@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPU Compute in zimr — one Zig function, two machines</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="hero-inner">
+    <p class="eyebrow">zimr · webgpu compute</p>
+    <h1 class="title">One Zig function,<br><span class="grad">two machines.</span></h1>
+    <p class="dek">How zimr takes a single piece of Zig and runs it as both an ordinary CPU loop and a massively-parallel GPU shader in the browser — told from the ground up, with the real code, and ending with the optimizations that make a 20,000-particle fluid run in your pocket.</p>
+    <div class="hero-meta">
+      <span><b>target</b> &nbsp;wasm32 + WebGPU</span>
+      <span><b>language</b> &nbsp;pure Zig, no C</span>
+      <span><b>example</b> &nbsp;20k-particle SPH fluid</span>
+    </div>
+  </div>
+  <div class="split">
+    <div class="split-grid">
+      <div class="split-card split-cpu">
+        <span class="tag">compiles to · CPU</span>
+        <code><span class="cm">// a plain loop over 20,000 items</span><br>
+        <span class="kw">while</span> (id &lt; count) : (id += 1) {<br>
+        &nbsp;&nbsp;double(.{ .id = id });<br>
+        }</code>
+      </div>
+      <div class="split-card split-gpu">
+        <span class="tag">compiles to · GPU</span>
+        <code><span class="cm">// 20,000 threads, all at once</span><br>
+        <span class="kw">@compute</span> @workgroup_size(256)<br>
+        <span class="kw">fn</span> <span class="fn">double</span>(id: vec3u) { … }</code>
+      </div>
+    </div>
+    <p class="split-from">…both generated from the&nbsp; <b>same source</b>.</p>
+  </div>
+</header>
+
+<nav class="toc">
+  <ol>
+    <li><a href="#why">What "GPU compute" even means <span class="d">and why a fluid needs it</span></a></li>
+    <li><a href="#duality">The big idea: write once, run on both <span class="d">the CPU twin as truth</span></a></li>
+    <li><a href="#kernel">Anatomy of a kernel file <span class="d">Buffers, Params, Ctx</span></a></li>
+    <li><a href="#pipeline">From Zig to a running shader <span class="d">the three-stage build</span></a></li>
+    <li><a href="#transpiler">spv2wgsl: the translator <span class="d">SPIR-V → WGSL, and the atomics trick</span></a></li>
+    <li><a href="#host">The host: dispatch, batch, read back <span class="d">keeping data on the GPU</span></a></li>
+    <li><a href="#sph">The SPH fluid, kernel by kernel <span class="d">the whole simulation</span></a></li>
+    <li><a href="#perf">Making it fast <span class="d">what every optimization actually does</span></a></li>
+    <li><a href="#future">The road ahead <span class="d">the sort, and what's left</span></a></li>
+  </ol>
+</nav>
+
+<main>
+<section id="why" class="reveal">
+  <p class="sec-num">01 — motivation</p>
+  <h2>What "GPU compute" even means, and why a fluid needs it</h2>
+  <p>A CPU is a small team of very fast, very clever workers. It has a handful of cores, and each one races through a list of instructions one after another. If you ask a CPU to update 20,000 water particles, it walks the list: particle 0, then 1, then 2, all the way to 19,999. Fast, but fundamentally <em>one thing at a time</em> per core.</p>
+  <p>A GPU is the opposite shape: thousands of much simpler workers that all do the <strong>same instructions at the same time</strong>, each on a different piece of data. That is exactly the shape of a particle simulation — every particle runs the identical update rule, just with its own position and velocity. So instead of a loop that visits 20,000 particles in sequence, you launch 20,000 tiny threads and they all move in parallel. This is called a <strong>compute shader</strong>: a program that doesn't draw anything directly, it just crunches numbers in parallel and leaves the results in memory.</p>
+  <p>The fluid in this project is an <strong>SPH</strong> simulation — Smoothed Particle Hydrodynamics. The water isn't a surface; it's 20,000 little balls that push on their neighbours. Every frame, each particle has to look at the particles near it, feel how crowded it is, and nudge itself to relieve the pressure. Done on a CPU, that's 20,000 particles × dozens of neighbours × several times per frame — far too slow for a phone. Done on a GPU, all 20,000 are handled together. That is why this lives on the GPU.</p>
+  <div class="note">
+    <span class="lab">the catch</span>
+    Writing GPU shaders normally means writing a <em>second</em> program in a <em>second</em> language (WGSL, the WebGPU Shading Language) that has to behave <em>identically</em> to your CPU code — and when they drift apart, you get bugs you can't see. zimr's whole trick is to never write that second program by hand.
+  </div>
+</section>
+
+<section id="duality" class="reveal">
+  <p class="sec-num">02 — the core idea</p>
+  <h2>Write once, run on both</h2>
+  <p>The heart of zimr's compute system is a module called <em>kompute</em>. You write your simulation logic <strong>one time</strong>, in plain Zig. From that single source, the build produces two things:</p>
+  <ul class="clean">
+    <li>A <strong>native CPU version</strong> — an ordinary loop you can run, step through in a debugger, and trust.</li>
+    <li>A <strong>GPU version</strong> — the same logic compiled all the way down to a WebGPU compute shader.</li>
+  </ul>
+  <p>How can one function become both? Zig has a value, available at compile time, that says which machine it's being compiled for. kompute exposes it as <em>is_gpu</em>:</p>
+  <figure class="code"><figcaption><span class="path">src/kompute.zig</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">/// True when compiling for SPIR-V (the GPU dispatch). False for the</span>
+<span class="tok-comment">/// native CPU loop. Kernel files comptime-branch on it.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> is_gpu: bool = builtin.target.cpu.arch.<span class="tok-fn">isSpirV</span>();</code></pre></figure>
+  <p>Because <em>is_gpu</em> is known at compile time, an <em>if (is_gpu)</em> isn't a runtime cost — the compiler keeps one branch and deletes the other. The CPU build and the GPU build literally contain different code, generated from the same text. The CPU version becomes the <strong>oracle</strong>: it is the definition of "correct." If the GPU version ever disagrees with it, the GPU version is wrong. That single idea — a trustworthy CPU twin you can compare against — is what makes it possible to develop a parallel program without going mad.</p>
+  <p>The same compile-time switch is how kompute handles operations the GPU compiler can't express directly. Take <strong>atomics</strong> — the special "no two threads collide" operations the particle grid needs (more on those soon). The CPU has real atomic instructions; the GPU shader language has its own. So the helper picks the right one at compile time:</p>
+  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the atomic-add helper</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">/// Atomic read-modify-write add. Returns the value stored BEFORE the</span>
+<span class="tok-comment">/// add (WGSL atomicAdd semantics — the grid build uses the returned</span>
+<span class="tok-comment">/// value as the claimed slot index).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">inline</span> <span class="tok-kw">fn</span> <span class="tok-fn">atomicAdd</span>(arr: <span class="tok-kw">anytype</span>, idx: u32, val: u32) u32 {
+    <span class="tok-kw">if</span> (is_gpu) {
+        <span class="tok-kw">return</span> <span class="tok-fn">zatomicAdd</span>(arr, idx, val);   <span class="tok-comment">// GPU: rewritten into WGSL later</span>
+    }
+    <span class="tok-kw">return</span> <span class="tok-builtin">@atomicRmw</span>(u32, &amp;arr[idx], .Add, val, .monotonic); <span class="tok-comment">// CPU: the real thing</span>
+}</code></pre></figure>
+  <p>One call, <em>k.atomicAdd(...)</em>, written once in the simulation. On the CPU it becomes a genuine atomic instruction; on the GPU it becomes a placeholder that a later stage turns into the WGSL atomic builtin. The kernel author never sees the difference.</p>
+</section>
+
+<section id="kernel" class="reveal">
+  <p class="sec-num">03 — anatomy</p>
+  <h2>What a kernel file actually contains</h2>
+  <p>A "kernel" is one parallel function. A kernel <em>file</em> declares three things, and then one or more kernel functions. Here's the shape, straight from kompute's own documentation:</p>
+  <figure class="code"><figcaption><span class="path">a minimal kernel file</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">const</span> k = <span class="tok-builtin">@import</span>(<span class="tok-str">"kompute"</span>);
+
+<span class="tok-comment">// 1. config — how big, and how many threads per workgroup</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = <span class="tok-num">1024</span>, .workgroup = <span class="tok-num">64</span> };
+
+<span class="tok-comment">// 2. Buffers — the data living on the GPU (one big struct)</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> { data: [config.max]f32 };
+
+<span class="tok-comment">// 3. Params — small read-only values passed in each dispatch</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> { count: u32, _pad: [<span class="tok-num">3</span>]u32 = .{<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">0</span>} };
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> g = k.<span class="tok-fn">Globals</span>(<span class="tok-builtin">@This</span>());   <span class="tok-comment">// wires up storage on both targets</span>
+<span class="tok-kw">const</span> b_data = g.<span class="tok-fn">bind</span>(.data);        <span class="tok-comment">// one alias per Buffers field</span>
+
+<span class="tok-comment">// the kernel: runs once per thread, c.id is "which thread am I"</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">double</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id &gt;= c.params.count) <span class="tok-kw">return</span>;   <span class="tok-comment">// ignore threads past the data</span>
+    b_data[c.id] = b_data[c.id] * <span class="tok-num">2.0</span>;
+}
+
+<span class="tok-kw">comptime</span> { k.<span class="tok-fn">installKernel</span>(<span class="tok-builtin">@This</span>(), <span class="tok-str">"double"</span>); }   <span class="tok-comment">// register it</span></code></pre></figure>
+  <p>Three pieces deserve a closer look.</p>
+  <h3>Buffers — the shared data</h3>
+  <p><strong>Buffers</strong> is one big struct holding everything the simulation keeps on the GPU: arrays of positions, velocities, and so on. It uses <em>extern struct</em> so its memory layout is fixed and predictable — the CPU and the GPU have to agree, byte for byte, on where each field sits.</p>
+  <p>Each field is reached through an alias made by <em>g.bind(.field)</em>. On the GPU these become separate storage bindings; on the CPU they're pointers into plain memory. Either way, <em>b_data[i]</em> means the same thing in both worlds.</p>
+  <div class="note gotcha">
+    <span class="lab">a real scar in the code</span>
+    Early on, all the data lived in a <em>single</em> GPU binding (one giant struct). On the phone's Adreno GPU it silently corrupted above ~1000 threads: the large offsets inside one binding got mis-addressed. The fix was to give <strong>each field its own binding</strong> — the shape every hand-written WebGPU demo uses. The comments in the code still carry the warning so nobody re-introduces the bug.
+  </div>
+  <h3>Ctx — what each thread knows</h3>
+  <p>When a kernel runs, it receives a tiny context: <em>c.id</em> (this thread's global index — "which particle am I?") and <em>c.params</em> (the read-only settings for this dispatch). That's deliberately almost everything a thread needs and nothing it doesn't:</p>
+  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the context handed to every thread</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">Ctx</span>(<span class="tok-kw">comptime</span> Module: type) type {
+    <span class="tok-kw">return</span> <span class="tok-kw">struct</span> {
+        id: u32,              <span class="tok-comment">// this invocation's global index</span>
+        params: Module.Params, <span class="tok-comment">// the kernel's Params, by value (read-only)</span>
+    };
+}</code></pre></figure>
+  <p>The guard <em>if (c.id >= c.params.count) return;</em> appears at the top of every kernel. The GPU launches threads in fixed-size groups, so you almost always get a few <em>more</em> threads than you have data. Those extra threads must do nothing. Forgetting this guard is how you read or write past the end of an array on the GPU.</p>
+  <h3>installKernel — making it launchable</h3>
+  <p>The <em>comptime { k.installKernel(...) }</em> line is what turns your function into something the GPU can actually start. On the GPU build it generates the official entry point: read this thread's index, build the <em>Ctx</em>, call your function. On the CPU build it does nothing (the host just calls your function in a loop). Here it is:</p>
+  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the generated GPU entry point</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">installKernel</span>(<span class="tok-kw">comptime</span> Module: type, <span class="tok-kw">comptime</span> name: []<span class="tok-kw">const</span> u8) void {
+    <span class="tok-kw">if</span> (!is_gpu) <span class="tok-kw">return</span>;   <span class="tok-comment">// CPU: nothing to generate</span>
+    <span class="tok-kw">const</span> Entry = <span class="tok-kw">struct</span> {
+        <span class="tok-kw">fn</span> <span class="tok-fn">run</span>() <span class="tok-kw">callconv</span>(.spirv_kernel) void {
+            <span class="tok-builtin">@setRuntimeSafety</span>(false);
+            <span class="tok-kw">const</span> c: <span class="tok-fn">Ctx</span>(Module) = .{
+                .id = gpu.global_invocation_id[<span class="tok-num">0</span>],   <span class="tok-comment">// ask the GPU "who am I"</span>
+                .params = Module.g.P,
+            };
+            <span class="tok-builtin">@field</span>(Module, name)(c);                 <span class="tok-comment">// call your kernel</span>
+        }
+    };
+    <span class="tok-builtin">@export</span>(&amp;Entry.run, .{ .name = name });          <span class="tok-comment">// name it for the host</span>
+}</code></pre></figure>
+</section>
+
+<section id="pipeline" class="reveal">
+  <p class="sec-num">04 — the build</p>
+  <h2>From Zig to a running shader, in three stages</h2>
+  <p>So you've written one Zig file. How does it become a GPU shader? WebGPU in the browser doesn't run Zig, and it doesn't run the GPU's native machine code either — it runs <strong>WGSL</strong>, a high-level shading language. The journey has three steps:</p>
+  <ul class="clean">
+    <li><strong>Zig → SPIR-V.</strong> Zig's own compiler can target SPIR-V, a portable binary format for GPU programs. This is just the normal Zig compiler with a GPU target.</li>
+    <li><strong>SPIR-V → WGSL.</strong> A custom tool in this project, <em>spv2wgsl</em>, reads that binary and writes out readable WGSL text. This is the part most engines outsource to a big C++ library; zimr does it in pure Zig.</li>
+    <li><strong>WGSL → GPU.</strong> The browser's WebGPU implementation compiles the WGSL the rest of the way and runs it.</li>
+  </ul>
+  <p>The build wires the first two stages together. The Zig-to-SPIR-V step is an ordinary compiler invocation with a GPU target:</p>
+  <figure class="code"><figcaption><span class="path">src/shader_codegen.zig &mdash; stage 1: Zig → SPIR-V</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">// Stage 1: Zig -&gt; SPIR-V (same flags as the fragment-shader path).</span>
+<span class="tok-kw">const</span> compile: *Run = b.<span class="tok-fn">addSystemCommand</span>(&amp;.{
+    b.graph.zig_exe, <span class="tok-str">"build-obj"</span>,
+    <span class="tok-str">"-target"</span>, <span class="tok-str">"spirv32-vulkan"</span>,
+    <span class="tok-str">"-mcpu"</span>,   <span class="tok-str">"vulkan_v1_2"</span>,
+    <span class="tok-str">"-fno-llvm"</span>, <span class="tok-str">"-fno-lld"</span>,
+    <span class="tok-str">"-O"</span>, <span class="tok-str">"ReleaseFast"</span>,
+    <span class="tok-str">"-ofmt=spirv"</span>,
+});
+<span class="tok-kw">const</span> raw_spv: LazyPath = compile.<span class="tok-fn">addPrefixedOutputFileArg</span>(<span class="tok-str">"-femit-bin="</span>, <span class="tok-str">"compute.spv"</span>);</code></pre></figure>
+  <p>Then the SPIR-V is handed to <em>spv2wgsl</em>, along with the workgroup size to stamp into the output:</p>
+  <figure class="code"><figcaption><span class="path">src/shader_codegen.zig &mdash; stage 2: SPIR-V → WGSL</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">// Stage 2: SPIR-V -&gt; WGSL with the injected @workgroup_size.</span>
+w.<span class="tok-fn">addArg</span>(b.<span class="tok-fn">fmt</span>(<span class="tok-str">"--workgroup={d},{d},{d}"</span>, .{ workgroup[<span class="tok-num">0</span>], workgroup[<span class="tok-num">1</span>], workgroup[<span class="tok-num">2</span>] }));
+<span class="tok-kw">if</span> (entry) |e| { w.<span class="tok-fn">addArg</span>(b.<span class="tok-fn">fmt</span>(<span class="tok-str">"--entry={s}"</span>, .{e})); }
+w.<span class="tok-fn">addFileArg</span>(raw_spv);
+<span class="tok-kw">return</span> w.<span class="tok-fn">addOutputFileArg</span>(<span class="tok-str">"compute.wgsl"</span>);   <span class="tok-comment">// the finished shader text</span></code></pre></figure>
+  <p>The resulting WGSL is baked into the app, where the host loads it onto the GPU. One source file, run through a pipeline, comes out the other end as a shader — with the matching CPU loop built from the very same source in a separate pass.</p>
+</section>
+<section id="transpiler" class="reveal">
+  <p class="sec-num">05 — the translator</p>
+  <h2>spv2wgsl: turning GPU binary back into readable shaders</h2>
+  <p><em>spv2wgsl</em> is the most unusual piece. SPIR-V is a binary list of numbered instructions — closer to assembly than to source. WGSL is structured, high-level text with real <em>if</em>s and <em>for</em>s. Going from the first to the second means rebuilding structure that the binary has flattened: recovering loops from jumps, naming anonymous values, mapping each SPIR-V operation to its WGSL equivalent. It's a small compiler in its own right, and in this project it's around ten thousand lines of Zig.</p>
+  <p>Most of it is mechanical translation. The interesting parts are where the two languages <em>don't</em> line up. Atomics are the headline example, and they show how the whole system absorbs a gap in the toolchain rather than giving up.</p>
+  <h3>The atomics gap</h3>
+  <p>The version of Zig used here can target SPIR-V, but its SPIR-V backend doesn't yet implement atomic operations — the very thing the parallel grid build depends on. You'd be stuck, except for a trick. Recall the <em>k.atomicAdd</em> helper from earlier: on the GPU it calls a deliberately useless function named <em>zatomicAdd</em>:</p>
+  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the placeholder the GPU compiles</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">// MUST be `noinline` so the call survives into the SPIR-V for spv2wgsl</span>
+<span class="tok-comment">// to find. The body is never run on the GPU — it exists only to make</span>
+<span class="tok-comment">// Zig emit a real function call with the right name.</span>
+<span class="tok-kw">noinline</span> <span class="tok-kw">fn</span> <span class="tok-fn">zatomicAdd</span>(arr: <span class="tok-kw">anytype</span>, idx: u32, val: u32) u32 {
+    <span class="tok-kw">const</span> prev: u32 = arr[idx];
+    arr[idx] = prev +% val;
+    <span class="tok-kw">return</span> prev;
+}</code></pre></figure>
+  <p>Because it's marked <em>noinline</em>, Zig can't optimize it away — it leaves a real function call in the SPIR-V, named after the helper. spv2wgsl watches for that name. When it sees a call to something containing <em>zatomicAdd</em>, it does four things: it emits the genuine WGSL <em>atomicAdd(&field[idx], val)</em> instead of the call, it deletes the useless helper function, it marks the target array as atomic, and it changes that array's type to <em>array&lt;atomic&lt;u32&gt;&gt;</em> in the output. The placeholder is a hook; spv2wgsl rewrites it into the real builtin.</p>
+  <div class="note proof">
+    <span class="lab">why this is safe</span>
+    The CPU twin of <em>k.atomicAdd</em> is a <em>real</em> atomic instruction (Zig's native backend supports those). So the CPU build is a correct reference for what the GPU's rewritten atomics should do. The simulation has a permanent CPU test asserting the grid the build produces is well-formed — that test is how a change to the atomics path is caught without ever touching the phone.
+  </div>
+  <h3>A one-character bug that froze the fluid</h3>
+  <p>The translator also has to get small things exactly right, and one of them caused a memorable failure. In SPIR-V, a value can be given a name more than once. A data array that gets passed into a function picks up the function's <em>parameter</em> name as a second, later name. spv2wgsl was using "last name wins," so the array <em>grid_counts</em> ended up renamed to the generic parameter name <em>arr</em>. The host, which finds each buffer by its real name, then bound the wrong memory — and on the device the fluid froze into a dead blob. The fix is one line, and a comment now guards it: <strong>first name wins</strong>.</p>
+  <figure class="code"><figcaption><span class="path">src/spv2wgsl.zig &mdash; the OpName fix</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">// Zig emits MULTIPLE names per id; a storage array passed as a function</span>
+<span class="tok-comment">// arg picks up the callee's PARAMETER name as a later duplicate. Keep the</span>
+<span class="tok-comment">// FIRST name so the host's `kbuf_&lt;field&gt;` lookup still matches the buffer.</span>
+<span class="tok-kw">if</span> (s.ids[target].wgsl_name.len == <span class="tok-num">0</span>) s.ids[target].wgsl_name = name;</code></pre></figure>
+  <p>The lesson worth taking from this section isn't the specific bug — it's that a translator between two languages is a sequence of decisions this precise, and each one can be the difference between a working simulation and a frozen screen.</p>
+</section>
+
+<section id="host" class="reveal">
+  <p class="sec-num">06 — the host</p>
+  <h2>The host: starting the work, and keeping data on the GPU</h2>
+  <p>The <em>host</em> is the ordinary code that runs on the CPU and tells the GPU what to do: load the shaders, allocate the buffers, and launch kernels. The launch function, <em>run</em>, is where the CPU/GPU split appears one more time. On the CPU it's literally a loop; on the GPU it records a dispatch:</p>
+  <figure class="code"><figcaption><span class="path">src/compute_host.zig &mdash; run, both backends</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">run</span>(self: *Self, <span class="tok-kw">comptime</span> name: []<span class="tok-kw">const</span> u8) void {
+    <span class="tok-kw">switch</span> (self.backend) {
+        .cpu =&gt; {
+            <span class="tok-comment">// the GPU's "thousands of threads" is just a for-loop here</span>
+            <span class="tok-kw">var</span> id: u32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (id &lt; self.count) : (id += <span class="tok-num">1</span>) {
+                <span class="tok-builtin">@field</span>(M, name)(.{ .id = id, .params = self.params });
+            }
+        },
+        .gpu =&gt; {
+            <span class="tok-comment">// ...find the compiled pipeline for `name`, then:</span>
+            <span class="tok-kw">const</span> wg: u32 = M.config.workgroup;
+            compute_pass.<span class="tok-fn">setPipeline</span>(cp, pipeline);
+            compute_pass.<span class="tok-fn">setBindGroup</span>(cp, <span class="tok-num">0</span>, gp.bind_group);
+            <span class="tok-comment">// launch ceil(count / workgroup) groups of `workgroup` threads</span>
+            compute_pass.<span class="tok-fn">dispatchWorkgroups</span>(cp, .{ .x = (self.count + wg - <span class="tok-num">1</span>) / wg });
+        },
+    }
+}</code></pre></figure>
+  <p>Notice <em>dispatchWorkgroups</em> launches <em>count / workgroup</em> groups — that's why the in-kernel guard matters: the division rounds up, so the last group has spare threads.</p>
+  <h3>One submission per frame</h3>
+  <p>Talking to the GPU has overhead. Every time the host "submits" work, the driver has paperwork to do. A naive simulation submits once per kernel — and with several kernels run several times per frame, that paperwork dominates. The fix is <strong>batching</strong>: open one recording, encode <em>all</em> the kernels and all the sub-steps into it, and submit once.</p>
+  <figure class="code"><figcaption><span class="path">src/compute_host.zig &mdash; batch the whole frame into one submit</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">/// Open a single-pass batch: every following `run` encodes into one</span>
+<span class="tok-comment">/// compute pass until `endBatch` submits it.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">beginBatch</span>(self: *Self) void {
+    <span class="tok-comment">// ... write params once, open one encoder + one compute pass</span>
+    gp.batch_pass = compute_pass.<span class="tok-fn">begin</span>(gp.batch_enc);
+    compute_pass.<span class="tok-fn">setBindGroup</span>(gp.batch_pass, <span class="tok-num">0</span>, gp.bind_group);
+}
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">endBatch</span>(self: *Self) void {
+    compute_pass.<span class="tok-fn">end</span>(gp.batch_pass);
+    <span class="tok-kw">const</span> cmd = wgpu.<span class="tok-fn">finishCommandEncoder</span>(gp.batch_enc);
+    wgpu.<span class="tok-fn">queueSubmit</span>(gp.queue, cmd);   <span class="tok-comment">// ONE submit for the entire frame</span>
+}</code></pre></figure>
+  <p>With batching on, the kernels just record themselves into the open pass and nothing is submitted until the frame is fully assembled.</p>
+  <h3>The data never leaves the GPU</h3>
+  <p>The most important performance fact about this fluid is something the host <em>doesn't</em> do. Once the particles are on the GPU, they stay there. The compute kernels write positions into a GPU buffer, and the renderer reads positions <em>from that same buffer</em> to draw the discs — no copy back to the CPU, no round trip. The simulation and the drawing share memory.</p>
+  <p>The only time data is copied back to the CPU is for the on-screen diagnostics (the "cells / average" readout), and that copy is switched off unless you open the diagnostics panel. The function that does it, <em>readLatest</em>, also carries a small scar:</p>
+  <figure class="code"><figcaption><span class="path">src/compute_host.zig &mdash; readLatest: slice to the field's OWN length</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">// Variable-count fields (positions, …) are sized to the particle count;</span>
+<span class="tok-comment">// fixed-size fields (grid_counts, cell_start) must slice to THEIR OWN</span>
+<span class="tok-comment">// length, never the particle count — otherwise grid_counts overruns into</span>
+<span class="tok-comment">// the cell_start array that follows it. Clamp to the lesser of the two.</span>
+<span class="tok-kw">const</span> arr_len: usize = <span class="tok-builtin">@field</span>(M.g.B, <span class="tok-builtin">@tagName</span>(field)).len;
+<span class="tok-kw">const</span> n: usize = <span class="tok-builtin">@min</span>(self.count, arr_len);</code></pre></figure>
+  <p>Before this fix, the diagnostics asked for 20,000 grid cells when only ~1,300 existed, read straight past the end into the next array, and reported impossible numbers (a "fullest cell" of 19,999). The simulation itself was always fine — only the readout was lying. It's a clean illustration of how a bug in a <em>measurement</em> can look exactly like a bug in the thing being measured.</p>
+</section>
+
+<section id="sph" class="reveal">
+  <p class="sec-num">07 — the example</p>
+  <h2>The fluid, kernel by kernel</h2>
+  <p>Now the payoff: the actual simulation. The method is Clavet's <strong>double-density relaxation</strong>, a particle fluid that's stable and cheap enough for real time. Each frame runs a few <em>sub-steps</em>, and each sub-step is a short sequence of kernels. First, the data they all share:</p>
+  <figure class="code"><figcaption><span class="path">examples/wgpu_fluid_sort/sort_kernels.zig &mdash; the simulation state</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> num_particles: u32 = <span class="tok-num">20000</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> interact_radius: f32 = <span class="tok-num">22.0</span>;   <span class="tok-comment">// a particle only feels neighbours within this</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    pos:     [num_particles]zm.Vec2,   <span class="tok-comment">// position  (pos is FIRST: the renderer reads it)</span>
+    prev:    [num_particles]zm.Vec2,   <span class="tok-comment">// last position (used to recover velocity)</span>
+    vel:     [num_particles]zm.Vec2,   <span class="tok-comment">// velocity</span>
+    delta:   [num_particles]zm.Vec2,   <span class="tok-comment">// pending position correction</span>
+    density: [num_particles]zm.Vec2,   <span class="tok-comment">// (density, near-density) — also drives colour</span>
+    grid_counts: [grid_cells]u32,          <span class="tok-comment">// particles per cell (atomic); reused as the scatter cursor</span>
+    cell_start:  [grid_cells + <span class="tok-num">1</span>]u32,      <span class="tok-comment">// prefix sum: cell c owns sorted slots [cell_start[c] .. cell_start[c+1])</span>
+    pos2:    [num_particles]zm.Vec2,   <span class="tok-comment">// scatter scratch — the cell-sorted copy of pos/vel/prev</span>
+    vel2:    [num_particles]zm.Vec2,
+    prev2:   [num_particles]zm.Vec2,
+};</code></pre></figure>
+  <h3>The neighbour grid: a counting sort, so the reads are fast</h3>
+  <p>Checking all 20,000 particles against each other would be 400 million comparisons. Instead the domain is chopped into a grid of square cells, each the size of the interaction radius. A particle only needs to look in its own cell and the eight around it — a 3×3 neighbourhood — because anything farther away is out of reach.</p>
+  <p>The interesting question is <em>how</em> a cell's particles are stored. The obvious way is a list of indices per cell; the neighbour walk then reads <code>pos[index]</code> for each one — and those indices point all over memory, so every read is a random jump. On a GPU that is the slowest thing you can do (see the performance section). The fast way is to <strong>physically reorder the particles into cell order every sub-step</strong>, so that a cell's particles occupy one <em>contiguous</em> run of memory. That reordering is a classic <strong>counting sort</strong>, and it's five small kernels.</p>
+  <p><strong>clearGrid</strong> zeroes every cell's counter — one thread per cell:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">clearGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> cell: u32 = c.id;
+    <span class="tok-kw">if</span> (cell &gt;= c.params.n_cols * c.params.n_rows) <span class="tok-kw">return</span>;
+    k.<span class="tok-fn">atomicStore</span>(b_grid_counts, cell, <span class="tok-num">0</span>);
+}</code></pre></figure>
+  <p><strong>countGrid</strong> tallies how many particles fall in each cell — one thread per particle, an atomic add so thousands can count into the same cell at once:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the counting pass</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">countGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) <span class="tok-kw">return</span>;
+    <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOf</span>(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    _ = k.<span class="tok-fn">atomicAdd</span>(b_grid_counts, cell, <span class="tok-num">1</span>);   <span class="tok-comment">// result unused — we only want the totals</span>
+}</code></pre></figure>
+  <p><strong>prefixSum</strong> turns those per-cell counts into <em>start offsets</em>. A running total: cell 0 starts at 0, cell 1 starts after cell 0's particles, and so on. After it, cell <code>c</code> owns the contiguous slot range <code>[cell_start[c], cell_start[c+1])</code>. It's a single serial scan (~1,300 cells — nothing next to 20,000 particles), so it runs on <em>one</em> thread, and it zeroes <code>grid_counts</code> as it goes so the next kernel can reuse it as a write cursor:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the exclusive prefix sum (one invocation)</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">prefixSum</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id != <span class="tok-num">0</span>) <span class="tok-kw">return</span>;                       <span class="tok-comment">// a single thread does the whole scan</span>
+    <span class="tok-kw">const</span> cells: u32 = c.params.n_cols * c.params.n_rows;
+    <span class="tok-kw">var</span> acc: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> cell: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (cell &lt; cells) : (cell += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> cnt: u32 = k.<span class="tok-fn">atomicLoad</span>(b_grid_counts, cell);
+        b_cell_start[cell] = acc;                <span class="tok-comment">// where this cell's run begins</span>
+        acc += cnt;
+        k.<span class="tok-fn">atomicStore</span>(b_grid_counts, cell, <span class="tok-num">0</span>);   <span class="tok-comment">// reset → reused as the scatter cursor</span>
+    }
+    b_cell_start[cells] = acc;                   <span class="tok-comment">// == num_particles</span>
+}</code></pre></figure>
+  <p><strong>scatter</strong> does the actual move: each particle claims the next free slot in its cell (atomic add on the reused counter) and writes its position, velocity, and previous-position into the sorted scratch at that slot. <strong>copyback</strong> then copies the scratch back over the originals, so <code>pos/vel/prev</code> <em>become</em> the cell-sorted order — the canonical layout for the rest of the sub-step and the next one. Because particles are interchangeable, there's no need to ever un-sort:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; place each particle in its cell's run</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">scatter</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) <span class="tok-kw">return</span>;
+    <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOf</span>(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    <span class="tok-kw">const</span> slot: u32 = k.<span class="tok-fn">atomicAdd</span>(b_grid_counts, cell, <span class="tok-num">1</span>);  <span class="tok-comment">// unique offset within the cell</span>
+    <span class="tok-kw">const</span> dest: u32 = b_cell_start[cell] + slot;            <span class="tok-comment">// its place in the sorted array</span>
+    b_pos2[dest] = b_pos[i];
+    b_vel2[dest] = b_vel[i];
+    b_prev2[dest] = b_prev[i];
+}</code></pre></figure>
+  <p>There's a quiet bonus: with exact ranges there's no fixed per-cell capacity to overflow, so dense clumps never silently drop neighbours the way a capped slot list could.</p>
+  <h3>Density: how crowded am I?</h3>
+  <p><strong>density</strong> walks the 3×3 neighbourhood and sums up how close the neighbours are. Two numbers come out: a normal density and a sharper "near-density" that spikes when particles are almost touching. The near-density is what stops the fluid from collapsing into itself. Because of the sort, each neighbour cell is just a contiguous slice — the loop reads consecutive particles from consecutive memory:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; inside the neighbour loop</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-comment">// for each of the 9 neighbour cells: walk its contiguous run</span>
+<span class="tok-kw">var</span> kk: u32 = b_cell_start[cell];
+<span class="tok-kw">while</span> (kk &lt; b_cell_start[cell + <span class="tok-num">1</span>]) : (kk += <span class="tok-num">1</span>) {   <span class="tok-comment">// consecutive kk → consecutive memory</span>
+    <span class="tok-kw">if</span> (kk == i) <span class="tok-kw">continue</span>;
+    <span class="tok-kw">const</span> sep: zm.Vec2 = b_pos[kk] - my_pos;
+    <span class="tok-kw">const</span> d2: f32 = zm.<span class="tok-fn">dot</span>(sep, sep);
+    <span class="tok-kw">if</span> (d2 &lt; c.params.h * c.params.h) {     <span class="tok-comment">// squared compare: skip the sqrt if out of range</span>
+        <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(d2);
+        <span class="tok-kw">const</span> omq: f32 = <span class="tok-num">1.0</span> - dist / c.params.h;
+        rho      += omq * omq;              <span class="tok-comment">// density</span>
+        rho_near += omq * omq * omq;        <span class="tok-comment">// near-density (sharper)</span>
+    }
+}</code></pre></figure>
+  <h3>Force: relieve the pressure</h3>
+  <p><strong>force</strong> turns those densities into movement. A crowded particle pushes its neighbours away; the push is stronger the closer they are. Rather than write the pushes straight to velocity, the kernel accumulates a position <em>correction</em>, which the final kernel turns back into velocity. It reads the same contiguous neighbour runs the density pass did — now also pulling each neighbour's density and velocity from consecutive memory:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the pressure displacement</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">const</span> omq: f32 = <span class="tok-num">1.0</span> - dist / c.params.h;
+<span class="tok-kw">const</span> jd:  zm.Vec2 = b_density[kk];        <span class="tok-comment">// neighbour density — contiguous read</span>
+<span class="tok-kw">const</span> disp: f32 = <span class="tok-num">0.5</span> * c.params.dt * c.params.dt *
+    ((my_press + j_press) * omq + (my_near + j_near) * omq * omq);
+corr = corr - dir * zm.<span class="tok-fn">splat2</span>(disp);       <span class="tok-comment">// push away from the crowd</span></code></pre></figure>
+  <h3>Viscosity: a separate, gentler pass</h3>
+  <p><strong>viscosity</strong> is what makes the fluid look like water rather than a gas — a drag between particles moving toward each other. It used to be folded into the force loop, but it now runs as its own pass <em>before</em> the prediction step, matching the order in Clavet's paper, which is noticeably more stable. The model is a small <strong>collision impulse</strong>: it acts only on a pair that's approaching (closing speed <code>u &gt; 0</code>), it's quadratic in that speed, and it's clamped so it can at most bring the pair's approach to rest — never a bounce, so it can only ever calm the fluid, never inject energy:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the collision-impulse viscosity</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">const</span> u: f32 = zm.<span class="tok-fn">dot</span>(my_vel - b_vel[kk], n);   <span class="tok-comment">// closing speed along the line of centres</span>
+<span class="tok-kw">if</span> (u &gt; <span class="tok-num">0.0</span>) {                                  <span class="tok-comment">// only if approaching</span>
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-kw">if</span> (w_lin &lt; <span class="tok-num">1.0</span>) w_lin <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;        <span class="tok-comment">// 1 inside h/2, fading to 0 at h</span>
+    <span class="tok-kw">const</span> imp_raw: f32 = c.params.visc_beta * w * u * u;   <span class="tok-comment">// quadratic in the closing speed</span>
+    <span class="tok-kw">const</span> imp: f32 = <span class="tok-kw">if</span> (imp_raw &lt; u) imp_raw <span class="tok-kw">else</span> u;      <span class="tok-comment">// clamp: never overshoot to a bounce</span>
+    my_vel = my_vel - n * zm.<span class="tok-fn">splat2</span>(<span class="tok-num">0.5</span> * imp);            <span class="tok-comment">// half to each side</span>
+}</code></pre></figure>
+  <h3>Gravity, predict, finalize: move, and hit the walls gracefully</h3>
+  <p>Three per-particle kernels bracket the neighbour work. <strong>gravityMouse</strong> applies gravity and any mouse push to the velocity. <strong>predict</strong> remembers each particle's current position (into <code>prev</code>) and advances it by its velocity. <strong>applyAndFinalize</strong> (run last) adds the accumulated correction, keeps particles inside the box, and recovers each velocity from how far it actually moved.</p>
+  <p>The wall handling here fixed a bug that resisted fixes for a long time: particles <strong>exploding in the corners</strong>. The cause was a hard clamp that pinned a cornered particle to the <em>exact</em> corner point on both axes at once. Several particles landing on the identical point made the near-density term blow up — and they shot apart. The fix is a soft push that ramps up near a wall (so density stays smooth), plus a tiny per-particle nudge along the wall so two particles never share one point:</p>
+  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the corner-explosion fix</span><span class="lang">zig</span></figcaption><pre><code class="zig"><span class="tok-kw">const</span> band: f32 = c.params.h;   <span class="tok-comment">// start pushing one radius from the wall</span>
+<span class="tok-kw">const</span> push: f32 = <span class="tok-num">0.25</span>;
+<span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; band) {                 p[<span class="tok-num">0</span>] += (band - p[<span class="tok-num">0</span>]) * push; }
+<span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt; c.params.dom_w - band) { p[<span class="tok-num">0</span>] -= (p[<span class="tok-num">0</span>] - (c.params.dom_w - band)) * push; }
+<span class="tok-comment">// ... same for the vertical walls ...</span>
+<span class="tok-comment">// hard safety clamp, with a sub-particle jitter ALONG the wall so two</span>
+<span class="tok-comment">// cornered particles never land on the exact same point (which spiked density)</span>
+<span class="tok-kw">const</span> jitter: f32 = <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(i % <span class="tok-num">7</span>)) * <span class="tok-num">0.3</span>;   <span class="tok-comment">// 0..1.8 px</span></code></pre></figure>
+  <h3>The whole sub-step, on one line</h3>
+  <p>Put together, each sub-step the host records is eleven dispatches — three per-particle steps, the five-kernel sort, then the two neighbour walks and the finalize:</p>
+  <figure class="code"><figcaption><span class="path">examples/wgpu_fluid_sort/wgpu_fluid_sort.zig &mdash; the per-sub-step sequence</span><span class="lang">zig</span></figcaption><pre><code class="zig">s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"gravityMouse"</span>);      <span class="tok-comment">// gravity + mouse → velocity</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"viscosity"</span>);         <span class="tok-comment">// collision-impulse drag (on last step's sorted grid)</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"predict"</span>);           <span class="tok-comment">// remember prev, advance by velocity</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"clearGrid"</span>);         <span class="tok-comment">// ─┐</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"countGrid"</span>);         <span class="tok-comment">//  │ counting sort: reorder pos/vel/prev</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"prefixSum"</span>);         <span class="tok-comment">//  │ into cell order so the neighbour</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"scatter"</span>);           <span class="tok-comment">//  │ walks below read contiguous memory</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"copyback"</span>);          <span class="tok-comment">// ─┘</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"density"</span>);           <span class="tok-comment">// measure crowding   (neighbour walk #1)</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"force"</span>);             <span class="tok-comment">// push apart          (neighbour walk #2)</span>
+s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"applyAndFinalize"</span>);  <span class="tok-comment">// apply, clamp to walls, recover velocity</span></code></pre></figure>
+  <p>That sequence, run three times per frame for 20,000 particles, batched into a single submit, with the results drawn straight from GPU memory — that's the whole fluid. (Viscosity runs <em>before</em> the sort, so it uses last sub-step's ordering — a damping term doesn't mind a slightly stale grid; density and force run <em>after</em>, on the fresh one.)</p>
+</section>
+<section id="perf" class="reveal">
+  <p class="sec-num">08 — performance</p>
+  <h2>Making it fast: what every optimization actually does</h2>
+  <p>A simulation can be correct and still too slow to use. The number that matters here is <strong>milliseconds per sub-step</strong> — how long one of those kernel sequences takes on the phone. Lower is better; to hit a smooth 60 frames per second with three sub-steps per frame, the budget is tight. Here's the path the project actually walked, from where it started to where it is now:</p>
+  <div class="ladder">
+    <div class="rung"><div class="what"><b>Starting point</b> — single-writer grid</div><div class="ms">15.5 ms</div><div class="bar"><i style="width:100%"></i></div></div>
+    <div class="rung"><div class="what"><b>Atomic grid build</b> — parallel binning</div><div class="ms">11.9 ms</div><div class="bar"><i style="width:77%"></i></div></div>
+    <div class="rung"><div class="what"><b>Bigger workgroups + arithmetic trims</b></div><div class="ms">~10 ms</div><div class="bar"><i style="width:65%"></i></div></div>
+    <div class="rung"><div class="what"><b>Counting sort</b> — cell-contiguous neighbours</div><div class="ms">3.8 ms</div><div class="bar"><i style="width:25%"></i></div></div>
+  </div>
+  <p>At three sub-steps a frame, 3.8 ms each comes to about 11 milliseconds of compute — so the simulation clears the 60-frames-per-second bar with real headroom, and on the test phone (an Adreno GPU) it runs at close to 90. That's the whole point of measuring in milliseconds per sub-step rather than frames per second: the frame rate hides behind the display's refresh cap, but the sub-step time is the honest throughput number, and it's what dropped.</p>
+  <p>The last step is the big one — it nearly tripled the throughput in a single change. It's also the most important idea in this whole document, so it's worth being precise about <em>why</em> it works.</p>
+  <h3>The headline: coalesced memory, and why the sort pays for itself</h3>
+  <p>On a GPU, threads run in lockstep groups (a "warp" — 32 or 64 of them). When all the threads in a group read memory at the same instant, the hardware can satisfy them efficiently only if the addresses they want are <strong>next to each other</strong> — then one wide memory transaction serves the whole group. That's called a <em>coalesced</em> read. If the addresses are scattered, the hardware must issue a separate transaction per thread, and the group stalls while they trickle in one by one. Same number of bytes, many times the latency.</p>
+  <p>Now look at the neighbour walk. The slow grid stored a list of particle <em>indices</em> per cell, so reading a neighbour meant <code>b_pos[grid_data[slot]]</code> — an index pulled from one place, then a position fetched from wherever <em>that</em> particle happened to live in memory. Adjacent threads, looking at the same cell, chased indices pointing all over the buffer. Every neighbour read was a scattered, uncoalesced jump. For a fluid, the neighbour walks are nearly the entire cost, so this one access pattern dominated the frame.</p>
+  <p>The counting sort fixes it at the source: after the sort, a cell's particles sit in one <strong>contiguous run</strong> of the <code>pos</code> array. The neighbour loop just walks <code>b_pos[kk]</code> for consecutive <code>kk</code> — consecutive addresses — so the reads coalesce, and the same is true for the density and velocity the force pass reads. The fluid does the identical math; it just stops fighting the memory system. The sort itself costs four extra little passes (count, the one-thread scan, scatter, copy-back), but every one of them is cheap and coalesced, and they buy back far more than they cost in the two neighbour walks that follow.</p>
+  <div class="note">
+    <span class="lab">the one-sentence version</span>
+    A GPU's real cost is moving data, not doing math — so the biggest win wasn't a faster calculation, it was <em>reordering the particles in memory</em> so thousands of neighbour reads turn from scattered jumps into contiguous, coalesced loads.
+  </div>
+  <p>Three earlier ideas are still in the code and still pull their weight:</p>
+  <ul class="clean">
+    <li><strong>Atomics for parallel binning.</strong> <code>countGrid</code> and <code>scatter</code> use atomic adds so all 20,000 particles can tally into — and claim slots in — shared cells at once, with the hardware guaranteeing no two collide. Atomics are the price of admission for "many threads writing to shared structures safely."</li>
+    <li><strong>Workgroup size 256.</strong> The GPU runs threads in groups; too small and the chip sits half-idle waiting on memory with nothing else to do. Launching in groups of 256 (up from 64) gives the scheduler enough threads that while some wait for data, others compute — exactly what hides the memory latency the sort doesn't eliminate.</li>
+    <li><strong>Skip the square root.</strong> To tell if a neighbour is in range you compare <em>squared</em> distances, avoiding a square root for the many candidates that turn out too far away — the 3×3 box reaches past the circular radius, so its corners are always out of range and now cost nothing.</li>
+  </ul>
+  <div class="note">
+    <span class="lab">the throughline</span>
+    Nearly every win here is about <em>memory traffic</em>, not arithmetic: bin in parallel, keep the machine busy enough to hide the waits, and above all lay the data out so the neighbour reads are contiguous. On a GPU, in that order of importance.
+  </div>
+</section>
+
+<section id="future" class="reveal">
+  <p class="sec-num">09 — the road ahead</p>
+  <h2>The turn we didn't take, and what's actually left</h2>
+  <p>For a long time the plan in this very section was <strong>shared-memory tiling</strong>: assign one thread-group to one cell, have it copy the cell's neighbourhood onto the GPU's small, fast on-chip scratchpad once, then let every particle in the cell read neighbours from the scratchpad instead of making repeated trips to main memory. On paper it's the textbook fix for redundant neighbour reads, and it's the kind of thing that closes the gap to a hand-tuned reference. So it got built — and on this fluid it was about <strong>19% slower</strong>.</p>
+  <h3>Why tiling lost</h3>
+  <p>The killer was <strong>occupancy</strong>. Tiling wants one workgroup per cell, and a workgroup here is 256 threads — but a typical cell holds only ~17–30 particles. So fewer than one lane in eight had a particle to work on; the rest sat idle holding the group open. The scratchpad did save memory traffic, but the machine was so under-filled that it lost far more than it saved. A clean illustration that an optimization can be locally correct — fewer reads! — and globally a loss.</p>
+  <h3>Why the sort won instead</h3>
+  <p>The counting sort chases the same prize — make the neighbour reads cheap — but from the opposite direction. Instead of caching scattered data in fast memory, it <em>rearranges the data so it isn't scattered in the first place</em>, and it keeps the simple, fully-occupied "one thread per particle" launch that fills the machine. Same goal (less effective memory traffic), no occupancy penalty, and a much simpler kernel: no scratchpad, no barrier. It's the better lever, and it's the one that actually moved the number — 10 ms to 3.8.</p>
+  <div class="note gotcha">
+    <span class="lab">the principle that held</span>
+    The reason a losing experiment and a winning one were both safe to try: a trustworthy CPU twin to compare against, a permanent test that the sort is well-formed (every particle in its cell, arrays stay in sync), and changes small enough to verify one at a time. That net is what let the project take big swings — at tiling, then at the sort — without ever gambling the whole simulation on a build it couldn't test directly on the phone.
+  </div>
+  <h3>What's actually left</h3>
+  <p>With the big lever pulled, the rest is tuning, not restructuring: choosing a particle count and cell size that hold a steady 60 frames per second with headroom, and trimming the cost of drawing 20,000 overlapping discs. One structural option remains in reserve — the prefix sum is a single-thread serial scan today, which is fine at ~1,300 cells but would become a parallel scan if the grid ever grew large enough for it to show up in a profile. It doesn't yet. Smaller knobs, turned now that the fluid is fast.</p>
+</section>
+</main>
+
+<footer>
+  <div class="fi">
+    <b>zimr</b> — a pure-Zig raylib &amp; Dear ImGui port to WebAssembly + WebGPU.<br>
+    This tutorial covers the compute system (<b>kompute</b>, <b>spv2wgsl</b>, the host) and the
+    20k-particle SPH fluid example.<br>
+    The CPU twin is the oracle · the sort test is the guardrail · one source, two machines.
+  </div>
+</footer>
+
+</div>
+
+</body>
+</html>

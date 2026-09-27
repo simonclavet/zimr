@@ -1,0 +1,1700 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>plot_demo — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>plot_demo</h1>
+<figure class="code src-file" data-path="examples/plot_demo/plot_demo.zig" data-lines="1420"><figcaption><span>examples/plot_demo/plot_demo.zig</span><span>1420 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/plot_demo/plot_demo.zig - the growing zimr plot showcase,</span>
+<span class="tok-comment">// in the spirit of ImPlot's implot_demo. One tab per feature so it stays</span>
+<span class="tok-comment">// reviewable on a phone; add a tab as each parity item lands. Fully</span>
+<span class="tok-comment">// interactive (pan / zoom / pinch / double-tap-fit / value readout).</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> sinTurns = zm.sinTurns;
+<span class="tok-kw">const</span> float64 = zm.float64;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> ui = z.ui_real;
+
+<span class="tok-kw">const</span> screen_w: i32 = <span class="tok-num">960</span>;
+<span class="tok-kw">const</span> screen_h: i32 = <span class="tok-num">720</span>;
+<span class="tok-kw">const</span> n: usize = <span class="tok-num">200</span>;
+<span class="tok-kw">const</span> n_marker_pts: usize = <span class="tok-num">6</span>;
+<span class="tok-kw">const</span> n_coarse: usize = <span class="tok-num">12</span>;
+<span class="tok-kw">const</span> hm_rows: usize = <span class="tok-num">20</span>;
+<span class="tok-kw">const</span> hm_cols: usize = <span class="tok-num">28</span>;
+<span class="tok-kw">const</span> hist_bins: usize = <span class="tok-num">32</span>;
+<span class="tok-kw">const</span> hist_n: usize = <span class="tok-num">4000</span>;
+<span class="tok-kw">const</span> h2_cols: usize = <span class="tok-num">28</span>;
+<span class="tok-kw">const</span> h2_rows: usize = <span class="tok-num">28</span>;
+<span class="tok-kw">const</span> h2_n: usize = <span class="tok-num">6000</span>;
+<span class="tok-kw">const</span> bg_items: usize = <span class="tok-num">3</span>;
+<span class="tok-kw">const</span> bg_groups: usize = <span class="tok-num">5</span>;
+<span class="tok-kw">const</span> hb_n: usize = <span class="tok-num">6</span>;
+<span class="tok-kw">const</span> plot_w: f32 = <span class="tok-num">884</span>;
+<span class="tok-kw">const</span> plot_h: f32 = <span class="tok-num">470</span>;
+
+<span class="tok-kw">const</span> MarkerDef = <span class="tok-kw">struct</span> { m: z.plot.Marker, name: []<span class="tok-kw">const</span> u8 };
+<span class="tok-kw">const</span> markers = [_]MarkerDef{
+    .{ .m = .circle, .name = <span class="tok-str">"circle"</span> },
+    .{ .m = .square, .name = <span class="tok-str">"square"</span> },
+    .{ .m = .diamond, .name = <span class="tok-str">"diamond"</span> },
+    .{ .m = .triangle_up, .name = <span class="tok-str">"tri up"</span> },
+    .{ .m = .triangle_down, .name = <span class="tok-str">"tri down"</span> },
+    .{ .m = .triangle_left, .name = <span class="tok-str">"tri left"</span> },
+    .{ .m = .triangle_right, .name = <span class="tok-str">"tri right"</span> },
+    .{ .m = .plus, .name = <span class="tok-str">"plus"</span> },
+    .{ .m = .cross, .name = <span class="tok-str">"cross"</span> },
+    .{ .m = .asterisk, .name = <span class="tok-str">"asterisk"</span> },
+};
+
+<span class="tok-comment">// Vertical reference-line positions for the Inf Lines tab.</span>
+<span class="tok-kw">const</span> vline_vals = [_]f64{ <span class="tok-num">2.0</span>, <span class="tok-num">5.0</span>, <span class="tok-num">8.0</span> };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    ui_host: z.UiHost,
+    font: z.Font,
+    p_lines: z.plot_ui.PlotState = .{},
+    p_markers: z.plot_ui.PlotState = .{},
+    p_more: z.plot_ui.PlotState = .{},
+    p_stems: z.plot_ui.PlotState = .{},
+    p_inflines: z.plot_ui.PlotState = .{},
+    p_errorbars: z.plot_ui.PlotState = .{},
+    p_annot: z.plot_ui.PlotState = .{},
+    p_heatmap: z.plot_ui.PlotState = .{},
+    cmap_idx: usize = <span class="tok-num">0</span>,
+    legend_loc_idx: usize = <span class="tok-num">1</span>,
+    p_hist: z.plot_ui.PlotState = .{},
+    p_hist2d: z.plot_ui.PlotState = .{},
+    p_bargroups: z.plot_ui.PlotState = .{},
+    p_band: z.plot_ui.PlotState = .{},
+    p_hbars: z.plot_ui.PlotState = .{},
+    p_dual: z.plot_ui.PlotState = .{},
+    p_dualx: z.plot_ui.PlotState = .{},
+    p_theme: z.plot_ui.PlotState = .{},
+    p_gaps: z.plot_ui.PlotState = .{},
+    p_query: z.plot_ui.PlotState = .{},
+    p_boxzoom: z.plot_ui.PlotState = .{},
+    p_legend: z.plot_ui.PlotState = .{},
+    legend_h: bool = false,
+    p_image: z.plot_ui.PlotState = .{},
+    img_tex: u32 = <span class="tok-num">0</span>,
+    theme_light: bool = false,
+    p_drag: z.plot_ui.PlotState = .{},
+    p_rect: z.plot_ui.PlotState = .{},
+    p_sel: z.plot_ui.PlotState = .{},
+    p_time: z.plot_ui.PlotState = .{},
+    p_sym: z.plot_ui.PlotState = .{},
+    p_axiscfg: z.plot_ui.PlotState = .{},
+    p_equal: z.plot_ui.PlotState = .{},
+    p_pie: z.plot_ui.PlotState = .{},
+    p_bub: z.plot_ui.PlotState = .{},
+    p_candle: z.plot_ui.PlotState = .{},
+    p_digital: z.plot_ui.PlotState = .{},
+    p_heatlbl: z.plot_ui.PlotState = .{},
+    sub: [<span class="tok-num">4</span>]z.plot_ui.PlotState = <span class="tok-builtin">@splat</span>(.{}),
+    bg_stacked: bool = false,
+    box_mode: bool = true,
+    sel: z.plot_ui.SelectRect = .{},
+    current_tab: usize = <span class="tok-num">0</span>,
+    drag_px: f64 = <span class="tok-num">2.5</span>,
+    drag_py: f64 = <span class="tok-num">0.6</span>,
+    drag_lx: f64 = <span class="tok-num">6.0</span>,
+    drag_ly: f64 = -<span class="tok-num">0.4</span>,
+    rect_x0: f64 = <span class="tok-num">2.0</span>,
+    rect_x1: f64 = <span class="tok-num">6.0</span>,
+    rect_y0: f64 = -<span class="tok-num">0.5</span>,
+    rect_y1: f64 = <span class="tok-num">0.8</span>,
+    frame_count: u64 = <span class="tok-num">0</span>,
+    animate: bool = true,
+
+    <span class="tok-comment">// Line + inf-line section (animated).</span>
+    xs: [n]f64 = undefined,
+    sine: [n]f64 = undefined,
+    cosw: [n]f64 = undefined,
+    d1: [n]f64 = undefined,
+    d2: [n]f64 = undefined,
+
+    <span class="tok-comment">// Markers section: each marker as its own row of points.</span>
+    mxs: [n_marker_pts]f64 = undefined,
+    mys: [markers.len][n_marker_pts]f64 = undefined,
+
+    <span class="tok-comment">// Coarse series for bars / stairs / stems / error bars.</span>
+    cxs: [n_coarse]f64 = undefined,
+    cys: [n_coarse]f64 = undefined,
+    stem_ys: [n_coarse]f64 = undefined,
+    cerr: [n_coarse]f64 = undefined,
+    cneg: [n_coarse]f64 = undefined,
+    cpos: [n_coarse]f64 = undefined,
+
+    <span class="tok-comment">// Smooth positive curve for the shaded fill.</span>
+    sxs: [n]f64 = undefined,
+    area: [n]f64 = undefined,
+
+    <span class="tok-comment">// Heatmap grid + bounds corners (for auto-fit).</span>
+    hvals: [hm_rows * hm_cols]f64 = undefined,
+    hxs: [<span class="tok-num">2</span>]f64 = undefined,
+    hys: [<span class="tok-num">2</span>]f64 = undefined,
+
+    <span class="tok-comment">// Histogram (1D) + 2D histogram data.</span>
+    samp: [hist_n]f64 = undefined,
+    hist_centers: [hist_bins]f64 = undefined,
+    hist_counts: [hist_bins]f64 = undefined,
+    sx: [h2_n]f64 = undefined,
+    sy: [h2_n]f64 = undefined,
+    h2vals: [h2_rows * h2_cols]f64 = undefined,
+    h2x: [<span class="tok-num">2</span>]f64 = undefined,
+    h2y: [<span class="tok-num">2</span>]f64 = undefined,
+    h2max: f64 = <span class="tok-num">1</span>,
+
+    <span class="tok-comment">// Bar groups (item-major), band (between two curves), horizontal bars.</span>
+    bg_vals: [bg_items * bg_groups]f64 = undefined,
+    bg_x: [<span class="tok-num">2</span>]f64 = undefined,
+    bg_y: [<span class="tok-num">2</span>]f64 = undefined,
+    band_hi: [n]f64 = undefined,
+    band_lo: [n]f64 = undefined,
+    hb_vals: [hb_n]f64 = undefined,
+    hb_pos: [hb_n]f64 = undefined,
+    time_x: [n]f64 = undefined,
+    time_y: [n]f64 = undefined,
+    sym_x: [n]f64 = undefined,
+    sym_y: [n]f64 = undefined,
+    acfg_x: [n]f64 = undefined,
+    acfg_y: [n]f64 = undefined,
+    eq_x: [n]f64 = undefined,
+    eq_y: [n]f64 = undefined,
+    pie_vals: [<span class="tok-num">6</span>]f64 = .{ <span class="tok-num">30</span>, <span class="tok-num">22</span>, <span class="tok-num">16</span>, <span class="tok-num">12</span>, <span class="tok-num">14</span>, <span class="tok-num">6</span> },
+    bub_x: [<span class="tok-num">14</span>]f64 = undefined,
+    bub_y: [<span class="tok-num">14</span>]f64 = undefined,
+    bub_sz: [<span class="tok-num">14</span>]f64 = undefined,
+    c_x: [<span class="tok-num">40</span>]f64 = undefined,
+    c_o: [<span class="tok-num">40</span>]f64 = undefined,
+    c_h: [<span class="tok-num">40</span>]f64 = undefined,
+    c_l: [<span class="tok-num">40</span>]f64 = undefined,
+    c_c: [<span class="tok-num">40</span>]f64 = undefined,
+    dig_x: [<span class="tok-num">64</span>]f64 = undefined,
+    dig_y: [<span class="tok-num">64</span>]f64 = undefined,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">rngNext</span>(state: *u64) f64 {
+    state.* = state.* *% <span class="tok-num">6364136223846793005</span> +% <span class="tok-num">1442695040888963407</span>;
+    <span class="tok-kw">const</span> top: u64 = state.* &gt;&gt; <span class="tok-num">40</span>; <span class="tok-comment">// 24 high bits</span>
+    <span class="tok-kw">return</span> <span class="tok-fn">float64</span>(top) / <span class="tok-fn">float64</span>(<span class="tok-builtin">@as</span>(u64, <span class="tok-num">1</span>) &lt;&lt; <span class="tok-num">24</span>);
+}
+
+<span class="tok-comment">/// Approx N(0,1) via the sum of 12 uniforms (central-limit). Deterministic.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">gauss</span>(state: *u64) f64 {
+    <span class="tok-kw">var</span> sum: f64 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (k &lt; <span class="tok-num">12</span>) : (k += <span class="tok-num">1</span>) {
+        sum += <span class="tok-fn">rngNext</span>(state);
+    }
+    <span class="tok-kw">return</span> sum - <span class="tok-num">6.0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>), <span class="tok-num">22</span>);
+    s.* = .{ .font = font, .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font) };
+
+    <span class="tok-comment">// Checkerboard texture for the Image tab: built once, uploaded to the GPU,</span>
+    <span class="tok-comment">// and registered to a draw-list id we keep in State.</span>
+    <span class="tok-kw">const</span> checker: z.Image = <span class="tok-kw">try</span> z.<span class="tok-fn">genImageChecked</span>(
+        gpa,
+        <span class="tok-num">64</span>,
+        <span class="tok-num">64</span>,
+        <span class="tok-num">8</span>,
+        <span class="tok-num">8</span>,
+        .{ .r = <span class="tok-num">60</span>, .g = <span class="tok-num">70</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> },
+        .{ .r = <span class="tok-num">230</span>, .g = <span class="tok-num">220</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> },
+    );
+    <span class="tok-kw">const</span> tex: z.WgpuTexture = z.<span class="tok-fn">loadTextureFromImage</span>(f.gl, checker);
+    z.<span class="tok-fn">unloadImage</span>(gpa, checker);
+    s.img_tex = f.gl.<span class="tok-fn">renderer</span>().<span class="tok-fn">registerOwnedTexture</span>(tex);
+
+    <span class="tok-kw">var</span> j: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; n_marker_pts) : (j += <span class="tok-num">1</span>) {
+        s.mxs[j] = <span class="tok-fn">float64</span>(j) + <span class="tok-num">1.0</span>;
+    }
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; markers.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k &lt; n_marker_pts) : (k += <span class="tok-num">1</span>) {
+            s.mys[i][k] = <span class="tok-fn">float64</span>(i);
+        }
+    }
+
+    <span class="tok-kw">var</span> b: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (b &lt; n_coarse) : (b += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(b);
+        s.cxs[b] = t + <span class="tok-num">0.5</span>;
+        s.cys[b] = <span class="tok-num">1.0</span> + <span class="tok-fn">float64</span>((b * <span class="tok-num">7</span> + <span class="tok-num">3</span>) % <span class="tok-num">6</span>) * <span class="tok-num">0.5</span>;
+        s.stem_ys[b] = <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.7</span>) * <span class="tok-num">2.0</span>;
+        s.cerr[b] = <span class="tok-num">0.25</span> + <span class="tok-num">0.12</span> * <span class="tok-fn">float64</span>(b % <span class="tok-num">3</span>);
+        s.cneg[b] = <span class="tok-num">0.2</span> + <span class="tok-num">0.1</span> * <span class="tok-fn">float64</span>(b % <span class="tok-num">2</span>);
+        s.cpos[b] = <span class="tok-num">0.5</span> + <span class="tok-num">0.1</span> * <span class="tok-fn">float64</span>((b + <span class="tok-num">1</span>) % <span class="tok-num">3</span>);
+    }
+
+    <span class="tok-kw">var</span> m: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (m &lt; n) : (m += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(m) / <span class="tok-builtin">@as</span>(f64, n - <span class="tok-num">1</span>) * <span class="tok-num">12.0</span>;
+        s.sxs[m] = t;
+        s.area[m] = <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.8</span>) * <span class="tok-num">1.5</span> + <span class="tok-num">2.5</span>;
+    }
+
+    s.hxs = .{ <span class="tok-num">0</span>, <span class="tok-builtin">@floatFromInt</span>(hm_cols) };
+    s.hys = .{ <span class="tok-num">0</span>, <span class="tok-builtin">@floatFromInt</span>(hm_rows) };
+
+    <span class="tok-comment">// 1D histogram: gaussian samples binned over [-4, 4].</span>
+    <span class="tok-kw">var</span> rng: u64 = <span class="tok-num">0x9e3779b97f4a7c15</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..hist_n) |hi| {
+        s.samp[hi] = <span class="tok-fn">gauss</span>(&amp;rng);
+    }
+    z.plot.<span class="tok-fn">histogramBins</span>(&amp;s.samp, &amp;s.hist_counts, -<span class="tok-num">4.0</span>, <span class="tok-num">4.0</span>);
+    <span class="tok-kw">const</span> bf: f64 = <span class="tok-fn">float64</span>(hist_bins);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..hist_bins) |bi| {
+        s.hist_centers[bi] = -<span class="tok-num">4.0</span> + <span class="tok-num">8.0</span> * (<span class="tok-fn">float64</span>(bi) + <span class="tok-num">0.5</span>) / bf;
+    }
+
+    <span class="tok-comment">// 2D histogram: independent gaussian x/y, binned over [-3,3]^2.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..h2_n) |pi| {
+        s.sx[pi] = <span class="tok-fn">gauss</span>(&amp;rng);
+        s.sy[pi] = <span class="tok-fn">gauss</span>(&amp;rng);
+    }
+    z.plot.<span class="tok-fn">histogramBins2D</span>(&amp;s.sx, &amp;s.sy, &amp;s.h2vals, h2_cols, h2_rows, -<span class="tok-num">3.0</span>, <span class="tok-num">3.0</span>, -<span class="tok-num">3.0</span>, <span class="tok-num">3.0</span>);
+    s.h2x = .{ -<span class="tok-num">3</span>, <span class="tok-num">3</span> };
+    s.h2y = .{ -<span class="tok-num">3</span>, <span class="tok-num">3</span> };
+    <span class="tok-kw">var</span> mx: f64 = <span class="tok-num">1</span>;
+    <span class="tok-kw">for</span> (s.h2vals) |v| {
+        <span class="tok-kw">if</span> (v &gt; mx) {
+            mx = v;
+        }
+    }
+    s.h2max = mx;
+
+    <span class="tok-comment">// Bar groups: 3 items x 5 groups (item-major). Track stacked-sum max.</span>
+    <span class="tok-kw">const</span> bgv = [_]f64{
+        <span class="tok-num">2.0</span>, <span class="tok-num">3.0</span>, <span class="tok-num">1.5</span>, <span class="tok-num">4.0</span>, <span class="tok-num">2.5</span>, <span class="tok-comment">// item 0 across groups</span>
+        <span class="tok-num">1.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">3.0</span>, <span class="tok-num">1.5</span>, <span class="tok-num">2.0</span>, <span class="tok-comment">// item 1</span>
+        <span class="tok-num">2.5</span>, <span class="tok-num">1.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">2.5</span>, <span class="tok-num">3.0</span>, <span class="tok-comment">// item 2</span>
+    };
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..bg_items * bg_groups) |k| {
+        s.bg_vals[k] = bgv[k];
+    }
+    <span class="tok-kw">var</span> bgmax: f64 = <span class="tok-num">1</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..bg_groups) |g| {
+        <span class="tok-kw">var</span> sum: f64 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..bg_items) |it| {
+            sum += s.bg_vals[it * bg_groups + g];
+        }
+        <span class="tok-kw">if</span> (sum &gt; bgmax) {
+            bgmax = sum;
+        }
+    }
+    s.bg_x = .{ -<span class="tok-num">0.6</span>, <span class="tok-fn">float64</span>(bg_groups) - <span class="tok-num">0.4</span> };
+    s.bg_y = .{ <span class="tok-num">0</span>, bgmax * <span class="tok-num">1.05</span> };
+
+    <span class="tok-comment">// Horizontal bars: position 0 has value 0 so the x=0 baseline is in frame.</span>
+    <span class="tok-kw">const</span> hbv = [_]f64{ <span class="tok-num">0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">4.0</span>, <span class="tok-num">1.5</span>, <span class="tok-num">5.0</span>, <span class="tok-num">3.0</span> };
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..hb_n) |k| {
+        s.hb_pos[k] = <span class="tok-builtin">@floatFromInt</span>(k);
+        s.hb_vals[k] = hbv[k];
+    }
+
+    <span class="tok-comment">// Time series: a 2-day diurnal "temperature" curve over epoch seconds.</span>
+    <span class="tok-kw">const</span> t0: f64 = <span class="tok-num">1704067200</span>; <span class="tok-comment">// 2024-01-01 00:00 UTC</span>
+    <span class="tok-kw">const</span> tspan: f64 = <span class="tok-num">2.0</span> * <span class="tok-num">86400.0</span>;
+    <span class="tok-kw">var</span> tseed: u64 = <span class="tok-num">99</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |k| {
+        <span class="tok-kw">const</span> fr: f64 = <span class="tok-fn">float64</span>(k) / <span class="tok-builtin">@as</span>(f64, n - <span class="tok-num">1</span>);
+        s.time_x[k] = t0 + fr * tspan;
+        <span class="tok-comment">// Two turns across the span, started a quarter turn back so it opens at the trough.</span>
+        <span class="tok-kw">const</span> diurnal: f64 = <span class="tok-num">15.0</span> + <span class="tok-num">8.0</span> * <span class="tok-fn">sinTurns</span>(fr * <span class="tok-num">2.0</span> - <span class="tok-num">0.25</span>);
+        s.time_y[k] = diurnal + <span class="tok-fn">gauss</span>(&amp;tseed) * <span class="tok-num">0.6</span>;
+    }
+
+    <span class="tok-comment">// Symlog series: a saturating curve crossing zero, spanning +/-1000.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |k| {
+        <span class="tok-kw">const</span> fr: f64 = <span class="tok-fn">float64</span>(k) / <span class="tok-builtin">@as</span>(f64, n - <span class="tok-num">1</span>);
+        s.sym_x[k] = fr * <span class="tok-num">10.0</span>;
+        <span class="tok-kw">const</span> uu: f64 = (fr - <span class="tok-num">0.5</span>) * <span class="tok-num">8.0</span>;
+        s.sym_y[k] = <span class="tok-num">1000.0</span> * (uu / (<span class="tok-num">1.0</span> + <span class="tok-builtin">@abs</span>(uu)));
+    }
+
+    <span class="tok-comment">// Axis-config series: x in [0,1] (percent), y a 0..120 swing.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |k| {
+        <span class="tok-kw">const</span> fr: f64 = <span class="tok-fn">float64</span>(k) / <span class="tok-builtin">@as</span>(f64, n - <span class="tok-num">1</span>);
+        s.acfg_x[k] = fr;
+        s.acfg_y[k] = <span class="tok-num">60.0</span> + <span class="tok-num">50.0</span> * <span class="tok-fn">sinTurns</span>(fr);
+    }
+
+    <span class="tok-comment">// Equal-aspect series: a unit circle (round only with equal aspect).</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |k| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(k) / <span class="tok-builtin">@as</span>(f64, n - <span class="tok-num">1</span>) * <span class="tok-num">6.2831853</span>;
+        s.eq_x[k] = <span class="tok-builtin">@cos</span>(t);
+        s.eq_y[k] = <span class="tok-builtin">@sin</span>(t);
+    }
+
+    <span class="tok-comment">// Bubbles: scattered points with a third value mapped to size.</span>
+    <span class="tok-kw">var</span> bseed: u64 = <span class="tok-num">99</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">14</span>) |k| {
+        s.bub_x[k] = <span class="tok-num">1.0</span> + <span class="tok-fn">rngNext</span>(&amp;bseed) * <span class="tok-num">9.0</span>;
+        s.bub_y[k] = <span class="tok-num">1.0</span> + <span class="tok-fn">rngNext</span>(&amp;bseed) * <span class="tok-num">8.0</span>;
+        s.bub_sz[k] = <span class="tok-num">2.0</span> + <span class="tok-fn">rngNext</span>(&amp;bseed) * <span class="tok-num">90.0</span>;
+    }
+
+    <span class="tok-comment">// Candlesticks: a small random walk of OHLC bars.</span>
+    <span class="tok-kw">var</span> cseed: u64 = <span class="tok-num">1234</span>;
+    <span class="tok-kw">var</span> price: f64 = <span class="tok-num">100</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">40</span>) |k| {
+        s.c_x[k] = <span class="tok-builtin">@floatFromInt</span>(k);
+        <span class="tok-kw">const</span> o: f64 = price;
+        <span class="tok-kw">const</span> c: f64 = o + (<span class="tok-fn">rngNext</span>(&amp;cseed) - <span class="tok-num">0.5</span>) * <span class="tok-num">9.0</span>;
+        <span class="tok-kw">const</span> wig: f64 = <span class="tok-fn">rngNext</span>(&amp;cseed) * <span class="tok-num">4.0</span>;
+        s.c_o[k] = o;
+        s.c_c[k] = c;
+        s.c_h[k] = <span class="tok-builtin">@max</span>(o, c) + wig;
+        s.c_l[k] = <span class="tok-builtin">@min</span>(o, c) - wig;
+        price = c;
+    }
+
+    <span class="tok-comment">// Digital trace: a pseudo-random 0/1 bitstream.</span>
+    <span class="tok-kw">var</span> dseed: u64 = <span class="tok-num">555</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">64</span>) |k| {
+        s.dig_x[k] = <span class="tok-builtin">@floatFromInt</span>(k);
+        s.dig_y[k] = <span class="tok-kw">if</span> (<span class="tok-fn">rngNext</span>(&amp;dseed) &gt; <span class="tok-num">0.5</span>) <span class="tok-num">1</span> <span class="tok-kw">else</span> <span class="tok-num">0</span>;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">regen</span>(s: *State) void {
+    <span class="tok-kw">const</span> phase: f64 = <span class="tok-kw">if</span> (s.animate) <span class="tok-fn">float64</span>(s.frame_count) * <span class="tok-num">0.03</span> <span class="tok-kw">else</span> <span class="tok-num">0.0</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; n) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-builtin">@as</span>(f64, n - <span class="tok-num">1</span>) * <span class="tok-num">10.0</span>;
+        s.xs[i] = t;
+        s.sine[i] = <span class="tok-builtin">@sin</span>(t + phase);
+        s.cosw[i] = <span class="tok-builtin">@cos</span>(t * <span class="tok-num">0.7</span> + phase) * <span class="tok-num">0.8</span>;
+        <span class="tok-kw">const</span> env: f64 = <span class="tok-num">0.35</span> + <span class="tok-num">0.25</span> * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.5</span>);
+        s.band_hi[i] = s.sine[i] + env;
+        s.band_lo[i] = s.sine[i] - env;
+        s.d1[i] = <span class="tok-num">50.0</span> + <span class="tok-num">40.0</span> * <span class="tok-builtin">@sin</span>(t + phase);
+        s.d2[i] = <span class="tok-num">0.5</span> + <span class="tok-num">0.45</span> * <span class="tok-builtin">@cos</span>(t * <span class="tok-num">0.7</span> + phase);
+    }
+    <span class="tok-kw">var</span> r: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (r &lt; hm_rows) : (r += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> c: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (c &lt; hm_cols) : (c += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> fx: f64 = <span class="tok-fn">float64</span>(c);
+            <span class="tok-kw">const</span> fy: f64 = <span class="tok-fn">float64</span>(r);
+            s.hvals[r * hm_cols + c] = <span class="tok-builtin">@sin</span>(fx * <span class="tok-num">0.4</span> + phase) * <span class="tok-builtin">@cos</span>(fy * <span class="tok-num">0.4</span>);
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabLines</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> locs = [_]z.plot.LegendLocation{ .nw, .ne, .sw, .se };
+    <span class="tok-kw">const</span> loc: z.plot.LegendLocation = locs[s.legend_loc_idx % locs.len];
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"legend corner"</span>, .{})) {
+        s.legend_loc_idx += <span class="tok-num">1</span>;
+    }
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"corner: {s}  (tap a legend row to hide/show that line)"</span>, .{<span class="tok-builtin">@tagName</span>(loc)});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"sin"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.cosw,
+            .spec = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">152</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"cos"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_lines, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"live lines"</span>,
+        .legend_location = loc,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabMarkers</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">var</span> mseries: [markers.len]z.plot_ui.Series = undefined;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; markers.len) : (i += <span class="tok-num">1</span>) {
+        mseries[i] = .{
+            .kind = .scatter,
+            .xs = &amp;s.mxs,
+            .ys = &amp;s.mys[i],
+            .spec = .{ .marker = markers[i].m, .marker_size = <span class="tok-num">5.0</span>, .color = z.plot.<span class="tok-fn">autoColor</span>(i) },
+            .label = markers[i].name,
+        };
+    }
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_markers, .{ plot_w, plot_h }, &amp;mseries, .{ .title = <span class="tok-str">"marker types"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabMore</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .shaded,
+            .xs = &amp;s.sxs,
+            .ys = &amp;s.area,
+            .shaded = .{ .color = .{ .r = <span class="tok-num">76</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">50</span> }, .y_ref = <span class="tok-num">0</span> },
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;s.sxs,
+            .ys = &amp;s.area,
+            .spec = .{ .color = .{ .r = <span class="tok-num">76</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"area"</span>,
+        },
+        .{
+            .kind = .bars,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.cys,
+            .bars = .{ .color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">188</span>, .b = <span class="tok-num">212</span>, .a = <span class="tok-num">120</span> }, .width = <span class="tok-num">0.6</span> },
+            .label = <span class="tok-str">"bars"</span>,
+        },
+        .{
+            .kind = .stairs,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.cys,
+            .spec = .{ .color = .{ .r = <span class="tok-num">156</span>, .g = <span class="tok-num">39</span>, .b = <span class="tok-num">176</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"stairs"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_more, .{ plot_w, plot_h }, &amp;series, .{ .title = <span class="tok-str">"shaded / bars / stairs"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabStems</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .stems,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.stem_ys,
+            .spec = .{
+                .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> },
+                .marker = .circle,
+                .marker_size = <span class="tok-num">4.0</span>,
+            },
+            .label = <span class="tok-str">"stems"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_stems, .{ plot_w, plot_h }, &amp;series, .{ .title = <span class="tok-str">"stem plot"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabInfLines</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"sin"</span>,
+        },
+        .{
+            .kind = .inf_lines,
+            .xs = &amp;vline_vals,
+            .ys = &amp;vline_vals,
+            .inflines = .{ .color = .{ .r = <span class="tok-num">244</span>, .g = <span class="tok-num">67</span>, .b = <span class="tok-num">54</span>, .a = <span class="tok-num">200</span> } },
+            .label = <span class="tok-str">"markers"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_inflines, .{ plot_w, plot_h }, &amp;series, .{ .title = <span class="tok-str">"infinite lines"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabErrorBars</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .bars,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.cys,
+            .bars = .{ .color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">188</span>, .b = <span class="tok-num">212</span>, .a = <span class="tok-num">90</span> }, .width = <span class="tok-num">0.5</span> },
+            .label = <span class="tok-str">"value"</span>,
+        },
+        .{
+            .kind = .error_bars,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.cys,
+            .err = &amp;s.cerr,
+            .errorbars = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">180</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"sym err"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.stem_ys,
+            .spec = .{ .color = .{ .r = <span class="tok-num">156</span>, .g = <span class="tok-num">39</span>, .b = <span class="tok-num">176</span>, .a = <span class="tok-num">255</span> }, .marker = .circle, .marker_size = <span class="tok-num">3</span> },
+            .label = <span class="tok-str">"signal"</span>,
+        },
+        .{
+            .kind = .error_bars_asym,
+            .xs = &amp;s.cxs,
+            .ys = &amp;s.stem_ys,
+            .err_neg = &amp;s.cneg,
+            .err_pos = &amp;s.cpos,
+            .errorbars = .{ .color = .{ .r = <span class="tok-num">233</span>, .g = <span class="tok-num">30</span>, .b = <span class="tok-num">99</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"asym err"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_errorbars, .{ plot_w, plot_h }, &amp;series, .{ .title = <span class="tok-str">"error bars (sym + asym)"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabAnnotations</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"sin"</span>,
+        },
+    };
+    <span class="tok-kw">const</span> overlays = [_]z.plot_ui.Overlay{
+        .{
+            .kind = .text,
+            .text = <span class="tok-str">"free text label"</span>,
+            .x = <span class="tok-num">5.0</span>,
+            .y = <span class="tok-num">1.25</span>,
+            .text_spec = .{ .color = .{ .r = <span class="tok-num">210</span>, .g = <span class="tok-num">210</span>, .b = <span class="tok-num">220</span>, .a = <span class="tok-num">255</span> } },
+        },
+        .{ .kind = .annotation, .text = <span class="tok-str">"first peak"</span>, .x = <span class="tok-num">1.57</span>, .y = <span class="tok-num">1.0</span> },
+        .{ .kind = .annotation, .text = <span class="tok-str">"trough"</span>, .x = <span class="tok-num">4.71</span>, .y = -<span class="tok-num">1.0</span>, .ann_spec = .{ .offset = .{ <span class="tok-num">0</span>, <span class="tok-num">16</span> } } },
+        .{ .kind = .tag_x, .text = <span class="tok-str">"x=5"</span>, .value = <span class="tok-num">5.0</span> },
+        .{ .kind = .tag_y, .text = <span class="tok-str">"0"</span>, .value = <span class="tok-num">0.0</span> },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_annot, .{ plot_w, plot_h }, &amp;series, .{
+        .title = <span class="tok-str">"text / annotations / tags"</span>,
+        .overlays = &amp;overlays,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabHeatmap</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> cmaps = [_]z.plot.Colormap{ .viridis, .plasma, .jet, .hot, .cool, .spectral, .twilight, .greys };
+    <span class="tok-kw">const</span> cmap: z.plot.Colormap = cmaps[s.cmap_idx % cmaps.len];
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"next colormap"</span>, .{})) {
+        s.cmap_idx += <span class="tok-num">1</span>;
+    }
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"colormap: {s}"</span>, .{<span class="tok-builtin">@tagName</span>(cmap)});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .heatmap,
+            .xs = &amp;s.hxs,
+            .ys = &amp;s.hys,
+            .values = &amp;s.hvals,
+            .rows = hm_rows,
+            .cols = hm_cols,
+            .heatmap = .{
+                .cmap = cmap,
+                .min = -<span class="tok-num">1</span>,
+                .max = <span class="tok-num">1</span>,
+                .x0 = <span class="tok-num">0</span>,
+                .x1 = <span class="tok-builtin">@floatFromInt</span>(hm_cols),
+                .y0 = <span class="tok-num">0</span>,
+                .y1 = <span class="tok-builtin">@floatFromInt</span>(hm_rows),
+            },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_heatmap, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"heatmap"</span>,
+        .show_legend = false,
+        .colorbar = .{
+            .cmap = cmap,
+            .min = -<span class="tok-num">1</span>,
+            .max = <span class="tok-num">1</span>,
+            .ticks = <span class="tok-num">5</span>,
+            .label_decimals = <span class="tok-num">1</span>,
+        },
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabHistogram</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .bars,
+            .xs = &amp;s.hist_centers,
+            .ys = &amp;s.hist_counts,
+            .bars = .{ .color = .{ .r = <span class="tok-num">100</span>, .g = <span class="tok-num">181</span>, .b = <span class="tok-num">246</span>, .a = <span class="tok-num">200</span> }, .width = <span class="tok-num">0.92</span> },
+            .label = <span class="tok-str">"counts"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_hist, .{ plot_w, plot_h }, &amp;series, .{
+        .title = <span class="tok-str">"histogram - 4000 gaussian samples"</span>,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabHistogram2D</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .heatmap,
+            .xs = &amp;s.h2x,
+            .ys = &amp;s.h2y,
+            .values = &amp;s.h2vals,
+            .rows = h2_rows,
+            .cols = h2_cols,
+            .heatmap = .{ .cmap = .plasma, .min = <span class="tok-num">0</span>, .max = s.h2max, .x0 = -<span class="tok-num">3</span>, .x1 = <span class="tok-num">3</span>, .y0 = -<span class="tok-num">3</span>, .y1 = <span class="tok-num">3</span> },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_hist2d, .{ plot_w, plot_h }, &amp;series, .{
+        .title = <span class="tok-str">"2D histogram - gaussian x/y"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabBarGroups</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-kw">if</span> (s.bg_stacked) <span class="tok-str">"show clustered"</span> <span class="tok-kw">else</span> <span class="tok-str">"show stacked"</span>, .{})) {
+        s.bg_stacked = !s.bg_stacked;
+    }
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"mode: {s}  (3 items x 5 groups)"</span>, .{<span class="tok-kw">if</span> (s.bg_stacked) <span class="tok-str">"stacked"</span> <span class="tok-kw">else</span> <span class="tok-str">"clustered"</span>});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .bar_groups,
+            .xs = &amp;s.bg_x,
+            .ys = &amp;s.bg_y,
+            .values = &amp;s.bg_vals,
+            .rows = bg_items,
+            .cols = bg_groups,
+            .bargroups = .{ .stacked = s.bg_stacked, .width = <span class="tok-num">0.7</span> },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_bargroups, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"bar groups"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabBand</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .shaded_between,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.band_hi,
+            .ys2 = &amp;s.band_lo,
+            .shaded = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">55</span> } },
+            .label = <span class="tok-str">"band"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"signal"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_band, .{ plot_w, plot_h }, &amp;series, .{ .title = <span class="tok-str">"shaded between two lines"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabHBars</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .bars,
+            .xs = &amp;s.hb_vals,
+            .ys = &amp;s.hb_pos,
+            .bars = .{
+                .horizontal = true,
+                .color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">188</span>, .b = <span class="tok-num">212</span>, .a = <span class="tok-num">200</span> },
+                .width = <span class="tok-num">0.6</span>,
+                .show_labels = true,
+            },
+            .label = <span class="tok-str">"value"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_hbars, .{ plot_w, plot_h }, &amp;series, .{ .title = <span class="tok-str">"horizontal bars"</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabDual</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.d1,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"left (y1)"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.d2,
+            .axis = .y2,
+            .spec = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">152</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"right (y2)"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_dual, .{ plot_w, plot_h }, &amp;series, .{
+        .title = <span class="tok-str">"dual Y axes"</span>,
+        .y_label = <span class="tok-str">"0..100"</span>,
+        .y2_label = <span class="tok-str">"0..1"</span>,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabSubplots</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> sp: z.plot_ui.Subplots = z.plot_ui.<span class="tok-fn">beginSubplots</span>(u, .{ plot_w, plot_h }, <span class="tok-num">2</span>, <span class="tok-num">2</span>, <span class="tok-num">10</span>);
+    {
+        <span class="tok-kw">const</span> sz: Vec2 = sp.<span class="tok-fn">cellAt</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+            .{
+                .kind = .line,
+                .xs = &amp;s.xs,
+                .ys = &amp;s.sine,
+                .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+            },
+        };
+        z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.sub[<span class="tok-num">0</span>], sz, &amp;series, .{ .title = <span class="tok-str">"sin"</span>, .show_legend = false });
+    }
+    {
+        <span class="tok-kw">const</span> sz: Vec2 = sp.<span class="tok-fn">cellAt</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+            .{
+                .kind = .line,
+                .xs = &amp;s.xs,
+                .ys = &amp;s.cosw,
+                .spec = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">152</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> } },
+            },
+        };
+        z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.sub[<span class="tok-num">1</span>], sz, &amp;series, .{ .title = <span class="tok-str">"cos"</span>, .show_legend = false });
+    }
+    {
+        <span class="tok-kw">const</span> sz: Vec2 = sp.<span class="tok-fn">cellAt</span>(<span class="tok-num">1</span>, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+            .{
+                .kind = .scatter,
+                .xs = &amp;s.cxs,
+                .ys = &amp;s.cys,
+                .spec = .{ .marker = .diamond, .marker_size = <span class="tok-num">5</span>, .color = .{ .r = <span class="tok-num">76</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">255</span> } },
+            },
+        };
+        z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.sub[<span class="tok-num">2</span>], sz, &amp;series, .{ .title = <span class="tok-str">"scatter"</span>, .show_legend = false });
+    }
+    {
+        <span class="tok-kw">const</span> sz: Vec2 = sp.<span class="tok-fn">cellAt</span>(<span class="tok-num">1</span>, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+            .{
+                .kind = .bars,
+                .xs = &amp;s.cxs,
+                .ys = &amp;s.cys,
+                .bars = .{ .color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">188</span>, .b = <span class="tok-num">212</span>, .a = <span class="tok-num">160</span> }, .width = <span class="tok-num">0.7</span> },
+            },
+        };
+        z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.sub[<span class="tok-num">3</span>], sz, &amp;series, .{ .title = <span class="tok-str">"bars"</span>, .show_legend = false });
+    }
+    sp.<span class="tok-fn">finish</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabDrag</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"grab the dot or either guide line and drag it"</span>, .{});
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"pt = ({d:.2}, {d:.2})   x-line = {d:.2}   y-line = {d:.2}"</span>, .{
+        s.drag_px,
+        s.drag_py,
+        s.drag_lx,
+        s.drag_ly,
+    });
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">200</span> } },
+        },
+    };
+    <span class="tok-kw">const</span> handles = [_]z.plot_ui.DragHandle{
+        .{ .kind = .point, .x = &amp;s.drag_px, .y = &amp;s.drag_py, .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">87</span>, .b = <span class="tok-num">34</span>, .a = <span class="tok-num">255</span> } },
+        .{ .kind = .line_x, .x = &amp;s.drag_lx, .color = .{ .r = <span class="tok-num">76</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">220</span> } },
+        .{ .kind = .line_y, .y = &amp;s.drag_ly, .color = .{ .r = <span class="tok-num">156</span>, .g = <span class="tok-num">39</span>, .b = <span class="tok-num">176</span>, .a = <span class="tok-num">220</span> } },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_drag, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"drag tools"</span>,
+        .drag_handles = &amp;handles,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabDragRect</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"drag the rectangle interior to move it, a corner to resize"</span>, .{});
+    <span class="tok-kw">const</span> xlo: f64 = <span class="tok-builtin">@min</span>(s.rect_x0, s.rect_x1);
+    <span class="tok-kw">const</span> xhi: f64 = <span class="tok-builtin">@max</span>(s.rect_x0, s.rect_x1);
+    <span class="tok-kw">const</span> ylo: f64 = <span class="tok-builtin">@min</span>(s.rect_y0, s.rect_y1);
+    <span class="tok-kw">const</span> yhi: f64 = <span class="tok-builtin">@max</span>(s.rect_y0, s.rect_y1);
+    <span class="tok-kw">var</span> inside: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (s.xs, s.sine) |xv, yv| {
+        <span class="tok-kw">if</span> (xv &gt;= xlo <span class="tok-kw">and</span> xv &lt;= xhi <span class="tok-kw">and</span> yv &gt;= ylo <span class="tok-kw">and</span> yv &lt;= yhi) {
+            inside += <span class="tok-num">1</span>;
+        }
+    }
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"x:[{d:.2}, {d:.2}]  y:[{d:.2}, {d:.2}]  pts inside: {d}"</span>, .{ xlo, xhi, ylo, yhi, inside });
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">200</span> } },
+        },
+    };
+    <span class="tok-kw">const</span> dr: z.plot_ui.DragRect = .{
+        .x0 = &amp;s.rect_x0,
+        .x1 = &amp;s.rect_x1,
+        .y0 = &amp;s.rect_y0,
+        .y1 = &amp;s.rect_y1,
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_rect, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"drag rect + query"</span>,
+        .drag_rect = dr,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabSelect</span>(u: ui.Ui, s: *State) void {
+    _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"select mode (drag = box-select; uncheck to pan)"</span>, &amp;s.box_mode);
+    <span class="tok-kw">if</span> (s.sel.has) {
+        <span class="tok-kw">var</span> inside: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (s.xs, s.sine) |xv, yv| {
+            <span class="tok-kw">if</span> (xv &gt;= s.sel.x0 <span class="tok-kw">and</span> xv &lt;= s.sel.x1 <span class="tok-kw">and</span> yv &gt;= s.sel.y0 <span class="tok-kw">and</span> yv &lt;= s.sel.y1) {
+                inside += <span class="tok-num">1</span>;
+            }
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"selected x:[{d:.2}, {d:.2}]  y:[{d:.2}, {d:.2}]  pts: {d}"</span>, .{
+            s.sel.x0,
+            s.sel.x1,
+            s.sel.y0,
+            s.sel.y1,
+            inside,
+        });
+    } <span class="tok-kw">else</span> {
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"drag a box over the curve to select a region (tap to clear)"</span>, .{});
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.xs,
+            .ys = &amp;s.sine,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">200</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_sel, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"box select + query"</span>,
+        .box_select = s.box_mode,
+        .selection = &amp;s.sel,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabTime</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"epoch-seconds x axis with date/time ticks (pan/zoom to rescale)"</span>, .{});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.time_x,
+            .ys = &amp;s.time_y,
+            .spec = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">152</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_time, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"time series (2 days)"</span>,
+        .x_time = true,
+        .y_label = <span class="tok-str">"degC"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabSymlog</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"symmetric-log Y: linear near 0, log decades beyond (linthresh=1)"</span>, .{});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.sym_x,
+            .ys = &amp;s.sym_y,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_sym, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"symlog"</span>,
+        .y_symlog = true,
+        .y_linthresh = <span class="tok-num">1</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabAxisCfg</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"custom Y labels + percent X; view locked to data via constraints"</span>, .{});
+    <span class="tok-kw">const</span> yt = [_]f64{ <span class="tok-num">0</span>, <span class="tok-num">30</span>, <span class="tok-num">60</span>, <span class="tok-num">90</span>, <span class="tok-num">120</span> };
+    <span class="tok-kw">const</span> yl = [_][]<span class="tok-kw">const</span> u8{ <span class="tok-str">"0"</span>, <span class="tok-str">"cool"</span>, <span class="tok-str">"warm"</span>, <span class="tok-str">"hot"</span>, <span class="tok-str">"max"</span> };
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.acfg_x,
+            .ys = &amp;s.acfg_y,
+            .spec = .{ .color = .{ .r = <span class="tok-num">76</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_axiscfg, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"axiscfg"</span>,
+        .x_format = .percent,
+        .y_tick_values = &amp;yt,
+        .y_tick_labels = &amp;yl,
+        .x_constraints = .{ .min = <span class="tok-num">0</span>, .max = <span class="tok-num">1</span> },
+        .y_constraints = .{ .min = <span class="tok-num">0</span>, .max = <span class="tok-num">120</span> },
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabEqual</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"equal aspect: identical units/pixel on both axes keeps the circle round"</span>, .{});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;s.eq_x,
+            .ys = &amp;s.eq_y,
+            .spec = .{ .color = .{ .r = <span class="tok-num">233</span>, .g = <span class="tok-num">30</span>, .b = <span class="tok-num">99</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_equal, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"equal"</span>,
+        .equal_aspect = true,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabPie</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"pie chart — wedge angle is proportional; labels + percentages inside"</span>, .{});
+    <span class="tok-kw">const</span> labs = [_][]<span class="tok-kw">const</span> u8{ <span class="tok-str">"rent"</span>, <span class="tok-str">"food"</span>, <span class="tok-str">"fun"</span>, <span class="tok-str">"save"</span>, <span class="tok-str">"travel"</span>, <span class="tok-str">"misc"</span> };
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .pie,
+            .xs = &amp;[_]f64{},
+            .ys = &amp;[_]f64{},
+            .values = &amp;s.pie_vals,
+            .pie = .{ .radius = <span class="tok-num">1.0</span>, .labels = &amp;labs },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_pie, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"pie"</span>,
+        .equal_aspect = true,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabBubbles</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"bubble chart — marker radius encodes a third value"</span>, .{});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .bubbles,
+            .xs = &amp;s.bub_x,
+            .ys = &amp;s.bub_y,
+            .sizes = &amp;s.bub_sz,
+            .bubble = .{ .color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">188</span>, .b = <span class="tok-num">212</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_bub, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"bubbles"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabCandles</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"candlestick / OHLC — green when close &gt;= open, red otherwise"</span>, .{});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .candlestick,
+            .xs = &amp;s.c_x,
+            .ys = &amp;s.c_c,
+            .opens = &amp;s.c_o,
+            .highs = &amp;s.c_h,
+            .lows = &amp;s.c_l,
+            .closes = &amp;s.c_c,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_candle, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"ohlc"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabDigital</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"digital / logic trace — 0/1 step signal in a fixed bottom band"</span>, .{});
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .digital,
+            .xs = &amp;s.dig_x,
+            .ys = &amp;s.dig_y,
+            .digital = .{
+                .color = .{ .r = <span class="tok-num">76</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">255</span> },
+                .height = <span class="tok-num">46</span>,
+                .offset = <span class="tok-num">36</span>,
+            },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_digital, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"digital"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabHeatLabels</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"heatmap cell labels — text color auto-picks black/white for contrast"</span>, .{});
+    <span class="tok-kw">const</span> vals = [_]f64{
+        <span class="tok-num">0.05</span>, <span class="tok-num">0.30</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.80</span>,
+        <span class="tok-num">0.20</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.70</span>, <span class="tok-num">0.95</span>,
+        <span class="tok-num">0.10</span>, <span class="tok-num">0.35</span>, <span class="tok-num">0.60</span>, <span class="tok-num">0.85</span>,
+        <span class="tok-num">0.25</span>, <span class="tok-num">0.50</span>, <span class="tok-num">0.75</span>, <span class="tok-num">1.00</span>,
+    };
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .heatmap,
+            .xs = &amp;[_]f64{},
+            .ys = &amp;[_]f64{},
+            .values = &amp;vals,
+            .rows = <span class="tok-num">4</span>,
+            .cols = <span class="tok-num">4</span>,
+            .heatmap = .{
+                .cmap = .viridis,
+                .min = <span class="tok-num">0</span>,
+                .max = <span class="tok-num">1</span>,
+                .x0 = <span class="tok-num">0</span>,
+                .x1 = <span class="tok-num">4</span>,
+                .y0 = <span class="tok-num">0</span>,
+                .y1 = <span class="tok-num">4</span>,
+                .show_labels = true,
+                .label_decimals = <span class="tok-num">2</span>,
+            },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_heatlbl, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"cells"</span>,
+        .show_legend = false,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabDualX</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"two independent X axes: bottom 0..10 (blue), top 32..212 (orange)"</span>, .{});
+    <span class="tok-kw">var</span> xs1: [<span class="tok-num">40</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys1: [<span class="tok-num">40</span>]f64 = undefined;
+    <span class="tok-kw">var</span> xs2: [<span class="tok-num">40</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys2: [<span class="tok-num">40</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">40</span>) |i| {
+        <span class="tok-kw">const</span> fi: f64 = <span class="tok-fn">float64</span>(i);
+        <span class="tok-kw">const</span> t: f64 = fi / <span class="tok-num">39.0</span>;
+        xs1[i] = t * <span class="tok-num">10.0</span>;
+        ys1[i] = <span class="tok-num">0.5</span> + <span class="tok-num">0.4</span> * <span class="tok-builtin">@sin</span>(xs1[i]);
+        xs2[i] = <span class="tok-num">32.0</span> + t * <span class="tok-num">180.0</span>;
+        ys2[i] = <span class="tok-num">0.5</span> + <span class="tok-num">0.4</span> * <span class="tok-builtin">@cos</span>(xs2[i] / <span class="tok-num">30.0</span>);
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;xs1,
+            .ys = &amp;ys1,
+            .spec = .{ .color = .{ .r = <span class="tok-num">100</span>, .g = <span class="tok-num">181</span>, .b = <span class="tok-num">246</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"x1 series"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;xs2,
+            .ys = &amp;ys2,
+            .x_axis = .x2,
+            .spec = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">160</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> } },
+            .label = <span class="tok-str">"x2 series"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_dualx, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"dual X axes"</span>,
+        .x_label = <span class="tok-str">"x1 (bottom)"</span>,
+        .x2_label = <span class="tok-str">"x2 (top)"</span>,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabTheme</span>(u: ui.Ui, s: *State) void {
+    _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"light theme"</span>, &amp;s.theme_light);
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"the same plot under a swappable Style (area bg, grid, border, text)"</span>, .{});
+    <span class="tok-kw">var</span> xs: [<span class="tok-num">60</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys: [<span class="tok-num">60</span>]f64 = undefined;
+    <span class="tok-kw">var</span> yb: [<span class="tok-num">60</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">60</span>) |i| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-num">59.0</span> * <span class="tok-num">6.28318</span>;
+        xs[i] = t;
+        ys[i] = <span class="tok-num">0.5</span> + <span class="tok-num">0.4</span> * <span class="tok-builtin">@sin</span>(t);
+        yb[i] = <span class="tok-num">0.0</span>;
+    }
+    <span class="tok-kw">const</span> light: z.plot.Style = .{
+        .panel_bg = .{ .r = <span class="tok-num">246</span>, .g = <span class="tok-num">246</span>, .b = <span class="tok-num">249</span>, .a = <span class="tok-num">255</span> },
+        .bg = .{ .r = <span class="tok-num">252</span>, .g = <span class="tok-num">252</span>, .b = <span class="tok-num">254</span>, .a = <span class="tok-num">255</span> },
+        .grid = .{ .r = <span class="tok-num">205</span>, .g = <span class="tok-num">205</span>, .b = <span class="tok-num">214</span>, .a = <span class="tok-num">255</span> },
+        .minor_grid = .{ .r = <span class="tok-num">230</span>, .g = <span class="tok-num">230</span>, .b = <span class="tok-num">236</span>, .a = <span class="tok-num">255</span> },
+        .border = .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">120</span>, .b = <span class="tok-num">132</span>, .a = <span class="tok-num">255</span> },
+        .text = .{ .r = <span class="tok-num">28</span>, .g = <span class="tok-num">28</span>, .b = <span class="tok-num">38</span>, .a = <span class="tok-num">255</span> },
+        .label = .{ .r = <span class="tok-num">60</span>, .g = <span class="tok-num">60</span>, .b = <span class="tok-num">72</span>, .a = <span class="tok-num">255</span> },
+        .legend_bg = .{ .r = <span class="tok-num">236</span>, .g = <span class="tok-num">236</span>, .b = <span class="tok-num">242</span>, .a = <span class="tok-num">235</span> },
+    };
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .shaded,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .shaded = .{ .y_ref = <span class="tok-num">0.0</span>, .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">90</span> } },
+            .label = <span class="tok-str">"sin"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .spec = .{ .color = .{ .r = <span class="tok-num">33</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">243</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_theme, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"themeable"</span>,
+        .x_label = <span class="tok-str">"x"</span>,
+        .y_label = <span class="tok-str">"y"</span>,
+        .style = <span class="tok-kw">if</span> (s.theme_light) light <span class="tok-kw">else</span> .{},
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabGaps</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"non-finite samples (z.plot.missing) break the line / skip the point"</span>, .{});
+    <span class="tok-kw">var</span> xs: [<span class="tok-num">120</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys: [<span class="tok-num">120</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">120</span>) |i| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-num">119.0</span> * <span class="tok-num">6.2831853</span>;
+        xs[i] = t;
+        <span class="tok-comment">// Two windows of missing data become clean gaps in the curve + fill.</span>
+        <span class="tok-kw">if</span> ((t &gt; <span class="tok-num">1.5</span> <span class="tok-kw">and</span> t &lt; <span class="tok-num">2.3</span>) <span class="tok-kw">or</span> (t &gt; <span class="tok-num">4.0</span> <span class="tok-kw">and</span> t &lt; <span class="tok-num">4.6</span>)) {
+            ys[i] = z.plot.missing;
+        } <span class="tok-kw">else</span> {
+            ys[i] = <span class="tok-builtin">@sin</span>(t);
+        }
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .shaded,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .shaded = .{ .y_ref = <span class="tok-num">0.0</span>, .color = .{ .r = <span class="tok-num">80</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">70</span> } },
+            .label = <span class="tok-str">"sin"</span>,
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .spec = .{
+                .color = .{ .r = <span class="tok-num">80</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> },
+                .thickness = <span class="tok-num">2</span>,
+                .marker = .circle,
+                .marker_size = <span class="tok-num">3</span>,
+            },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_gaps, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"missing data = gaps"</span>,
+        .x_label = <span class="tok-str">"x"</span>,
+        .y_label = <span class="tok-str">"sin(x)"</span>,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabQuery</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"public query API: crosshair + live data coords drawn AFTER show()"</span>, .{});
+    <span class="tok-kw">var</span> xs: [<span class="tok-num">60</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys: [<span class="tok-num">60</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">60</span>) |i| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-num">59.0</span> * <span class="tok-num">10.0</span>;
+        xs[i] = t;
+        ys[i] = <span class="tok-num">50.0</span> + <span class="tok-num">40.0</span> * <span class="tok-builtin">@sin</span>(t);
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .spec = .{ .color = .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }, .thickness = <span class="tok-num">2</span> },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_query, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"query / crosshair"</span>,
+        .x_label = <span class="tok-str">"x"</span>,
+        .y_label = <span class="tok-str">"y"</span>,
+    });
+
+    <span class="tok-comment">// Everything below is app code using ONLY the public query API to draw a</span>
+    <span class="tok-comment">// custom overlay into the same window: a crosshair at the cursor plus the</span>
+    <span class="tok-comment">// cursor's position in DATA space (maps correctly under pan/zoom).</span>
+    <span class="tok-kw">const</span> area: z.plot.Rect = s.p_query.<span class="tok-fn">plotArea</span>();
+    <span class="tok-kw">const</span> m: Vec2 = u.<span class="tok-fn">getMousePos</span>();
+    <span class="tok-kw">if</span> (s.p_query.<span class="tok-fn">isInside</span>(m)) {
+        <span class="tok-kw">var</span> sink: z.plot_ui.DrawListSink = z.plot_ui.DrawListSink.<span class="tok-fn">fromUi</span>(u) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+        <span class="tok-kw">const</span> ch: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">220</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">170</span> };
+        sink.<span class="tok-fn">line</span>(.{ area.x, m[<span class="tok-num">1</span>] }, .{ area.<span class="tok-fn">right</span>(), m[<span class="tok-num">1</span>] }, .{ .color = ch, .thickness = <span class="tok-num">1.0</span> });
+        sink.<span class="tok-fn">line</span>(.{ m[<span class="tok-num">0</span>], area.y }, .{ m[<span class="tok-num">0</span>], area.<span class="tok-fn">bottom</span>() }, .{ .color = ch, .thickness = <span class="tok-num">1.0</span> });
+        <span class="tok-kw">const</span> dp: [<span class="tok-num">2</span>]f64 = s.p_query.<span class="tok-fn">getPlotMousePos</span>();
+        <span class="tok-kw">var</span> buf: [<span class="tok-num">64</span>]u8 = undefined;
+        <span class="tok-kw">const</span> txt: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"x={d:.2}  y={d:.2}"</span>, .{ dp[<span class="tok-num">0</span>], dp[<span class="tok-num">1</span>] }) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+        sink.<span class="tok-fn">text</span>(.{ m[<span class="tok-num">0</span>] + <span class="tok-num">8</span>, m[<span class="tok-num">1</span>] - <span class="tok-num">18</span> }, txt, .{ .size = <span class="tok-num">13</span>, .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } });
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabBoxZoom</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"drag a box to zoom into it; double-tap to re-fit"</span>, .{});
+    <span class="tok-kw">var</span> xs: [<span class="tok-num">400</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys: [<span class="tok-num">400</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">400</span>) |i| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-num">399.0</span> * <span class="tok-num">20.0</span>;
+        xs[i] = t;
+        <span class="tok-comment">// Fine structure so zooming actually reveals detail.</span>
+        ys[i] = <span class="tok-builtin">@sin</span>(t) + <span class="tok-num">0.25</span> * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">7.0</span>) + <span class="tok-num">0.08</span> * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">31.0</span>);
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .line,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .spec = .{ .color = .{ .r = <span class="tok-num">150</span>, .g = <span class="tok-num">230</span>, .b = <span class="tok-num">160</span>, .a = <span class="tok-num">255</span> } },
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_boxzoom, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"box-zoom"</span>,
+        .x_label = <span class="tok-str">"t"</span>,
+        .y_label = <span class="tok-str">"f(t)"</span>,
+        .box_zoom = true,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabLegend</span>(u: ui.Ui, s: *State) void {
+    _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"horizontal legend"</span>, &amp;s.legend_h);
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"tap a legend entry to hide it; double-tap to solo (double-tap again to restore)"</span>, .{});
+    <span class="tok-kw">var</span> xs: [<span class="tok-num">80</span>]f64 = undefined;
+    <span class="tok-kw">var</span> y1: [<span class="tok-num">80</span>]f64 = undefined;
+    <span class="tok-kw">var</span> y2: [<span class="tok-num">80</span>]f64 = undefined;
+    <span class="tok-kw">var</span> y3: [<span class="tok-num">80</span>]f64 = undefined;
+    <span class="tok-kw">var</span> y4: [<span class="tok-num">80</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">80</span>) |i| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-num">79.0</span> * <span class="tok-num">10.0</span>;
+        xs[i] = t;
+        y1[i] = <span class="tok-builtin">@sin</span>(t);
+        y2[i] = <span class="tok-builtin">@cos</span>(t);
+        y3[i] = <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.5</span>);
+        y4[i] = <span class="tok-num">0.5</span> * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">2.0</span>);
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{ .kind = .line, .xs = &amp;xs, .ys = &amp;y1, .spec = .{ .thickness = <span class="tok-num">2</span> }, .label = <span class="tok-str">"sin"</span> },
+        .{ .kind = .line, .xs = &amp;xs, .ys = &amp;y2, .spec = .{ .thickness = <span class="tok-num">2</span> }, .label = <span class="tok-str">"cos"</span> },
+        .{ .kind = .line, .xs = &amp;xs, .ys = &amp;y3, .spec = .{ .thickness = <span class="tok-num">2</span> }, .label = <span class="tok-str">"sin/2"</span> },
+        .{ .kind = .line, .xs = &amp;xs, .ys = &amp;y4, .spec = .{ .thickness = <span class="tok-num">2</span> }, .label = <span class="tok-str">"sin2x/2"</span> },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_legend, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"legend: solo + orientation"</span>,
+        .x_label = <span class="tok-str">"x"</span>,
+        .y_label = <span class="tok-str">"y"</span>,
+        .legend_horizontal = s.legend_h,
+        .legend_location = <span class="tok-kw">if</span> (s.legend_h) .nw <span class="tok-kw">else</span> .ne,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabImage</span>(u: ui.Ui, s: *State) void {
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"a GPU texture drawn in plot space (pan/zoom moves it with the axes)"</span>, .{});
+    <span class="tok-kw">var</span> xs: [<span class="tok-num">48</span>]f64 = undefined;
+    <span class="tok-kw">var</span> ys: [<span class="tok-num">48</span>]f64 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">48</span>) |i| {
+        <span class="tok-kw">const</span> t: f64 = <span class="tok-fn">float64</span>(i) / <span class="tok-num">47.0</span> * <span class="tok-num">8.0</span>;
+        xs[i] = t;
+        ys[i] = <span class="tok-num">4.0</span> + <span class="tok-num">3.0</span> * <span class="tok-builtin">@sin</span>(t);
+    }
+    <span class="tok-kw">const</span> series = [_]z.plot_ui.Series{
+        .{
+            .kind = .image,
+            .ys = &amp;.{},
+            .tex_id = s.img_tex,
+            .img_bounds = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">7</span>, <span class="tok-num">7</span> },
+        },
+        .{
+            .kind = .line,
+            .xs = &amp;xs,
+            .ys = &amp;ys,
+            .spec = .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">80</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">255</span> }, .thickness = <span class="tok-num">2</span> },
+            .label = <span class="tok-str">"signal"</span>,
+        },
+    };
+    z.plot_ui.<span class="tok-fn">show</span>(u, &amp;s.p_image, .{ plot_w, plot_h - <span class="tok-num">40</span> }, &amp;series, .{
+        .title = <span class="tok-str">"image in plot space"</span>,
+        .x_label = <span class="tok-str">"x"</span>,
+        .y_label = <span class="tok-str">"y"</span>,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-fn">regen</span>(s);
+
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"zimr plot demo"</span>, .{
+        .initial_pos = .{ <span class="tok-num">16</span>, <span class="tok-num">16</span> },
+        .initial_size = .{ <span class="tok-num">928</span>, <span class="tok-num">688</span> },
+    })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"A growing showcase of the zimr plot library. Pan/drag, wheel or"</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"pinch to zoom, double-tap to fit, hover/touch for values."</span>, .{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"animate"</span>, &amp;s.animate);
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// Multi-row tab strip: a wrapping grid of selectables (the built-in</span>
+        <span class="tok-comment">// TabBar is single-row and overflows once there are many tabs).</span>
+        <span class="tok-kw">const</span> tab_names = [_][]<span class="tok-kw">const</span> u8{
+            <span class="tok-str">"Lines"</span>,   <span class="tok-str">"Drag"</span>,    <span class="tok-str">"Markers"</span>, <span class="tok-str">"Shaded"</span>,
+            <span class="tok-str">"Stems"</span>,   <span class="tok-str">"InfLine"</span>, <span class="tok-str">"ErrBars"</span>, <span class="tok-str">"Annot"</span>,
+            <span class="tok-str">"Heatmap"</span>, <span class="tok-str">"Histo"</span>,   <span class="tok-str">"Hist2D"</span>,  <span class="tok-str">"Groups"</span>,
+            <span class="tok-str">"Band"</span>,    <span class="tok-str">"HBars"</span>,   <span class="tok-str">"Dual"</span>,    <span class="tok-str">"Subplots"</span>,
+            <span class="tok-str">"Rect"</span>,    <span class="tok-str">"Select"</span>,  <span class="tok-str">"Time"</span>,    <span class="tok-str">"Symlog"</span>,
+            <span class="tok-str">"AxisCfg"</span>, <span class="tok-str">"Equal"</span>,   <span class="tok-str">"Pie"</span>,     <span class="tok-str">"Bubbles"</span>,
+            <span class="tok-str">"Candles"</span>, <span class="tok-str">"Digital"</span>, <span class="tok-str">"HeatLbl"</span>, <span class="tok-str">"DualX"</span>,
+            <span class="tok-str">"Theme"</span>,   <span class="tok-str">"Gaps"</span>,    <span class="tok-str">"Query"</span>,   <span class="tok-str">"BoxZoom"</span>,
+            <span class="tok-str">"Legend"</span>,  <span class="tok-str">"Image"</span>,
+        };
+        <span class="tok-kw">const</span> cols: usize = <span class="tok-num">4</span>;
+        <span class="tok-kw">const</span> avail: f32 = u.<span class="tok-fn">getContentRegionAvail</span>()[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> cw: f32 = avail / <span class="tok-fn">float</span>(cols) - <span class="tok-num">6</span>;
+        <span class="tok-kw">for</span> (tab_names, <span class="tok-num">0</span>..) |name, i| {
+            <span class="tok-kw">if</span> (i % cols != <span class="tok-num">0</span>) {
+                u.<span class="tok-fn">sameLine</span>(.{});
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">selectable</span>(name, i == s.current_tab, .{ .width = cw })) {
+                s.current_tab = i;
+            }
+        }
+        u.<span class="tok-fn">separator</span>();
+        <span class="tok-kw">switch</span> (s.current_tab) {
+            <span class="tok-num">0</span> =&gt; <span class="tok-fn">tabLines</span>(u, s),
+            <span class="tok-num">1</span> =&gt; <span class="tok-fn">tabDrag</span>(u, s),
+            <span class="tok-num">2</span> =&gt; <span class="tok-fn">tabMarkers</span>(u, s),
+            <span class="tok-num">3</span> =&gt; <span class="tok-fn">tabMore</span>(u, s),
+            <span class="tok-num">4</span> =&gt; <span class="tok-fn">tabStems</span>(u, s),
+            <span class="tok-num">5</span> =&gt; <span class="tok-fn">tabInfLines</span>(u, s),
+            <span class="tok-num">6</span> =&gt; <span class="tok-fn">tabErrorBars</span>(u, s),
+            <span class="tok-num">7</span> =&gt; <span class="tok-fn">tabAnnotations</span>(u, s),
+            <span class="tok-num">8</span> =&gt; <span class="tok-fn">tabHeatmap</span>(u, s),
+            <span class="tok-num">9</span> =&gt; <span class="tok-fn">tabHistogram</span>(u, s),
+            <span class="tok-num">10</span> =&gt; <span class="tok-fn">tabHistogram2D</span>(u, s),
+            <span class="tok-num">11</span> =&gt; <span class="tok-fn">tabBarGroups</span>(u, s),
+            <span class="tok-num">12</span> =&gt; <span class="tok-fn">tabBand</span>(u, s),
+            <span class="tok-num">13</span> =&gt; <span class="tok-fn">tabHBars</span>(u, s),
+            <span class="tok-num">14</span> =&gt; <span class="tok-fn">tabDual</span>(u, s),
+            <span class="tok-num">15</span> =&gt; <span class="tok-fn">tabSubplots</span>(u, s),
+            <span class="tok-num">16</span> =&gt; <span class="tok-fn">tabDragRect</span>(u, s),
+            <span class="tok-num">17</span> =&gt; <span class="tok-fn">tabSelect</span>(u, s),
+            <span class="tok-num">18</span> =&gt; <span class="tok-fn">tabTime</span>(u, s),
+            <span class="tok-num">19</span> =&gt; <span class="tok-fn">tabSymlog</span>(u, s),
+            <span class="tok-num">20</span> =&gt; <span class="tok-fn">tabAxisCfg</span>(u, s),
+            <span class="tok-num">21</span> =&gt; <span class="tok-fn">tabEqual</span>(u, s),
+            <span class="tok-num">22</span> =&gt; <span class="tok-fn">tabPie</span>(u, s),
+            <span class="tok-num">23</span> =&gt; <span class="tok-fn">tabBubbles</span>(u, s),
+            <span class="tok-num">24</span> =&gt; <span class="tok-fn">tabCandles</span>(u, s),
+            <span class="tok-num">25</span> =&gt; <span class="tok-fn">tabDigital</span>(u, s),
+            <span class="tok-num">26</span> =&gt; <span class="tok-fn">tabHeatLabels</span>(u, s),
+            <span class="tok-num">27</span> =&gt; <span class="tok-fn">tabDualX</span>(u, s),
+            <span class="tok-num">28</span> =&gt; <span class="tok-fn">tabTheme</span>(u, s),
+            <span class="tok-num">29</span> =&gt; <span class="tok-fn">tabGaps</span>(u, s),
+            <span class="tok-num">30</span> =&gt; <span class="tok-fn">tabQuery</span>(u, s),
+            <span class="tok-num">31</span> =&gt; <span class="tok-fn">tabBoxZoom</span>(u, s),
+            <span class="tok-num">32</span> =&gt; <span class="tok-fn">tabLegend</span>(u, s),
+            <span class="tok-num">33</span> =&gt; <span class="tok-fn">tabImage</span>(u, s),
+            <span class="tok-kw">else</span> =&gt; {},
+        }
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - plot demo"</span>,
+            .width = screen_w,
+            .height = screen_h,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+</body>
+</html>

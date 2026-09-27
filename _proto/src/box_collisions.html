@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>box_collisions — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>box_collisions</h1>
+<figure class="code src-file" data-path="examples/box_collisions/box_collisions.zig" data-lines="602"><figcaption><span>examples/box_collisions/box_collisions.zig</span><span>602 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! box_collisions - raylib's `models_box_collisions`, the zimr way.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A green player box slides around an arena holding a gray enemy cube</span>
+<span class="tok-comment">//! and a gray enemy sphere.  Every frame the player's AABB is tested</span>
+<span class="tok-comment">//! against both (`checkCollisionBoxes`, `checkCollisionBoxSphere` -</span>
+<span class="tok-comment">//! raylib's exact predicates, re-exported this port); on any overlap</span>
+<span class="tok-comment">//! the player flashes RED and the panel says which enemy it's touching.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Phone-first: raylib steers with arrow keys.  Here you DRAG - one</span>
+<span class="tok-comment">//! finger anywhere slides the player to the ground point under it,</span>
+<span class="tok-comment">//! computed by casting `getScreenToWorldRay` (last port's engine</span>
+<span class="tok-comment">//! addition) against the ground plane.  The camera is fixed like</span>
+<span class="tok-comment">//! raylib's, so dragging never fights an orbit; pinch still zooms.</span>
+<span class="tok-comment">//! Rendering is the shared forward stack (`gbuffer_vs` + `fog_fs` at</span>
+<span class="tok-comment">//! density 0), one pipeline for the four draws.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-kw">const</span> mat_vs = z.deferred_shaders.gbuffer_vs;
+<span class="tok-kw">const</span> mat_fs = z.fog_shader; <span class="tok-comment">// density 0 = plain lambert+blinn</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">const</span> gbuffer_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"gbuffer_vs.wgsl"</span>);
+<span class="tok-kw">const</span> fog_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"fog_fs.wgsl"</span>);
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> VsUbo = <span class="tok-builtin">@FieldType</span>(mat_vs.Io, <span class="tok-str">"u"</span>);
+<span class="tok-kw">const</span> FsUbo = <span class="tok-builtin">@FieldType</span>(mat_fs.Io, <span class="tok-str">"u"</span>);
+
+<span class="tok-kw">const</span> bg_clear: Color = .{ .r = <span class="tok-num">24</span>, .g = <span class="tok-num">26</span>, .b = <span class="tok-num">32</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> white: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> sun_dir: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">0.4</span>, <span class="tok-num">0.85</span>, <span class="tok-num">0.5</span> };
+<span class="tok-kw">const</span> fovy_rad: f32 = <span class="tok-num">1.0</span>;
+
+<span class="tok-comment">// raylib's cast, verbatim: sizes are FULL extents.</span>
+<span class="tok-kw">const</span> player_size: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">1.0</span>, <span class="tok-num">2.0</span>, <span class="tok-num">1.0</span> };
+<span class="tok-kw">const</span> enemy_box_pos: [<span class="tok-num">3</span>]f32 = .{ -<span class="tok-num">4.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.0</span> };
+<span class="tok-kw">const</span> enemy_box_size: f32 = <span class="tok-num">2.0</span>;
+<span class="tok-kw">const</span> enemy_sphere_pos: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">4.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> };
+<span class="tok-kw">const</span> enemy_sphere_r: f32 = <span class="tok-num">1.5</span>;
+<span class="tok-kw">const</span> arena_half: f32 = <span class="tok-num">6.0</span>;
+
+<span class="tok-kw">const</span> MeshVertex = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    position: [<span class="tok-num">3</span>]f32,
+    normal: [<span class="tok-num">3</span>]f32,
+};
+
+<span class="tok-kw">const</span> up_n: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> };
+<span class="tok-kw">const</span> ground_verts = [_]MeshVertex{
+    .{ .position = .{ -arena_half, <span class="tok-num">0</span>, -arena_half }, .normal = up_n },
+    .{ .position = .{ arena_half, <span class="tok-num">0</span>, -arena_half }, .normal = up_n },
+    .{ .position = .{ arena_half, <span class="tok-num">0</span>, arena_half }, .normal = up_n },
+    .{ .position = .{ -arena_half, <span class="tok-num">0</span>, arena_half }, .normal = up_n },
+};
+<span class="tok-kw">const</span> ground_indices = [_]u32{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">0</span>, <span class="tok-num">2</span>, <span class="tok-num">3</span> };
+
+<span class="tok-comment">/// Unit cube (half-extent 1), flat face normals.</span>
+<span class="tok-kw">const</span> cube_verts = [_]MeshVertex{
+    .{ .position = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = up_n },
+    .{ .position = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = up_n },
+    .{ .position = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = up_n },
+    .{ .position = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = up_n },
+    .{ .position = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span> }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+};
+<span class="tok-kw">const</span> cube_indices = [_]u32{
+    <span class="tok-num">0</span>,  <span class="tok-num">1</span>,  <span class="tok-num">2</span>,  <span class="tok-num">0</span>,  <span class="tok-num">2</span>,  <span class="tok-num">3</span>,
+    <span class="tok-num">4</span>,  <span class="tok-num">5</span>,  <span class="tok-num">6</span>,  <span class="tok-num">4</span>,  <span class="tok-num">6</span>,  <span class="tok-num">7</span>,
+    <span class="tok-num">8</span>,  <span class="tok-num">9</span>,  <span class="tok-num">10</span>, <span class="tok-num">8</span>,  <span class="tok-num">10</span>, <span class="tok-num">11</span>,
+    <span class="tok-num">12</span>, <span class="tok-num">13</span>, <span class="tok-num">14</span>, <span class="tok-num">12</span>, <span class="tok-num">14</span>, <span class="tok-num">15</span>,
+    <span class="tok-num">16</span>, <span class="tok-num">17</span>, <span class="tok-num">18</span>, <span class="tok-num">16</span>, <span class="tok-num">18</span>, <span class="tok-num">19</span>,
+    <span class="tok-num">20</span>, <span class="tok-num">21</span>, <span class="tok-num">22</span>, <span class="tok-num">20</span>, <span class="tok-num">22</span>, <span class="tok-num">23</span>,
+};
+
+<span class="tok-kw">const</span> GpuMesh = <span class="tok-kw">struct</span> {
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    vbo_bytes: u64,
+    ibo_bytes: u64,
+    icount: u32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uploadMesh</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    queue: z.wgpu.QueueHandle,
+    mesh: z.Mesh,
+    label: []<span class="tok-kw">const</span> u8,
+) !GpuMesh {
+    <span class="tok-kw">const</span> vcount: usize = <span class="tok-builtin">@intCast</span>(mesh.vertexCount);
+    <span class="tok-kw">const</span> verts: []MeshVertex = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(MeshVertex, vcount);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(verts);
+    <span class="tok-kw">for</span> (verts, <span class="tok-num">0</span>..) |*v, i| {
+        v.* = .{
+            .position = .{ mesh.vertices[i * <span class="tok-num">3</span> + <span class="tok-num">0</span>], mesh.vertices[i * <span class="tok-num">3</span> + <span class="tok-num">1</span>], mesh.vertices[i * <span class="tok-num">3</span> + <span class="tok-num">2</span>] },
+            .normal = .{ mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">0</span>], mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">1</span>], mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">2</span>] },
+        };
+    }
+    <span class="tok-kw">const</span> icount: usize = <span class="tok-builtin">@as</span>(usize, <span class="tok-builtin">@intCast</span>(mesh.triangleCount)) * <span class="tok-num">3</span>;
+    <span class="tok-kw">const</span> indices: []u32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u32, icount);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(indices);
+    <span class="tok-kw">if</span> (mesh.indices != null) {
+        <span class="tok-kw">for</span> (indices, <span class="tok-num">0</span>..) |*ix, i| {
+            ix.* = mesh.indices[i];
+        }
+    } <span class="tok-kw">else</span> {
+        <span class="tok-kw">for</span> (indices, <span class="tok-num">0</span>..) |*ix, i| {
+            ix.* = <span class="tok-builtin">@intCast</span>(i);
+        }
+    }
+    <span class="tok-kw">return</span> .{
+        .vbo = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+            device,
+            queue,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(verts),
+            .{ .vertex = true, .copy_dst = true },
+            label,
+        ),
+        .ibo = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+            device,
+            queue,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(indices),
+            .{ .index = true, .copy_dst = true },
+            label,
+        ),
+        .vbo_bytes = verts.len * <span class="tok-builtin">@sizeOf</span>(MeshVertex),
+        .ibo_bytes = indices.len * <span class="tok-builtin">@sizeOf</span>(u32),
+        .icount = <span class="tok-builtin">@intCast</span>(icount),
+    };
+}
+
+<span class="tok-kw">const</span> Obj = <span class="tok-kw">struct</span> {
+    mesh: GpuMesh,
+    vs_ubo: z.wgpu.BufferHandle,
+    g0_bg: z.wgpu.BindGroupHandle,
+    fs_ubo: z.wgpu.BufferHandle,
+    g2_bg: z.wgpu.BindGroupHandle,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    pipeline: z.wgpu.RenderPipelineHandle,
+    empty_bg: z.wgpu.BindGroupHandle,
+    objs: [<span class="tok-num">4</span>]Obj, <span class="tok-comment">// ground, enemy cube, enemy sphere, player</span>
+    meshes: [<span class="tok-num">3</span>]GpuMesh, <span class="tok-comment">// the 3 UNIQUE meshes (cube is shared by objs[1] &amp; objs[3])</span>
+
+    player_pos: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span> }, <span class="tok-comment">// raylib's start</span>
+    hit_box: bool = false,
+    hit_sphere: bool = false,
+
+    rt: z.RenderTexture,
+    ui_host: z.UiHost,
+
+    cam_dist_scale: f32 = <span class="tok-num">1.0</span>, <span class="tok-comment">// pinch zoom scales the fixed camera</span>
+    prev_pinch: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    _ = gpa;
+    <span class="tok-comment">// Per-object uniforms + bind groups (NOT obj.mesh - those alias s.meshes below).</span>
+    <span class="tok-kw">for</span> (s.objs) |o| {
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(o.vs_ubo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(o.fs_ubo);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(o.g0_bg);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(o.g2_bg);
+    }
+    <span class="tok-comment">// The 3 unique meshes (freeing per-obj would double-destroy the shared cube).</span>
+    <span class="tok-kw">for</span> (s.meshes) |m| {
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(m.vbo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(m.ibo);
+    }
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.pipeline);
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.empty_bg);
+    s.rt.<span class="tok-fn">deinit</span>(); <span class="tok-comment">// color+depth textures/views + sampler (no-op when empty)</span>
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformLayout</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    min_size: u64,
+    vis: z.wgpu.ShaderStage,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupLayoutHandle {
+    <span class="tok-kw">const</span> entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+        .{ .binding = <span class="tok-num">0</span>, .visibility = vis, .resource = .{ .uniform_buffer = .{ .min_size = min_size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, blob, label);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformBindGroup</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    bgl: z.wgpu.BindGroupLayoutHandle,
+    buffer: z.wgpu.BufferHandle,
+    size: u64,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupHandle {
+    <span class="tok-kw">const</span> entries = [_]z.gpu.BindGroupEntry{
+        .{ .binding = <span class="tok-num">0</span>, .resource = .{ .buffer = .{ .handle = buffer, .size = size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroup</span>(device, bgl, blob, label);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> device: z.wgpu.DeviceHandle = f.gpu.device;
+    <span class="tok-kw">const</span> queue: z.wgpu.QueueHandle = f.gpu.queue;
+
+    <span class="tok-kw">const</span> ground: GpuMesh = .{
+        .vbo = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+            device,
+            queue,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(ground_verts[<span class="tok-num">0</span>..]),
+            .{ .vertex = true, .copy_dst = true },
+            <span class="tok-str">"bc_ground_vbo"</span>,
+        ),
+        .ibo = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+            device,
+            queue,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(ground_indices[<span class="tok-num">0</span>..]),
+            .{ .index = true, .copy_dst = true },
+            <span class="tok-str">"bc_ground_ibo"</span>,
+        ),
+        .vbo_bytes = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(ground_verts)),
+        .ibo_bytes = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(ground_indices)),
+        .icount = ground_indices.len,
+    };
+    <span class="tok-kw">const</span> cube: GpuMesh = .{
+        .vbo = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+            device,
+            queue,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(cube_verts[<span class="tok-num">0</span>..]),
+            .{ .vertex = true, .copy_dst = true },
+            <span class="tok-str">"bc_cube_vbo"</span>,
+        ),
+        .ibo = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+            device,
+            queue,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(cube_indices[<span class="tok-num">0</span>..]),
+            .{ .index = true, .copy_dst = true },
+            <span class="tok-str">"bc_cube_ibo"</span>,
+        ),
+        .vbo_bytes = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(cube_verts)),
+        .ibo_bytes = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(cube_indices)),
+        .icount = cube_indices.len,
+    };
+    <span class="tok-kw">const</span> sphere_cpu: z.Mesh = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">24</span>, <span class="tok-num">20</span>);
+    <span class="tok-kw">defer</span> z.<span class="tok-fn">unloadMesh</span>(gpa, sphere_cpu);
+    <span class="tok-kw">const</span> sphere: GpuMesh = <span class="tok-kw">try</span> <span class="tok-fn">uploadMesh</span>(gpa, device, queue, sphere_cpu, <span class="tok-str">"bc_sphere"</span>);
+
+    <span class="tok-kw">const</span> g0_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, <span class="tok-builtin">@sizeOf</span>(VsUbo), .{ .vertex = true }, <span class="tok-str">"bc_g0"</span>);
+    <span class="tok-kw">const</span> g2_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, <span class="tok-builtin">@sizeOf</span>(FsUbo), .{ .fragment = true }, <span class="tok-str">"bc_g2"</span>);
+    <span class="tok-kw">const</span> empty_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;.{});
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(empty_blob);
+    <span class="tok-kw">const</span> empty_bgl: z.wgpu.BindGroupLayoutHandle =
+        z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, empty_blob, <span class="tok-str">"bc_empty"</span>);
+    <span class="tok-kw">const</span> empty_bg_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;.{});
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(empty_bg_blob);
+    <span class="tok-kw">const</span> empty_bg: z.wgpu.BindGroupHandle =
+        z.wgpu.<span class="tok-fn">createBindGroup</span>(device, empty_bgl, empty_bg_blob, <span class="tok-str">"bc_empty_bg"</span>);
+    <span class="tok-kw">const</span> pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(
+        device,
+        &amp;.{ g0_bgl, empty_bgl, g2_bgl },
+        <span class="tok-str">"bc_pl"</span>,
+    );
+    <span class="tok-kw">const</span> vs_mod: z.wgpu.ShaderModuleHandle =
+        z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, gbuffer_vs_wgsl, <span class="tok-str">"gbuffer_vs"</span>);
+    <span class="tok-kw">const</span> fs_mod: z.wgpu.ShaderModuleHandle =
+        z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, fog_fs_wgsl, <span class="tok-str">"fog_fs"</span>);
+    <span class="tok-kw">const</span> combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .none,
+        .less,
+        .back,
+        .rgba8_unorm,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> pipe_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{.{
+            .array_stride = <span class="tok-builtin">@sizeOf</span>(MeshVertex),
+            .step_mode = .vertex,
+            .attributes = &amp;.{
+                .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+                .{ .format = .float32x3, .offset = <span class="tok-num">12</span>, .shader_location = <span class="tok-num">1</span> },
+            },
+        }},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(pipe_blob);
+    <span class="tok-kw">const</span> pipeline: z.wgpu.RenderPipelineHandle =
+        z.wgpu.<span class="tok-fn">createRenderPipeline</span>(device, pl, vs_mod, fs_mod, pipe_blob, <span class="tok-str">"bc_pipe"</span>);
+
+    <span class="tok-kw">var</span> objs: [<span class="tok-num">4</span>]Obj = undefined;
+    <span class="tok-kw">const</span> meshes = [<span class="tok-num">4</span>]GpuMesh{ ground, cube, sphere, cube };
+    <span class="tok-kw">for</span> (&amp;objs, meshes) |*obj, gm| {
+        <span class="tok-kw">const</span> vs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+            .size = <span class="tok-builtin">@sizeOf</span>(VsUbo),
+            .usage = .{ .uniform = true, .copy_dst = true },
+        });
+        <span class="tok-kw">const</span> fs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+            .size = <span class="tok-builtin">@sizeOf</span>(FsUbo),
+            .usage = .{ .uniform = true, .copy_dst = true },
+        });
+        obj.* = .{
+            .mesh = gm,
+            .vs_ubo = vs_ubo,
+            .g0_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, g0_bgl, vs_ubo, <span class="tok-builtin">@sizeOf</span>(VsUbo), <span class="tok-str">"bc_g0_bg"</span>),
+            .fs_ubo = fs_ubo,
+            .g2_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, g2_bgl, fs_ubo, <span class="tok-builtin">@sizeOf</span>(FsUbo), <span class="tok-str">"bc_g2_bg"</span>),
+        };
+    }
+
+    <span class="tok-comment">// The layouts, pipeline layout, and shader modules are only needed to build</span>
+    <span class="tok-comment">// the pipeline and bind groups; WebGPU keeps its own internal refs, so we can</span>
+    <span class="tok-comment">// release these build intermediates now rather than leak them for the app's life.</span>
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(g0_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(g2_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(empty_bgl);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(pl);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(fs_mod);
+
+    s.* = .{
+        .gpa = gpa,
+        .pipeline = pipeline,
+        .empty_bg = empty_bg,
+        .objs = objs,
+        .meshes = .{ ground, cube, sphere }, <span class="tok-comment">// 3 unique; obj mesh fields alias these</span>
+
+        .rt = .{},
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>)),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureTargets</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> backing: z.wgpu.SurfaceSize = z.wgpu.<span class="tok-fn">getSurfaceSize</span>(f.gpu.surface);
+    <span class="tok-kw">const</span> bw: u32 = <span class="tok-builtin">@max</span>(backing.width, <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> bh: u32 = <span class="tok-builtin">@max</span>(backing.height, <span class="tok-num">1</span>);
+    <span class="tok-kw">if</span> (s.rt.color != .invalid <span class="tok-kw">and</span> s.rt.width == bw <span class="tok-kw">and</span> s.rt.height == bh) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">if</span> (s.rt.color != .invalid) {
+        z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt);
+    }
+    s.rt = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(bw), <span class="tok-builtin">@intCast</span>(bh));
+}
+
+<span class="tok-comment">/// Drag anywhere: the finger's ray hits the ground plane and the player</span>
+<span class="tok-comment">/// glides there (clamped to the arena).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(
+    f: *z.Frame,
+    s: *State,
+    ui_wants_mouse: bool,
+    cam: zm.Camera3D,
+    vw: f32,
+    vh: f32,
+) void {
+    <span class="tok-kw">const</span> touches: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touches &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> a: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> b: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> dx: f32 = a[<span class="tok-num">0</span>] - b[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = a[<span class="tok-num">1</span>] - b[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (s.prev_pinch &gt; <span class="tok-num">0</span>) {
+            s.cam_dist_scale = <span class="tok-fn">clamp</span>(s.cam_dist_scale - (dist - s.prev_pinch) * <span class="tok-num">0.002</span>, <span class="tok-num">0.6</span>, <span class="tok-num">1.8</span>);
+        }
+        s.prev_pinch = dist;
+        <span class="tok-kw">return</span>;
+    }
+    s.prev_pinch = <span class="tok-num">0</span>;
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left) <span class="tok-kw">and</span> !ui_wants_mouse) {
+        <span class="tok-kw">const</span> mp: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+        <span class="tok-kw">const</span> ray: zm.Ray = z.<span class="tok-fn">getScreenToWorldRay</span>(mp, cam, vw, vh);
+        <span class="tok-kw">const</span> hit: zm.RayCollision = z.<span class="tok-fn">getRayCollisionQuad</span>(
+            ray,
+            <span class="tok-fn">vec</span>(-<span class="tok-num">100</span>, <span class="tok-num">0</span>, -<span class="tok-num">100</span>),
+            <span class="tok-fn">vec</span>(-<span class="tok-num">100</span>, <span class="tok-num">0</span>, <span class="tok-num">100</span>),
+            <span class="tok-fn">vec</span>(<span class="tok-num">100</span>, <span class="tok-num">0</span>, <span class="tok-num">100</span>),
+            <span class="tok-fn">vec</span>(<span class="tok-num">100</span>, <span class="tok-num">0</span>, -<span class="tok-num">100</span>),
+        );
+        <span class="tok-kw">if</span> (hit.hit) {
+            s.player_pos[<span class="tok-num">0</span>] = <span class="tok-fn">clamp</span>(hit.point[<span class="tok-num">0</span>], -arena_half + <span class="tok-num">0.5</span>, arena_half - <span class="tok-num">0.5</span>);
+            s.player_pos[<span class="tok-num">2</span>] = <span class="tok-fn">clamp</span>(hit.point[<span class="tok-num">2</span>], -arena_half + <span class="tok-num">0.5</span>, arena_half - <span class="tok-num">0.5</span>);
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">writeObj</span>(
+    f: *z.Frame,
+    obj: *Obj,
+    model: Mat,
+    cam_vp: Mat,
+    cam_eye: Vec,
+    color: [<span class="tok-num">4</span>]f32,
+) void {
+    <span class="tok-kw">var</span> vs_io: mat_vs.Io = undefined;
+    vs_io.u = .{ .mvp = <span class="tok-fn">mulMat</span>(cam_vp, model), .model = model, .normal_matrix = zm.<span class="tok-fn">identity</span>() };
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, obj.vs_ubo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">asBytes</span>(&amp;vs_io.u));
+    <span class="tok-kw">var</span> fs_io: mat_fs.Io = undefined;
+    fs_io.u = .{
+        .base_color = color,
+        .view_pos = .{ cam_eye[<span class="tok-num">0</span>], cam_eye[<span class="tok-num">1</span>], cam_eye[<span class="tok-num">2</span>], <span class="tok-num">0</span> },
+        .light_dir = .{ sun_dir[<span class="tok-num">0</span>], sun_dir[<span class="tok-num">1</span>], sun_dir[<span class="tok-num">2</span>], <span class="tok-num">0</span> },
+        .fog_color = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> },
+        .params = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    };
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, obj.fs_ubo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">asBytes</span>(&amp;fs_io.u));
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureTargets</span>(f, s);
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-comment">// OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing; uses</span>
+    <span class="tok-comment">// last-frame UI state = 1-frame lag, imperceptible).</span>
+
+    <span class="tok-comment">// raylib's fixed camera at (0,10,10), pinch-scaled.</span>
+    <span class="tok-kw">const</span> cam_eye: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">15.0</span> * s.cam_dist_scale, <span class="tok-num">20.0</span> * s.cam_dist_scale);
+    <span class="tok-kw">const</span> cam_target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> cam_view: Mat = <span class="tok-fn">lookAtRh</span>(cam_eye, cam_target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> cam_proj: Mat = <span class="tok-fn">perspectiveFovRh</span>(fovy_rad, vw / vh, <span class="tok-num">0.1</span>, <span class="tok-num">100.0</span>);
+    <span class="tok-kw">const</span> cam_vp: Mat = <span class="tok-fn">mulMat</span>(cam_proj, cam_view);
+    <span class="tok-kw">const</span> cam3d: zm.Camera3D = .{
+        .position = cam_eye,
+        .target = cam_target,
+        .up = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>),
+        .fovy_deg = fovy_rad * <span class="tok-num">180.0</span> / pi,
+    };
+
+    <span class="tok-comment">// ---- the collision tests, raylib's predicates verbatim ----</span>
+    <span class="tok-kw">const</span> player_box: z.BoundingBox = .{
+        .min = <span class="tok-fn">vec</span>(
+            s.player_pos[<span class="tok-num">0</span>] - player_size[<span class="tok-num">0</span>] * <span class="tok-num">0.5</span>,
+            s.player_pos[<span class="tok-num">1</span>] - player_size[<span class="tok-num">1</span>] * <span class="tok-num">0.5</span>,
+            s.player_pos[<span class="tok-num">2</span>] - player_size[<span class="tok-num">2</span>] * <span class="tok-num">0.5</span>,
+        ),
+        .max = <span class="tok-fn">vec</span>(
+            s.player_pos[<span class="tok-num">0</span>] + player_size[<span class="tok-num">0</span>] * <span class="tok-num">0.5</span>,
+            s.player_pos[<span class="tok-num">1</span>] + player_size[<span class="tok-num">1</span>] * <span class="tok-num">0.5</span>,
+            s.player_pos[<span class="tok-num">2</span>] + player_size[<span class="tok-num">2</span>] * <span class="tok-num">0.5</span>,
+        ),
+    };
+    <span class="tok-kw">const</span> enemy_box: z.BoundingBox = .{
+        .min = <span class="tok-fn">vec</span>(
+            enemy_box_pos[<span class="tok-num">0</span>] - enemy_box_size * <span class="tok-num">0.5</span>,
+            enemy_box_pos[<span class="tok-num">1</span>] - enemy_box_size * <span class="tok-num">0.5</span>,
+            enemy_box_pos[<span class="tok-num">2</span>] - enemy_box_size * <span class="tok-num">0.5</span>,
+        ),
+        .max = <span class="tok-fn">vec</span>(
+            enemy_box_pos[<span class="tok-num">0</span>] + enemy_box_size * <span class="tok-num">0.5</span>,
+            enemy_box_pos[<span class="tok-num">1</span>] + enemy_box_size * <span class="tok-num">0.5</span>,
+            enemy_box_pos[<span class="tok-num">2</span>] + enemy_box_size * <span class="tok-num">0.5</span>,
+        ),
+    };
+    s.hit_box = z.<span class="tok-fn">checkCollisionBoxes</span>(player_box, enemy_box);
+    s.hit_sphere = z.<span class="tok-fn">checkCollisionBoxSphere</span>(
+        player_box,
+        <span class="tok-fn">vec</span>(enemy_sphere_pos[<span class="tok-num">0</span>], enemy_sphere_pos[<span class="tok-num">1</span>], enemy_sphere_pos[<span class="tok-num">2</span>]),
+        enemy_sphere_r,
+    );
+    <span class="tok-kw">const</span> colliding: bool = s.hit_box <span class="tok-kw">or</span> s.hit_sphere;
+
+    <span class="tok-comment">// ---- uniforms: ground, enemies, then the player (green or RED) ----</span>
+    <span class="tok-fn">writeObj</span>(f, &amp;s.objs[<span class="tok-num">0</span>], zm.<span class="tok-fn">identity</span>(), cam_vp, cam_eye, .{ <span class="tok-num">0.5</span>, <span class="tok-num">0.52</span>, <span class="tok-num">0.56</span>, <span class="tok-num">1</span> });
+    <span class="tok-kw">const</span> ebox_model: Mat = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">translation</span>(enemy_box_pos[<span class="tok-num">0</span>], enemy_box_pos[<span class="tok-num">1</span>], enemy_box_pos[<span class="tok-num">2</span>]),
+        <span class="tok-fn">scaling</span>(enemy_box_size * <span class="tok-num">0.5</span>, enemy_box_size * <span class="tok-num">0.5</span>, enemy_box_size * <span class="tok-num">0.5</span>),
+    );
+    <span class="tok-fn">writeObj</span>(f, &amp;s.objs[<span class="tok-num">1</span>], ebox_model, cam_vp, cam_eye, .{ <span class="tok-num">0.55</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.58</span>, <span class="tok-num">1</span> });
+    <span class="tok-kw">const</span> esph_model: Mat = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">translation</span>(enemy_sphere_pos[<span class="tok-num">0</span>], enemy_sphere_pos[<span class="tok-num">1</span>], enemy_sphere_pos[<span class="tok-num">2</span>]),
+        <span class="tok-fn">scaling</span>(enemy_sphere_r, enemy_sphere_r, enemy_sphere_r),
+    );
+    <span class="tok-fn">writeObj</span>(f, &amp;s.objs[<span class="tok-num">2</span>], esph_model, cam_vp, cam_eye, .{ <span class="tok-num">0.55</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.58</span>, <span class="tok-num">1</span> });
+    <span class="tok-kw">const</span> player_model: Mat = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">translation</span>(s.player_pos[<span class="tok-num">0</span>], s.player_pos[<span class="tok-num">1</span>], s.player_pos[<span class="tok-num">2</span>]),
+        <span class="tok-fn">scaling</span>(player_size[<span class="tok-num">0</span>] * <span class="tok-num">0.5</span>, player_size[<span class="tok-num">1</span>] * <span class="tok-num">0.5</span>, player_size[<span class="tok-num">2</span>] * <span class="tok-num">0.5</span>),
+    );
+    <span class="tok-kw">const</span> player_color: [<span class="tok-num">4</span>]f32 = <span class="tok-kw">if</span> (colliding) .{ <span class="tok-num">0.95</span>, <span class="tok-num">0.2</span>, <span class="tok-num">0.2</span>, <span class="tok-num">1</span> } <span class="tok-kw">else</span> .{ <span class="tok-num">0.25</span>, <span class="tok-num">0.85</span>, <span class="tok-num">0.35</span>, <span class="tok-num">1</span> };
+    <span class="tok-fn">writeObj</span>(f, &amp;s.objs[<span class="tok-num">3</span>], player_model, cam_vp, cam_eye, player_color);
+
+    <span class="tok-comment">// ---- the pass ----</span>
+    <span class="tok-kw">const</span> Backend: type = z.WgpuBackend;
+    z.<span class="tok-fn">beginTextureModeRaw</span>(f.gl, s.rt, bg_clear);
+    <span class="tok-kw">const</span> pa: *z.PassState = f.gl.pass;
+    Backend.<span class="tok-fn">setPipeline</span>(pa, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.pipeline });
+    Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">1</span>, s.empty_bg);
+    <span class="tok-kw">for</span> (&amp;s.objs) |*obj| {
+        Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">0</span>, obj.g0_bg);
+        Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">2</span>, obj.g2_bg);
+        z.render_pass.<span class="tok-fn">setVertexBuffer</span>(pa.pass, .{
+            .slot = <span class="tok-num">0</span>,
+            .buffer = obj.mesh.vbo,
+            .offset = <span class="tok-num">0</span>,
+            .size = obj.mesh.vbo_bytes,
+        });
+        z.render_pass.<span class="tok-fn">setIndexBuffer</span>(pa.pass, .{
+            .buffer = obj.mesh.ibo,
+            .format = .uint32,
+            .offset = <span class="tok-num">0</span>,
+            .size = obj.mesh.ibo_bytes,
+        });
+        z.render_pass.<span class="tok-fn">drawIndexed</span>(pa.pass, .{
+            .index_count = obj.mesh.icount,
+            .instance_count = <span class="tok-num">1</span>,
+            .first_index = <span class="tok-num">0</span>,
+            .base_vertex = <span class="tok-num">0</span>,
+            .first_instance = <span class="tok-num">0</span>,
+        });
+    }
+    z.<span class="tok-fn">endTextureModeRaw</span>(f.gl);
+
+    <span class="tok-comment">// SCREEN PASS: open once, composite, then UI.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearViewport</span>(f, bg_clear);
+    f.gl.<span class="tok-fn">texture</span>(.{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = vw, .height = vh }, s.rt.<span class="tok-fn">asTexture</span>(), .{ .tint = white });
+    <span class="tok-comment">// ---- UI first (its capture flag gates the drag) ----</span>
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-builtin">@min</span>(<span class="tok-num">300</span>, vw - <span class="tok-num">16</span>);
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, vh - <span class="tok-num">118</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-num">110</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"box collisions"</span>, .{})) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"drag to slide the player"</span>, .{});
+        <span class="tok-kw">const</span> status: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.hit_box <span class="tok-kw">and</span> s.hit_sphere)
+            <span class="tok-str">"COLLISION: box + sphere!"</span>
+        <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.hit_box)
+            <span class="tok-str">"COLLISION: enemy box!"</span>
+        <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.hit_sphere)
+            <span class="tok-str">"COLLISION: enemy sphere!"</span>
+        <span class="tok-kw">else</span>
+            <span class="tok-str">"clear"</span>;
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{status});
+    }
+    <span class="tok-fn">handleInput</span>(f, s, u.<span class="tok-fn">wantCaptureMouse</span>(), cam3d, vw, vh);
+    s.ui_host.<span class="tok-fn">render</span>(f);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - box collisions (drag the player)"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">540</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// Renders offscreen before the screen opens (tile-based-GPU safe); owns</span>
+    <span class="tok-comment">// its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>worker_png — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>worker_png</h1>
+<figure class="code src-file" data-path="examples/worker_png/worker_png.zig" data-lines="346"><figcaption><span>examples/worker_png/worker_png.zig</span><span>346 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! worker_png - start a task on a worker, and watch the frame NOT freeze.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `codecs.png.encode` of a 1024x1024 image costs ~240 ms in wasm on a phone.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * On the MAIN THREAD that is a 233 ms frozen frame - fourteen dropped frames. The</span>
+<span class="tok-comment">//!     orbiting dot below stops dead, and the "worst frame gap" readout says so.</span>
+<span class="tok-comment">//!   * On a WORKER the encode still takes ~222 ms, but the worst frame gap is 17 ms.</span>
+<span class="tok-comment">//!     Nothing stalls. The dot never even flickers.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The job is not FASTER. It is ELSEWHERE, and elsewhere is the whole feature.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Tap either button and watch the dot. That is the demo.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! (Where workers are unavailable - a sandboxed iframe refuses `new Worker()` - the</span>
+<span class="tok-comment">//! kernel runs inline on the main thread instead, so this example still WORKS. It just</span>
+<span class="tok-comment">//! hitches on both buttons, and the readout tells you why.)</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> kernels = <span class="tok-builtin">@import</span>(<span class="tok-str">"kernels.zig"</span>);
+<span class="tok-kw">const</span> jobs = z.jobs;
+<span class="tok-kw">const</span> cosRad = zm.cosRad;
+<span class="tok-kw">const</span> sinRad = zm.sinRad;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">/// 1024x1024 RGBA - 4 MB in, ~2.7 MB of PNG out. Big enough that the main-thread encode</span>
+<span class="tok-comment">/// is unmissable; small enough to stay inside the registry's 8 MB bounds.</span>
+<span class="tok-kw">const</span> dim: u32 = <span class="tok-num">1024</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    ui_host: z.UiHost,
+    font: z.Font,
+    <span class="tok-comment">/// The image we encode. Filled once, never touched again - the kernel gets a COPY.</span>
+    pixels: []u8,
+
+    <span class="tok-comment">/// The result buffer, allocated ONCE. Handing this to `pollInto` every frame is the</span>
+    <span class="tok-comment">/// difference between a 17 ms landing frame and a 154 ms one: `poll()` would allocate</span>
+    <span class="tok-comment">/// 2.7 MB on the frame the PNG arrives, and a multi-megabyte request grows the wasm</span>
+    <span class="tok-comment">/// linear memory - which Chrome services by copying the whole thing. The worker had</span>
+    <span class="tok-comment">/// already handed the frame back; collecting the answer took it away again.</span>
+    result_buf: []u8,
+
+    <span class="tok-comment">/// The one piece of job state an app carries: a handle you poll.</span>
+    job: jobs.Job = .{},
+
+    png_kb: usize = <span class="tok-num">0</span>,
+    png_ok: bool = false,
+    <span class="tok-comment">/// Worst frame gap seen while a job was outstanding. THIS is the measurement.</span>
+    worst_gap_ms: f32 = <span class="tok-num">0</span>,
+    watching: bool = false,
+
+    <span class="tok-comment">/// WHERE the main thread actually spent the time. A single "worst gap" told us a worker</span>
+    <span class="tok-comment">/// run still cost 157 ms and left us guessing which part of the round trip did it - and</span>
+    <span class="tok-comment">/// guessing is how you spend a day bisecting the wrong layer. So the number is broken</span>
+    <span class="tok-comment">/// into the three places it can possibly come from:</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">///   submit  the frame we called `submit()`. Blame: staging the 4 MB payload (a Zig</span>
+    <span class="tok-comment">///           alloc + memcpy, then a JS-owned copy), and - the first time only - bringing</span>
+    <span class="tok-comment">///           the worker pool up, which `available()` does lazily INSIDE a frame.</span>
+    <span class="tok-comment">///   wait    the worst frame while the worker was actually working. This one SHOULD be</span>
+    <span class="tok-comment">///           ~16 ms. If it is not, the work is not really off-thread and the feature is</span>
+    <span class="tok-comment">///           a lie.</span>
+    <span class="tok-comment">///   land    the frame the result arrived. Blame: allocating and copying the 2.7 MB PNG</span>
+    <span class="tok-comment">///           back out of the host.</span>
+    submit_ms: f32 = <span class="tok-num">0</span>,
+    wait_ms: f32 = <span class="tok-num">0</span>,
+    land_ms: f32 = <span class="tok-num">0</span>,
+
+    <span class="tok-comment">/// LAND is 149 ms and does not shrink with repetition, so it is not a one-off</span>
+    <span class="tok-comment">/// `memory.grow` - and `submit` allocates a BIGGER buffer (4 MB) in 17 ms, so a large</span>
+    <span class="tok-comment">/// wasm_allocator alloc is not inherently slow either. Both of my hypotheses died.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// So: stop inferring from frame gaps and time the landing frame from the inside.</span>
+    <span class="tok-comment">/// `poll_ms` is wall-clock around `job.poll()` alone - the alloc, the copy-out, the</span>
+    <span class="tok-comment">/// handle retire. If the 149 ms is in there, it is ours. If it is NOT, the cost is</span>
+    <span class="tok-comment">/// elsewhere in the frame (GC from churning 7 MB a run is the next suspect) and no</span>
+    <span class="tok-comment">/// amount of tuning `poll` would have touched it.</span>
+    poll_ms: f32 = <span class="tok-num">0</span>,
+    <span class="tok-comment">/// `pollInto` crosses into JS exactly twice: ask if the result is ready, then copy it</span>
+    <span class="tok-comment">/// out. With the allocation gone it STILL costs 93 ms for 2.7 MB - 29 MB/s, when a</span>
+    <span class="tok-comment">/// native `TypedArray.set` runs at gigabytes/sec. So one of these two is not what it</span>
+    <span class="tok-comment">/// looks like, and the only way to know which is to time them apart.</span>
+    ready_ms: f32 = <span class="tok-num">0</span>,
+    copy_ms: f32 = <span class="tok-num">0</span>,
+    phase: <span class="tok-kw">enum</span> { idle, submitted, waiting, landed } = .idle,
+
+    <span class="tok-comment">/// Keep watching for a few frames after the work "finishes".</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Load-bearing. A main-thread encode BLOCKS INSIDE its own frame, so the frame time that</span>
+    <span class="tok-comment">/// proves it only arrives on the NEXT frame. Clearing `watching` the moment the encode</span>
+    <span class="tok-comment">/// returned meant the 233 ms this example exists to show was never actually recorded -</span>
+    <span class="tok-comment">/// the headline number could not measure itself.</span>
+    settle: u32 = <span class="tok-num">0</span>,
+    ran_on: <span class="tok-kw">enum</span> { nothing, main_thread, worker } = .nothing,
+
+    <span class="tok-comment">/// Which run this is. A wasm `memory.grow` is paid ONCE - if `land` collapses on run 2,</span>
+    <span class="tok-comment">/// the 2.7 MB result alloc was growing the heap, and the fix is to keep a buffer rather</span>
+    <span class="tok-comment">/// than allocate one per job.</span>
+    runs: u32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">20</span>);
+
+    <span class="tok-kw">const</span> pixels: []u8 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u8, dim * dim * <span class="tok-num">4</span>);
+    <span class="tok-comment">// ONCE, and sized from the REGISTRY rather than from a number typed here.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// A hand-written constant that drifts from `max_output` does not fail loudly - it fails as</span>
+    <span class="tok-comment">// `Error.OutputTooLarge`, on a phone, on the frame a result lands. The registry already</span>
+    <span class="tok-comment">// knows the answer; there is no reason to know it twice.</span>
+    <span class="tok-kw">const</span> result_buf: []u8 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u8, kernels.registry.max_output);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..dim * dim) |i| {
+        <span class="tok-kw">const</span> x: u32 = <span class="tok-builtin">@intCast</span>(i % dim);
+        <span class="tok-kw">const</span> y: u32 = <span class="tok-builtin">@intCast</span>(i / dim);
+        <span class="tok-comment">// Gradients plus noise: compresses like a real screenshot, so the encoder does</span>
+        <span class="tok-comment">// real work rather than running away with a trivial RLE.</span>
+        pixels[i * <span class="tok-num">4</span> + <span class="tok-num">0</span>] = <span class="tok-builtin">@truncate</span>(x ^ y);
+        pixels[i * <span class="tok-num">4</span> + <span class="tok-num">1</span>] = <span class="tok-builtin">@truncate</span>(x +% y);
+        pixels[i * <span class="tok-num">4</span> + <span class="tok-num">2</span>] = <span class="tok-builtin">@truncate</span>((i *% <span class="tok-num">2654435761</span>) &gt;&gt; <span class="tok-num">24</span>);
+        pixels[i * <span class="tok-num">4</span> + <span class="tok-num">3</span>] = <span class="tok-num">255</span>;
+    }
+
+    s.* = .{
+        .gpa = gpa,
+        .result_buf = result_buf,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .font = font,
+        .pixels = pixels,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.job.<span class="tok-fn">deinit</span>(); <span class="tok-comment">// cancels it host-side too, if it is still in flight</span>
+    gpa.<span class="tok-fn">free</span>(s.pixels);
+    gpa.<span class="tok-fn">free</span>(s.result_buf);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// ---- the measurement -----------------------------------------------------</span>
+    <span class="tok-comment">// The worst gap between frames while a job was outstanding. On the main thread this</span>
+    <span class="tok-comment">// reads ~233 ms (the frame simply did not happen). On a worker it reads ~17 ms.</span>
+    <span class="tok-kw">const</span> gap_ms: f32 = f.time.delta_time * <span class="tok-num">1000.0</span>;
+    <span class="tok-kw">if</span> (s.watching) {
+        <span class="tok-kw">if</span> (gap_ms &gt; s.worst_gap_ms) {
+            s.worst_gap_ms = gap_ms;
+        }
+        <span class="tok-comment">// Attribute this frame's cost to the phase that CAUSED it. A dispatch blocks inside</span>
+        <span class="tok-comment">// its own frame, so the cost always lands on the frame AFTER - which is why the</span>
+        <span class="tok-comment">// phase advances here, one frame late, rather than at the call site.</span>
+        <span class="tok-kw">switch</span> (s.phase) {
+            .submitted =&gt; {
+                s.submit_ms = gap_ms;
+                s.phase = .waiting;
+            },
+            .waiting =&gt; {
+                <span class="tok-kw">if</span> (gap_ms &gt; s.wait_ms) {
+                    s.wait_ms = gap_ms;
+                }
+            },
+            .landed =&gt; {
+                <span class="tok-comment">// The landing frame AND the ones just after it: the 2.7 MB copy-out, the</span>
+                <span class="tok-comment">// free, and any wasm `memory.grow` the alloc triggered can all land a frame</span>
+                <span class="tok-comment">// or two late. Attribute the whole tail here rather than let it hide in</span>
+                <span class="tok-comment">// `.idle` and surface only as an unexplained `worst`.</span>
+                <span class="tok-kw">if</span> (gap_ms &gt; s.land_ms) {
+                    s.land_ms = gap_ms;
+                }
+            },
+            .idle =&gt; {},
+        }
+        <span class="tok-kw">if</span> (s.settle &gt; <span class="tok-num">0</span>) {
+            s.settle -= <span class="tok-num">1</span>;
+        }
+    }
+
+    <span class="tok-comment">// ---- collect the job -----------------------------------------------------</span>
+    <span class="tok-comment">// One line, once a frame, never blocks. Identical whether a real worker ran it or</span>
+    <span class="tok-comment">// the inline fallback did.</span>
+    <span class="tok-kw">const</span> t_poll0: f64 = z.wgpu.<span class="tok-fn">nowMs</span>();
+    <span class="tok-kw">if</span> (s.job.<span class="tok-fn">pollInto</span>(s.result_buf)) |maybe_png| {
+        <span class="tok-kw">if</span> (maybe_png) |png| {
+            s.png_kb = png.len / <span class="tok-num">1024</span>;
+            <span class="tok-comment">// Cheap end-to-end proof that the bytes really crossed two wasm instances</span>
+            <span class="tok-comment">// intact: a PNG starts with this signature.</span>
+            s.png_ok = png.len &gt; <span class="tok-num">8</span> <span class="tok-kw">and</span> std.mem.<span class="tok-fn">eql</span>(u8, png[<span class="tok-num">0</span>..<span class="tok-num">4</span>], &amp;[_]u8{ <span class="tok-num">0x89</span>, <span class="tok-str">'P'</span>, <span class="tok-str">'N'</span>, <span class="tok-str">'G'</span> });
+            s.phase = .landed; <span class="tok-comment">// the copy-out cost shows up on the NEXT frame</span>
+            s.settle = <span class="tok-num">3</span>;
+            s.job.<span class="tok-fn">deinit</span>();
+        }
+    } <span class="tok-kw">else</span> |err| {
+        std.log.<span class="tok-fn">err</span>(<span class="tok-str">"worker_png: job failed: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+        s.watching = false;
+        s.job.<span class="tok-fn">deinit</span>();
+    }
+    <span class="tok-kw">const</span> poll_took: f32 = <span class="tok-builtin">@floatCast</span>(z.wgpu.<span class="tok-fn">nowMs</span>() - t_poll0);
+    <span class="tok-kw">if</span> (s.phase == .landed <span class="tok-kw">and</span> poll_took &gt; s.poll_ms) {
+        s.poll_ms = poll_took;
+        s.ready_ms = jobs.last_ready_ms;
+        s.copy_ms = jobs.last_copy_ms;
+    }
+
+    <span class="tok-comment">// The watch ends only after the settle frames, so the blocking frame's cost is counted.</span>
+    <span class="tok-kw">if</span> (s.watching <span class="tok-kw">and</span> s.settle == <span class="tok-num">0</span> <span class="tok-kw">and</span> !s.job.<span class="tok-fn">inFlight</span>() <span class="tok-kw">and</span> s.png_kb &gt; <span class="tok-num">0</span>) {
+        s.watching = false;
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">11</span>, .g = <span class="tok-num">15</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+
+    <span class="tok-kw">const</span> fw: f32 = f.window.<span class="tok-fn">widthf</span>();
+
+    <span class="tok-comment">// ---- the orbiting dot: its smoothness IS the demo ------------------------</span>
+    <span class="tok-comment">// A frozen frame stops it dead. You cannot miss it, and you cannot fake it.</span>
+    <span class="tok-kw">const</span> cx: f32 = fw * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-num">110.0</span>;
+    <span class="tok-kw">const</span> angle: f32 = f.time.time * <span class="tok-num">3.0</span>;
+    <span class="tok-kw">const</span> orbit: f32 = <span class="tok-num">46.0</span>;
+    f.gl.<span class="tok-fn">circle</span>(.{ cx, cy }, <span class="tok-num">52.0</span>, .{ .color = .{ .r = <span class="tok-num">22</span>, .g = <span class="tok-num">30</span>, .b = <span class="tok-num">48</span>, .a = <span class="tok-num">255</span> }, .segments = <span class="tok-num">32</span> });
+    f.gl.<span class="tok-fn">circle</span>(
+        .{ cx + orbit * <span class="tok-fn">cosRad</span>(angle), cy + orbit * <span class="tok-fn">sinRad</span>(angle) },
+        <span class="tok-num">11.0</span>,
+        .{ .color = .{ .r = <span class="tok-num">126</span>, .g = <span class="tok-num">231</span>, .b = <span class="tok-num">135</span>, .a = <span class="tok-num">255</span> }, .segments = <span class="tok-num">16</span> },
+    );
+
+    <span class="tok-comment">// ---- the buttons ---------------------------------------------------------</span>
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">190</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ fw - <span class="tok-num">16</span>, <span class="tok-num">330</span> }, .{}); <span class="tok-comment">// tall enough that no number hides below the fold</span>
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"encode a 1024x1024 PNG"</span>, .{})) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        <span class="tok-kw">const</span> busy: bool = s.job.<span class="tok-fn">inFlight</span>();
+
+        <span class="tok-kw">const</span> bh: f32 = <span class="tok-num">44.0</span>; <span class="tok-comment">// a real tap target; this is a phone-first engine</span>
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Encode on the MAIN THREAD"</span>, .{ .size = .{ <span class="tok-num">0</span>, bh } }) <span class="tok-kw">and</span> !busy) {
+            s.worst_gap_ms = <span class="tok-num">0</span>;
+            s.submit_ms = <span class="tok-num">0</span>;
+            s.wait_ms = <span class="tok-num">0</span>;
+            s.land_ms = <span class="tok-num">0</span>;
+            s.watching = true;
+            s.settle = <span class="tok-num">0</span>;
+            s.phase = .submitted; <span class="tok-comment">// the whole encode happens inside this one frame</span>
+            s.ran_on = .main_thread;
+            <span class="tok-comment">// The bad way, kept on purpose. This BLOCKS the frame for ~240 ms - the dot</span>
+            <span class="tok-comment">// stops, and `worst frame gap` below records exactly how long for.</span>
+            <span class="tok-kw">if</span> (z.codecs.png.<span class="tok-fn">encode</span>(s.gpa, s.pixels, dim, dim)) |png| {
+                <span class="tok-kw">defer</span> s.gpa.<span class="tok-fn">free</span>(png);
+                s.png_kb = png.len / <span class="tok-num">1024</span>;
+                s.png_ok = true;
+            } <span class="tok-kw">else</span> |err| {
+                std.log.<span class="tok-fn">err</span>(<span class="tok-str">"worker_png: main-thread encode failed: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+            }
+            <span class="tok-comment">// NOT `s.watching = false` - see `settle`. The 240 ms just spent blocking shows</span>
+            <span class="tok-comment">// up as the NEXT frame's delta, and stopping the watch here would discard it.</span>
+            s.settle = <span class="tok-num">3</span>;
+        }
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Encode on a WORKER"</span>, .{ .size = .{ <span class="tok-num">0</span>, bh } }) <span class="tok-kw">and</span> !busy) {
+            s.worst_gap_ms = <span class="tok-num">0</span>;
+            s.submit_ms = <span class="tok-num">0</span>;
+            s.wait_ms = <span class="tok-num">0</span>;
+            s.land_ms = <span class="tok-num">0</span>;
+            s.poll_ms = <span class="tok-num">0</span>;
+            s.watching = true;
+            s.settle = <span class="tok-num">0</span>;
+            s.phase = .submitted;
+            s.ran_on = .worker;
+            s.runs += <span class="tok-num">1</span>;
+            <span class="tok-comment">// The good way. Returns IMMEDIATELY; `poll` above collects it whenever it</span>
+            <span class="tok-comment">// lands. Note the kernel is named by the FUNCTION, not a string - so a typo</span>
+            <span class="tok-comment">// is a compile error, not a NoSuchKernel at runtime.</span>
+            s.job = kernels.registry.<span class="tok-fn">submit</span>(
+                s.gpa,
+                kernels.encodePng,
+                .{ .w = dim, .h = dim },
+                s.pixels,
+            ) <span class="tok-kw">catch</span> |err| blk: {
+                std.log.<span class="tok-fn">err</span>(<span class="tok-str">"worker_png: submit failed: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+                s.watching = false;
+                <span class="tok-kw">break</span> :blk .{};
+            };
+        }
+
+        u.<span class="tok-fn">separator</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"workers: {s}"</span>, .{
+            <span class="tok-kw">if</span> (jobs.<span class="tok-fn">parallel</span>()) <span class="tok-str">"available"</span> <span class="tok-kw">else</span> <span class="tok-str">"UNAVAILABLE - running inline"</span>,
+        });
+        <span class="tok-kw">if</span> (s.png_kb &gt; <span class="tok-num">0</span>) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"png: {d} KB  signature {s}  (ran on {s})"</span>, .{
+                s.png_kb,
+                <span class="tok-kw">if</span> (s.png_ok) <span class="tok-str">"OK"</span> <span class="tok-kw">else</span> <span class="tok-str">"BAD"</span>,
+                <span class="tok-builtin">@tagName</span>(s.ran_on),
+            });
+        }
+        <span class="tok-comment">// THE number, DECOMPOSED. `wait` is the one that matters: it is the only one that</span>
+        <span class="tok-comment">// says whether the work is really off the main thread.</span>
+        <span class="tok-kw">const</span> dropped: f32 = s.worst_gap_ms / <span class="tok-num">16.7</span>;
+        u.<span class="tok-fn">textColored</span>(
+            <span class="tok-kw">if</span> (s.worst_gap_ms &gt; <span class="tok-num">34.0</span>) z.colors.red_400 <span class="tok-kw">else</span> z.colors.emerald_400,
+            <span class="tok-str">"worst gap {d:.0} ms  (~{d:.0} frames dropped)"</span>,
+            .{ s.worst_gap_ms, <span class="tok-builtin">@max</span>(<span class="tok-num">0.0</span>, dropped - <span class="tok-num">1.0</span>) },
+        );
+        u.<span class="tok-fn">textColored</span>(
+            <span class="tok-kw">if</span> (s.wait_ms &gt; <span class="tok-num">34.0</span>) z.colors.red_400 <span class="tok-kw">else</span> z.colors.emerald_400,
+            <span class="tok-str">"  WAIT   {d:.0} ms  &lt;- is the work really off-thread?"</span>,
+            .{s.wait_ms},
+        );
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  submit {d:.0} ms  (4 MB staged + copied to the worker)"</span>, .{s.submit_ms});
+        u.<span class="tok-fn">textColored</span>(
+            <span class="tok-kw">if</span> (s.land_ms &gt; <span class="tok-num">34.0</span>) z.colors.red_400 <span class="tok-kw">else</span> z.colors.emerald_400,
+            <span class="tok-str">"  LAND   {d:.0} ms  (2.7 MB PNG alloc'd + copied back)"</span>,
+            .{s.land_ms},
+        );
+        u.<span class="tok-fn">textColored</span>(
+            <span class="tok-kw">if</span> (s.poll_ms &gt; <span class="tok-num">34.0</span>) z.colors.red_400 <span class="tok-kw">else</span> z.colors.emerald_400,
+            <span class="tok-str">"    pollInto {d:.0} ms  = ready {d:.0} + copy {d:.0}"</span>,
+            .{ s.poll_ms, s.ready_ms, s.copy_ms },
+        );
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"run #{d}   (2.7 MB copy should be ~2 ms)"</span>, .{s.runs});
+    }
+
+    s.ui_host.<span class="tok-fn">render</span>(f);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - jobs - PNG encode on a worker"</span>,
+            .width = <span class="tok-num">420</span>,
+            .height = <span class="tok-num">480</span>,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/worker_png/kernels.zig" data-lines="94"><figcaption><span>examples/worker_png/kernels.zig</span><span>94 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/worker_png/kernels.zig - the PURE half of the example.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! This file is compiled TWICE:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * into the app's wasm, so `registry.submit(...)` knows the kernel's header type -</span>
+<span class="tok-comment">//!     all at comptime, so a mismatch is a build error;</span>
+<span class="tok-comment">//!   * into a SEPARATE, freestanding kernel wasm (~20 KB, ZERO imports) that the workers</span>
+<span class="tok-comment">//!     instantiate. Zero imports is the whole trick: the worker's JS can instantiate it</span>
+<span class="tok-comment">//!     with `{}`. Nothing to stub, no DOM, no WebGPU, no WASI.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It imports `z` like any other example - but it may only TOUCH the pure parts of it</span>
+<span class="tok-comment">//! (`codecs`, `zm`, `jobs`, `easings`, ...). Reach for `z.drawText` and the kernel wasm</span>
+<span class="tok-comment">//! sprouts a `dom` import and the trick dies. That is not a style rule you can forget: the</span>
+<span class="tok-comment">//! build ASSERTS the kernel wasm's import section is empty, so a kernel that touches the</span>
+<span class="tok-comment">//! DOM fails to build, with a message saying which import gave it away.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! (Zig's lazy analysis is what makes this work: `src/z.zig` declares the whole engine,</span>
+<span class="tok-comment">//! but only what the kernel actually REACHES gets compiled in. Touch nothing impure and</span>
+<span class="tok-comment">//! nothing impure is linked.)</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Note what is NOT here: `exportWorkerEntry`. build.zig generates a tiny root that calls</span>
+<span class="tok-comment">//! it, so the app - which imports this file for `registry` - never links the worker's</span>
+<span class="tok-comment">//! buffers.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+
+<span class="tok-kw">const</span> codecs = z.codecs;
+<span class="tok-kw">const</span> jobs = z.jobs;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> expect = std.testing.expect;
+<span class="tok-kw">const</span> expectEqualSlices = std.testing.expectEqualSlices;
+
+<span class="tok-comment">/// `extern`, not a plain struct: these bytes are memcpy'd out of the app's wasm and into</span>
+<span class="tok-comment">/// the kernel's - two separate compilations - and Zig's auto layout is free to reorder</span>
+<span class="tok-comment">/// fields. `extern` is what the language provides for a boundary. (The call site is</span>
+<span class="tok-comment">/// unchanged: `.{ .w = 1024, .h = 1024 }` still coerces.)</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Size = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    w: u32,
+    h: u32,
+};
+
+<span class="tok-comment">/// Encode an RGBA8 image to PNG.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// An ordinary Zig function: allocator first, as everywhere else in std, and a plain</span>
+<span class="tok-comment">/// `std.Io.Writer` for output. Nothing about it announces that it will run on another</span>
+<span class="tok-comment">/// thread - which is exactly the point. It runs in its own wasm instance with its own</span>
+<span class="tok-comment">/// linear memory, so it cannot see the app's globals even if it wanted to.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `gpa` is an ARENA. Whatever the kernel allocates is released for it when the job ends,</span>
+<span class="tok-comment">/// which is why there is no `defer free` here and no way to leak.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// ~240 ms for 1024x1024 in wasm on a phone. On the main thread that is a 233 ms frozen</span>
+<span class="tok-comment">/// frame - fourteen dropped frames, plainly visible. Here it is zero.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">encodePng</span>(
+    gpa: Allocator,
+    hdr: Size,
+    pixels: []<span class="tok-kw">const</span> u8,
+    out: *std.Io.Writer,
+) !void {
+    <span class="tok-kw">const</span> png: []u8 = <span class="tok-kw">try</span> codecs.png.<span class="tok-fn">encode</span>(gpa, pixels, hdr.w, hdr.h);
+    <span class="tok-kw">try</span> out.<span class="tok-fn">writeAll</span>(png);
+}
+
+<span class="tok-comment">/// The kernel table, exposed so registries can COMPOSE. A page that bundles several</span>
+<span class="tok-comment">/// examples (the launcher) builds one kernel wasm from the concatenation:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///     jobs.Registry(worker_png.job_kernels ++ four_ways.job_kernels, .{})</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// which works because the wasm exports are keyed by NAME, not by an index or a hash -</span>
+<span class="tok-comment">/// so a merged kernel wasm satisfies every example's `submit` with nobody renumbering.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> job_kernels = .{
+    .{ <span class="tok-str">"encodePng"</span>, encodePng },
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> registry = jobs.<span class="tok-fn">Registry</span>(job_kernels, .{
+    .max_input = <span class="tok-num">8</span> &lt;&lt; <span class="tok-num">20</span>, <span class="tok-comment">// 4 MB of RGBA at 1024x1024, with room to spare</span>
+    .max_output = <span class="tok-num">8</span> &lt;&lt; <span class="tok-num">20</span>, <span class="tok-comment">// a 1024x1024 PNG comes out around 2.7 MB</span>
+});
+
+<span class="tok-comment">// The kernel is a plain function, so testing it needs no browser, no worker and no wasm.</span>
+<span class="tok-comment">// This is the ergonomic payoff, and it is worth stating plainly: if you can `zig build</span>
+<span class="tok-comment">// test` your kernel, the only thing left to break is transport - and transport is the</span>
+<span class="tok-comment">// engine's problem, not yours.</span>
+<span class="tok-kw">test</span> <span class="tok-str">"encodePng emits a valid PNG signature"</span> {
+    <span class="tok-kw">var</span> out_buf: [<span class="tok-num">1</span> &lt;&lt; <span class="tok-num">16</span>]u8 = undefined;
+    <span class="tok-kw">var</span> out: std.Io.Writer = .<span class="tok-fn">fixed</span>(&amp;out_buf);
+    <span class="tok-kw">const</span> px: [<span class="tok-num">4</span> * <span class="tok-num">4</span> * <span class="tok-num">4</span>]u8 = <span class="tok-builtin">@splat</span>(<span class="tok-num">255</span>); <span class="tok-comment">// 4x4 RGBA, all white</span>
+
+    <span class="tok-kw">try</span> <span class="tok-fn">encodePng</span>(std.testing.allocator, .{ .w = <span class="tok-num">4</span>, .h = <span class="tok-num">4</span> }, &amp;px, &amp;out);
+
+    <span class="tok-kw">try</span> <span class="tok-fn">expect</span>(out.<span class="tok-fn">buffered</span>().len &gt; <span class="tok-num">8</span>);
+    <span class="tok-kw">try</span> <span class="tok-fn">expectEqualSlices</span>(u8, &amp;[_]u8{ <span class="tok-num">0x89</span>, <span class="tok-str">'P'</span>, <span class="tok-str">'N'</span>, <span class="tok-str">'G'</span> }, out.<span class="tok-fn">buffered</span>()[<span class="tok-num">0</span>..<span class="tok-num">4</span>]);
+}
+</code></pre></figure>
+</body>
+</html>

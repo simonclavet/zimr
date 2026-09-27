@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>bone_socket — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>bone_socket</h1>
+<figure class="code src-file" data-path="examples/bone_socket/bone_socket.zig" data-lines="429"><figcaption><span>examples/bone_socket/bone_socket.zig</span><span>429 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! bone_socket - port of raylib's `models_bone_socket` with the real rigged</span>
+<span class="tok-comment">//! character. Loads the CC0 `greenman.glb` (a 12-joint HIERARCHICAL skeleton</span>
+<span class="tok-comment">//! with 4 animations) and `greenman_sword.glb`, plays an animation, and rigidly</span>
+<span class="tok-comment">//! sockets the sword to the `socket_hand_R` bone so it swings with the hand.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! This is the honest v1: CPU skinning, like `skinned_mesh`, but generalised</span>
+<span class="tok-comment">//! from that flat 2-bone rig to a real one -</span>
+<span class="tok-comment">//!   * FULL node hierarchy: each node's world = local * parent-world (walked</span>
+<span class="tok-comment">//!     from the scene roots), not the unparented shortcut skinned_mesh used.</span>
+<span class="tok-comment">//!   * FULL TRS animation: every clip animates translation + rotation + scale,</span>
+<span class="tok-comment">//!     sampled per keyframe interval (linear for T/S, nlerp for R).</span>
+<span class="tok-comment">//!   * NAMED socket: the sword follows `world[socket_hand_R]` - a bone found by</span>
+<span class="tok-comment">//!     name, exactly as raylib does with `skeleton.bones[i].name`.</span>
+<span class="tok-comment">//! The character deforms via sum w_k*(v*skin_k); the sword (a rigid mesh) is just</span>
+<span class="tok-comment">//! world[socket] applied to each vertex per frame. Matrix order follows zm's</span>
+<span class="tok-comment">//! column-vector convention (see the `Mat` docs): build transforms with</span>
+<span class="tok-comment">//! `composeN`/`compose`, which read in application order - a node's local is</span>
+<span class="tok-comment">//! `composeN(scale, rotate, translate)`, a child's world is</span>
+<span class="tok-comment">//! `compose(local, parentWorld)`, and a skin matrix is `compose(inverseBind, jointWorld)`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+<span class="tok-kw">const</span> c = z.colors;
+
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> f32x4 = zm.f32x4;
+<span class="tok-kw">const</span> pointVec = zm.pointVec;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> compose = zm.compose;
+<span class="tok-kw">const</span> composeN = zm.composeN;
+<span class="tok-kw">const</span> mulMatVec = zm.mulMatVec;
+<span class="tok-kw">const</span> matFromQuat = zm.matFromQuat;
+<span class="tok-kw">const</span> translationV = zm.translationV;
+<span class="tok-kw">const</span> scalingV = zm.scalingV;
+<span class="tok-kw">const</span> quat_identity = zm.quat_identity;
+
+<span class="tok-kw">const</span> greenman_glb = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"greenman.glb"</span>);
+<span class="tok-kw">const</span> sword_glb = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"greenman_sword.glb"</span>);
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> max_nodes: usize = <span class="tok-num">32</span>;
+<span class="tok-kw">const</span> max_joints: usize = <span class="tok-num">16</span>;
+
+<span class="tok-kw">const</span> Path = <span class="tok-kw">enum</span> { translation, rotation, scale };
+
+<span class="tok-comment">/// One pre-read animation track (a sampler bound to a node + property).</span>
+<span class="tok-kw">const</span> Track = <span class="tok-kw">struct</span> {
+    target_node: u32,
+    path: Path,
+    times: []f32,
+    values: []f32, <span class="tok-comment">// comps-per-key flattened</span>
+    comps: usize, <span class="tok-comment">// 3 for T/S, 4 for R</span>
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    doc: z.codecs.gltf.Data, <span class="tok-comment">// kept alive: node hierarchy is read every frame</span>
+
+    char_model: z.Model,
+    char_base: []f32, <span class="tok-comment">// bind-pose positions</span>
+    char_skinned: []f32, <span class="tok-comment">// per-frame destination (memcpy'd into the mesh)</span>
+    bone_ids: [*c]u8,
+    bone_weights: [*c]f32,
+    char_vc: usize,
+
+    sword_model: z.Model,
+    sword_base: []f32, <span class="tok-comment">// sword mesh positions (its own object space)</span>
+    sword_skinned: []f32,
+    sword_vc: usize,
+
+    joint_count: usize,
+    joint_nodes: [max_joints]u32,
+    inverse_bind: [max_joints]Mat,
+
+    node_count: usize,
+    parent: [max_nodes]i32, <span class="tok-comment">// -1 = root</span>
+    order: [max_nodes]usize, <span class="tok-comment">// node indices, parents before children</span>
+    socket_node: usize,
+
+    tracks: []Track,
+    duration: f32,
+    cam: z.OrbitCamera,
+    t: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    z.<span class="tok-fn">unloadModel</span>(gpa, s.char_model);
+    z.<span class="tok-fn">unloadModel</span>(gpa, s.sword_model);
+    gpa.<span class="tok-fn">free</span>(s.char_base);
+    gpa.<span class="tok-fn">free</span>(s.char_skinned);
+    gpa.<span class="tok-fn">free</span>(s.sword_base);
+    gpa.<span class="tok-fn">free</span>(s.sword_skinned);
+    <span class="tok-kw">for</span> (s.tracks) |tr| {
+        gpa.<span class="tok-fn">free</span>(tr.times);
+        gpa.<span class="tok-fn">free</span>(tr.values);
+    }
+    gpa.<span class="tok-fn">free</span>(s.tracks);
+    s.doc.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Result of loading one glb's first mesh.</span>
+<span class="tok-kw">const</span> MeshLoad = <span class="tok-kw">struct</span> {
+    model: z.Model,
+    base: []f32,
+    skinned: []f32,
+    vc: usize,
+    mesh: z.types.Mesh,
+};
+
+<span class="tok-comment">/// Load one glb's first mesh as base positions + an uploaded model. Frees the</span>
+<span class="tok-comment">/// meshesFromGltf slice container (its mesh CPU arrays travel with the model).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">loadMeshPositions</span>(
+    gpa: Allocator,
+    f: *z.Frame,
+    doc: z.codecs.gltf.Data,
+) !MeshLoad {
+    <span class="tok-kw">const</span> meshes: []z.types.Mesh = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">meshesFromGltf</span>(gpa, doc);
+    <span class="tok-kw">if</span> (meshes.len == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoMesh;
+    }
+    <span class="tok-kw">const</span> mesh: z.types.Mesh = meshes[<span class="tok-num">0</span>];
+    gpa.<span class="tok-fn">free</span>(meshes);
+    <span class="tok-kw">const</span> vc: usize = <span class="tok-builtin">@intCast</span>(mesh.vertexCount);
+    <span class="tok-kw">const</span> base: []f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, vc * <span class="tok-num">3</span>);
+    <span class="tok-builtin">@memcpy</span>(base, mesh.vertices[<span class="tok-num">0</span> .. vc * <span class="tok-num">3</span>]);
+    <span class="tok-kw">const</span> skinned: []f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, vc * <span class="tok-num">3</span>);
+    <span class="tok-builtin">@memcpy</span>(skinned, base);
+    <span class="tok-kw">const</span> model: z.Model = <span class="tok-kw">try</span> z.<span class="tok-fn">loadModelFromMesh</span>(f.gl, gpa, mesh);
+    <span class="tok-kw">return</span> .{ .model = model, .base = base, .skinned = skinned, .vc = vc, .mesh = mesh };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">var</span> doc: z.codecs.gltf.Data = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">parse</span>(gpa, greenman_glb);
+    <span class="tok-kw">errdefer</span> doc.<span class="tok-fn">deinit</span>();
+
+    <span class="tok-kw">const</span> char: MeshLoad = <span class="tok-kw">try</span> <span class="tok-fn">loadMeshPositions</span>(gpa, f, doc);
+    <span class="tok-kw">if</span> (char.mesh.boneIndices == null <span class="tok-kw">or</span> char.mesh.boneWeights == null) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NotSkinned;
+    }
+
+    <span class="tok-comment">// Sword is a separate glb; its mesh CPU arrays travel with sword_model, so</span>
+    <span class="tok-comment">// the sword document can be dropped after upload.</span>
+    <span class="tok-kw">var</span> sword_doc: z.codecs.gltf.Data = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">parse</span>(gpa, sword_glb);
+    <span class="tok-kw">const</span> sword: MeshLoad = <span class="tok-kw">try</span> <span class="tok-fn">loadMeshPositions</span>(gpa, f, sword_doc);
+    sword_doc.<span class="tok-fn">deinit</span>();
+
+    <span class="tok-comment">// ---- skin: joints + inverse-bind matrices (glTF row-major floats) ----</span>
+    <span class="tok-kw">if</span> (doc.skins.len == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoSkin;
+    }
+    <span class="tok-kw">const</span> skin: z.codecs.gltf.Skin = doc.skins[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> joint_count: usize = <span class="tok-builtin">@min</span>(skin.joints.len, max_joints);
+    <span class="tok-kw">var</span> joint_nodes: [max_joints]u32 = undefined;
+    <span class="tok-kw">var</span> inverse_bind: [max_joints]Mat = undefined;
+    <span class="tok-kw">const</span> ibm_acc: u32 = skin.inverse_bind_matrices <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoInverseBind;
+    <span class="tok-kw">const</span> ibm: []f32 = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">readAccessor</span>(f32, gpa, doc, doc.accessors[ibm_acc]);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(ibm);
+    <span class="tok-kw">var</span> j: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; joint_count) : (j += <span class="tok-num">1</span>) {
+        joint_nodes[j] = skin.joints[j];
+        <span class="tok-kw">const</span> b: usize = j * <span class="tok-num">16</span>;
+        inverse_bind[j] = .{
+            <span class="tok-fn">f32x4</span>(ibm[b + <span class="tok-num">0</span>], ibm[b + <span class="tok-num">1</span>], ibm[b + <span class="tok-num">2</span>], ibm[b + <span class="tok-num">3</span>]),
+            <span class="tok-fn">f32x4</span>(ibm[b + <span class="tok-num">4</span>], ibm[b + <span class="tok-num">5</span>], ibm[b + <span class="tok-num">6</span>], ibm[b + <span class="tok-num">7</span>]),
+            <span class="tok-fn">f32x4</span>(ibm[b + <span class="tok-num">8</span>], ibm[b + <span class="tok-num">9</span>], ibm[b + <span class="tok-num">10</span>], ibm[b + <span class="tok-num">11</span>]),
+            <span class="tok-fn">f32x4</span>(ibm[b + <span class="tok-num">12</span>], ibm[b + <span class="tok-num">13</span>], ibm[b + <span class="tok-num">14</span>], ibm[b + <span class="tok-num">15</span>]),
+        };
+    }
+
+    <span class="tok-comment">// ---- hierarchy: parent[] from every node's children + a parents-first order ----</span>
+    <span class="tok-kw">const</span> node_count: usize = <span class="tok-builtin">@min</span>(doc.nodes.len, max_nodes);
+    <span class="tok-kw">var</span> parent: [max_nodes]i32 = <span class="tok-builtin">@splat</span>(-<span class="tok-num">1</span>);
+    <span class="tok-kw">for</span> (doc.nodes[<span class="tok-num">0</span>..node_count], <span class="tok-num">0</span>..) |n, ni| {
+        <span class="tok-kw">for</span> (n.children) |ch| {
+            <span class="tok-kw">if</span> (ch &lt; node_count) {
+                parent[ch] = <span class="tok-builtin">@intCast</span>(ni);
+            }
+        }
+    }
+    <span class="tok-comment">// Topological order: emit a node only after its parent (simple O(n^2), n tiny).</span>
+    <span class="tok-kw">var</span> order: [max_nodes]usize = undefined;
+    <span class="tok-kw">var</span> emitted: [max_nodes]bool = <span class="tok-builtin">@splat</span>(false);
+    <span class="tok-kw">var</span> count: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (count &lt; node_count) {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..node_count) |ni| {
+            <span class="tok-kw">if</span> (emitted[ni]) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> p: i32 = parent[ni];
+            <span class="tok-kw">if</span> (p &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> emitted[<span class="tok-builtin">@intCast</span>(p)]) {
+                order[count] = ni;
+                emitted[ni] = true;
+                count += <span class="tok-num">1</span>;
+            }
+        }
+    }
+
+    <span class="tok-comment">// ---- socket bone by NAME (as raylib matches skeleton.bones[i].name) ----</span>
+    <span class="tok-kw">var</span> socket_node: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (doc.nodes[<span class="tok-num">0</span>..node_count], <span class="tok-num">0</span>..) |n, ni| {
+        <span class="tok-kw">if</span> (n.name) |nm| {
+            <span class="tok-kw">if</span> (std.mem.<span class="tok-fn">eql</span>(u8, nm, <span class="tok-str">"socket_hand_R"</span>)) {
+                socket_node = ni;
+            }
+        }
+    }
+
+    <span class="tok-comment">// ---- pre-read the "3_attack" clip's TRS tracks (a dynamic swing) ----</span>
+    <span class="tok-kw">var</span> anim_index: usize = doc.animations.len - <span class="tok-num">1</span>; <span class="tok-comment">// last = attack</span>
+    <span class="tok-kw">for</span> (doc.animations, <span class="tok-num">0</span>..) |a, ai| {
+        <span class="tok-kw">if</span> (a.name) |nm| {
+            <span class="tok-kw">if</span> (std.mem.<span class="tok-fn">eql</span>(u8, nm, <span class="tok-str">"3_attack"</span>)) {
+                anim_index = ai;
+            }
+        }
+    }
+    <span class="tok-kw">const</span> anim: z.codecs.gltf.Animation = doc.animations[anim_index];
+    <span class="tok-kw">var</span> tracks: std.<span class="tok-fn">ArrayListUnmanaged</span>(Track) = .empty;
+    <span class="tok-kw">errdefer</span> tracks.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">var</span> duration: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (anim.channels) |chn| {
+        <span class="tok-kw">const</span> sampler: z.codecs.gltf.AnimationSampler = anim.samplers[chn.sampler];
+        <span class="tok-kw">const</span> times: []f32 = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">readAccessor</span>(f32, gpa, doc, doc.accessors[sampler.input]);
+        <span class="tok-kw">const</span> values: []f32 = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">readAccessor</span>(f32, gpa, doc, doc.accessors[sampler.output]);
+        <span class="tok-kw">if</span> (times.len &gt; <span class="tok-num">0</span> <span class="tok-kw">and</span> times[times.len - <span class="tok-num">1</span>] &gt; duration) {
+            duration = times[times.len - <span class="tok-num">1</span>];
+        }
+        <span class="tok-kw">const</span> path: Path = <span class="tok-kw">switch</span> (chn.target_path) {
+            .translation =&gt; .translation,
+            .rotation =&gt; .rotation,
+            .scale =&gt; .scale,
+            .weights =&gt; {
+                gpa.<span class="tok-fn">free</span>(times);
+                gpa.<span class="tok-fn">free</span>(values);
+                <span class="tok-kw">continue</span>;
+            },
+        };
+        <span class="tok-kw">const</span> comps: usize = <span class="tok-kw">if</span> (path == .rotation) <span class="tok-num">4</span> <span class="tok-kw">else</span> <span class="tok-num">3</span>;
+        <span class="tok-kw">try</span> tracks.<span class="tok-fn">append</span>(gpa, .{
+            .target_node = chn.target_node,
+            .path = path,
+            .times = times,
+            .values = values,
+            .comps = comps,
+        });
+    }
+
+    s.* = .{
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>),
+        .doc = doc,
+        .char_model = char.model,
+        .char_base = char.base,
+        .char_skinned = char.skinned,
+        .bone_ids = char.mesh.boneIndices,
+        .bone_weights = char.mesh.boneWeights,
+        .char_vc = char.vc,
+        .sword_model = sword.model,
+        .sword_base = sword.base,
+        .sword_skinned = sword.skinned,
+        .sword_vc = sword.vc,
+        .joint_count = joint_count,
+        .joint_nodes = joint_nodes,
+        .inverse_bind = inverse_bind,
+        .node_count = node_count,
+        .parent = parent,
+        .order = order,
+        .socket_node = socket_node,
+        .tracks = <span class="tok-kw">try</span> tracks.<span class="tok-fn">toOwnedSlice</span>(gpa),
+        .duration = <span class="tok-kw">if</span> (duration &gt; <span class="tok-num">0</span>) duration <span class="tok-kw">else</span> <span class="tok-num">1.0</span>,
+        .cam = .{ .target = <span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0</span>), .distance = <span class="tok-num">9.0</span>, .pitch = <span class="tok-num">0.35</span>, .yaw = <span class="tok-num">0.7</span> },
+    };
+}
+
+<span class="tok-comment">/// Normalized lerp between quaternions (nlerp - enough for these clips).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">nlerp</span>(a: Vec, b: Vec, alpha: f32) Vec {
+    <span class="tok-kw">const</span> qd: f32 = a[<span class="tok-num">0</span>] * b[<span class="tok-num">0</span>] + a[<span class="tok-num">1</span>] * b[<span class="tok-num">1</span>] + a[<span class="tok-num">2</span>] * b[<span class="tok-num">2</span>] + a[<span class="tok-num">3</span>] * b[<span class="tok-num">3</span>];
+    <span class="tok-kw">const</span> bb: Vec = <span class="tok-kw">if</span> (qd &lt; <span class="tok-num">0</span>) -b <span class="tok-kw">else</span> b;
+    <span class="tok-kw">const</span> q: Vec = a + (bb - a) * <span class="tok-fn">splat</span>(alpha);
+    <span class="tok-kw">const</span> len: f32 = <span class="tok-builtin">@sqrt</span>(q[<span class="tok-num">0</span>] * q[<span class="tok-num">0</span>] + q[<span class="tok-num">1</span>] * q[<span class="tok-num">1</span>] + q[<span class="tok-num">2</span>] * q[<span class="tok-num">2</span>] + q[<span class="tok-num">3</span>] * q[<span class="tok-num">3</span>]);
+    <span class="tok-kw">if</span> (len &lt; <span class="tok-num">1e-6</span>) {
+        <span class="tok-kw">return</span> quat_identity;
+    }
+    <span class="tok-kw">return</span> q / <span class="tok-fn">splat</span>(len);
+}
+
+<span class="tok-comment">/// Sample one track at time t into a 4-wide value (unused lanes = 0).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">sampleTrack</span>(tr: Track, t: f32) [<span class="tok-num">4</span>]f32 {
+    <span class="tok-kw">const</span> n: usize = tr.times.len;
+    <span class="tok-kw">if</span> (n == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+    }
+    <span class="tok-comment">// Find the keyframe interval [k, k+1] containing t.</span>
+    <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (k + <span class="tok-num">1</span> &lt; n <span class="tok-kw">and</span> tr.times[k + <span class="tok-num">1</span>] &lt; t) : (k += <span class="tok-num">1</span>) {}
+    <span class="tok-kw">const</span> k1: usize = <span class="tok-builtin">@min</span>(k + <span class="tok-num">1</span>, n - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> t0: f32 = tr.times[k];
+    <span class="tok-kw">const</span> t1: f32 = tr.times[k1];
+    <span class="tok-kw">const</span> span: f32 = t1 - t0;
+    <span class="tok-kw">const</span> alpha: f32 = <span class="tok-kw">if</span> (span &gt; <span class="tok-num">1e-6</span>) (t - t0) / span <span class="tok-kw">else</span> <span class="tok-num">0.0</span>;
+    <span class="tok-kw">var</span> out: [<span class="tok-num">4</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+    <span class="tok-kw">if</span> (tr.path == .rotation) {
+        <span class="tok-kw">const</span> a: Vec = <span class="tok-fn">f32x4</span>(tr.values[k * <span class="tok-num">4</span>], tr.values[k * <span class="tok-num">4</span> + <span class="tok-num">1</span>], tr.values[k * <span class="tok-num">4</span> + <span class="tok-num">2</span>], tr.values[k * <span class="tok-num">4</span> + <span class="tok-num">3</span>]);
+        <span class="tok-kw">const</span> b: Vec = <span class="tok-fn">f32x4</span>(tr.values[k1 * <span class="tok-num">4</span>], tr.values[k1 * <span class="tok-num">4</span> + <span class="tok-num">1</span>], tr.values[k1 * <span class="tok-num">4</span> + <span class="tok-num">2</span>], tr.values[k1 * <span class="tok-num">4</span> + <span class="tok-num">3</span>]);
+        <span class="tok-kw">const</span> q: Vec = <span class="tok-fn">nlerp</span>(a, b, alpha);
+        out = .{ q[<span class="tok-num">0</span>], q[<span class="tok-num">1</span>], q[<span class="tok-num">2</span>], q[<span class="tok-num">3</span>] };
+    } <span class="tok-kw">else</span> {
+        <span class="tok-kw">var</span> comp: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (comp &lt; <span class="tok-num">3</span>) : (comp += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> va: f32 = tr.values[k * <span class="tok-num">3</span> + comp];
+            <span class="tok-kw">const</span> vb: f32 = tr.values[k1 * <span class="tok-num">3</span> + comp];
+            out[comp] = va + (vb - va) * alpha;
+        }
+    }
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.t += f.time.delta_time;
+    <span class="tok-kw">if</span> (s.t &gt; s.duration) {
+        s.t -= s.duration;
+    }
+
+    <span class="tok-comment">// ---- 1. per-node local TRS: bind pose, then override from the clip ----</span>
+    <span class="tok-kw">var</span> trans: [max_nodes]Vec = undefined;
+    <span class="tok-kw">var</span> rot: [max_nodes]Vec = undefined;
+    <span class="tok-kw">var</span> scal: [max_nodes]Vec = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.node_count) |ni| {
+        trans[ni] = s.doc.nodes[ni].translation;
+        rot[ni] = s.doc.nodes[ni].rotation;
+        scal[ni] = s.doc.nodes[ni].scale;
+    }
+    <span class="tok-kw">for</span> (s.tracks) |tr| {
+        <span class="tok-kw">if</span> (tr.target_node &gt;= s.node_count) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> v: [<span class="tok-num">4</span>]f32 = <span class="tok-fn">sampleTrack</span>(tr, s.t);
+        <span class="tok-kw">switch</span> (tr.path) {
+            .translation =&gt; trans[tr.target_node] = <span class="tok-fn">f32x4</span>(v[<span class="tok-num">0</span>], v[<span class="tok-num">1</span>], v[<span class="tok-num">2</span>], <span class="tok-num">0</span>),
+            .rotation =&gt; rot[tr.target_node] = <span class="tok-fn">f32x4</span>(v[<span class="tok-num">0</span>], v[<span class="tok-num">1</span>], v[<span class="tok-num">2</span>], v[<span class="tok-num">3</span>]),
+            .scale =&gt; scal[tr.target_node] = <span class="tok-fn">f32x4</span>(v[<span class="tok-num">0</span>], v[<span class="tok-num">1</span>], v[<span class="tok-num">2</span>], <span class="tok-num">0</span>),
+        }
+    }
+
+    <span class="tok-comment">// ---- 2. world matrices, parents before children ----</span>
+    <span class="tok-kw">var</span> world: [max_nodes]Mat = undefined;
+    <span class="tok-kw">for</span> (s.order[<span class="tok-num">0</span>..s.node_count]) |ni| {
+        <span class="tok-kw">const</span> local: Mat = <span class="tok-fn">composeN</span>(<span class="tok-fn">scalingV</span>(scal[ni]), <span class="tok-fn">matFromQuat</span>(rot[ni]), <span class="tok-fn">translationV</span>(trans[ni]));
+        <span class="tok-kw">const</span> p: i32 = s.parent[ni];
+        world[ni] = <span class="tok-kw">if</span> (p &lt; <span class="tok-num">0</span>) local <span class="tok-kw">else</span> <span class="tok-fn">compose</span>(local, world[<span class="tok-builtin">@intCast</span>(p)]);
+    }
+
+    <span class="tok-comment">// ---- 3. skin the character: v' = sum w_k * (v * invBind_k * world_k) ----</span>
+    <span class="tok-kw">var</span> skin_mat: [max_joints]Mat = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.joint_count) |ji| {
+        skin_mat[ji] = <span class="tok-fn">compose</span>(s.inverse_bind[ji], world[s.joint_nodes[ji]]);
+    }
+    <span class="tok-kw">var</span> vi: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (vi &lt; s.char_vc) : (vi += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> p: Vec = <span class="tok-fn">f32x4</span>(s.char_base[vi * <span class="tok-num">3</span>], s.char_base[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>], s.char_base[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>], <span class="tok-num">1.0</span>);
+        <span class="tok-kw">var</span> acc: Vec = <span class="tok-fn">f32x4</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+        <span class="tok-kw">var</span> kk: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (kk &lt; <span class="tok-num">4</span>) : (kk += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> w: f32 = s.bone_weights[vi * <span class="tok-num">4</span> + kk];
+            <span class="tok-kw">if</span> (w == <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> joint: usize = s.bone_ids[vi * <span class="tok-num">4</span> + kk];
+            <span class="tok-kw">if</span> (joint &gt;= s.joint_count) {
+                <span class="tok-kw">continue</span>;
+            }
+            acc += <span class="tok-fn">mulMatVec</span>(skin_mat[joint], p) * <span class="tok-fn">splat</span>(w);
+        }
+        s.char_skinned[vi * <span class="tok-num">3</span>] = acc[<span class="tok-num">0</span>];
+        s.char_skinned[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>] = acc[<span class="tok-num">1</span>];
+        s.char_skinned[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>] = acc[<span class="tok-num">2</span>];
+    }
+    z.<span class="tok-fn">updateMeshBuffer</span>(s.char_model.meshes[<span class="tok-num">0</span>], <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(s.char_skinned), <span class="tok-num">0</span>);
+
+    <span class="tok-comment">// ---- 4. socket: rigidly transform the sword by the hand bone's world ----</span>
+    <span class="tok-kw">const</span> socket: Mat = world[s.socket_node];
+    <span class="tok-kw">var</span> si: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (si &lt; s.sword_vc) : (si += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> p: Vec = <span class="tok-fn">f32x4</span>(s.sword_base[si * <span class="tok-num">3</span>], s.sword_base[si * <span class="tok-num">3</span> + <span class="tok-num">1</span>], s.sword_base[si * <span class="tok-num">3</span> + <span class="tok-num">2</span>], <span class="tok-num">1.0</span>);
+        <span class="tok-kw">const</span> q: Vec = <span class="tok-fn">mulMatVec</span>(socket, p);
+        s.sword_skinned[si * <span class="tok-num">3</span>] = q[<span class="tok-num">0</span>];
+        s.sword_skinned[si * <span class="tok-num">3</span> + <span class="tok-num">1</span>] = q[<span class="tok-num">1</span>];
+        s.sword_skinned[si * <span class="tok-num">3</span> + <span class="tok-num">2</span>] = q[<span class="tok-num">2</span>];
+    }
+    z.<span class="tok-fn">updateMeshBuffer</span>(s.sword_model.meshes[<span class="tok-num">0</span>], <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(s.sword_skinned), <span class="tok-num">0</span>);
+
+    <span class="tok-comment">// ---- 5. draw ----</span>
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, false, .{ .fovy_deg = <span class="tok-num">55</span> });
+    z.<span class="tok-fn">beginMode3D</span>(f.gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(f.gl, <span class="tok-num">12</span>, <span class="tok-num">0.5</span>);
+    z.<span class="tok-fn">drawModel</span>(f.gl, s.char_model, <span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-num">1.0</span>, c.emerald_400);
+    z.<span class="tok-fn">drawModel</span>(f.gl, s.sword_model, <span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-num">1.0</span>, c.sky_300);
+    z.<span class="tok-fn">endMode3D</span>(f.gl);
+
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">16</span>, <span class="tok-num">14</span> }, <span class="tok-str">"bone socket - rigged character"</span>, .{
+        .size = <span class="tok-num">22</span>,
+        .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> },
+        .font = &amp;s.font,
+    });
+    <span class="tok-kw">var</span> hud_buf: [<span class="tok-num">80</span>]u8 = undefined;
+    <span class="tok-kw">const</span> hud: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;hud_buf, <span class="tok-str">"anim '3_attack'  t = {d:.2}s / {d:.2}s"</span>, .{ s.t, s.duration }) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">16</span>, <span class="tok-num">42</span> }, hud, .{ .size = <span class="tok-num">16</span>, .color = .{ .r = <span class="tok-num">170</span>, .g = <span class="tok-num">180</span>, .b = <span class="tok-num">200</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font });
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"drag = orbit, pinch/wheel = zoom - sword socketed to bone socket_hand_R"</span>);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - bone socket (rigged character)"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">540</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .update = update,
+    .deinit = deinit,
+};
+</code></pre></figure>
+</body>
+</html>

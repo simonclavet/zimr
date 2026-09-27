@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>three_leg — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>three_leg</h1>
+<figure class="code src-file" data-path="examples/three_leg/three_leg.zig" data-lines="736"><figcaption><span>examples/three_leg/three_leg.zig</span><span>736 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! three_leg - a Go1 standing on three legs, reaching with the fourth.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * WHAT TO TRY --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Pick a foot, press **lift**, and drive it with the three sliders. All four work. Turn off</span>
+<span class="tok-comment">//! **shift the torso first** and the robot rolls over instantly, whichever foot you choose -</span>
+<span class="tok-comment">//! that is the whole point of the sway.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** WHY A FRONT FOOT AND NOT A REAR ONE --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The Go1's centre of mass sits at **(-0.051, 0.001)** - 51 mm behind the middle of its feet,</span>
+<span class="tok-comment">//! because the trunk's mass is not centred between the hips. So the four-foot stance is not</span>
+<span class="tok-comment">//! symmetric about the mass, and the two diagonals are not equivalent:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * lift a FRONT foot and the CM starts 19 mm INSIDE the triangle the others make;</span>
+<span class="tok-comment">//!   * lift a REAR foot and it starts 17 mm OUTSIDE it.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A 36 mm asymmetry, and it decides which leg a static walk can lift first. The panel shows</span>
+<span class="tok-comment">//! the margin live so you can watch it change as the torso shifts.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- *** AND WHY THE TORSO SHIFTS BEFORE THE FOOT LEAVES --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Lifting without shifting drops the mass onto the edge of a triangle it is already on, and</span>
+<span class="tok-comment">//! the robot rolls over - measured, 180 degrees, every time, for all four feet. Real quadrupeds</span>
+<span class="tok-comment">//! sway before they step for exactly this reason, and it is why a static walk needs three feet</span>
+<span class="tok-comment">//! down most of the time (`examples/quadruped` found duty 0.85 stands and 0.70 falls by</span>
+<span class="tok-comment">//! experiment; this is the geometry underneath that number).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * THE TWO BUGS THIS COST, BOTH INVISIBLE --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! **`applyKeyframe` is not a memcpy.** `keyframes[0].qpos` is in the FILE's layout and the</span>
+<span class="tok-comment">//! model's differs in the free joint's quaternion. Copying it raw put the robot UPSIDE DOWN -</span>
+<span class="tok-comment">//! feet at z = 0.535, above a trunk at 0.27 - and every foot position and CM number computed</span>
+<span class="tok-comment">//! from it described an inverted machine. Nothing complained, because an inverted pose is a</span>
+<span class="tok-comment">//! valid pose.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! **A missing `forward` after restoring the live state.** The loop swaps in the commanded pose</span>
+<span class="tok-comment">//! to run IK, then swaps the live one back. Marking it stale is not enough: `plantFeet` reads</span>
+<span class="tok-comment">//! `body_xpos` to decide where contacts go, so stale kinematics placed them centimetres from</span>
+<span class="tok-comment">//! the actual feet. The robot was held up by contacts that were not under it.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> ctl = z.robot_control;
+<span class="tok-kw">const</span> mjcf = z.mjcf;
+<span class="tok-kw">const</span> rmj = z.robot_mjcf;
+<span class="tok-kw">const</span> ui = z.ui;
+<span class="tok-kw">const</span> profiler = z.profiler;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> quatToMat = zm.quatToMat;
+
+<span class="tok-kw">const</span> leg_count: usize = <span class="tok-num">4</span>;
+<span class="tok-kw">const</span> sim_timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">500.0</span>;
+<span class="tok-comment">/// How fast the torso chases the centre-of-mass goal. 0.005 converges in about a second;</span>
+<span class="tok-comment">/// 0.010 overshoots and tips the robot, measured on all four legs.</span>
+<span class="tok-kw">const</span> com_rate: f32 = <span class="tok-num">0.005</span>;
+<span class="tok-comment">/// One stride per leg per cycle.</span>
+<span class="tok-kw">const</span> walk_stride: f32 = <span class="tok-num">0.06</span>;
+<span class="tok-comment">/// How fast the torso may sway while walking. See the note in `rebuildCommand`.</span>
+<span class="tok-kw">const</span> walk_sway_speed: f32 = <span class="tok-num">0.05</span>;
+<span class="tok-comment">/// Support margin required before a foot may leave the ground.</span>
+<span class="tok-kw">const</span> walk_gate: f32 = <span class="tok-num">0.03</span>;
+<span class="tok-comment">/// Crawl order: both right legs, then both left.</span>
+<span class="tok-kw">const</span> crawl_order = [_]usize{ <span class="tok-num">2</span>, <span class="tok-num">0</span>, <span class="tok-num">3</span>, <span class="tok-num">1</span> };
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">18</span>, .g = <span class="tok-num">20</span>, .b = <span class="tok-num">28</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> trunk_col: Color = .{ .r = <span class="tok-num">96</span>, .g = <span class="tok-num">132</span>, .b = <span class="tok-num">184</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> link_col: Color = .{ .r = <span class="tok-num">148</span>, .g = <span class="tok-num">156</span>, .b = <span class="tok-num">172</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> planted_col: Color = .{ .r = <span class="tok-num">237</span>, .g = <span class="tok-num">184</span>, .b = <span class="tok-num">89</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> lifted_col: Color = .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">106</span>, .b = <span class="tok-num">154</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> support_col: Color = .{ .r = <span class="tok-num">89</span>, .g = <span class="tok-num">204</span>, .b = <span class="tok-num">153</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> com_col: Color = .{ .r = <span class="tok-num">250</span>, .g = <span class="tok-num">240</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> leg_names = [_][]<span class="tok-kw">const</span> u8{ <span class="tok-str">"front right"</span>, <span class="tok-str">"front left"</span>, <span class="tok-str">"rear right"</span>, <span class="tok-str">"rear left"</span> };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    doc: z.codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: rmj.Imported,
+    data: rbt.Data,
+
+    <span class="tok-comment">/// The commanded reference pose, in the MODEL's layout - see the header on `applyKeyframe`.</span>
+    home: []f32,
+    <span class="tok-comment">/// What `PoseHold` is actually given each tick: `home` with the torso shifted and the</span>
+    <span class="tok-comment">/// lifted foot moved, resolved to joint angles by per-leg IK.</span>
+    commanded: []f32,
+    scratch_pose: []f32,
+    ik_scratch: []Vec,
+
+    foot_geom: [leg_count]u32,
+    <span class="tok-comment">/// Where each foot is planted. Advances one stride at a time while walking.</span>
+    pinned: [leg_count]Vec,
+    <span class="tok-comment">/// The original stance, so a reset puts the feet back.</span>
+    pinned_home: [leg_count]Vec,
+    <span class="tok-comment">/// Where the centre of mass sits relative to the root at the home stance. Constant enough</span>
+    <span class="tok-comment">/// that the root position putting the CM on a goal is simply `goal - this`.</span>
+    com_home_offset: [<span class="tok-num">2</span>]f32,
+    leg_act: [leg_count]ctl.Actuation,
+    all_act: ctl.Actuation,
+
+    lift_index: i32,
+    lifting: bool,
+    <span class="tok-comment">/// Walk mode: step the four legs in sequence instead of holding one up.</span>
+    walking: bool,
+    <span class="tok-comment">/// How many steps of the crawl have finished. Drives both the leg order and the march.</span>
+    steps_done: u32,
+    <span class="tok-comment">/// Swing progress for the current step, or negative while waiting for the weight to shift.</span>
+    swing: f32,
+    swing_from: Vec,
+    swing_to: Vec,
+    <span class="tok-comment">/// 0 while the torso shifts, then ramps to 1 as the foot rises.</span>
+    shift_progress: f32,
+    lift_progress: f32,
+    <span class="tok-comment">/// How far the commanded torso has been moved from `home`, integrated from the measured</span>
+    <span class="tok-comment">/// centre-of-mass error. See `rebuildCommand`.</span>
+    torso_offset: [<span class="tok-num">2</span>]f32,
+    <span class="tok-comment">/// The lifted foot's target, relative to where that foot rests.</span>
+    reach: Vec,
+    auto_shift: bool,
+
+    margin: f32,
+    <span class="tok-comment">/// Which feet are carrying load this tick, one bit per leg.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// * THE READOUT THAT WOULD HAVE SAVED A ROUND TRIP. "The wrong foot lifted" and "the robot</span>
+    <span class="tok-comment">/// tipped and dropped a foot" look identical in a picture and are completely different</span>
+    <span class="tok-comment">/// faults. One bit per leg tells them apart instantly.</span>
+    contact_mask: u4,
+    accumulator: f32,
+    running: bool,
+
+    cam: z.OrbitCamera,
+    font: z.Font,
+    ui_host: z.UiHost,
+    cube: z.Mesh,
+    sphere: z.Mesh,
+    cylinder: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.doc = <span class="tok-kw">try</span> z.codecs.xml.<span class="tok-fn">parse</span>(gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"go1.xml"</span>), null);
+    s.robot = <span class="tok-kw">try</span> mjcf.<span class="tok-fn">readRobot</span>(gpa, &amp;s.doc);
+    s.imported = <span class="tok-kw">try</span> rmj.<span class="tok-fn">build</span>(gpa, &amp;s.robot, .{
+        .max_contacts = <span class="tok-num">64</span>,
+        .timestep = sim_timestep,
+        .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>),
+    });
+    <span class="tok-kw">const</span> model: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    s.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, model);
+
+    <span class="tok-comment">// * THROUGH `applyKeyframe`, NOT A COPY. See the file header.</span>
+    _ = rmj.<span class="tok-fn">applyKeyframe</span>(model, &amp;s.data, s.robot.keyframes[<span class="tok-num">0</span>]);
+    rbt.<span class="tok-fn">forward</span>(model, &amp;s.data);
+    s.home = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(f32, s.data.pos);
+    s.commanded = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(f32, s.data.pos);
+    s.scratch_pose = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, model.nq);
+
+    <span class="tok-kw">var</span> found: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..model.ngeom) |g| {
+        <span class="tok-kw">if</span> (model.geom_shape[g] == .sphere <span class="tok-kw">and</span> found &lt; leg_count) {
+            s.foot_geom[found] = <span class="tok-builtin">@intCast</span>(g);
+            found += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        s.pinned[leg] = <span class="tok-fn">footAt</span>(model, &amp;s.data, s.foot_geom[leg]);
+        s.pinned_home[leg] = s.pinned[leg];
+        s.leg_act[leg] = <span class="tok-kw">try</span> ctl.<span class="tok-fn">limbActuation</span>(gpa, model, model.geom_body[s.foot_geom[leg]]);
+    }
+    s.com_home_offset = .{
+        s.data.subtree_com[rbt.world_body][<span class="tok-num">0</span>] - s.home[model.jnt_qpos_adr[<span class="tok-num">0</span>] + <span class="tok-num">0</span>],
+        s.data.subtree_com[rbt.world_body][<span class="tok-num">1</span>] - s.home[model.jnt_qpos_adr[<span class="tok-num">0</span>] + <span class="tok-num">1</span>],
+    };
+    s.all_act = <span class="tok-kw">try</span> ctl.Actuation.<span class="tok-fn">init</span>(gpa, model);
+    s.ik_scratch = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, ctl.Ik.<span class="tok-fn">scratchSize</span>(model));
+
+    s.lift_index = <span class="tok-num">0</span>;
+    s.lifting = false;
+    s.shift_progress = <span class="tok-num">0</span>;
+    s.lift_progress = <span class="tok-num">0</span>;
+    s.torso_offset = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+    s.walking = false;
+    s.steps_done = <span class="tok-num">0</span>;
+    s.swing = -<span class="tok-num">1</span>;
+    s.swing_from = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    s.swing_to = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    s.reach = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0.05</span>);
+    s.auto_shift = true;
+    s.margin = <span class="tok-num">0</span>;
+    s.contact_mask = <span class="tok-num">0</span>;
+    s.accumulator = <span class="tok-num">0</span>;
+    s.running = true;
+
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.2</span>, <span class="tok-num">0</span>), <span class="tok-num">1.3</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.sphere = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">12</span>, <span class="tok-num">10</span>);
+    s.cylinder = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCylinder</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">12</span>, <span class="tok-num">2</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cylinder);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.sphere);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cube);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    gpa.<span class="tok-fn">free</span>(s.ik_scratch);
+    s.all_act.<span class="tok-fn">deinit</span>();
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        s.leg_act[leg].<span class="tok-fn">deinit</span>();
+    }
+    gpa.<span class="tok-fn">free</span>(s.scratch_pose);
+    gpa.<span class="tok-fn">free</span>(s.commanded);
+    gpa.<span class="tok-fn">free</span>(s.home);
+    s.data.<span class="tok-fn">deinit</span>();
+    s.imported.<span class="tok-fn">deinit</span>();
+    s.robot.<span class="tok-fn">deinit</span>();
+    s.doc.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">footAt</span>(model: *<span class="tok-kw">const</span> rbt.Model, d: *<span class="tok-kw">const</span> rbt.Data, geom: u32) Vec {
+    <span class="tok-kw">const</span> body: u32 = model.geom_body[geom];
+    <span class="tok-kw">return</span> d.body_xpos[body] + zm.<span class="tok-fn">rotate</span>(d.body_xrot[body], model.geom_pos[geom]);
+}
+
+<span class="tok-comment">/// Push one contact under every foot that is meant to be down.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">plantFeet</span>(s: *State) void {
+    <span class="tok-kw">const</span> model: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    s.data.<span class="tok-fn">clearContacts</span>();
+    s.contact_mask = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        <span class="tok-kw">if</span> (s.walking) {
+            <span class="tok-kw">if</span> (leg == crawl_order[s.steps_done % <span class="tok-num">4</span>] <span class="tok-kw">and</span> s.swing &gt;= <span class="tok-num">0.05</span> <span class="tok-kw">and</span> s.swing &lt;= <span class="tok-num">0.95</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.lifting <span class="tok-kw">and</span> <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(leg)) == s.lift_index <span class="tok-kw">and</span> s.lift_progress &gt; <span class="tok-num">0.02</span>) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> g: u32 = s.foot_geom[leg];
+        <span class="tok-kw">const</span> radius: f32 = <span class="tok-kw">switch</span> (model.geom_shape[g]) {
+            .sphere =&gt; |sph| sph.radius,
+            <span class="tok-kw">else</span> =&gt; <span class="tok-kw">continue</span>,
+        };
+        <span class="tok-kw">const</span> at: Vec = <span class="tok-fn">footAt</span>(model, &amp;s.data, g);
+        <span class="tok-kw">const</span> gap: f32 = at[<span class="tok-num">2</span>] - radius;
+        <span class="tok-kw">if</span> (gap &gt; <span class="tok-num">0.02</span>) {
+            <span class="tok-kw">continue</span>;
+        }
+        s.data.<span class="tok-fn">pushContact</span>(.{
+            .position = <span class="tok-fn">vec</span>(at[<span class="tok-num">0</span>], at[<span class="tok-num">1</span>], <span class="tok-num">0</span>),
+            .normal = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+            .tangent = .{ <span class="tok-fn">vec</span>(<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>) },
+            .distance = gap,
+            .friction = .{ <span class="tok-num">0.8</span>, <span class="tok-num">0.8</span> },
+            .body_a = rbt.world_body,
+            .body_b = model.geom_body[g],
+            .id = g,
+        });
+        s.contact_mask |= <span class="tok-builtin">@as</span>(u4, <span class="tok-num">1</span>) &lt;&lt; <span class="tok-builtin">@intCast</span>(leg);
+    }
+}
+
+<span class="tok-comment">/// Signed distance from `point` to the nearest edge of the support triangle. Positive inside.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * A DIAGNOSTIC, NOT A PREDICATE. Measured, the robot stands happily at a margin of -0.11:</span>
+<span class="tok-comment">/// the lifted leg's own mass and the contact compliance carry it well outside the strict</span>
+<span class="tok-comment">/// polygon. A stability test built on this number would reject configurations that work.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">supportMargin</span>(tri: [<span class="tok-num">3</span>]Vec, point: Vec) f32 {
+    <span class="tok-kw">var</span> worst: f32 = <span class="tok-num">1.0e9</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">3</span>) |i| {
+        <span class="tok-kw">const</span> a: Vec = tri[i];
+        <span class="tok-kw">const</span> b: Vec = tri[(i + <span class="tok-num">1</span>) % <span class="tok-num">3</span>];
+        <span class="tok-kw">const</span> c: Vec = tri[(i + <span class="tok-num">2</span>) % <span class="tok-num">3</span>];
+        <span class="tok-kw">const</span> ex: f32 = b[<span class="tok-num">0</span>] - a[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> ey: f32 = b[<span class="tok-num">1</span>] - a[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> len: f32 = <span class="tok-builtin">@sqrt</span>(ex * ex + ey * ey);
+        <span class="tok-kw">var</span> nx: f32 = -ey / len;
+        <span class="tok-kw">var</span> ny: f32 = ex / len;
+        <span class="tok-kw">if</span> (nx * (c[<span class="tok-num">0</span>] - a[<span class="tok-num">0</span>]) + ny * (c[<span class="tok-num">1</span>] - a[<span class="tok-num">1</span>]) &lt; <span class="tok-num">0</span>) {
+            nx = -nx;
+            ny = -ny;
+        }
+        worst = <span class="tok-builtin">@min</span>(worst, nx * (point[<span class="tok-num">0</span>] - a[<span class="tok-num">0</span>]) + ny * (point[<span class="tok-num">1</span>] - a[<span class="tok-num">1</span>]));
+    }
+    <span class="tok-kw">return</span> worst;
+}
+
+<span class="tok-comment">/// Rebuild `commanded`: shift the torso, place the lifted foot, pin the rest.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- *** EVERYTHING HERE HAPPENS IN COMMAND SPACE --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The reference is `home` and the feet are pinned where they are AT `home` - never where the</span>
+<span class="tok-comment">/// robot has actually got to. A PD holds a load by sitting off its target, so the achieved pose</span>
+<span class="tok-comment">/// is `home + steady-state error`; capture that and command it back and the error is zero, the</span>
+<span class="tok-comment">/// torque is zero, and the robot collapses. Solving from the commanded pose keeps the error,</span>
+<span class="tok-comment">/// and the error is what holds it up.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">rebuildCommand</span>(s: *State) void {
+    <span class="tok-kw">const</span> model: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> root: u32 = model.jnt_qpos_adr[<span class="tok-num">0</span>];
+
+    <span class="tok-kw">var</span> support: [<span class="tok-num">3</span>]Vec = undefined;
+    <span class="tok-kw">var</span> goal: [<span class="tok-num">2</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+    <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        <span class="tok-kw">if</span> (<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(leg)) == s.lift_index) {
+            <span class="tok-kw">continue</span>;
+        }
+        support[k] = s.pinned[leg];
+        goal[<span class="tok-num">0</span>] += s.pinned[leg][<span class="tok-num">0</span>];
+        goal[<span class="tok-num">1</span>] += s.pinned[leg][<span class="tok-num">1</span>];
+        k += <span class="tok-num">1</span>;
+    }
+    goal[<span class="tok-num">0</span>] /= <span class="tok-num">3.0</span>;
+    goal[<span class="tok-num">1</span>] /= <span class="tok-num">3.0</span>;
+
+    <span class="tok-comment">// -- *** THE SHIFT IS A CLOSED LOOP ON THE MEASURED CM, NOT AN OPEN-LOOP RATIO --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Moving the torso by `d` does NOT move the centre of mass by `d`: the legs carry about</span>
+    <span class="tok-comment">// half the robot and largely stay where they are, so the CM follows roughly half as far.</span>
+    <span class="tok-comment">// An open-loop shift therefore needs a fudge factor, and measured, **no single factor</span>
+    <span class="tok-comment">// works**:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     torso shift   front feet          rear feet</span>
+    <span class="tok-comment">//     x1.0          OK (margin -0.11)   falls (-0.38)</span>
+    <span class="tok-comment">//     x1.5          falls               falls</span>
+    <span class="tok-comment">//     x2.0          falls               OK (+0.024)</span>
+    <span class="tok-comment">//     x2.5          falls               OK (+0.057)</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Front needs one and falls at two; rear needs two and falls at one. The factor depends on</span>
+    <span class="tok-comment">// which foot is coming up, so there is no constant to find.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Integrating the measured error removes the constant. It converges on whatever</span>
+    <span class="tok-comment">// displacement the geometry actually needs, and all four feet then work with ONE setting -</span>
+    <span class="tok-comment">// measured margin +0.071 for every one of them, which is the loop arriving at the same</span>
+    <span class="tok-comment">// place regardless of the leg. Too fast and it overshoots into a fall: 0.005 holds, 0.010</span>
+    <span class="tok-comment">// tips every foot.</span>
+    <span class="tok-kw">const</span> live_com: Vec = s.data.subtree_com[rbt.world_body];
+    <span class="tok-kw">if</span> (s.walking) {
+        <span class="tok-comment">// -- *** MARCH PLUS SWAY, AT A SPEED THE LEGS CAN FOLLOW --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// The support centroid is a SWAY target, not a drive: lifting a front foot removes it</span>
+        <span class="tok-comment">// from the centroid so the target moves BACKWARD, and with no march the body walks</span>
+        <span class="tok-comment">// itself backwards - measured, trunk at -0.200 while two feet had advanced. The march</span>
+        <span class="tok-comment">// is what the feet have actually done, and the sway rides on top of it.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// * AND THE SPEED IS SET BY LEG COMPLIANCE, NOT BY THE PLAN. Moving a 12 kg trunk means</span>
+        <span class="tok-comment">// bending springy legs against planted feet; at 0.25 m/s the body lagged its command by</span>
+        <span class="tok-comment">// 0.21 m then overshot - a +/-0.2 m oscillation that stretched a rear leg to its limit.</span>
+        <span class="tok-comment">// At 0.05 m/s it tracks and a full four-leg cycle completes.</span>
+        <span class="tok-kw">var</span> mean_foot: f32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> mean_home: f32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+            mean_foot += s.pinned[leg][<span class="tok-num">0</span>];
+            mean_home += s.pinned_home[leg][<span class="tok-num">0</span>];
+        }
+        <span class="tok-kw">const</span> march: f32 = (mean_foot - mean_home) / <span class="tok-fn">float</span>(leg_count);
+        <span class="tok-kw">const</span> want_x: f32 = march + goal[<span class="tok-num">0</span>] - s.com_home_offset[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> want_y: f32 = goal[<span class="tok-num">1</span>] - s.com_home_offset[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> cap: f32 = walk_sway_speed * sim_timestep;
+        s.torso_offset[<span class="tok-num">0</span>] += <span class="tok-fn">clamp</span>((want_x - s.torso_offset[<span class="tok-num">0</span>]) * <span class="tok-num">0.02</span>, -cap, cap);
+        s.torso_offset[<span class="tok-num">1</span>] += <span class="tok-fn">clamp</span>((want_y - s.torso_offset[<span class="tok-num">1</span>]) * <span class="tok-num">0.02</span>, -cap, cap);
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.auto_shift <span class="tok-kw">and</span> s.shift_progress &gt; <span class="tok-num">0</span>) {
+        s.torso_offset[<span class="tok-num">0</span>] += com_rate * (goal[<span class="tok-num">0</span>] - live_com[<span class="tok-num">0</span>]);
+        s.torso_offset[<span class="tok-num">1</span>] += com_rate * (goal[<span class="tok-num">1</span>] - live_com[<span class="tok-num">1</span>]);
+        s.torso_offset[<span class="tok-num">0</span>] = <span class="tok-fn">clamp</span>(s.torso_offset[<span class="tok-num">0</span>], -<span class="tok-num">0.25</span>, <span class="tok-num">0.25</span>);
+        s.torso_offset[<span class="tok-num">1</span>] = <span class="tok-fn">clamp</span>(s.torso_offset[<span class="tok-num">1</span>], -<span class="tok-num">0.25</span>, <span class="tok-num">0.25</span>);
+    }
+
+    <span class="tok-builtin">@memcpy</span>(s.scratch_pose, s.data.pos);
+    <span class="tok-builtin">@memcpy</span>(s.data.pos, s.home);
+    s.data.pos[root + <span class="tok-num">0</span>] = s.home[root + <span class="tok-num">0</span>] + s.torso_offset[<span class="tok-num">0</span>];
+    s.data.pos[root + <span class="tok-num">1</span>] = s.home[root + <span class="tok-num">1</span>] + s.torso_offset[<span class="tok-num">1</span>];
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(model, &amp;s.data);
+
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        <span class="tok-kw">var</span> target: Vec = s.pinned[leg];
+        <span class="tok-kw">if</span> (<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(leg)) == s.lift_index) {
+            target += s.reach * <span class="tok-fn">splat</span>(s.lift_progress);
+        }
+        _ = (ctl.Ik{ .max_iterations = <span class="tok-num">12</span>, .max_step = <span class="tok-num">0.15</span> }).<span class="tok-fn">solve</span>(
+            model,
+            &amp;s.data,
+            s.leg_act[leg],
+            .{
+                .body = model.geom_body[s.foot_geom[leg]],
+                .offset = model.geom_pos[s.foot_geom[leg]],
+                .goal = target,
+            },
+            s.ik_scratch,
+        );
+    }
+    <span class="tok-builtin">@memcpy</span>(s.commanded, s.data.pos);
+
+    <span class="tok-comment">// * BACK TO THE LIVE STATE, AND RECOMPUTE. `plantFeet` reads `body_xpos`; leaving it on the</span>
+    <span class="tok-comment">// IK configuration places contacts centimetres from the real feet, and the robot is held up</span>
+    <span class="tok-comment">// by contacts that are not under it. This one missing call cost a day.</span>
+    <span class="tok-builtin">@memcpy</span>(s.data.pos, s.scratch_pose);
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(model, &amp;s.data);
+
+    s.margin = <span class="tok-fn">supportMargin</span>(support, s.data.subtree_com[rbt.world_body]);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">controlTick</span>(s: *State) void {
+    <span class="tok-kw">const</span> model: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">if</span> (s.walking) {
+        <span class="tok-comment">// * THE FOOT WAITS FOR THE MASS. The swing only begins once the measured margin says</span>
+        <span class="tok-comment">// the centre of mass is actually over the triangle the other three feet make - a fixed</span>
+        <span class="tok-comment">// delay works right up until the shift is slower than the delay, and then the robot</span>
+        <span class="tok-comment">// steps off a support it has not reached.</span>
+        <span class="tok-kw">const</span> leg: usize = crawl_order[s.steps_done % <span class="tok-num">4</span>];
+        <span class="tok-kw">if</span> (s.swing &lt; <span class="tok-num">0</span>) {
+            <span class="tok-kw">if</span> (s.margin &gt; walk_gate) {
+                s.swing = <span class="tok-num">0</span>;
+                s.swing_from = s.pinned[leg];
+                s.swing_to = <span class="tok-fn">vec</span>(s.pinned[leg][<span class="tok-num">0</span>] + walk_stride, s.pinned[leg][<span class="tok-num">1</span>], s.pinned[leg][<span class="tok-num">2</span>]);
+            }
+        } <span class="tok-kw">else</span> {
+            s.swing += sim_timestep / <span class="tok-num">0.6</span>;
+            <span class="tok-kw">if</span> (s.swing &gt;= <span class="tok-num">1.0</span>) {
+                s.pinned[leg] = s.swing_to;
+                s.swing = -<span class="tok-num">1</span>;
+                s.steps_done += <span class="tok-num">1</span>;
+                <span class="tok-comment">// *** AND THE MARGIN IS NOW STALE. `steps_done` has changed, so the next tick</span>
+                <span class="tok-comment">// asks about a DIFFERENT support triangle - but `s.margin` still describes the</span>
+                <span class="tok-comment">// one just finished, where the weight was deliberately shifted and the margin is</span>
+                <span class="tok-comment">// comfortably positive. The gate would pass instantly and the next foot would</span>
+                <span class="tok-comment">// leave the ground with no weight shift at all.</span>
+                <span class="tok-comment">//</span>
+                <span class="tok-comment">// That is the whole failure: step one lands, step two fires immediately, and the</span>
+                <span class="tok-comment">// robot goes over. Invalidating it forces one tick of recomputation for the leg</span>
+                <span class="tok-comment">// that is actually about to move.</span>
+                s.margin = -<span class="tok-num">1</span>;
+            }
+        }
+        <span class="tok-fn">rebuildCommand</span>(s);
+        <span class="tok-fn">plantFeet</span>(s);
+        (ctl.PoseHold{ .target = s.commanded, .kp = <span class="tok-num">100</span>, .kv = <span class="tok-num">4</span> }).<span class="tok-fn">apply</span>(model, &amp;s.data, s.all_act);
+        rbt.<span class="tok-fn">step</span>(model, &amp;s.data);
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-comment">// Shift first, then lift - a robot on three legs before its mass has moved is the one thing</span>
+    <span class="tok-comment">// a real quadruped never does.</span>
+    <span class="tok-kw">if</span> (s.lifting) {
+        s.shift_progress = <span class="tok-builtin">@min</span>(<span class="tok-num">1.0</span>, s.shift_progress + sim_timestep * <span class="tok-num">1.0</span>);
+        <span class="tok-comment">// * THE FOOT WAITS FOR THE MASS, not for a timer: the lift only starts once the CM is</span>
+        <span class="tok-comment">// actually inside the triangle. A fixed delay works until the shift is slower than the</span>
+        <span class="tok-comment">// delay, and then the robot steps off a support it has not reached yet.</span>
+        <span class="tok-kw">if</span> (s.shift_progress &gt;= <span class="tok-num">1.0</span> <span class="tok-kw">and</span> (s.margin &gt; <span class="tok-num">0.01</span> <span class="tok-kw">or</span> !s.auto_shift)) {
+            s.lift_progress = <span class="tok-builtin">@min</span>(<span class="tok-num">1.0</span>, s.lift_progress + sim_timestep * <span class="tok-num">1.0</span>);
+        }
+    } <span class="tok-kw">else</span> {
+        s.lift_progress = <span class="tok-builtin">@max</span>(<span class="tok-num">0.0</span>, s.lift_progress - sim_timestep * <span class="tok-num">2.0</span>);
+        <span class="tok-kw">if</span> (s.lift_progress &lt;= <span class="tok-num">0.0</span>) {
+            s.shift_progress = <span class="tok-builtin">@max</span>(<span class="tok-num">0.0</span>, s.shift_progress - sim_timestep * <span class="tok-num">1.0</span>);
+            <span class="tok-comment">// * UNWIND THE LEAN TOO. Without this the robot puts its foot down and stays</span>
+            <span class="tok-comment">// leaning, so the next lift starts from a stance that is already committed.</span>
+            s.torso_offset[<span class="tok-num">0</span>] -= s.torso_offset[<span class="tok-num">0</span>] * sim_timestep * <span class="tok-num">2.0</span>;
+            s.torso_offset[<span class="tok-num">1</span>] -= s.torso_offset[<span class="tok-num">1</span>] * sim_timestep * <span class="tok-num">2.0</span>;
+        }
+    }
+    <span class="tok-fn">rebuildCommand</span>(s);
+    <span class="tok-fn">plantFeet</span>(s);
+    (ctl.PoseHold{ .target = s.commanded, .kp = <span class="tok-num">100</span>, .kv = <span class="tok-num">4</span> }).<span class="tok-fn">apply</span>(model, &amp;s.data, s.all_act);
+    rbt.<span class="tok-fn">step</span>(model, &amp;s.data);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">resetRobot</span>(s: *State) void {
+    <span class="tok-kw">const</span> model: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    _ = rmj.<span class="tok-fn">applyKeyframe</span>(model, &amp;s.data, s.robot.keyframes[<span class="tok-num">0</span>]);
+    rbt.<span class="tok-fn">forward</span>(model, &amp;s.data);
+    s.lifting = false;
+    s.shift_progress = <span class="tok-num">0</span>;
+    s.lift_progress = <span class="tok-num">0</span>;
+    s.torso_offset = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+    s.accumulator = <span class="tok-num">0</span>;
+    s.walking = false;
+    s.steps_done = <span class="tok-num">0</span>;
+    s.swing = -<span class="tok-num">1</span>;
+    s.margin = -<span class="tok-num">1</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        s.pinned[leg] = s.pinned_home[leg];
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-comment">// * PROFILING OFF ACROSS THE CONTROL LOOP. Physics runs at 500 Hz and each tick also does</span>
+    <span class="tok-comment">// four IK solves, so a frame executes thousands of instrumented calls - each zone costing</span>
+    <span class="tok-comment">// two timestamps, which on wasm are two JS boundary crossings. Measured here: 5602 host</span>
+    <span class="tok-comment">// calls per frame before this, 200 after. The instrument is priced for a frame that does a</span>
+    <span class="tok-comment">// few things; everything outside this call is still profiled normally.</span>
+    <span class="tok-kw">const</span> was_frozen: bool = profiler.<span class="tok-fn">isFrozen</span>();
+    profiler.<span class="tok-fn">freeze</span>();
+    <span class="tok-kw">if</span> (s.running) {
+        s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+        <span class="tok-kw">while</span> (s.accumulator &gt;= sim_timestep) : (s.accumulator -= sim_timestep) {
+            <span class="tok-fn">controlTick</span>(s);
+        }
+    }
+    <span class="tok-kw">if</span> (!was_frozen) {
+        profiler.<span class="tok-fn">unfreeze</span>();
+    }
+    <span class="tok-kw">if</span> (s.data.body_xpos[<span class="tok-num">1</span>][<span class="tok-num">2</span>] &lt; <span class="tok-num">0.05</span>) {
+        <span class="tok-fn">resetRobot</span>(s);
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">0.6</span>, .max_distance = <span class="tok-num">4.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(gl, <span class="tok-num">16</span>, <span class="tok-num">0.25</span>);
+    <span class="tok-fn">drawRobot</span>(s, gl);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawRobot</span>(s: *State, gl: *z.WgpuGl) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> to_y_up: Mat = zm.<span class="tok-fn">zUpToYUp</span>();
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.ngeom) |g| {
+        <span class="tok-kw">const</span> body: u32 = m.geom_body[g];
+        <span class="tok-kw">const</span> body_rot: zm.Quat = s.data.body_xrot[body];
+        <span class="tok-kw">const</span> world_pos: Vec = s.data.body_xpos[body] + zm.<span class="tok-fn">rotate</span>(body_rot, m.geom_pos[g]);
+        <span class="tok-kw">const</span> world_rot: Mat = <span class="tok-fn">quatToMat</span>(zm.<span class="tok-fn">qmul</span>(body_rot, m.geom_rot[g]));
+        <span class="tok-kw">const</span> place: Mat = <span class="tok-fn">mulMat</span>(
+            <span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(world_pos[<span class="tok-num">0</span>], world_pos[<span class="tok-num">1</span>], world_pos[<span class="tok-num">2</span>])),
+            world_rot,
+        );
+        <span class="tok-kw">var</span> tint: Color = <span class="tok-kw">if</span> (body == <span class="tok-num">0</span>) trunk_col <span class="tok-kw">else</span> link_col;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+            <span class="tok-kw">if</span> (s.foot_geom[leg] == g) {
+                tint = <span class="tok-kw">if</span> (<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(leg)) == s.lift_index) lifted_col <span class="tok-kw">else</span> planted_col;
+            }
+        }
+        <span class="tok-kw">switch</span> (m.geom_shape[g]) {
+            .sphere =&gt; |sph| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">scaling</span>(sph.radius, sph.radius, sph.radius));
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, tint);
+            },
+            .capsule =&gt; |cap| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                    <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -cap.half_height, <span class="tok-num">0</span>)),
+                    <span class="tok-fn">scaling</span>(cap.radius, <span class="tok-num">2.0</span> * cap.half_height, cap.radius),
+                );
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, tint);
+                <span class="tok-kw">inline</span> <span class="tok-kw">for</span> ([_]f32{ -<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span> }) |end| {
+                    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                        <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, end * cap.half_height, <span class="tok-num">0</span>)),
+                        <span class="tok-fn">scaling</span>(cap.radius, cap.radius, cap.radius),
+                    );
+                    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, tint);
+                }
+            },
+            .box =&gt; |box| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">scaling</span>(
+                    <span class="tok-num">2.0</span> * box.half_extent[<span class="tok-num">0</span>],
+                    <span class="tok-num">2.0</span> * box.half_extent[<span class="tok-num">1</span>],
+                    <span class="tok-num">2.0</span> * box.half_extent[<span class="tok-num">2</span>],
+                ));
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, tint);
+            },
+            <span class="tok-kw">else</span> =&gt; {},
+        }
+    }
+
+    <span class="tok-comment">// * THE SUPPORT TRIANGLE AND THE CENTRE OF MASS, which is what makes the demo worth</span>
+    <span class="tok-comment">// watching: the whole question is whether the yellow dot is over the green triangle.</span>
+    <span class="tok-kw">var</span> tri: [<span class="tok-num">3</span>]Vec = undefined;
+    <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+        <span class="tok-kw">if</span> (<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(leg)) == s.lift_index) {
+            <span class="tok-kw">continue</span>;
+        }
+        tri[k] = s.pinned[leg];
+        k += <span class="tok-num">1</span>;
+    }
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">3</span>) |i| {
+        <span class="tok-kw">const</span> a: Vec = tri[i];
+        <span class="tok-kw">const</span> b: Vec = tri[(i + <span class="tok-num">1</span>) % <span class="tok-num">3</span>];
+        z.<span class="tok-fn">drawLine3D</span>(gl, <span class="tok-fn">vec</span>(a[<span class="tok-num">0</span>], <span class="tok-num">0.002</span>, -a[<span class="tok-num">1</span>]), <span class="tok-fn">vec</span>(b[<span class="tok-num">0</span>], <span class="tok-num">0.002</span>, -b[<span class="tok-num">1</span>]), support_col);
+    }
+    <span class="tok-kw">const</span> com: Vec = s.data.subtree_com[rbt.world_body];
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(com[<span class="tok-num">0</span>], <span class="tok-num">0.004</span>, -com[<span class="tok-num">1</span>]), <span class="tok-fn">scaling</span>(<span class="tok-num">0.022</span>, <span class="tok-num">0.004</span>, <span class="tok-num">0.022</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, com_col);
+    <span class="tok-comment">// And a line from the CM straight down, so its height is readable too.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(com[<span class="tok-num">0</span>], com[<span class="tok-num">1</span>], com[<span class="tok-num">2</span>])),
+        <span class="tok-fn">scaling</span>(<span class="tok-num">0.016</span>, <span class="tok-num">0.016</span>, <span class="tok-num">0.016</span>),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, com_col);
+    z.<span class="tok-fn">drawLine3D</span>(gl, <span class="tok-fn">vec</span>(com[<span class="tok-num">0</span>], com[<span class="tok-num">2</span>], -com[<span class="tok-num">1</span>]), <span class="tok-fn">vec</span>(com[<span class="tok-num">0</span>], <span class="tok-num">0.004</span>, -com[<span class="tok-num">1</span>]), com_col);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-kw">const</span> narrow: bool = ui.Ui.<span class="tok-fn">isNarrow</span>(viewport_w);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-kw">if</span> (narrow) viewport_w - <span class="tok-num">16</span> <span class="tok-kw">else</span> <span class="tok-builtin">@min</span>(<span class="tok-num">470.0</span>, viewport_w * <span class="tok-num">0.36</span>);
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-builtin">@min</span>(<span class="tok-num">540.0</span>, viewport_h * <span class="tok-num">0.76</span>) }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"standing on three legs"</span>, .{})) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+
+        <span class="tok-kw">const</span> trunk_z: f32 = s.data.body_xpos[<span class="tok-num">1</span>][<span class="tok-num">2</span>];
+        <span class="tok-kw">const</span> com: Vec = s.data.subtree_com[rbt.world_body];
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"trunk height {d:&gt;6.3} m"</span>, .{trunk_z});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"CM ({d:&gt;6.3},{d:&gt;6.3})  margin {d:&gt;7.4} m"</span>, .{ com[<span class="tok-num">0</span>], com[<span class="tok-num">1</span>], s.margin });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  (margin &gt; 0 = CM inside the triangle)"</span>, .{});
+        <span class="tok-kw">const</span> chosen: Vec = <span class="tok-fn">footAt</span>(&amp;s.imported.model, &amp;s.data, s.foot_geom[<span class="tok-builtin">@intCast</span>(s.lift_index)]);
+        <span class="tok-kw">var</span> travelled: f32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..leg_count) |leg| {
+            travelled += s.pinned[leg][<span class="tok-num">0</span>] - s.pinned_home[leg][<span class="tok-num">0</span>];
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"travelled {d:&gt;6.3} m"</span>, .{travelled / <span class="tok-fn">float</span>(leg_count)});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"chosen foot at ({d:&gt;6.3},{d:&gt;6.3}) h {d:&gt;6.3}"</span>, .{ chosen[<span class="tok-num">0</span>], chosen[<span class="tok-num">1</span>], chosen[<span class="tok-num">2</span>] });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  (+x is forward, +y is the robot's LEFT)"</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"carrying: {s}{s}{s}{s}"</span>, .{
+            <span class="tok-kw">if</span> (s.contact_mask &amp; <span class="tok-num">1</span> != <span class="tok-num">0</span>) <span class="tok-str">"FR "</span> <span class="tok-kw">else</span> <span class="tok-str">"-- "</span>,
+            <span class="tok-kw">if</span> (s.contact_mask &amp; <span class="tok-num">2</span> != <span class="tok-num">0</span>) <span class="tok-str">"FL "</span> <span class="tok-kw">else</span> <span class="tok-str">"-- "</span>,
+            <span class="tok-kw">if</span> (s.contact_mask &amp; <span class="tok-num">4</span> != <span class="tok-num">0</span>) <span class="tok-str">"RR "</span> <span class="tok-kw">else</span> <span class="tok-str">"-- "</span>,
+            <span class="tok-kw">if</span> (s.contact_mask &amp; <span class="tok-num">8</span> != <span class="tok-num">0</span>) <span class="tok-str">"RL"</span> <span class="tok-kw">else</span> <span class="tok-str">"--"</span>,
+        });
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-kw">var</span> index: i32 = s.lift_index;
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">combo</span>(<span class="tok-str">"which foot"</span>, &amp;index, &amp;leg_names, .{})) {
+            <span class="tok-comment">// *** AND THE ACCUMULATED SHIFT GOES WITH IT. `torso_offset` is an integrator</span>
+            <span class="tok-comment">// aimed at ONE foot's support triangle. Leaving it in place when the selection</span>
+            <span class="tok-comment">// changes means the torso is still leaning for the PREVIOUS choice - pick the</span>
+            <span class="tok-comment">// front right after the rear left and the mass is already thrown forward, so the</span>
+            <span class="tok-comment">// robot tips the instant a foot leaves. The symptom is "I chose one foot and a</span>
+            <span class="tok-comment">// different one came up", because the tipping lifts a foot nobody asked for.</span>
+            s.lift_index = index;
+            s.lifting = false;
+            s.torso_offset = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"all four work: the torso chases the CM"</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  goal until the mass is over the triangle"</span>, .{});
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// * WALK MODE: the same machinery, sequenced. Each leg shifts the weight, swings</span>
+        <span class="tok-comment">// forward one stride, and plants - then the next. A full four-leg cycle completes.</span>
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"WALK (crawl gait)"</span>, &amp;s.walking)) {
+            <span class="tok-comment">// *** A CLEAN START, AND THE MARGIN MUST BE STALE-PROOF. `s.margin` is computed for</span>
+            <span class="tok-comment">// whichever leg was last EXCLUDED from the support triangle - the one the lift-mode</span>
+            <span class="tok-comment">// combo selected. The crawl starts on a different leg, so on the first tick the gate</span>
+            <span class="tok-comment">// would read a margin belonging to another triangle: if the robot had just been</span>
+            <span class="tok-comment">// holding a foot up, that margin is comfortably positive and the very first swing</span>
+            <span class="tok-comment">// fires with the torso still shifted for the wrong foot. The robot flips on step</span>
+            <span class="tok-comment">// one.</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// Forcing it negative makes the gate wait for a margin computed for the leg that is</span>
+            <span class="tok-comment">// actually about to move.</span>
+            <span class="tok-fn">resetRobot</span>(s);
+            s.walking = true;
+            s.margin = -<span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">if</span> (s.walking) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"steps {d}   next leg {s}"</span>, .{
+                s.steps_done,
+                leg_names[crawl_order[s.steps_done % <span class="tok-num">4</span>]],
+            });
+            <span class="tok-comment">// * WHAT THE GAIT IS WAITING FOR, SPELLED OUT. "It flips on the first step" and</span>
+            <span class="tok-comment">// "it never steps" and "it steps too early" look identical from outside; the phase</span>
+            <span class="tok-comment">// and the margin against the gate tell them apart without another round trip.</span>
+            <span class="tok-kw">if</span> (s.swing &lt; <span class="tok-num">0</span>) {
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"  shifting weight: margin {d:&gt;7.4} / gate {d:.3}"</span>, .{ s.margin, walk_gate });
+            } <span class="tok-kw">else</span> {
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"  swinging: {d:&gt;3.0}%"</span>, .{s.swing * <span class="tok-num">100</span>});
+            }
+        }
+        u.<span class="tok-fn">separator</span>();
+
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"lift it (shifts first, then raises)"</span>, &amp;s.lifting);
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"shift the torso first"</span>, &amp;s.auto_shift);
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"shift {d:&gt;4.0}%   lift {d:&gt;4.0}%"</span>, .{ s.shift_progress * <span class="tok-num">100</span>, s.lift_progress * <span class="tok-num">100</span> });
+        u.<span class="tok-fn">separator</span>();
+
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"reach x"</span>, &amp;s.reach[<span class="tok-num">0</span>], .{ .min = -<span class="tok-num">0.12</span>, .max = <span class="tok-num">0.12</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"reach y"</span>, &amp;s.reach[<span class="tok-num">1</span>], .{ .min = -<span class="tok-num">0.12</span>, .max = <span class="tok-num">0.12</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"reach z"</span>, &amp;s.reach[<span class="tok-num">2</span>], .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.15</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"run"</span>, &amp;s.running);
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"reset"</span>, .{})) {
+            <span class="tok-fn">resetRobot</span>(s);
+        }
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - standing on three legs"</span>,
+            .width = <span class="tok-num">900</span>,
+            .height = <span class="tok-num">660</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

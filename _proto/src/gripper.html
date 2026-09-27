@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>gripper — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>gripper</h1>
+<figure class="code src-file" data-path="examples/gripper/gripper.zig" data-lines="479"><figcaption><span>examples/gripper/gripper.zig</span><span>479 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! gripper - a 4-DOF arm with a geared two-finger gripper, driven by inverse kinematics.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * WHAT THIS DEMONSTRATES --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * an `&lt;equality type="joint"&gt;` COUPLING: one slider moves the left finger, and the right</span>
+<span class="tok-comment">//!     mirrors it through a constraint the solver enforces - not through code that sets two</span>
+<span class="tok-comment">//!     numbers. That is what a real parallel gripper is;</span>
+<span class="tok-comment">//!   * damped-least-squares IK placing the grasp point wherever you put it, on a redundant</span>
+<span class="tok-comment">//!     arm, once per frame;</span>
+<span class="tok-comment">//!   * gains in FREQUENCY units. This arm's wrist has a mass-matrix diagonal of 0.00041</span>
+<span class="tok-comment">//!     against 0.13 at its shoulder, and a `kp` that suits one destroys the other - see</span>
+<span class="tok-comment">//!     `PoseHold.scale_by_inertia`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** WHY IT IS HAND-DRIVEN AND NOT A SCRIPTED PICK-AND-PLACE --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! **Inverse kinematics is collision-blind**, here and in MuJoCo. It will happily return a</span>
+<span class="tok-comment">//! pose that folds the arm through its own base or through the table, reporting a</span>
+<span class="tok-comment">//! sub-millimetre error for a configuration the robot cannot occupy. Measured: five targets in</span>
+<span class="tok-comment">//! free space reached to under a millimetre with zero contacts; the same solver aiming at a</span>
+<span class="tok-comment">//! cube on a table put the forearm INTO the table.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Choosing waypoints around an obstacle is a planning problem this engine does not claim to</span>
+<span class="tok-comment">//! solve. So the human does it - which is not a consolation prize, because watching the arm</span>
+<span class="tok-comment">//! track a target you drag around is a better demonstration of the IK than any fixed sequence.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** THE THING TO TRY --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Move the target down and toward the base. The arm follows until it cannot, and `reach err`</span>
+<span class="tok-comment">//! climbs - that is the solver telling you the truth about a pose it found but the robot</span>
+<span class="tok-comment">//! cannot hold.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> zp = z.zimrphysics;
+<span class="tok-kw">const</span> mjcf = z.mjcf;
+<span class="tok-kw">const</span> rmj = z.robot_mjcf;
+<span class="tok-kw">const</span> bridge_mod = z.robot_physics;
+<span class="tok-kw">const</span> ctl = z.robot_control;
+<span class="tok-kw">const</span> Color = zm.Color;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> ui = z.ui;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> quatToMat = zm.quatToMat;
+<span class="tok-kw">const</span> identity = zm.identity;
+
+<span class="tok-comment">/// The Go1 runs at 500 Hz in Menagerie, and its contacts want it.</span>
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">500.0</span>;
+
+<span class="tok-comment">/// How many projectiles the scene carries.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** A FIXED POOL, RECYCLED, RATHER THAN SPAWNED ON DEMAND --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// A ball has to be a body in the ROBOT'S OWN TREE to hit it properly (section 4k) - that is the</span>
+<span class="tok-comment">/// whole point of the unified tree, and it is what makes the impact push back on the legs</span>
+<span class="tok-comment">/// with the right mass. But a tree is built once: adding a body means rebuilding the model,</span>
+<span class="tok-comment">/// which throws away the robot's state mid-flight.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// So the balls exist from the start, parked below the floor where nothing can reach them,</span>
+<span class="tok-comment">/// and a throw teleports one into place with a velocity. Recycling the oldest means the</span>
+<span class="tok-comment">/// scene never grows and a rapid-fire user cannot exhaust it.</span>
+<span class="tok-comment">/// Where an unthrown ball waits: far below the floor, spread out so two never overlap.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THEY ARE STILL SIMULATED DOWN THERE, and that is fine - nothing is near them, so they</span>
+<span class="tok-comment">/// contribute no contacts and cost only their six DOFs in the mass matrix. Parking beats</span>
+<span class="tok-comment">/// deleting because a tree cannot gain a body without being rebuilt, and rebuilding mid-throw</span>
+<span class="tok-comment">/// would discard the robot's state.</span>
+<span class="tok-comment">/// Where the fingers meet, in the wrist's frame.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * NOT THE WRIST'S ORIGIN. The jaws hang from it spanning 0.010..0.100, so the point a</span>
+<span class="tok-comment">/// grasped object's centre belongs at is halfway down them. Aiming the origin instead puts the</span>
+<span class="tok-comment">/// object 5 cm above the fingers and everything after looks like an IK failure.</span>
+<span class="tok-kw">const</span> grasp_offset: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0.055</span>);
+
+<span class="tok-kw">const</span> cube_half: f32 = <span class="tok-num">0.020</span>;
+<span class="tok-comment">/// * THE TABLE CLEARS THE ARM. A first attempt spanned x from 0.10 - straight through the</span>
+<span class="tok-comment">/// forearm's rest position at x = 0.163 - so the arm started embedded in the furniture and the</span>
+<span class="tok-comment">/// cube was fired across the room. Obstacles are placed against the robot's ACTUAL rest pose.</span>
+<span class="tok-kw">const</span> table_center: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.45</span>, <span class="tok-num">0</span>, <span class="tok-num">0.40</span>);
+<span class="tok-kw">const</span> table_half: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.15</span>, <span class="tok-num">0.20</span>, <span class="tok-num">0.05</span>);
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">16</span>, .g = <span class="tok-num">15</span>, .b = <span class="tok-num">20</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> link_col: Color = .{ .r = <span class="tok-num">90</span>, .g = <span class="tok-num">185</span>, .b = <span class="tok-num">175</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> finger_col: Color = .{ .r = <span class="tok-num">225</span>, .g = <span class="tok-num">130</span>, .b = <span class="tok-num">70</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> cube_col: Color = .{ .r = <span class="tok-num">220</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">90</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> table_col: Color = .{ .r = <span class="tok-num">70</span>, .g = <span class="tok-num">66</span>, .b = <span class="tok-num">72</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-comment">/// Straight down: the wrist's local +z onto the world's -z.</span>
+<span class="tok-kw">const</span> jaws_down: zm.Quat = zm.<span class="tok-fn">quatFromAxisAngle</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>), pi);
+
+<span class="tok-kw">const</span> target_col: Color = .{ .r = <span class="tok-num">250</span>, .g = <span class="tok-num">240</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    doc: z.codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: rmj.Imported,
+    data: rbt.Data,
+    world: zp.World,
+    bridge: bridge_mod.Bridge,
+    actuated: ctl.Actuation,
+    cam: z.OrbitCamera,
+    ui_host: z.UiHost,
+    font: z.Font,
+    cylinder: z.Mesh,
+    sphere: z.Mesh,
+    cube: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+    accumulator: f32,
+
+    <span class="tok-comment">/// What the PD tracks. IK writes joint angles here; nothing else does.</span>
+    home: []f32,
+    <span class="tok-comment">/// Scratch so the IK solve can run on a copy - see `solveReach`.</span>
+    pose_scratch: []f32,
+    ik_scratch: []Vec,
+    wrist: u32,
+    cube_body: u32,
+    left_finger_q: u32,
+
+    target: Vec,
+    reach_error: f32,
+    grip: f32,
+    physics_on: bool,
+    <span class="tok-comment">/// Whether to constrain the wrist's attitude as well as its position.</span>
+    aim_down: bool,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.doc = <span class="tok-kw">try</span> z.codecs.xml.<span class="tok-fn">parse</span>(gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"arm.xml"</span>), null);
+    s.robot = <span class="tok-kw">try</span> mjcf.<span class="tok-fn">readRobot</span>(gpa, &amp;s.doc);
+    <span class="tok-kw">const</span> cube_body = [_]z.robot_scene.FreeBody{.{
+        .name = <span class="tok-str">"cube"</span>,
+        .pos = <span class="tok-fn">vec</span>(table_center[<span class="tok-num">0</span>], <span class="tok-num">0</span>, table_center[<span class="tok-num">2</span>] + table_half[<span class="tok-num">2</span>] + cube_half),
+        .geoms = &amp;.{.{ .shape = .{ .box = .{ .half_extent = <span class="tok-fn">splat</span>(cube_half) } }, .mass = <span class="tok-num">0.08</span> }},
+    }};
+    s.imported = <span class="tok-kw">try</span> rmj.<span class="tok-fn">buildScene</span>(gpa, &amp;s.robot, &amp;cube_body, .{
+        .max_contacts = <span class="tok-num">64</span>,
+        .timestep = timestep,
+        .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>),
+    });
+    s.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;s.imported.model);
+    s.actuated = <span class="tok-kw">try</span> ctl.Actuation.<span class="tok-fn">init</span>(gpa, &amp;s.imported.model);
+
+    s.world = <span class="tok-kw">try</span> zp.World.<span class="tok-fn">init</span>(gpa, <span class="tok-num">64</span>);
+    s.world.gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>);
+    <span class="tok-kw">const</span> table_shape: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{
+        .box = .{ .half_extent = table_half, .convex_radius = <span class="tok-num">0.01</span> },
+    });
+    _ = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{ .shape = table_shape, .position = table_center, .motion_type = .static });
+    <span class="tok-kw">const</span> floor_shape: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{
+        .box = .{ .half_extent = <span class="tok-fn">vec</span>(<span class="tok-num">3</span>, <span class="tok-num">3</span>, <span class="tok-num">0.5</span>), .convex_radius = <span class="tok-num">0.01</span> },
+    });
+    _ = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{ .shape = floor_shape, .position = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">0.5</span>), .motion_type = .static });
+
+    <span class="tok-comment">// * THE READY POSE, and it is not decoration. Every joint at zero stands the arm straight</span>
+    <span class="tok-comment">// up, which is SINGULAR: the Jacobian has no preferred direction, so the first IK call</span>
+    <span class="tok-comment">// picks one arbitrarily. Measured from zero, a goal at (0.30, 0, 0.05) ended at</span>
+    <span class="tok-comment">// (-0.50, 0, 0.45) - the opposite side of the robot.</span>
+    _ = rmj.<span class="tok-fn">applyKeyframe</span>(&amp;s.imported.model, &amp;s.data, s.robot.keyframes[<span class="tok-num">0</span>]);
+    rbt.<span class="tok-fn">forward</span>(&amp;s.imported.model, &amp;s.data);
+
+    s.bridge = <span class="tok-kw">try</span> bridge_mod.Bridge.<span class="tok-fn">init</span>(gpa, &amp;s.world, &amp;s.imported.model, &amp;s.data, <span class="tok-num">64</span>);
+    s.bridge.<span class="tok-fn">listen</span>(&amp;s.world);
+
+    s.home = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(f32, s.data.pos);
+    s.pose_scratch = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.imported.model.nq);
+    s.ik_scratch = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, ctl.Ik.<span class="tok-fn">scratchSize</span>(&amp;s.imported.model));
+    s.wrist = s.imported.<span class="tok-fn">bodyIndex</span>(<span class="tok-str">"wrist"</span>).?;
+    s.cube_body = s.imported.<span class="tok-fn">bodyIndex</span>(<span class="tok-str">"cube"</span>).?;
+    s.left_finger_q = blk: {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.imported.model.njnt) |j| {
+            <span class="tok-kw">if</span> (s.imported.model.jnt_type[j] == .slide) {
+                <span class="tok-kw">break</span> :blk s.imported.model.jnt_qpos_adr[j];
+            }
+        }
+        <span class="tok-kw">break</span> :blk <span class="tok-num">0</span>;
+    };
+
+    <span class="tok-comment">// Start the target where the grasp point already is, so nothing lurches on frame one.</span>
+    s.target = s.data.body_xpos[s.wrist] + zm.<span class="tok-fn">rotate</span>(s.data.body_xrot[s.wrist], grasp_offset);
+    s.reach_error = <span class="tok-num">0</span>;
+    s.grip = <span class="tok-num">0</span>;
+    s.physics_on = true;
+    s.aim_down = true;
+    s.accumulator = <span class="tok-num">0</span>;
+
+    <span class="tok-comment">// * THE ORBIT TARGET IS THE TABLE, not the origin: the interesting half of this scene is</span>
+    <span class="tok-comment">// 45 cm up, and a camera aimed at the floor spends its range looking at the pedestal.</span>
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.25</span>), <span class="tok-num">1.5</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cylinder = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCylinder</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">16</span>, <span class="tok-num">2</span>);
+    s.sphere = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">10</span>, <span class="tok-num">8</span>);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    gpa.<span class="tok-fn">free</span>(s.ik_scratch);
+    gpa.<span class="tok-fn">free</span>(s.pose_scratch);
+    gpa.<span class="tok-fn">free</span>(s.home);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    s.actuated.<span class="tok-fn">deinit</span>();
+    s.bridge.<span class="tok-fn">deinit</span>(&amp;s.world);
+    s.world.<span class="tok-fn">deinit</span>(gpa);
+    s.data.<span class="tok-fn">deinit</span>();
+    s.imported.<span class="tok-fn">deinit</span>();
+    s.robot.<span class="tok-fn">deinit</span>();
+    s.doc.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Point the grasp at `s.target`, and write the result where the controller will read it.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- * THE SOLVE RUNS ON A COPY --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `Ik.solve` writes joint angles into `data` - that IS its answer. Doing it to the live state</span>
+<span class="tok-comment">/// would teleport the arm every frame: no dynamics, no contact, nothing to resist. The result</span>
+<span class="tok-comment">/// becomes a TARGET instead, so the arm travels there under its own torque limits and can</span>
+<span class="tok-comment">/// visibly fail to arrive.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">solveReach</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-builtin">@memcpy</span>(s.pose_scratch, s.data.pos);
+    <span class="tok-kw">const</span> result: ctl.Ik.Result = (ctl.Ik{ .max_iterations = <span class="tok-num">40</span> }).<span class="tok-fn">solve</span>(
+        m,
+        &amp;s.data,
+        s.actuated,
+        .{
+            .body = s.wrist,
+            .offset = grasp_offset,
+            .goal = s.target,
+            <span class="tok-comment">// * JAWS DOWN, WHICH A POSITION TARGET CANNOT ASK FOR. Without this the wrist's</span>
+            <span class="tok-comment">// attitude is whatever the solver's nullspace drifted into - on this arm, sideways</span>
+            <span class="tok-comment">// - and a top grasp is not expressible however the target position is moved.</span>
+            .orientation = <span class="tok-kw">if</span> (s.aim_down) jaws_down <span class="tok-kw">else</span> null,
+        },
+        s.ik_scratch,
+    );
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.njnt) |j| {
+        <span class="tok-kw">if</span> (m.jnt_type[j] != .hinge) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> q: u32 = m.jnt_qpos_adr[j];
+        s.home[q] = s.data.pos[q];
+    }
+    <span class="tok-builtin">@memcpy</span>(s.data.pos, s.pose_scratch);
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+    s.reach_error = result.error_distance;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-comment">// * IK RUNS ONCE PER FRAME, NOT PER SUBSTEP. It answers "where should the joints be",</span>
+    <span class="tok-comment">// which changes only when the target moves; inside the fixed-timestep loop it would</span>
+    <span class="tok-comment">// recompute the same answer several times over and the cost would multiply.</span>
+    <span class="tok-fn">solveReach</span>(s);
+
+    s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+    <span class="tok-kw">while</span> (s.accumulator &gt;= timestep) : (s.accumulator -= timestep) {
+        rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+        <span class="tok-kw">if</span> (s.physics_on) {
+            <span class="tok-comment">// These two can only fail by running out of memory: the frame callback that contains them</span>
+            <span class="tok-comment">// returns `void` by the engine's design, so there is nothing to propagate to. Swallowing</span>
+            <span class="tok-comment">// leaves the world un-stepped for one frame, which is the least-bad outcome available here -</span>
+            <span class="tok-comment">// and is why the rule wants it said out loud rather than written silently.</span>
+            <span class="tok-comment">// lint:off catch-suppression: OOM only, void callback - see above</span>
+            s.bridge.<span class="tok-fn">sync</span>(&amp;s.world, m, &amp;s.data) <span class="tok-kw">catch</span> {};
+            <span class="tok-comment">// lint:off catch-suppression: OOM only, void callback - see above</span>
+            zp.<span class="tok-fn">step</span>(&amp;s.world, timestep) <span class="tok-kw">catch</span> {};
+            s.bridge.<span class="tok-fn">harvest</span>(&amp;s.data);
+        } <span class="tok-kw">else</span> {
+            s.data.<span class="tok-fn">clearContacts</span>();
+        }
+        <span class="tok-comment">// * GAINS IN FREQUENCY UNITS: `kp` is omega^2 and `kv` is 2 zeta omega. This arm's links differ by</span>
+        <span class="tok-comment">// three orders of magnitude in inertia - 0.13 at the shoulder, 0.00041 at the wrist -</span>
+        <span class="tok-comment">// and a single torque-unit gain cannot serve both. Measured at kp = 600 unscaled, the</span>
+        <span class="tok-comment">// wrist DIVERGED to the velocity clamp while its position sat still, which reads as a</span>
+        <span class="tok-comment">// stuck joint rather than a broken controller.</span>
+        (ctl.PoseHold{
+            .target = s.home,
+            .kp = <span class="tok-num">2500</span>,
+            .kv = <span class="tok-num">100</span>,
+            .max_torque = <span class="tok-num">300</span>,
+            .scale_by_inertia = true,
+        }).<span class="tok-fn">apply</span>(m, &amp;s.data, s.actuated);
+        <span class="tok-comment">// The gripper is commanded directly; the coupling moves the other finger.</span>
+        s.home[s.left_finger_q] = -s.grip;
+        rbt.<span class="tok-fn">step</span>(m, &amp;s.data);
+    }
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">0.5</span>, .max_distance = <span class="tok-num">4.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(gl, <span class="tok-num">16</span>, <span class="tok-num">0.25</span>);
+    <span class="tok-fn">drawScene</span>(s, gl);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(s: *State, gl: *z.WgpuGl) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> to_y_up: Mat = zm.<span class="tok-fn">zUpToYUp</span>();
+
+    <span class="tok-comment">// The table, which is world geometry rather than part of the tree.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(table_center[<span class="tok-num">0</span>], table_center[<span class="tok-num">1</span>], table_center[<span class="tok-num">2</span>])),
+        <span class="tok-fn">scaling</span>(<span class="tok-num">2</span> * table_half[<span class="tok-num">0</span>], <span class="tok-num">2</span> * table_half[<span class="tok-num">1</span>], <span class="tok-num">2</span> * table_half[<span class="tok-num">2</span>]),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, table_col);
+
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.ngeom) |g| {
+        <span class="tok-kw">const</span> body: u32 = m.geom_body[g];
+        <span class="tok-kw">const</span> body_rot: zm.Quat = s.data.body_xrot[body];
+        <span class="tok-kw">const</span> world_pos: Vec = s.data.body_xpos[body] + zm.<span class="tok-fn">rotate</span>(body_rot, m.geom_pos[g]);
+        <span class="tok-kw">const</span> world_rot: Mat = <span class="tok-fn">quatToMat</span>(zm.<span class="tok-fn">qmul</span>(body_rot, m.geom_rot[g]));
+        <span class="tok-kw">const</span> place: Mat = <span class="tok-fn">mulMat</span>(
+            <span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(world_pos[<span class="tok-num">0</span>], world_pos[<span class="tok-num">1</span>], world_pos[<span class="tok-num">2</span>])),
+            world_rot,
+        );
+        <span class="tok-kw">const</span> tint: Color = <span class="tok-kw">if</span> (body == s.cube_body)
+            cube_col
+        <span class="tok-kw">else</span> <span class="tok-kw">if</span> (body &gt;= s.wrist)
+            finger_col
+        <span class="tok-kw">else</span>
+            link_col;
+        <span class="tok-kw">switch</span> (m.geom_shape[g]) {
+            .sphere =&gt; |sph| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">scaling</span>(sph.radius, sph.radius, sph.radius));
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, tint);
+            },
+            .capsule =&gt; |cap| {
+                <span class="tok-comment">// * THE GENERATED CYLINDER SPANS [0, h] ALONG Y, not centred on the origin and</span>
+                <span class="tok-comment">// not along Z - measured from the mesh's own bounds rather than read off the</span>
+                <span class="tok-comment">// generator, which remaps as it writes.</span>
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                    <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -cap.half_height, <span class="tok-num">0</span>)),
+                    <span class="tok-fn">scaling</span>(cap.radius, <span class="tok-num">2.0</span> * cap.half_height, cap.radius),
+                );
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, tint);
+            },
+            .cylinder =&gt; |cyl| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                    <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -cyl.half_height, <span class="tok-num">0</span>)),
+                    <span class="tok-fn">scaling</span>(cyl.radius, <span class="tok-num">2.0</span> * cyl.half_height, cyl.radius),
+                );
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, tint);
+            },
+            .box =&gt; |b| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">scaling</span>(
+                    <span class="tok-num">2</span> * b.half_extent[<span class="tok-num">0</span>],
+                    <span class="tok-num">2</span> * b.half_extent[<span class="tok-num">1</span>],
+                    <span class="tok-num">2</span> * b.half_extent[<span class="tok-num">2</span>],
+                ));
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, tint);
+            },
+            <span class="tok-kw">else</span> =&gt; {},
+        }
+    }
+
+    <span class="tok-comment">// The target, so the thing being tracked is visible alongside what is tracking it.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(s.target[<span class="tok-num">0</span>], s.target[<span class="tok-num">1</span>], s.target[<span class="tok-num">2</span>])),
+        <span class="tok-fn">scaling</span>(<span class="tok-num">0.016</span>, <span class="tok-num">0.016</span>, <span class="tok-num">0.016</span>),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, target_col);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-comment">// Sized to the viewport rather than to pixels - see `ui.Ui.scaleToViewport`.</span>
+    <span class="tok-kw">const</span> narrow: bool = ui.Ui.<span class="tok-fn">isNarrow</span>(viewport_w);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-kw">if</span> (narrow) viewport_w - <span class="tok-num">16</span> <span class="tok-kw">else</span> <span class="tok-builtin">@min</span>(<span class="tok-num">400.0</span>, viewport_w * <span class="tok-num">0.32</span>);
+    _ = u.<span class="tok-fn">scaleToViewport</span>(panel_w, <span class="tok-kw">if</span> (narrow) <span class="tok-num">30.0</span> <span class="tok-kw">else</span> <span class="tok-num">22.0</span>);
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    <span class="tok-comment">// Height capped to the viewport: auto-size lets the window run off a short screen.</span>
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-builtin">@min</span>(<span class="tok-num">470.0</span>, viewport_h * <span class="tok-num">0.7</span>) }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"4-DOF arm with a geared gripper"</span>, .{})) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"IK target (metres)"</span>, .{});
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"x"</span>, &amp;s.target[<span class="tok-num">0</span>], .{ .min = <span class="tok-num">0.10</span>, .max = <span class="tok-num">0.60</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"y"</span>, &amp;s.target[<span class="tok-num">1</span>], .{ .min = -<span class="tok-num">0.40</span>, .max = <span class="tok-num">0.40</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"z"</span>, &amp;s.target[<span class="tok-num">2</span>], .{ .min = <span class="tok-num">0.20</span>, .max = <span class="tok-num">0.75</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"   reach err {d:.4} m"</span>, .{s.reach_error});
+        <span class="tok-comment">// * TURN THIS OFF AND WATCH THE WRIST WANDER. Position targets say nothing about</span>
+        <span class="tok-comment">// attitude, so the jaws end up wherever the nullspace leaves them - which is exactly</span>
+        <span class="tok-comment">// why an orientation target had to exist.</span>
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"aim the jaws down"</span>, &amp;s.aim_down);
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// ** ONE SLIDER, TWO FINGERS. The right one is not set here - an</span>
+        <span class="tok-comment">// `&lt;equality type="joint" polycoef="0 -1"&gt;` ties it to the left, and the SOLVER moves</span>
+        <span class="tok-comment">// it. That is what a parallel gripper physically is, and modelling it as two joints a</span>
+        <span class="tok-comment">// controller keeps in sync is how a gripper ends up gripping crooked.</span>
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"gripper (one motor, coupled)"</span>, .{});
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"close"</span>, &amp;s.grip, .{ .min = -<span class="tok-num">0.010</span>, .max = <span class="tok-num">0.020</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"   left {d:&gt;6.3}  right {d:&gt;6.3}"</span>, .{
+            s.data.pos[s.left_finger_q],
+            s.data.pos[s.left_finger_q + <span class="tok-num">1</span>],
+        });
+        u.<span class="tok-fn">separator</span>();
+
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"physics"</span>, &amp;s.physics_on);
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"reset"</span>, .{})) {
+            <span class="tok-fn">resetScene</span>(s);
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"contacts {d}"</span>, .{s.data.contact_count});
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-comment">/// Put the arm and the cube back where they started.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * EVERYTHING THAT REMEMBERS, or the button appears to do nothing: `home` is what the</span>
+<span class="tok-comment">/// controller tracks, so restoring `pos` alone lets it drag the arm straight back. Velocities</span>
+<span class="tok-comment">/// go too - a reset mid-swing keeps its momentum - and so does the solver's warm start.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">resetScene</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    _ = rmj.<span class="tok-fn">applyKeyframe</span>(m, &amp;s.data, s.robot.keyframes[<span class="tok-num">0</span>]);
+    <span class="tok-kw">const</span> cube_joint: u32 = m.jnt_qpos_adr[m.body_jnt_adr[s.cube_body]];
+    s.data.pos[cube_joint + <span class="tok-num">0</span>] = table_center[<span class="tok-num">0</span>];
+    s.data.pos[cube_joint + <span class="tok-num">1</span>] = <span class="tok-num">0</span>;
+    s.data.pos[cube_joint + <span class="tok-num">2</span>] = table_center[<span class="tok-num">2</span>] + table_half[<span class="tok-num">2</span>] + cube_half;
+    s.data.pos[cube_joint + <span class="tok-num">3</span>] = <span class="tok-num">0</span>;
+    s.data.pos[cube_joint + <span class="tok-num">4</span>] = <span class="tok-num">0</span>;
+    s.data.pos[cube_joint + <span class="tok-num">5</span>] = <span class="tok-num">0</span>;
+    s.data.pos[cube_joint + <span class="tok-num">6</span>] = <span class="tok-num">1</span>;
+    <span class="tok-builtin">@memset</span>(s.data.vel, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.data.acc, <span class="tok-num">0</span>);
+    s.data.<span class="tok-fn">clearContacts</span>();
+    s.data.<span class="tok-fn">forgetWarmStart</span>();
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+    <span class="tok-builtin">@memcpy</span>(s.home, s.data.pos);
+    s.grip = <span class="tok-num">0</span>;
+    s.accumulator = <span class="tok-num">0</span>;
+    s.target = s.data.body_xpos[s.wrist] + zm.<span class="tok-fn">rotate</span>(s.data.body_xrot[s.wrist], grasp_offset);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - arm and coupled gripper"</span>,
+            .width = <span class="tok-num">820</span>,
+            .height = <span class="tok-num">680</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>net_cursors — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>net_cursors</h1>
+<figure class="code src-file" data-path="examples/net_cursors/net_cursors.zig" data-lines="382"><figcaption><span>examples/net_cursors/net_cursors.zig</span><span>382 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! net_cursors - the payoff demo: a shared 2D canvas where everyone in the room</span>
+<span class="tok-comment">//! sees everyone else's mouse cursor moving in real time, and clicks send a</span>
+<span class="tok-comment">//! ripple that all peers see. This is the "invite friends to a local game"</span>
+<span class="tok-comment">//! goal in its simplest form.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It's built entirely on `z.net.Session` (the L2 layer), so it's also the</span>
+<span class="tok-comment">//! reference for how to use it:</span>
+<span class="tok-comment">//!   - `session.connect(url, room)` to join (host generates a shareable room</span>
+<span class="tok-comment">//!     name; others type it in).</span>
+<span class="tok-comment">//!   - each frame, `session.broadcast(channel, bytes)` your cursor, and drain</span>
+<span class="tok-comment">//!     `session.poll(&amp;buf)` for peers joining/leaving and their messages.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Wire format is deliberately tiny: a cursor or click is two f32s (normalized</span>
+<span class="tok-comment">//! [0,1] so it maps correctly regardless of each peer's window size), 8 bytes.</span>
+<span class="tok-comment">//! Cursors go on channel 0 (unreliable - a dropped position is instantly</span>
+<span class="tok-comment">//! replaced by the next); clicks go on channel 1 (reliable - never dropped).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Native builds render the UI but do no networking (ws/rtc are wasm-only), so</span>
+<span class="tok-comment">//! the headless smoke test exercises the whole thing harmlessly.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> net = z.net;
+<span class="tok-kw">const</span> ui = z.ui_real;
+
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> clamp01 = zm.clamp01;
+
+<span class="tok-kw">const</span> chan_cursor = <span class="tok-num">0</span>; <span class="tok-comment">// unreliable, unordered</span>
+<span class="tok-kw">const</span> chan_click = <span class="tok-num">1</span>; <span class="tok-comment">// reliable, ordered</span>
+<span class="tok-kw">const</span> ripple_life = <span class="tok-num">0.8</span>; <span class="tok-comment">// seconds</span>
+<span class="tok-kw">const</span> ripple_max_r = <span class="tok-num">46.0</span>; <span class="tok-comment">// px at end of life</span>
+<span class="tok-kw">const</span> max_ripples = <span class="tok-num">24</span>;
+
+<span class="tok-comment">// A peer's latest cursor position (normalized), tracked from their messages.</span>
+<span class="tok-kw">const</span> PeerView = <span class="tok-kw">struct</span> {
+    id: u32,
+    nx: f32,
+    ny: f32,
+    active: bool,
+    has_pos: bool,
+};
+
+<span class="tok-kw">const</span> Ripple = <span class="tok-kw">struct</span> {
+    nx: f32,
+    ny: f32,
+    age: f32,
+    color: Color,
+    active: bool,
+};
+
+<span class="tok-comment">// A friendly, distinct colour per peer (indexed by id).</span>
+<span class="tok-kw">const</span> peer_colors = [_]Color{
+    .{ .r = <span class="tok-num">239</span>, .g = <span class="tok-num">71</span>, .b = <span class="tok-num">111</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">209</span>, .b = <span class="tok-num">102</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">6</span>, .g = <span class="tok-num">214</span>, .b = <span class="tok-num">160</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">17</span>, .g = <span class="tok-num">138</span>, .b = <span class="tok-num">178</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">131</span>, .g = <span class="tok-num">56</span>, .b = <span class="tok-num">236</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">251</span>, .g = <span class="tok-num">133</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">58</span>, .g = <span class="tok-num">134</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">131</span>, .g = <span class="tok-num">197</span>, .b = <span class="tok-num">190</span>, .a = <span class="tok-num">255</span> },
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">peerColor</span>(id: u32) Color {
+    <span class="tok-kw">return</span> peer_colors[id % peer_colors.len];
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">withAlpha</span>(c: Color, a: u8) Color {
+    <span class="tok-kw">return</span> .{ .r = c.r, .g = c.g, .b = c.b, .a = a };
+}
+
+<span class="tok-comment">// A cursor/click position is two f32s. WASM is little-endian everywhere, so a</span>
+<span class="tok-comment">// raw bit copy is a fine, tiny wire format between browsers.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">packVec2</span>(nx: f32, ny: f32) [<span class="tok-num">8</span>]u8 {
+    <span class="tok-kw">const</span> v: [<span class="tok-num">2</span>]f32 = .{ nx, ny };
+    <span class="tok-kw">return</span> <span class="tok-builtin">@bitCast</span>(v);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">unpackVec2</span>(bytes: []<span class="tok-kw">const</span> u8) ?[<span class="tok-num">2</span>]f32 {
+    <span class="tok-kw">if</span> (bytes.len &lt; <span class="tok-num">8</span>) {
+        <span class="tok-kw">return</span> null;
+    }
+    <span class="tok-kw">var</span> tmp: [<span class="tok-num">8</span>]u8 = undefined;
+    <span class="tok-builtin">@memcpy</span>(&amp;tmp, bytes[<span class="tok-num">0</span>..<span class="tok-num">8</span>]);
+    <span class="tok-kw">return</span> <span class="tok-builtin">@as</span>([<span class="tok-num">2</span>]f32, <span class="tok-builtin">@bitCast</span>(tmp));
+}
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    font: z.Font,
+    ui_host: z.UiHost,
+
+    session: net.Session,
+    url_buf: [<span class="tok-num">256</span>]u8,
+    url_len: usize,
+    room_buf: [<span class="tok-num">64</span>]u8,
+    room_len: usize,
+
+    peers: [net.max_peers]PeerView,
+    ripples: [max_ripples]Ripple,
+    my_nx: f32,
+    my_ny: f32,
+
+    poll_buf: [<span class="tok-num">512</span>]u8, <span class="tok-comment">// receives message bytes from session.poll (msgs are 8B)</span>
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">peerView</span>(s: *State, id: u32) ?*PeerView {
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.peers.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (s.peers[i].active <span class="tok-kw">and</span> s.peers[i].id == id) {
+            <span class="tok-kw">return</span> &amp;s.peers[i];
+        }
+    }
+    <span class="tok-kw">return</span> null;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">addPeerView</span>(s: *State, id: u32) void {
+    <span class="tok-kw">if</span> (<span class="tok-fn">peerView</span>(s, id) != null) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.peers.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (!s.peers[i].active) {
+            s.peers[i] = .{ .id = id, .nx = <span class="tok-num">0.5</span>, .ny = <span class="tok-num">0.5</span>, .active = true, .has_pos = false };
+            <span class="tok-kw">return</span>;
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">removePeerView</span>(s: *State, id: u32) void {
+    <span class="tok-kw">if</span> (<span class="tok-fn">peerView</span>(s, id)) |p| {
+        p.active = false;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">spawnRipple</span>(s: *State, nx: f32, ny: f32, color: Color) void {
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> oldest: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> oldest_age: f32 = -<span class="tok-num">1.0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.ripples.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (!s.ripples[i].active) {
+            s.ripples[i] = .{ .nx = nx, .ny = ny, .age = <span class="tok-num">0.0</span>, .color = color, .active = true };
+            <span class="tok-kw">return</span>;
+        }
+        <span class="tok-kw">if</span> (s.ripples[i].age &gt; oldest_age) {
+            oldest_age = s.ripples[i].age;
+            oldest = i;
+        }
+    }
+    <span class="tok-comment">// All slots busy - recycle the oldest.</span>
+    s.ripples[oldest] = .{ .nx = nx, .ny = ny, .age = <span class="tok-num">0.0</span>, .color = color, .active = true };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>), <span class="tok-num">20</span>);
+    s.* = .{
+        .gpa = gpa,
+        .font = font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .session = net.Session.<span class="tok-fn">init</span>(),
+        .url_buf = undefined,
+        .url_len = <span class="tok-num">0</span>,
+        .room_buf = undefined,
+        .room_len = <span class="tok-num">0</span>,
+        .peers = undefined,
+        .ripples = undefined,
+        .my_nx = <span class="tok-num">0.5</span>,
+        .my_ny = <span class="tok-num">0.5</span>,
+        .poll_buf = undefined,
+    };
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.peers.len) : (i += <span class="tok-num">1</span>) {
+        s.peers[i] = .{ .id = <span class="tok-num">0</span>, .nx = <span class="tok-num">0</span>, .ny = <span class="tok-num">0</span>, .active = false, .has_pos = false };
+    }
+    i = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.ripples.len) : (i += <span class="tok-num">1</span>) {
+        s.ripples[i] = .{ .nx = <span class="tok-num">0</span>, .ny = <span class="tok-num">0</span>, .age = <span class="tok-num">0</span>, .color = peer_colors[<span class="tok-num">0</span>], .active = false };
+    }
+    <span class="tok-kw">const</span> origin: []<span class="tok-kw">const</span> u8 = z.web.ws.<span class="tok-fn">originUrl</span>(&amp;s.url_buf);
+    s.url_len = origin.len;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.session.<span class="tok-fn">disconnect</span>();
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">hostRoom</span>(s: *State) void {
+    <span class="tok-kw">var</span> name_buf: [<span class="tok-num">32</span>]u8 = undefined;
+    <span class="tok-kw">const</span> seed: u64 = <span class="tok-builtin">@trunc</span>(z.web.dom.<span class="tok-fn">epochMillis</span>());
+    <span class="tok-kw">const</span> name: []<span class="tok-kw">const</span> u8 = net.<span class="tok-fn">generateRoomName</span>(seed, &amp;name_buf);
+    <span class="tok-kw">const</span> n: usize = <span class="tok-builtin">@min</span>(name.len, s.room_buf.len);
+    <span class="tok-builtin">@memcpy</span>(s.room_buf[<span class="tok-num">0</span>..n], name[<span class="tok-num">0</span>..n]);
+    s.room_len = n;
+    s.session.<span class="tok-fn">connect</span>(s.url_buf[<span class="tok-num">0</span>..s.url_len], s.room_buf[<span class="tok-num">0</span>..s.room_len]);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">joinRoom</span>(s: *State) void {
+    <span class="tok-kw">if</span> (s.room_len == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span>;
+    }
+    s.session.<span class="tok-fn">connect</span>(s.url_buf[<span class="tok-num">0</span>..s.url_len], s.room_buf[<span class="tok-num">0</span>..s.room_len]);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-comment">// 1. Drain the session: peers joining/leaving and their cursor/click bytes.</span>
+    <span class="tok-kw">while</span> (s.session.<span class="tok-fn">poll</span>(&amp;s.poll_buf)) |ev| {
+        <span class="tok-kw">switch</span> (ev) {
+            .joined_as =&gt; {},
+            .peer_joined =&gt; |id| <span class="tok-fn">addPeerView</span>(s, id),
+            .peer_state =&gt; {}, <span class="tok-comment">// terminal states also fire peer_left, handled below</span>
+            .channel_open =&gt; {},
+            .peer_left =&gt; |id| <span class="tok-fn">removePeerView</span>(s, id),
+            .host_changed =&gt; {}, <span class="tok-comment">// cursors are peer-owned; no host needed here</span>
+            .room_full =&gt; {}, <span class="tok-comment">// (would show "room full"; unreachable at this demo's scale)</span>
+            .message =&gt; |m| {
+                <span class="tok-kw">if</span> (<span class="tok-fn">unpackVec2</span>(m.bytes)) |pos| {
+                    <span class="tok-kw">if</span> (m.channel == chan_cursor) {
+                        <span class="tok-kw">if</span> (<span class="tok-fn">peerView</span>(s, m.peer)) |p| {
+                            p.nx = <span class="tok-fn">clamp01</span>(pos[<span class="tok-num">0</span>]);
+                            p.ny = <span class="tok-fn">clamp01</span>(pos[<span class="tok-num">1</span>]);
+                            p.has_pos = true;
+                        }
+                    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (m.channel == chan_click) {
+                        <span class="tok-fn">spawnRipple</span>(s, <span class="tok-fn">clamp01</span>(pos[<span class="tok-num">0</span>]), <span class="tok-fn">clamp01</span>(pos[<span class="tok-num">1</span>]), <span class="tok-fn">peerColor</span>(m.peer));
+                    }
+                }
+            },
+        }
+    }
+
+    <span class="tok-comment">// 2. Send my own cursor + clicks (only once we're fully joined).</span>
+    <span class="tok-kw">if</span> (s.session.<span class="tok-fn">isReady</span>()) {
+        <span class="tok-kw">const</span> mouse: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+        s.my_nx = <span class="tok-fn">clamp01</span>(mouse[<span class="tok-num">0</span>] / w);
+        s.my_ny = <span class="tok-fn">clamp01</span>(mouse[<span class="tok-num">1</span>] / h);
+        <span class="tok-kw">const</span> cur: [<span class="tok-num">8</span>]u8 = <span class="tok-fn">packVec2</span>(s.my_nx, s.my_ny);
+        s.session.<span class="tok-fn">broadcast</span>(chan_cursor, &amp;cur);
+        <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left)) {
+            <span class="tok-kw">const</span> clk: [<span class="tok-num">8</span>]u8 = <span class="tok-fn">packVec2</span>(s.my_nx, s.my_ny);
+            s.session.<span class="tok-fn">broadcast</span>(chan_click, &amp;clk);
+            <span class="tok-fn">spawnRipple</span>(s, s.my_nx, s.my_ny, .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> });
+        }
+    }
+
+    <span class="tok-comment">// 3. Age ripples.</span>
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.ripples.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (s.ripples[i].active) {
+            s.ripples[i].age += dt;
+            <span class="tok-kw">if</span> (s.ripples[i].age &gt;= ripple_life) {
+                s.ripples[i].active = false;
+            }
+        }
+    }
+
+    <span class="tok-comment">// 4. Render the canvas.</span>
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">15</span>, .g = <span class="tok-num">17</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> });
+
+    <span class="tok-comment">// ripples (expanding, fading rings)</span>
+    i = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.ripples.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> rp: Ripple = s.ripples[i];
+        <span class="tok-kw">if</span> (!rp.active) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> t: f32 = rp.age / ripple_life;
+        <span class="tok-kw">const</span> radius: f32 = <span class="tok-num">6.0</span> + t * ripple_max_r;
+        <span class="tok-kw">const</span> alpha_f: f32 = (<span class="tok-num">1.0</span> - t) * <span class="tok-num">220.0</span>;
+        <span class="tok-kw">const</span> alpha: u8 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-num">0.0</span>, alpha_f));
+        <span class="tok-kw">const</span> center: Vec2 = .{ rp.nx * w, rp.ny * h };
+        f.gl.<span class="tok-fn">circle</span>(center, radius, .{ .color = <span class="tok-fn">withAlpha</span>(rp.color, alpha), .outline = <span class="tok-num">2.5</span>, .segments = <span class="tok-num">32</span> });
+    }
+
+    <span class="tok-comment">// peer cursors</span>
+    i = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.peers.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> p: PeerView = s.peers[i];
+        <span class="tok-kw">if</span> (!p.active <span class="tok-kw">or</span> !p.has_pos) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> col: Color = <span class="tok-fn">peerColor</span>(p.id);
+        <span class="tok-kw">const</span> center: Vec2 = .{ p.nx * w, p.ny * h };
+        <span class="tok-fn">drawCursor</span>(f, center, col);
+        <span class="tok-kw">var</span> label: [<span class="tok-num">24</span>]u8 = undefined;
+        <span class="tok-kw">const</span> txt: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;label, <span class="tok-str">"peer {d}"</span>, .{p.id}) <span class="tok-kw">catch</span> <span class="tok-str">"peer"</span>;
+        <span class="tok-kw">const</span> label_pos: Vec2 = .{ center[<span class="tok-num">0</span>] + <span class="tok-num">12.0</span>, center[<span class="tok-num">1</span>] - <span class="tok-num">6.0</span> };
+        f.gl.<span class="tok-fn">text</span>(label_pos, txt, .{ .size = <span class="tok-num">13</span>, .color = col, .font = &amp;s.font });
+    }
+
+    <span class="tok-comment">// my own cursor (a hollow ring so it reads as "me")</span>
+    <span class="tok-kw">if</span> (s.session.<span class="tok-fn">isReady</span>()) {
+        <span class="tok-kw">const</span> me: Vec2 = .{ s.my_nx * w, s.my_ny * h };
+        <span class="tok-kw">const</span> white: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">235</span> };
+        f.gl.<span class="tok-fn">circle</span>(me, <span class="tok-num">10.0</span>, .{ .color = white, .outline = <span class="tok-num">2.0</span>, .segments = <span class="tok-num">28</span> });
+        f.gl.<span class="tok-fn">circle</span>(me, <span class="tok-num">2.5</span>, .{ .color = white, .segments = <span class="tok-num">12</span> });
+    }
+
+    <span class="tok-comment">// 5. UI overlay.</span>
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Shared cursors"</span>, .{
+        .initial_pos = .{ <span class="tok-num">12</span>, <span class="tok-num">12</span> },
+        .initial_size = .{ <span class="tok-num">340</span>, <span class="tok-num">250</span> },
+    })) |win| {
+        <span class="tok-kw">defer</span> win.<span class="tok-fn">close</span>();
+        <span class="tok-kw">if</span> (!s.session.<span class="tok-fn">isActive</span>()) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"Signaling server:"</span>, .{});
+            _ = u.<span class="tok-fn">inputTextWithHint</span>(<span class="tok-str">"Server URL"</span>, <span class="tok-str">"wss://your-app.onrender.com"</span>, &amp;s.url_buf, &amp;s.url_len, .{});
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Host a new room"</span>, .{})) {
+                <span class="tok-fn">hostRoom</span>(s);
+            }
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"or join an existing room:"</span>, .{});
+            _ = u.<span class="tok-fn">inputTextWithHint</span>(<span class="tok-str">"Room name"</span>, <span class="tok-str">"brave-otter-42"</span>, &amp;s.room_buf, &amp;s.room_len, .{});
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Join room"</span>, .{})) {
+                <span class="tok-fn">joinRoom</span>(s);
+            }
+        } <span class="tok-kw">else</span> {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"room: {s}"</span>, .{s.room_buf[<span class="tok-num">0</span>..s.room_len]});
+            <span class="tok-kw">if</span> (s.session.<span class="tok-fn">isReady</span>()) {
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"you are peer {d}"</span>, .{s.session.<span class="tok-fn">myId</span>()});
+            } <span class="tok-kw">else</span> {
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"connecting..."</span>, .{});
+            }
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"peers connected: {d}"</span>, .{<span class="tok-fn">activePeers</span>(s)});
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"move your mouse; click to ripple"</span>, .{});
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Leave"</span>, .{})) {
+                s.session.<span class="tok-fn">disconnect</span>();
+                <span class="tok-fn">clearPeers</span>(s);
+            }
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">activePeers</span>(s: *State) usize {
+    <span class="tok-kw">var</span> n: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.peers.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (s.peers[i].active) {
+            n += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">return</span> n;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">clearPeers</span>(s: *State) void {
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.peers.len) : (i += <span class="tok-num">1</span>) {
+        s.peers[i].active = false;
+    }
+}
+
+<span class="tok-comment">// A simple arrow-ish cursor: a filled dot with a short tail line.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawCursor</span>(f: *z.Frame, center: Vec2, col: Color) void {
+    <span class="tok-kw">const</span> tail: Vec2 = .{ center[<span class="tok-num">0</span>] - <span class="tok-num">10.0</span>, center[<span class="tok-num">1</span>] - <span class="tok-num">10.0</span> };
+    f.gl.<span class="tok-fn">line</span>(tail, center, .{ .color = <span class="tok-fn">withAlpha</span>(col, <span class="tok-num">180</span>), .thickness = <span class="tok-num">2.0</span> });
+    f.gl.<span class="tok-fn">circle</span>(center, <span class="tok-num">7.0</span>, .{ .color = col, .segments = <span class="tok-num">20</span> });
+    f.gl.<span class="tok-fn">circle</span>(center, <span class="tok-num">3.0</span>, .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }, .segments = <span class="tok-num">12</span> });
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - shared cursors"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .update = update,
+    .deinit = deinit,
+};
+</code></pre></figure>
+</body>
+</html>

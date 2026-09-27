@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>zimr · Two ways to write a shader</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="kicker">zimr · shader authoring · internal note</p>
+    <h1 class="title">Two ways to<br>write a <span class="cyan">shader</span>.<br><span class="amber">One is going away.</span></h1>
+    <p class="lede">Every zimr shader is Zig that compiles to SPIR-V and transpiles to WGSL. Until now there were two ways to write one: the <strong>direct</strong> way, where you hand-wire every binding, and the <strong>typed IoT</strong> way, where a schema does it for you. This is the case for collapsing to one.</p>
+    <div class="pipe">
+      <span class="node zig">shaderMain.zig</span>
+      <span class="arrow">→</span>
+      <span class="node spv">build-obj · spirv32</span>
+      <span class="arrow">→</span>
+      <span class="node spv">zspv rewrite</span>
+      <span class="arrow">→</span>
+      <span class="node wgsl">spv2wgsl</span>
+      <span class="arrow">→</span>
+      <span class="node wgsl">@embedFile(.wgsl)</span>
+    </div>
+  </div>
+</header>
+
+<!-- 1. THE TWO SHAPES -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="tok-num">01</span> The two shapes <span class="rule"></span></p>
+    <h2>Same shader, two source shapes</h2>
+    <p class="body">Here is the instanced-points vertex shader written both ways. It reads a particle position from a storage buffer indexed by the instance, expands a quad, and colors by height. Read the two side by side — the logic is identical; only the <em>boundary</em> differs.</p>
+
+    <div class="diff">
+      <div class="pane old">
+        <div class="pane-head"><span class="tag old">Old · direct</span><span class="file">points_vs.zig</span></div>
+<pre><code><span class="tok-kw">const</span> u = <span class="tok-fn">@extern</span>(*<span class="tok-kw">addrspace</span>(.uniform) <span class="tok-kw">const</span> Uniforms, .{
+    .name = <span class="tok-str">"u"</span>,
+    .decoration = .{ .descriptor = .{
+        .set = <span class="hazard">0</span>, .binding = <span class="hazard">0</span> } },
+});
+<span class="tok-kw">const</span> positions = <span class="tok-fn">storageBuffer</span>(Vec2,
+    <span class="tok-str">"positions"</span>, <span class="hazard">0</span>, <span class="hazard">1</span>);
+<span class="tok-kw">const</span> col_out = <span class="tok-fn">@extern</span>(*<span class="tok-kw">addrspace</span>(.output) Vec, .{
+    .name = <span class="tok-str">"col"</span>, .decoration = .{ .location = <span class="tok-num">0</span> },
+});
+
+<span class="tok-kw">export fn</span> <span class="tok-fn">entry</span>() <span class="tok-kw">callconv</span>(.spirv_vertex) <span class="tok-kw">void</span> {
+    <span class="tok-kw">const</span> vi: u32 = spirv.<span class="hl-old">vertex_index</span>;
+    <span class="tok-kw">const</span> ii: u32 = spirv.<span class="hl-old">instance_index</span>;
+    <span class="tok-kw">const</span> p = <span class="tok-fn">ssboLoad</span>(Vec2, <span class="hl-old">positions</span>, ii);
+    <span class="tok-kw">const</span> uu = u.*;
+    <span class="tok-comment">// ... quad expand, color ...</span>
+    spirv.position_out.* = .{ x, y, <span class="tok-num">0</span>, <span class="tok-num">1</span> };
+    col_out.* = color;
+}</code></pre>
+      </div>
+
+      <div class="pane new">
+        <div class="pane-head"><span class="tag new">New · IoT</span><span class="file">points_vs.zig + _io.zig</span></div>
+<pre><code><span class="tok-comment">// points_vs_io.zig — the schema</span>
+<span class="tok-kw">pub const</span> Ubo = <span class="tok-kw">extern struct</span> { <span class="tok-comment">/* … */</span> };
+<span class="tok-kw">pub const</span> Storage = <span class="tok-kw">struct</span> {
+    positions: shader.<span class="hl-new">StorageBuf</span>(Vec2, .read),
+};
+<span class="tok-kw">pub const</span> Builtins = <span class="tok-kw">struct</span> {
+    vertex_index:   shader.<span class="hl-new">Builtin</span>(.vertex_index),
+    instance_index: shader.<span class="hl-new">Builtin</span>(.instance_index),
+};
+<span class="tok-kw">pub const</span> Outputs = common.Interp;
+
+<span class="tok-comment">// points_vs.zig — the body</span>
+<span class="tok-kw">pub fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = <span class="tok-kw">undefined</span>;
+    <span class="tok-kw">const</span> vi = io_in.<span class="hl-new">vertex_index</span>();
+    <span class="tok-kw">const</span> ii = io_in.<span class="hl-new">instance_index</span>();
+    <span class="tok-kw">const</span> p = io_in.<span class="hl-new">positions</span>(ii);
+    <span class="tok-kw">const</span> uu = io_in.<span class="hl-new">u</span>;
+    <span class="tok-comment">// ... quad expand, color ...</span>
+    out.position = .{ x, y, <span class="tok-num">0</span>, <span class="tok-num">1</span> };
+    out.col = color;
+    <span class="tok-kw">return</span> out;
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="note warn">
+      <div class="mark">▲ risk</div>
+      <div>
+        <p>The four <strong style="color:var(--danger)">red integers</strong> on the left are descriptor <code>set</code>/<code>binding</code> numbers, typed by hand. Get one wrong and nothing errors at compile time — the pipeline is simply invalid at creation, or worse, silently reads the wrong buffer on the GPU. This is the exact failure class that cost real debugging time on the decals work.</p>
+        <p>On the right there are <strong>no binding integers at all</strong>. The schema names each resource once; the codegen assigns groups and bindings by a fixed, documented rule.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 2. WHERE THE NUMBERS COME FROM -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="tok-num">02</span> The signature move <span class="rule"></span></p>
+    <h2>The schema field <em>is</em> the binding</h2>
+    <p class="body">In the IoT world you never write a <code>@group(N) @binding(M)</code>. You declare a field in a schema section, and the codegen derives the WGSL decoration from <em>which section it's in</em> and <em>its position</em>. Uniforms land at binding&nbsp;0; storage buffers follow in the same group; samplers get their own group. Here is the actual derivation for the points shader:</p>
+
+    <div class="flow">
+      <p class="flow-title">schema  →  generated WGSL</p>
+      <div class="flow-rows">
+        <div class="flow-row">
+          <div class="chip schema"><b>Ubo</b> &nbsp;→&nbsp; VS uniform block</div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@group(0) @binding(0)</b> var&lt;uniform&gt; u</div>
+        </div>
+        <div class="flow-row">
+          <div class="chip schema"><b>Storage.positions</b> &nbsp;→&nbsp; StorageBuf(.read)</div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@group(0) @binding(1)</b> var&lt;storage, read&gt;</div>
+        </div>
+        <div class="flow-row">
+          <div class="chip schema"><b>Builtins.vertex_index</b></div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@builtin(vertex_index)</b> vertex_index</div>
+        </div>
+        <div class="flow-row">
+          <div class="chip schema"><b>Builtins.instance_index</b></div>
+          <div class="conn">╌╌►</div>
+          <div class="chip wgsl"><b>@builtin(instance_index)</b> instance_index</div>
+        </div>
+      </div>
+      <p class="flow-foot">Verified byte-for-byte: this is the <b>exact</b> WGSL the direct shader emitted — so the host bind-group code, which hand-wires the same layout, still works unchanged. The port is a drop-in.</p>
+    </div>
+
+    <div class="note">
+      <div class="mark">◆ why</div>
+      <div>
+        <p>Because the same rule feeds <strong>both</strong> the WGSL decorations and the host-side bind-group layout, the two can never disagree. In the direct pattern they're two hand-written lists that have to be kept in sync manually — and when they drift, the GPU rejects the pipeline.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3. SAMPLERS + VARYINGS -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="tok-num">03</span> Two more wins <span class="rule"></span></p>
+    <h2>Sampling, and the varying contract</h2>
+    <p class="body">Beyond bindings, the typed boundary changes two everyday things: how you sample a texture, and how a vertex shader's outputs stay matched to a fragment shader's inputs.</p>
+
+    <div class="diff">
+      <div class="pane old">
+        <div class="pane-head"><span class="tag old">Old · direct sample</span><span class="file">*_fs.zig</span></div>
+<pre><code><span class="tok-comment">// declare the sampler by hand…</span>
+<span class="tok-kw">extern const</span> decal_sampler2d: u32
+    <span class="tok-kw">addrspace</span>(.constant);
+<span class="tok-comment">// …bind it by hand at the top of main…</span>
+<span class="tok-fn">binding</span>(&decal_sampler2d, <span class="hazard">2</span>, <span class="hazard">0</span>);
+<span class="tok-comment">// …then call the raw op:</span>
+<span class="tok-kw">const</span> t = <span class="tok-fn">zsample2d</span>(decal_sampler2d, uv);</code></pre>
+      </div>
+      <div class="pane new">
+        <div class="pane-head"><span class="tag new">New · typed sample</span><span class="file">lambert_fs_io.zig + _fs.zig</span></div>
+<pre><code><span class="tok-comment">// declare it once, named, in the schema:</span>
+<span class="tok-kw">pub const</span> Samplers = <span class="tok-kw">struct</span> {
+    texture0: shader.<span class="hl-new">Sampler2D</span>(.albedo, .{}),
+};
+<span class="tok-comment">// call it as a method — no binding, no raw op:</span>
+<span class="tok-kw">const</span> tex = io_in.<span class="hl-new">texture0</span>(io_in.frag_tex_coord);</code></pre>
+      </div>
+    </div>
+
+    <p class="body" style="margin-top:26px;">The varyings between stages are the other quiet hazard. In the direct pattern the VS <code>@extern(.output)</code> list and the FS <code>@extern(.input)</code> list are written separately and must match by <code>location</code> index. In IoT they alias one shared struct, so they match <em>by construction</em>:</p>
+
+    <div class="diff">
+      <div class="pane new" style="grid-column:1 / -1;">
+        <div class="pane-head"><span class="tag new">New · one source of truth</span><span class="file">points_common_io.zig</span></div>
+<pre><code><span class="tok-comment">// points_common_io.zig — declared ONCE</span>
+<span class="tok-kw">pub const</span> <span class="hl-new">Interp</span> = <span class="tok-kw">struct</span> { col: Vec };
+
+<span class="tok-comment">// points_vs_io.zig             points_fs_io.zig</span>
+<span class="tok-kw">pub const</span> Outputs = common.<span class="hl-new">Interp</span>;   <span class="tok-kw">pub const</span> Inputs = common.<span class="hl-new">Interp</span>;
+<span class="tok-comment">// VS output === FS input. They cannot drift; renaming a field</span>
+<span class="tok-comment">// breaks both stages at compile time until you fix it.</span></code></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 4. THE SCOREBOARD -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="tok-num">04</span> Honest accounting <span class="rule"></span></p>
+    <h2>What it costs, what it buys</h2>
+    <p class="body">IoT is not free — it adds schema files. But it removes the per-binding <code>@extern</code> blocks from the body and the host-side bind-group code. On line count it's close to a wash; the real dividend is type-safety. Measured on real shaders:</p>
+
+    <div class="score">
+      <div class="h crit">Concern</div>
+      <div class="h old">Direct</div>
+      <div class="h new">IoT</div>
+
+      <div class="crit">Binding numbers</div>
+      <div class="cell meh">hand-typed ints</div>
+      <div class="cell win">derived, none</div>
+
+      <div class="crit">Texture sampling</div>
+      <div class="cell meh">raw op + manual bind</div>
+      <div class="cell win">io.name(uv)</div>
+
+      <div class="crit">VS-out / FS-in match</div>
+      <div class="cell meh">two lists, by hand</div>
+      <div class="cell win">shared struct</div>
+
+      <div class="crit">Host bind-group layout</div>
+      <div class="cell meh">~35 hand-written lines</div>
+      <div class="cell win">Resources auto</div>
+
+      <div class="crit">Failure mode</div>
+      <div class="cell meh">silent GPU / runtime</div>
+      <div class="cell win">compile error</div>
+
+      <div class="crit">Schema tax</div>
+      <div class="cell win">none</div>
+      <div class="cell meh">~20–30 lines</div>
+    </div>
+
+    <p class="pull">The schema tax is real. The bug surface it removes is <span class="cyan">realer</span>.</p>
+  </div>
+</section>
+
+<!-- 5. WHEN TO USE WHICH -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow"><span class="tok-num">05</span> The decision <span class="rule"></span></p>
+    <h2>Which pattern, when</h2>
+    <p class="body">The goal is one pattern. The interface now expresses everything — storage buffers, builtins, samplers — so the direct pattern is no longer a capability, only a habit. Until the last shaders are ported, here's the rule:</p>
+
+    <div class="cols">
+      <div class="card new-card">
+        <h3>Reach for IoT</h3>
+        <p class="sub">the default — 40+ of our shaders</p>
+        <ul>
+          <li><b>Any shader with bindings.</b> Uniforms, samplers, storage buffers — all named in a schema, zero hand-counted integers.</li>
+          <li><b>Anything with a VS/FS pair.</b> The shared <code>Interp</code> keeps the varyings honest.</li>
+          <li><b>Anything using builtins.</b> <code>vertex_index</code> and <code>instance_index</code> are schema members now.</li>
+        </ul>
+      </div>
+      <div class="card old-card">
+        <h3>Direct — shrinking</h3>
+        <p class="sub">an exception, not a parallel path</p>
+        <ul>
+          <li><b>Bespoke bind-group topologies</b> the fixed group scheme can't name yet — e.g. the decal projector-UBO ring with its 64 pre-built groups.</li>
+          <li>Everything else — points, fluid, billboard, skybox — <b>has already moved over</b>. The decal ring is the only shader left on the direct path.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note amber">
+      <div class="mark">● status</div>
+      <div>
+        <p><strong>points</strong>, <strong>fluid_discs</strong>, <strong>billboard</strong>, and <strong>skybox</strong> are all ported and shipping — every standard shader is now IoT. Their hosts bind storage buffers through <code>Resources</code>, validated on device. Only the decal ring stays direct, and that's a host-side resource concern (its 64-slot projector-UBO ring), not a limit of the interface.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap r">
+    <span>zimr · pure-Zig WebGPU · shader authoring note</span>
+    <span>Zig → SPIR-V → WGSL · <a href="#top">back to top</a></span>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,983 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>mandel_sidebyside — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>mandel_sidebyside</h1>
+<figure class="code src-file" data-path="examples/mandel_sidebyside/mandel_sidebyside.zig" data-lines="429"><figcaption><span>examples/mandel_sidebyside/mandel_sidebyside.zig</span><span>429 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/mandel_sidebyside/mandel_sidebyside.zig</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// THE HEADLINE: the SAME mandelbrot fragment shader running on the CPU and the</span>
+<span class="tok-comment">// GPU at the same time, on one zoomable view.</span>
+<span class="tok-comment">//   - LEFT of the (fixed, centered) divider: the mandelbrot_fs `shaderMain`</span>
+<span class="tok-comment">//     dispatched PER PIXEL on the CPU (raster_shader.dispatchFragmentShader) into</span>
+<span class="tok-comment">//     a LOW-RES software framebuffer (1/5 canvas res - chunky but fast), then</span>
+<span class="tok-comment">//     uploaded + blitted.</span>
+<span class="tok-comment">//   - RIGHT of the divider: the EXACT SAME `shaderMain`, compiled to WGSL, run</span>
+<span class="tok-comment">//     as a full-resolution GPU fullscreen pass.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// One shader. One iteration loop. Two execution targets, side by side. Pan by</span>
+<span class="tok-comment">// dragging, zoom with the mouse wheel or a two-finger pinch - both halves track</span>
+<span class="tok-comment">// the same (center, zoom) because they share one UBO.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Build:      zig build wgpu-mandel-sidebyside</span>
+<span class="tok-comment">// Standalone: zig build wgpu-mandel-sidebyside-standalone</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Vec2i = zm.Vec2i;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"mandelbrot_fs.zig"</span>);
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"mandelbrot_fs_io.zig"</span>);
+<span class="tok-kw">const</span> trivial_vs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_io.zig"</span>);
+
+<span class="tok-comment">// Route std.log to the on-page console (see zimr.std_options).</span>
+
+<span class="tok-kw">const</span> fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"mandelbrot_fs.wgsl"</span>);
+<span class="tok-kw">const</span> trivial_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"trivial_vs.wgsl"</span>);
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> width: u32 = <span class="tok-num">960</span>;
+<span class="tok-kw">const</span> height: u32 = <span class="tok-num">600</span>;
+
+<span class="tok-comment">// Software side: 1/5 resolution. The CPU mandelbrot is expensive (width*height*max_iter</span>
+<span class="tok-comment">// per frame, single wasm thread), so we render it small and upscale - the</span>
+<span class="tok-comment">// chunky result is the whole point of the comparison.</span>
+<span class="tok-comment">// sw_w/sw_h are the INITIAL dims; `ensureCpuTarget` reshapes the buffer to</span>
+<span class="tok-comment">// the live canvas aspect each frame at this constant pixel budget.</span>
+<span class="tok-kw">const</span> sw_w: u32 = width / <span class="tok-num">5</span>;
+<span class="tok-kw">const</span> sw_h: u32 = height / <span class="tok-num">5</span>;
+
+<span class="tok-kw">const</span> max_iter: f32 = <span class="tok-num">100</span>;
+<span class="tok-kw">const</span> zoom_step: f32 = <span class="tok-num">1.15</span>;
+<span class="tok-kw">const</span> initial_center: Vec2 = .{ -<span class="tok-num">0.5</span>, <span class="tok-num">0.0</span> };
+<span class="tok-kw">const</span> initial_zoom: f32 = <span class="tok-num">1.0</span>;
+
+<span class="tok-comment">// ---- Comptime corner: the SAME shaderMain, run by the Zig COMPILER ----------</span>
+<span class="tok-comment">// A third execution target alongside CPU (raster) and GPU (WGSL). The fractal here</span>
+<span class="tok-comment">// is evaluated PER PIXEL at COMPILE TIME and baked into the binary as a const;</span>
+<span class="tok-comment">// runtime just blits it. It uses the INITIAL view + resolution, so on load all</span>
+<span class="tok-comment">// three renders are identical. It cannot pan - it is literally a const in the</span>
+<span class="tok-comment">// read-only data section. One shader source. Three execution targets.</span>
+<span class="tok-kw">const</span> corner_cols: usize = <span class="tok-num">64</span>;
+<span class="tok-kw">const</span> corner_rows: usize = <span class="tok-num">40</span>;
+<span class="tok-kw">const</span> corner_iter: f32 = <span class="tok-num">48</span>; <span class="tok-comment">// lower cap keeps the comptime budget sane</span>
+
+<span class="tok-kw">const</span> corner_image: [corner_rows * corner_cols]Color = blk: {
+    <span class="tok-builtin">@setEvalBranchQuota</span>(<span class="tok-num">2_000_000_000</span>);
+    <span class="tok-kw">const</span> ubo: shader_io.Ubo = .{
+        .center = initial_center,
+        .zoom = initial_zoom,
+        .resolution = .{ <span class="tok-builtin">@floatFromInt</span>(width), <span class="tok-builtin">@floatFromInt</span>(height) },
+        .max_iter = corner_iter,
+    };
+    <span class="tok-kw">var</span> img: [corner_rows * corner_cols]Color = undefined;
+    <span class="tok-kw">var</span> py: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (py &lt; corner_rows) : (py += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> px: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (px &lt; corner_cols) : (px += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> io: shader.Io = .{
+                .frag_tex_coord = .{
+                    (<span class="tok-fn">float</span>(px) + <span class="tok-num">0.5</span>) / <span class="tok-fn">float</span>(corner_cols),
+                    <span class="tok-comment">// frag.y=1 is screen-TOP (unified CPU/GPU convention).</span>
+                    <span class="tok-num">1.0</span> - (<span class="tok-fn">float</span>(py) + <span class="tok-num">0.5</span>) / <span class="tok-fn">float</span>(corner_rows),
+                },
+                .u = ubo,
+            };
+            <span class="tok-kw">const</span> out: shader.Out = shader.<span class="tok-fn">shaderMain</span>(io);
+            img[py * corner_cols + px] = Color.<span class="tok-fn">fromFloats</span>(out.out_color[<span class="tok-num">0</span>], out.out_color[<span class="tok-num">1</span>], out.out_color[<span class="tok-num">2</span>], <span class="tok-num">1.0</span>);
+        }
+    }
+    <span class="tok-kw">break</span> :blk img;
+};
+
+<span class="tok-comment">/// Raw RGBA8 view of the corner - uploaded ONCE to a small texture and</span>
+<span class="tok-comment">/// drawn as a single quad instead of a 2560-rect grid (the helmet's</span>
+<span class="tok-comment">/// rect-grid version of this was the difference between 60 and 16 fps).</span>
+<span class="tok-kw">const</span> corner_bytes: [corner_rows * corner_cols * <span class="tok-num">4</span>]u8 = blk: {
+    <span class="tok-comment">// Zig 1245 forbids @bitCast from a struct; read Color fields directly.</span>
+    <span class="tok-builtin">@setEvalBranchQuota</span>(corner_rows * corner_cols * <span class="tok-num">8</span> + <span class="tok-num">1000</span>);
+    <span class="tok-kw">var</span> bytes: [corner_rows * corner_cols * <span class="tok-num">4</span>]u8 = undefined;
+    <span class="tok-kw">for</span> (corner_image, <span class="tok-num">0</span>..) |c, i| {
+        bytes[i * <span class="tok-num">4</span> + <span class="tok-num">0</span>] = c.r;
+        bytes[i * <span class="tok-num">4</span> + <span class="tok-num">1</span>] = c.g;
+        bytes[i * <span class="tok-num">4</span> + <span class="tok-num">2</span>] = c.b;
+        bytes[i * <span class="tok-num">4</span> + <span class="tok-num">3</span>] = c.a;
+    }
+    <span class="tok-kw">break</span> :blk bytes;
+};
+
+<span class="tok-comment">// No field defaults: initState constructs and returns a fully-specified State</span>
+<span class="tok-comment">// (zimr_app.run takes initState by value-return, so a missing field is a</span>
+<span class="tok-comment">// compile error - the "uninitialized/default-ignored" class can't happen).</span>
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpu_shader: z.shader.<span class="tok-fn">LoadedShader</span>(shader_io),
+    sw: z.raster.Context,
+    sw_fb: z.CpuFramebuffer,
+
+    <span class="tok-comment">// View (shared by both halves via the UBO).</span>
+    center: Vec2,
+    zoom: f32,
+
+    <span class="tok-comment">// Drag-pan bookkeeping; pinch-zoom now rides the shared gesture detector.</span>
+    dragging: bool,
+    drag_anchor_world: Vec2,
+    gestures: z.GesturesState,
+    ui_host: z.UiHost,
+    gpa: Allocator,
+    font: z.Font,
+    max_iter: f32,
+    <span class="tok-comment">/// Splitter as a width FRACTION (rotation-stable); follows the pointer.</span>
+    divider_frac: f32,
+    last_mouse: Vec2,
+    <span class="tok-comment">/// The comptime-baked corner, uploaded once at init.</span>
+    corner_fb: z.CpuFramebuffer,
+    ui_capturing: bool,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.gpu_shader.<span class="tok-fn">deinit</span>();
+    s.sw.<span class="tok-fn">deinit</span>(gpa);
+    s.sw_fb.<span class="tok-fn">deinit</span>();
+    s.corner_fb.<span class="tok-fn">deinit</span>();
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> gpu_shader: z.shader.<span class="tok-fn">LoadedShader</span>(shader_io) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(trivial_vs_io, shader_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = trivial_vs_wgsl,
+        .fs_wgsl_source = fs_wgsl,
+        .label = <span class="tok-str">"mandel_sbs_gpu"</span>,
+    });
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">28</span>);
+    <span class="tok-kw">var</span> sw: z.raster.Context = <span class="tok-kw">try</span> z.raster.Context.<span class="tok-fn">init</span>(gpa, <span class="tok-builtin">@intCast</span>(sw_w), <span class="tok-builtin">@intCast</span>(sw_h));
+    <span class="tok-kw">const</span> sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+        f.gpu.device,
+        f.gpu.queue,
+        sw_w,
+        sw_h,
+        sw.<span class="tok-fn">colorBufferBytes</span>(),
+        <span class="tok-str">"mandel_sbs_sw"</span>,
+    );
+    <span class="tok-comment">// Every field set explicitly - no defaults to silently drop.</span>
+    s.* = .{
+        .gpu_shader = gpu_shader,
+        .sw = sw,
+        .sw_fb = sw_fb,
+        .center = initial_center,
+        .zoom = initial_zoom,
+        .dragging = false,
+        .drag_anchor_world = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .gestures = .{},
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .gpa = gpa,
+        .font = font,
+        .max_iter = max_iter,
+        .ui_capturing = false,
+        .divider_frac = <span class="tok-num">0.5</span>,
+        .last_mouse = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span> },
+        .corner_fb = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+            f.gpu.device,
+            f.gpu.queue,
+            corner_cols,
+            corner_rows,
+            &amp;corner_bytes,
+            <span class="tok-str">"mandel_sbs_corner"</span>,
+        ),
+    };
+}
+
+<span class="tok-comment">/// Map a screen pixel (logical px) to a complex-plane point for the CURRENT</span>
+<span class="tok-comment">/// view - the inverse of the shader's pixel-&gt;complex mapping. Used to keep the</span>
+<span class="tok-comment">/// world point under the cursor/pinch-midpoint fixed across zoom.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">screenToComplex</span>(
+    p: Vec2,
+    sw_f: f32,
+    sh_f: f32,
+    center: Vec2,
+    zoom: f32,
+) Vec2 {
+    <span class="tok-kw">const</span> scale: f32 = <span class="tok-num">4.0</span> / (zoom * sh_f);
+    <span class="tok-comment">// Match the SHADER's pixel-&gt;complex mapping. The shader uses</span>
+    <span class="tok-comment">// frag_tex_coord.y, which is now v=1 at screen-TOP, 0 at screen-BOTTOM</span>
+    <span class="tok-comment">// (the unified CPU/GPU convention). So a screen pixel p.y (Y-down: 0=top)</span>
+    <span class="tok-comment">// corresponds to frag.y = (1 - p.y/sh_f), and the shader computes</span>
+    <span class="tok-comment">//   c.y = center.y - (frag.y*resH - halfH) * scale.</span>
+    <span class="tok-comment">// Substituting frag.y = 1 - p.y/sh_f gives c.y = center.y + (p.y - half)*scale</span>
+    <span class="tok-comment">// - i.e. the Y term is PLUS here (the shader's own flip already accounts for</span>
+    <span class="tok-comment">// screen-down). Getting this wrong inverts pan; it must mirror the shader.</span>
+    <span class="tok-kw">return</span> .{
+        center[<span class="tok-num">0</span>] + (p[<span class="tok-num">0</span>] - <span class="tok-num">0.5</span> * sw_f) * scale,
+        center[<span class="tok-num">1</span>] + (p[<span class="tok-num">1</span>] - <span class="tok-num">0.5</span> * sh_f) * scale,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> sw_f: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> sh_f: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> mouse: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+
+    <span class="tok-comment">// Tick the shared gesture detector once per frame.</span>
+    z.<span class="tok-fn">updateGestures</span>(&amp;s.gestures, f.input, f.time);
+
+    <span class="tok-comment">// ---- Two-finger pinch via the shared detector: `scale` = distance ratio</span>
+    <span class="tok-comment">// (zoom), `mid` = focal point to hold fixed, `mid_delta` = pan-while-pinch.</span>
+    <span class="tok-kw">const</span> touch_count: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touch_count &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> scale: f32 = z.<span class="tok-fn">getGesturePinchScale</span>(&amp;s.gestures);
+        <span class="tok-kw">const</span> mid: Vec2 = z.<span class="tok-fn">getGesturePinchMid</span>(&amp;s.gestures);
+        s.dragging = false; <span class="tok-comment">// pinch wins over drag</span>
+        <span class="tok-comment">// scale is 1.0 on the first two-finger frame (no baseline yet) - skip.</span>
+        <span class="tok-kw">if</span> (scale &gt; <span class="tok-num">0</span> <span class="tok-kw">and</span> scale != <span class="tok-num">1.0</span>) {
+            <span class="tok-comment">// Zoom about the midpoint: keep the world point under `mid` fixed.</span>
+            <span class="tok-kw">const</span> world_before: Vec2 = <span class="tok-fn">screenToComplex</span>(mid, sw_f, sh_f, s.center, s.zoom);
+            s.zoom *= scale;
+            <span class="tok-kw">if</span> (s.zoom &lt; initial_zoom * <span class="tok-num">0.5</span>) {
+                s.zoom = initial_zoom * <span class="tok-num">0.5</span>;
+            }
+            <span class="tok-kw">const</span> world_after: Vec2 = <span class="tok-fn">screenToComplex</span>(mid, sw_f, sh_f, s.center, s.zoom);
+            s.center += world_before - world_after;
+            <span class="tok-comment">// Pan by the midpoint's screen motion (in world units).</span>
+            <span class="tok-kw">const</span> md: Vec2 = z.<span class="tok-fn">getGesturePinchMidDelta</span>(&amp;s.gestures);
+            <span class="tok-kw">const</span> sc: f32 = <span class="tok-num">4.0</span> / (s.zoom * sh_f);
+            s.center[<span class="tok-num">0</span>] -= md[<span class="tok-num">0</span>] * sc;
+            s.center[<span class="tok-num">1</span>] -= md[<span class="tok-num">1</span>] * sc;
+        }
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-comment">// ---- Drag to pan --------------------------------------------------------</span>
+    <span class="tok-kw">const</span> pressed: bool = z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left);
+    <span class="tok-kw">if</span> (pressed <span class="tok-kw">and</span> !s.dragging) {
+        s.dragging = true;
+        s.drag_anchor_world = <span class="tok-fn">screenToComplex</span>(mouse, sw_f, sh_f, s.center, s.zoom);
+    }
+    <span class="tok-kw">if</span> (!pressed) {
+        s.dragging = false;
+    }
+    <span class="tok-kw">if</span> (s.dragging <span class="tok-kw">and</span> pressed) {
+        <span class="tok-kw">const</span> scale: f32 = <span class="tok-num">4.0</span> / (s.zoom * sh_f);
+        <span class="tok-kw">const</span> off: Vec2 = .{ mouse[<span class="tok-num">0</span>] - <span class="tok-num">0.5</span> * sw_f, mouse[<span class="tok-num">1</span>] - <span class="tok-num">0.5</span> * sh_f };
+        <span class="tok-comment">// Keep the world point grabbed at press (drag_anchor_world) under the</span>
+        <span class="tok-comment">// cursor: center = anchor - offset*scale on BOTH axes. (Both axes use</span>
+        <span class="tok-comment">// the same sign now that screenToComplex's Y term is +, matching the</span>
+        <span class="tok-comment">// shader. X and Y symmetric - if they differ, one axis pans backwards.)</span>
+        s.center = .{
+            s.drag_anchor_world[<span class="tok-num">0</span>] - off[<span class="tok-num">0</span>] * scale,
+            s.drag_anchor_world[<span class="tok-num">1</span>] - off[<span class="tok-num">1</span>] * scale,
+        };
+    }
+
+    <span class="tok-comment">// ---- Wheel to zoom (about the cursor) -----------------------------------</span>
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        <span class="tok-kw">const</span> world_before: Vec2 = <span class="tok-fn">screenToComplex</span>(mouse, sw_f, sh_f, s.center, s.zoom);
+        s.zoom *= <span class="tok-kw">if</span> (wheel &gt; <span class="tok-num">0</span>) zoom_step <span class="tok-kw">else</span> <span class="tok-num">1.0</span> / zoom_step;
+        <span class="tok-kw">if</span> (s.zoom &lt; initial_zoom * <span class="tok-num">0.5</span>) {
+            s.zoom = initial_zoom * <span class="tok-num">0.5</span>;
+        }
+        <span class="tok-kw">const</span> world_after: Vec2 = <span class="tok-fn">screenToComplex</span>(mouse, sw_f, sh_f, s.center, s.zoom);
+        s.center += world_before - world_after;
+        <span class="tok-kw">if</span> (s.dragging) {
+            s.drag_anchor_world = <span class="tok-fn">screenToComplex</span>(mouse, sw_f, sh_f, s.center, s.zoom);
+        }
+    }
+}
+
+<span class="tok-comment">// The control-panel rectangle (logical px). Shared by the input gate and the</span>
+<span class="tok-comment">// UI draw so they agree on the touch area.</span>
+<span class="tok-kw">const</span> panel_x: f32 = <span class="tok-num">14</span>;
+<span class="tok-kw">const</span> panel_y: f32 = <span class="tok-num">14</span>;
+<span class="tok-kw">const</span> panel_w: f32 = <span class="tok-num">300</span>;
+<span class="tok-kw">const</span> panel_h: f32 = <span class="tok-num">188</span>;
+
+<span class="tok-kw">fn</span> <span class="tok-fn">mouseOverPanel</span>(f: *z.Frame) bool {
+    <span class="tok-kw">const</span> m: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">return</span> m[<span class="tok-num">0</span>] &gt;= panel_x <span class="tok-kw">and</span> m[<span class="tok-num">0</span>] &lt;= panel_x + panel_w <span class="tok-kw">and</span>
+        m[<span class="tok-num">1</span>] &gt;= panel_y <span class="tok-kw">and</span> m[<span class="tok-num">1</span>] &lt;= panel_y + panel_h;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// Gate scene pan/zoom: if the pointer is over the UI panel (or a drag</span>
+    <span class="tok-comment">// started there), the UI owns the input. (Fixes "moving the slider pans the</span>
+    <span class="tok-comment">// fractal".)</span>
+    <span class="tok-kw">if</span> (<span class="tok-fn">mouseOverPanel</span>(f) <span class="tok-kw">or</span> s.ui_capturing) {
+        s.ui_capturing = z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left);
+        s.dragging = false;
+    } <span class="tok-kw">else</span> {
+        <span class="tok-fn">handleInput</span>(f, s);
+    }
+
+    <span class="tok-comment">// The app's coordinate space is f.window.screen_width/height (the contract;</span>
+    <span class="tok-comment">// see wgpu_app cssToLogical). In .responsive that's the LIVE size, which may</span>
+    <span class="tok-comment">// differ from width/height - so read it live, never hardcode. Both halves + the</span>
+    <span class="tok-comment">// shader resolution use this same size.</span>
+    <span class="tok-kw">const</span> vw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> vh: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-comment">// The shared UBO: both the CPU dispatch and the GPU pass read this, so the</span>
+    <span class="tok-comment">// two halves render the SAME view. resolution = the live logical size.</span>
+    <span class="tok-kw">const</span> ubo: shader_io.Ubo = .{
+        .center = s.center,
+        .zoom = s.zoom,
+        .resolution = .{ vw, vh },
+        .max_iter = s.max_iter,
+    };
+
+    <span class="tok-comment">// ---- CPU side: dispatch the SAME shaderMain per pixel into raster ---------</span>
+    s.sw.<span class="tok-fn">clearColor</span>(.{ .r = <span class="tok-num">8</span>, .g = <span class="tok-num">8</span>, .b = <span class="tok-num">14</span>, .a = <span class="tok-num">255</span> });
+    s.sw.<span class="tok-fn">clear</span>(.{ .color = true });
+    <span class="tok-kw">const</span> sw_dims: Vec2i = s.sw.<span class="tok-fn">colorBufferDims</span>();
+    <span class="tok-kw">const</span> base_io: shader.Io = .{ .frag_tex_coord = undefined, .u = ubo };
+    z.raster_shader.<span class="tok-fn">dispatchFragmentShader</span>(&amp;s.sw, shader, base_io, .{
+        .x = <span class="tok-num">0</span>,
+        .y = <span class="tok-num">0</span>,
+        .w = <span class="tok-builtin">@intCast</span>(sw_dims[<span class="tok-num">0</span>]),
+        .h = <span class="tok-builtin">@intCast</span>(sw_dims[<span class="tok-num">1</span>]),
+    });
+    s.sw_fb.<span class="tok-fn">update</span>(f.gpu.queue, s.sw.<span class="tok-fn">colorBufferBytes</span>());
+
+    <span class="tok-comment">// ---- GPU side: the SAME shaderMain as a full-res fullscreen pass --------</span>
+    s.gpu_shader.<span class="tok-fn">pushUbo</span>(f.gpu.queue, ubo);
+    z.<span class="tok-fn">bindFullscreenShader</span>(f.gl, shader_io, &amp;s.gpu_shader);
+    z.<span class="tok-fn">drawFullscreenTriangle</span>(f.gl);
+    <span class="tok-comment">// Commit the GPU pass before touching textured 2D.</span>
+    f.gl.<span class="tok-fn">flushBeforeMaterialSwap</span>();
+
+    <span class="tok-comment">// ---- Composite: software (CPU) over the LEFT of the splitter.  The</span>
+    <span class="tok-comment">//      divider is a width FRACTION (rotation-stable) that follows the</span>
+    <span class="tok-comment">//      pointer - helmet mechanics (t1168) - except while the UI owns</span>
+    <span class="tok-comment">//      the mouse (panel drags must not sweep the split).</span>
+    <span class="tok-kw">const</span> m_div: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> is_first_zero: bool = s.last_mouse[<span class="tok-num">0</span>] &lt; <span class="tok-num">0</span> <span class="tok-kw">and</span> m_div[<span class="tok-num">0</span>] == <span class="tok-num">0</span> <span class="tok-kw">and</span> m_div[<span class="tok-num">1</span>] == <span class="tok-num">0</span>;
+    <span class="tok-kw">const</span> ui_owns: bool = s.ui_capturing <span class="tok-kw">or</span> <span class="tok-fn">mouseOverPanel</span>(f);
+    <span class="tok-kw">if</span> (!ui_owns <span class="tok-kw">and</span> !is_first_zero <span class="tok-kw">and</span> (m_div[<span class="tok-num">0</span>] != s.last_mouse[<span class="tok-num">0</span>] <span class="tok-kw">or</span> m_div[<span class="tok-num">1</span>] != s.last_mouse[<span class="tok-num">1</span>])) {
+        s.last_mouse = m_div;
+        s.divider_frac = <span class="tok-fn">clamp</span>(m_div[<span class="tok-num">0</span>] / vw, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+    }
+    <span class="tok-kw">const</span> divider_x: f32 = s.divider_frac * vw;
+    z.<span class="tok-fn">beginScissorMode</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, divider_x, vh);
+    s.sw_fb.<span class="tok-fn">present</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, vw, vh);
+    z.<span class="tok-fn">endScissorMode</span>(f.gl);
+
+    <span class="tok-comment">// Divider bar.</span>
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = divider_x - <span class="tok-num">1.5</span>, .y = <span class="tok-num">0</span>, .width = <span class="tok-num">3</span>, .height = vh },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } },
+    );
+
+    <span class="tok-comment">// ---- UI control panel (immediate-mode, drawn via the same gl) -----------</span>
+    <span class="tok-kw">const</span> ui: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">if</span> (ui.<span class="tok-fn">window</span>(<span class="tok-str">"Mandelbrot"</span>, .{ .initial_pos = .{ panel_x, panel_y }, .initial_size = .{ panel_w, panel_h } })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        ui.<span class="tok-fn">text</span>(<span class="tok-str">"ONE shader, 3 targets:"</span>, .{});
+        ui.<span class="tok-fn">text</span>(<span class="tok-str">"CPU (left) | GPU (right) | comptime (corner)"</span>, .{});
+        _ = ui.<span class="tok-fn">slider</span>(<span class="tok-str">"max iterations"</span>, &amp;s.max_iter, .{ .min = <span class="tok-num">20</span>, .max = <span class="tok-num">300</span> });
+        <span class="tok-kw">if</span> (ui.<span class="tok-fn">button</span>(<span class="tok-str">"reset view"</span>, .{})) {
+            s.center = initial_center;
+            s.zoom = initial_zoom;
+        }
+    }
+    s.ui_host.<span class="tok-fn">render</span>(f);
+
+    <span class="tok-comment">// ---- Labels + comptime corner inset (bottom-right): the third target ----</span>
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"CPU mandel_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ vw - <span class="tok-num">156</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"GPU mandel_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    <span class="tok-kw">const</span> inset_w: f32 = <span class="tok-fn">clamp</span>(<span class="tok-builtin">@min</span>(vw, vh) * <span class="tok-num">0.30</span>, <span class="tok-num">84</span>, <span class="tok-num">200</span>);
+    <span class="tok-kw">const</span> inset_h: f32 = inset_w * <span class="tok-fn">float</span>(corner_rows) / <span class="tok-fn">float</span>(corner_cols);
+    <span class="tok-kw">const</span> ix: f32 = vw - inset_w - <span class="tok-num">12</span>;
+    <span class="tok-kw">const</span> iy: f32 = vh - inset_h - <span class="tok-num">12</span>;
+    s.corner_fb.<span class="tok-fn">present</span>(f.gl, ix, iy, inset_w, inset_h);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = ix - <span class="tok-num">1</span>, .y = iy - <span class="tok-num">1</span>, .width = inset_w + <span class="tok-num">2</span>, .height = inset_h + <span class="tok-num">2</span> },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }, .outline = <span class="tok-num">1.0</span> },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ ix, iy - <span class="tok-num">22</span> },
+        <span class="tok-str">"comptime mandel_fs"</span>,
+        .{ .size = <span class="tok-num">16</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - Mandelbrot: CPU shader | GPU shader"</span>,
+            .width = width,
+            .height = height,
+            <span class="tok-comment">// responsive: CSS px == design px, so mouse AND touch coords are in</span>
+            <span class="tok-comment">// the same space the pan/zoom math expects (no .fit inverse gap).</span>
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/mandelbrot_fs.zig" data-lines="162"><figcaption><span>examples/mandelbrot_fs.zig</span><span>162 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/mandelbrot_fs.zig - Mandelbrot fragment shader in Zig.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Companion to `examples/mandelbrot.zig` (the CPU side).  Compiles</span>
+<span class="tok-comment">//! to SPIR-V via the Zig shader build pipeline, then through</span>
+<span class="tok-comment">//! `spirv-opt` / `spirv-cross` to GLSL ES 3.0, and is `@embedFile`'d</span>
+<span class="tok-comment">//! back into the host as `mandelbrot_fs.glsl`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema (Inputs / Outputs / Ubo) lives in `mandelbrot_fs_io.zig`.</span>
+<span class="tok-comment">//! Codegen reflects on that file to produce `mandelbrot_fs_externs`</span>
+<span class="tok-comment">//! (cache-side); the CPU host imports the io file directly.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Complex = zm.Complex;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> c_zero = zm.c_zero;
+<span class="tok-kw">const</span> cabs = zm.cabs;
+<span class="tok-kw">const</span> clamp01 = zm.clamp01;
+<span class="tok-kw">const</span> cmandelbrot_step = zm.cmandelbrot_step;
+<span class="tok-kw">const</span> cnorm2 = zm.cnorm2;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> fract = zm.fract;
+<span class="tok-kw">const</span> log2 = zm.log2;
+<span class="tok-kw">const</span> pow = zm.pow;
+<span class="tok-kw">const</span> vec2 = zm.vec2;
+<span class="tok-kw">const</span> vec3 = zm.vec3;
+<span class="tok-kw">const</span> vec4 = zm.vec4;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"mandelbrot_fs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"mandelbrot_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_io.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-comment">// ---- Helpers --------------------------------------------------------</span>
+<span class="tok-comment">// `pub fn` (NOT `pub inline fn`) - spirv-opt's `-O` inline pass does</span>
+<span class="tok-comment">// the work post-codegen.  Forcing inline at the Zig level breaks the</span>
+<span class="tok-comment">// SPIR-V structured-control-flow markers.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">hsv2rgb</span>(c: Vec3) Vec3 {
+    <span class="tok-kw">const</span> k: Vec = <span class="tok-fn">vec4</span>(<span class="tok-num">1.0</span>, <span class="tok-num">2.0</span> / <span class="tok-num">3.0</span>, <span class="tok-num">1.0</span> / <span class="tok-num">3.0</span>, <span class="tok-num">3.0</span>);
+    <span class="tok-kw">const</span> cxyz: Vec3 = <span class="tok-fn">vec3</span>(c[<span class="tok-num">0</span>], c[<span class="tok-num">0</span>], c[<span class="tok-num">0</span>]);
+    <span class="tok-kw">const</span> kxyz: Vec3 = <span class="tok-fn">vec3</span>(k[<span class="tok-num">0</span>], k[<span class="tok-num">1</span>], k[<span class="tok-num">2</span>]);
+    <span class="tok-kw">const</span> sum: Vec3 = cxyz + kxyz;
+    <span class="tok-kw">const</span> f: Vec3 = <span class="tok-fn">vec3</span>(<span class="tok-fn">fract</span>(sum[<span class="tok-num">0</span>]), <span class="tok-fn">fract</span>(sum[<span class="tok-num">1</span>]), <span class="tok-fn">fract</span>(sum[<span class="tok-num">2</span>]));
+    <span class="tok-kw">const</span> six: Vec3 = <span class="tok-fn">vec3</span>(<span class="tok-num">6.0</span>, <span class="tok-num">6.0</span>, <span class="tok-num">6.0</span>);
+    <span class="tok-kw">const</span> t: Vec3 = f * six - <span class="tok-fn">vec3</span>(<span class="tok-num">3.0</span>, <span class="tok-num">3.0</span>, <span class="tok-num">3.0</span>);
+    <span class="tok-kw">const</span> p: Vec3 = <span class="tok-fn">vec3</span>(<span class="tok-builtin">@abs</span>(t[<span class="tok-num">0</span>]), <span class="tok-builtin">@abs</span>(t[<span class="tok-num">1</span>]), <span class="tok-builtin">@abs</span>(t[<span class="tok-num">2</span>]));
+    <span class="tok-kw">const</span> p_clamped: Vec3 = <span class="tok-fn">vec3</span>(
+        <span class="tok-fn">clamp01</span>(p[<span class="tok-num">0</span>] - <span class="tok-num">1.0</span>),
+        <span class="tok-fn">clamp01</span>(p[<span class="tok-num">1</span>] - <span class="tok-num">1.0</span>),
+        <span class="tok-fn">clamp01</span>(p[<span class="tok-num">2</span>] - <span class="tok-num">1.0</span>),
+    );
+    <span class="tok-kw">const</span> kxxx: Vec3 = <span class="tok-fn">vec3</span>(k[<span class="tok-num">0</span>], k[<span class="tok-num">0</span>], k[<span class="tok-num">0</span>]);
+    <span class="tok-kw">const</span> sat: Vec3 = <span class="tok-fn">vec3</span>(c[<span class="tok-num">1</span>], c[<span class="tok-num">1</span>], c[<span class="tok-num">1</span>]);
+    <span class="tok-kw">const</span> mixed: Vec3 = kxxx + (p_clamped - kxxx) * sat;
+    <span class="tok-kw">const</span> val: Vec3 = <span class="tok-fn">vec3</span>(c[<span class="tok-num">2</span>], c[<span class="tok-num">2</span>], c[<span class="tok-num">2</span>]);
+    <span class="tok-kw">return</span> mixed * val;
+}
+
+<span class="tok-comment">// ---- Pure-logic kernel -----------------------------------------------</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Takes an `Io` by value (varying inputs + uniforms), returns an</span>
+<span class="tok-comment">// `Out` by value (stage outputs).  Compiles on every target Zig</span>
+<span class="tok-comment">// supports - SPIR-V backend produces a fragment shader, x86_64/wasm</span>
+<span class="tok-comment">// targets get callable Zig that `raster_shader.dispatchFragmentShader`</span>
+<span class="tok-comment">// runs per pixel.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Pattern (see `src/notes/software_shaders.md`):</span>
+<span class="tok-comment">//   - The signature is `pub fn shaderMain(io: Io) Out` - return-by-</span>
+<span class="tok-comment">//     value is required by SPIR-V's Logical addressing model;</span>
+<span class="tok-comment">//     pointer-out params don't survive spirv-val.</span>
+<span class="tok-comment">//   - The name is `shaderMain`, NOT `main`.  Zig's `std.start.zig`</span>
+<span class="tok-comment">//     auto-exports a `_start()` symbol if the root module declares</span>
+<span class="tok-comment">//     `main`, and `_start` requires `callconv(.naked)` which the</span>
+<span class="tok-comment">//     SPIR-V backend rejects.  Using a different name keeps</span>
+<span class="tok-comment">//     std.start dormant.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-comment">// Pixel -&gt; complex plane.  At u.zoom=1.0 the canvas height spans</span>
+    <span class="tok-comment">// 4.0 units; halving u.zoom doubles the span.  Y is flipped:</span>
+    <span class="tok-comment">// screen Y grows downward, imaginary axis grows upward.  The CPU</span>
+    <span class="tok-comment">// side's `screenToComplex` flips with the same sign so mouse</span>
+    <span class="tok-comment">// interactions (drag, zoom-about-cursor) land where the user</span>
+    <span class="tok-comment">// points.</span>
+    <span class="tok-kw">const</span> frag: Vec2 = io_in.frag_tex_coord * io_in.u.resolution;
+    <span class="tok-kw">const</span> half_res: Vec2 = <span class="tok-fn">vec2</span>(io_in.u.resolution[<span class="tok-num">0</span>] * <span class="tok-num">0.5</span>, io_in.u.resolution[<span class="tok-num">1</span>] * <span class="tok-num">0.5</span>);
+    <span class="tok-kw">const</span> scale: f32 = <span class="tok-num">4.0</span> / (io_in.u.zoom * io_in.u.resolution[<span class="tok-num">1</span>]);
+    <span class="tok-kw">const</span> c: Vec2 = <span class="tok-fn">vec2</span>(
+        io_in.u.center[<span class="tok-num">0</span>] + (frag[<span class="tok-num">0</span>] - half_res[<span class="tok-num">0</span>]) * scale,
+        io_in.u.center[<span class="tok-num">1</span>] - (frag[<span class="tok-num">1</span>] - half_res[<span class="tok-num">1</span>]) * scale,
+    );
+
+    <span class="tok-comment">// Mandelbrot iteration: z_{n+1} = z_n^2 + c.  `Complex` is a</span>
+    <span class="tok-comment">// Vec2 alias with `cmul` and native `+`.  Reads like the textbook</span>
+    <span class="tok-comment">// math; same GLSL output as a hand-rolled version (spirv-opt</span>
+    <span class="tok-comment">// inlines the `cmul` call).</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// `escaped` is a u32 flag instead of `bool` - Zig's SPIR-V codegen</span>
+    <span class="tok-comment">// emits `bool` storage as `u1` / `uint8_t`, which WebGL2 rejects.</span>
+    <span class="tok-comment">// `+%=` is the wrapping increment; without it Zig emits an</span>
+    <span class="tok-comment">// overflow check.</span>
+    <span class="tok-kw">const</span> c_complex: Complex = c;
+    <span class="tok-kw">var</span> z: Complex = c_zero;
+    <span class="tok-kw">var</span> n: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> escaped: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; <span class="tok-num">1024</span>) : (i +%= <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (<span class="tok-fn">float</span>(i) &gt;= io_in.u.max_iter) {
+            <span class="tok-kw">break</span>;
+        }
+        <span class="tok-comment">// Escape radius^2 = 128 (|z| &gt; ~11.3). Large enough that the</span>
+        <span class="tok-comment">// log-log smooth-iteration term below stays accurate, small enough</span>
+        <span class="tok-comment">// that squaring in cmandelbrot_step CANNOT overflow f32 to inf: a</span>
+        <span class="tok-comment">// bailout at |z|^2=256 (the old value) let z reach ~16, and on the</span>
+        <span class="tok-comment">// boundary the NEXT square plus accumulated growth could push cmul</span>
+        <span class="tok-comment">// to inf -&gt; inf-inf = NaN -&gt; `NaN &gt; 256` is false -&gt; escape never</span>
+        <span class="tok-comment">// fires -&gt; the loop runs out with NaN -&gt; the whole pixel renders</span>
+        <span class="tok-comment">// white (the turn-901 mandelbrot WHITE bug). 128 keeps every</span>
+        <span class="tok-comment">// intermediate finite on the no-spirv-opt WGSL path.</span>
+        <span class="tok-kw">if</span> (<span class="tok-fn">cnorm2</span>(z) &gt; <span class="tok-num">128.0</span>) {
+            escaped = <span class="tok-num">1</span>;
+            <span class="tok-kw">break</span>;
+        }
+        z = <span class="tok-fn">cmandelbrot_step</span>(z, c_complex);
+        n += <span class="tok-num">1.0</span>;
+    }
+
+    <span class="tok-kw">if</span> (escaped == <span class="tok-num">0</span>) {
+        out.out_color = <span class="tok-fn">vec4</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>);
+    } <span class="tok-kw">else</span> {
+        <span class="tok-comment">// Smooth iteration count.  Without this you get visible bands</span>
+        <span class="tok-comment">// at every integer escape boundary.</span>
+        <span class="tok-kw">const</span> mod_z: f32 = <span class="tok-fn">cabs</span>(z);
+        <span class="tok-kw">const</span> nu: f32 = <span class="tok-fn">log2</span>(<span class="tok-fn">log2</span>(mod_z));
+        <span class="tok-kw">const</span> smoothed: f32 = n + <span class="tok-num">1.0</span> - nu;
+        <span class="tok-comment">// clamp01 guards the smooth-iteration tail: a fast escape can</span>
+        <span class="tok-comment">// drive `smoothed` negative, and pow(negative, 0.4) is NaN -</span>
+        <span class="tok-comment">// which a GPU renders as a hole (the clear color shows through,</span>
+        <span class="tok-comment">// so the fractal looks absent).  Clamping keeps every pixel</span>
+        <span class="tok-comment">// finite and in-gamut.</span>
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-fn">clamp01</span>(smoothed / io_in.u.max_iter);
+
+        <span class="tok-comment">// Hue cycles through spectrum; `pow(t, 0.4)` lifts the dark</span>
+        <span class="tok-comment">// tail so escape regions don't go pitch black.</span>
+        <span class="tok-kw">const</span> col: Vec3 = <span class="tok-fn">hsv2rgb</span>(<span class="tok-fn">vec3</span>(<span class="tok-num">0.85</span> + <span class="tok-num">0.4</span> * t, <span class="tok-num">0.7</span>, <span class="tok-fn">pow</span>(t, <span class="tok-num">0.4</span>)));
+        out.out_color = <span class="tok-fn">vec4</span>(col[<span class="tok-num">0</span>], col[<span class="tok-num">1</span>], col[<span class="tok-num">2</span>], <span class="tok-num">1.0</span>);
+    }
+
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-comment">// ---- GPU entry-point installer --------------------------------------</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// On SPIR-V targets this materializes an `export fn entry() callconv(</span>
+<span class="tok-comment">// .spirv_fragment)` wrapper that reads externs into Io, calls</span>
+<span class="tok-comment">// shaderMain, writes the returned Out's fields to extern outputs.</span>
+<span class="tok-comment">// On CPU targets this is a no-op - the caller (raster_shader.dispatch-</span>
+<span class="tok-comment">// FragmentShader) invokes shaderMain(io) directly per pixel.</span>
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/mandelbrot_fs_io.zig" data-lines="51"><figcaption><span>examples/mandelbrot_fs_io.zig</span><span>51 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/mandelbrot_fs_io.zig - schema for the Mandelbrot</span>
+<span class="tok-comment">//! fragment shader.  Declares the data interface (Inputs, Outputs,</span>
+<span class="tok-comment">//! Ubo) consumed by `mandelbrot_fs.zig` and shared with the CPU</span>
+<span class="tok-comment">//! host `mandelbrot.zig` / `mandelbrot_split.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! There is only ONE human-edited declaration of each shape; codegen</span>
+<span class="tok-comment">//! reflects on this file to emit a matching extern block for the</span>
+<span class="tok-comment">//! shader body, and the CPU side imports this file directly.  Drift</span>
+<span class="tok-comment">//! between sides is impossible.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+
+<span class="tok-comment">/// Varying inputs from the engine default VS.  Field names + order</span>
+<span class="tok-comment">/// MUST match `src/shaders/default_common_io.zig`'s `Interp`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+    <span class="tok-comment">// NOTE: this FS computes its own color from frag_tex_coord and does NOT</span>
+    <span class="tok-comment">// read a vertex color, so `frag_color` is intentionally NOT declared. (It</span>
+    <span class="tok-comment">// was previously here to mirror the 2D vertex format, but an FS must only</span>
+    <span class="tok-comment">// declare the varyings it consumes - otherwise its @location inputs don't</span>
+    <span class="tok-comment">// match a minimal fullscreen VS's outputs, and WebGPU rejects the pipeline.)</span>
+};
+
+<span class="tok-comment">/// Stage output - the rendered fractal colour.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    out_color: Vec,
+};
+
+<span class="tok-comment">/// UBO layout.  std140 alignment rules: vec2 needs 8-byte alignment,</span>
+<span class="tok-comment">/// the whole block must round to vec4 (16-byte) alignment.  Explicit</span>
+<span class="tok-comment">/// `_padN` fields enforce the right offsets - the comptime check in</span>
+<span class="tok-comment">/// `UniformBuffer(T)` catches "forgot trailing pad" drift via</span>
+<span class="tok-comment">/// `@sizeOf(T) % 16 == 0`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// Complex-plane center the view is anchored at.</span>
+    center: Vec2,
+    <span class="tok-comment">/// View scale (1.0 -&gt; canvas height spans 4 units of imaginary axis).</span>
+    zoom: f32,
+    <span class="tok-comment">/// std140: vec2 needs 8-byte alignment, so we pad 4 bytes here</span>
+    <span class="tok-comment">/// before `resolution`.</span>
+    _pad0: f32 = <span class="tok-num">0</span>,
+    <span class="tok-comment">/// Canvas pixel size, used to undo the pixel grid.</span>
+    resolution: Vec2,
+    <span class="tok-comment">/// Iteration cap.  GLSL ES needs a constant loop bound, so the</span>
+    <span class="tok-comment">/// shader's `for` runs to 1024; this is the runtime gate.</span>
+    max_iter: f32,
+    <span class="tok-comment">/// std140: struct size must round to 16 bytes.</span>
+    _pad1: f32 = <span class="tok-num">0</span>,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/trivial_vs.zig" data-lines="34"><figcaption><span>examples/trivial_vs.zig</span><span>34 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/trivial_vs.zig - minimal vertex shader for the</span>
+<span class="tok-comment">//! wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes</span>
+<span class="tok-comment">//! clip-space positions; VS forwards them with w=1.  UV varies to</span>
+<span class="tok-comment">//! the FS unchanged.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema: `trivial_vs_io.zig`.  No Ubo, no Samplers.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> vec4 = zm.vec4;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    out.position = <span class="tok-fn">vec4</span>(
+        io_in.vertex_position[<span class="tok-num">0</span>],
+        io_in.vertex_position[<span class="tok-num">1</span>],
+        <span class="tok-num">0.0</span>,
+        <span class="tok-num">1.0</span>,
+    );
+    out.frag_tex_coord = io_in.vertex_tex_coord;
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/trivial_vs_io.zig" data-lines="23"><figcaption><span>examples/trivial_vs_io.zig</span><span>23 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/trivial_vs_io.zig - schema for the trivial VS used</span>
+<span class="tok-comment">//! by the wgpu_bringup to validate Phase D1 (loadShader) end-to-end.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! No Ubo, no Samplers - purest possible shape.  Vertex positions</span>
+<span class="tok-comment">//! arrive already in clip space (-1..+1); the VS passes them through.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Vertex attributes - matches the Vertex2D layout that loadShader</span>
+<span class="tok-comment">/// hardcodes: pos: vec2 at location 0, uv: vec2 at location 1.</span>
+<span class="tok-comment">/// The color attribute at location 2 is part of the layout (so the</span>
+<span class="tok-comment">/// vertex buffer stride matches) but not consumed by this VS.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {
+    vertex_position: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">0</span>),
+    vertex_tex_coord: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">1</span>),
+};
+
+<span class="tok-comment">/// Pass-through outputs.  frag_tex_coord becomes a varying to the FS.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+</code></pre></figure>
+</body>
+</html>

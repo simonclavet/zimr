@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>langton_ant — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>langton_ant</h1>
+<figure class="code src-file" data-path="examples/langton_ant/langton_ant.zig" data-lines="604"><figcaption><span>examples/langton_ant/langton_ant.zig</span><span>604 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! langton_ant - Langton's Ant, the two-rule cellular automaton whose ant paints</span>
+<span class="tok-comment">//! chaos for ~10,000 steps and then, astonishingly, builds a repeating diagonal</span>
+<span class="tok-comment">//! "highway" forever. The whole rule is four lines: on a white cell turn right, on</span>
+<span class="tok-comment">//! a black cell turn left; flip the cell you leave; step forward one square.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! To make the rule legible we draw the last ten TURNS as a red polyline with a</span>
+<span class="tok-comment">//! little L/R glyph at each turn, so you can read "white here, so it turned right"</span>
+<span class="tok-comment">//! straight off the screen. Pan and zoom (mouse wheel + drag, or pinch + drag on a</span>
+<span class="tok-comment">//! phone) to follow the ant in close, and slow the speed right down to watch one</span>
+<span class="tok-comment">//! move at a time.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Controls:</span>
+<span class="tok-comment">//!   space            pause / resume</span>
+<span class="tok-comment">//!   . or right       single step (while paused)</span>
+<span class="tok-comment">//!   1-9              speed: steps taken per frame</span>
+<span class="tok-comment">//!   f                toggle follow-the-ant camera</span>
+<span class="tok-comment">//!   r                reset</span>
+<span class="tok-comment">//!   wheel / +  -     zoom     |   left-drag or pinch   zoom &amp; pan</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> allocPrint = std.fmt.allocPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> tau = zm.tau;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> atan2Rad = zm.atan2Rad;
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> grid_w = <span class="tok-num">200</span>;
+<span class="tok-kw">const</span> grid_h = <span class="tok-num">200</span>;
+<span class="tok-kw">const</span> path_len = <span class="tok-num">28</span>; <span class="tok-comment">// footsteps kept for the trail polyline</span>
+
+<span class="tok-kw">const</span> bg_col: Color = .{ .r = <span class="tok-num">18</span>, .g = <span class="tok-num">21</span>, .b = <span class="tok-num">29</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> white_col: Color = .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">231</span>, .b = <span class="tok-num">240</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> grid_col: Color = .{ .r = <span class="tok-num">40</span>, .g = <span class="tok-num">46</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> ant_col: Color = .{ .r = <span class="tok-num">250</span>, .g = <span class="tok-num">204</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> turn_r_col: Color = .{ .r = <span class="tok-num">236</span>, .g = <span class="tok-num">72</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> }; <span class="tok-comment">// right turn = red</span>
+<span class="tok-kw">const</span> turn_l_col: Color = .{ .r = <span class="tok-num">90</span>, .g = <span class="tok-num">160</span>, .b = <span class="tok-num">240</span>, .a = <span class="tok-num">255</span> }; <span class="tok-comment">// left turn = blue</span>
+<span class="tok-kw">const</span> btn_col: Color = .{ .r = <span class="tok-num">34</span>, .g = <span class="tok-num">40</span>, .b = <span class="tok-num">54</span>, .a = <span class="tok-num">235</span> };
+<span class="tok-kw">const</span> btn_hot_col: Color = .{ .r = <span class="tok-num">54</span>, .g = <span class="tok-num">64</span>, .b = <span class="tok-num">86</span>, .a = <span class="tok-num">245</span> };
+<span class="tok-kw">const</span> btn_txt_col: Color = .{ .r = <span class="tok-num">210</span>, .g = <span class="tok-num">216</span>, .b = <span class="tok-num">228</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// A screen-space rectangle, for the on-screen control buttons (this runs on</span>
+<span class="tok-comment">/// phones with no keyboard, so every action needs a tappable target).</span>
+<span class="tok-kw">const</span> Rect = <span class="tok-kw">struct</span> {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">contains</span>(self: Rect, p: Vec2) bool {
+        <span class="tok-kw">return</span> p[<span class="tok-num">0</span>] &gt;= self.x <span class="tok-kw">and</span> p[<span class="tok-num">0</span>] &lt;= self.x + self.w <span class="tok-kw">and</span>
+            p[<span class="tok-num">1</span>] &gt;= self.y <span class="tok-kw">and</span> p[<span class="tok-num">1</span>] &lt;= self.y + self.h;
+    }
+};
+
+<span class="tok-comment">/// A heading. Turning is just stepping around this ring, so the two rules become</span>
+<span class="tok-comment">/// `dir.right()` and `dir.left()`; moving is a switch that nudges x/y by one.</span>
+<span class="tok-kw">const</span> Dir = <span class="tok-kw">enum</span>(u2) {
+    up,
+    right,
+    down,
+    left,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">turnRight</span>(self: Dir) Dir {
+        <span class="tok-kw">return</span> <span class="tok-builtin">@fromBackingInt</span>(<span class="tok-builtin">@intCast</span>((<span class="tok-builtin">@backingInt</span>(self) +% <span class="tok-num">1</span>) &amp; <span class="tok-num">3</span>));
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">turnLeft</span>(self: Dir) Dir {
+        <span class="tok-kw">return</span> <span class="tok-builtin">@fromBackingInt</span>(<span class="tok-builtin">@intCast</span>((<span class="tok-builtin">@backingInt</span>(self) +% <span class="tok-num">3</span>) &amp; <span class="tok-num">3</span>));
+    }
+};
+
+<span class="tok-comment">/// One recorded turn: the cell it happened on, and which way the ant swung.</span>
+<span class="tok-kw">const</span> Turn = <span class="tok-kw">struct</span> {
+    x: i32,
+    y: i32,
+    <span class="tok-comment">/// true = turned right (was on white), false = turned left (was on black).</span>
+    right: bool,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    scratch: std.heap.ArenaAllocator,
+    gestures: z.GesturesState = .{},
+
+    <span class="tok-comment">/// The board: false = black, true = white. Everything starts white.</span>
+    cells: [grid_w * grid_h]bool = <span class="tok-builtin">@splat</span>(true),
+    ant_x: i32 = grid_w / <span class="tok-num">2</span>,
+    ant_y: i32 = grid_h / <span class="tok-num">2</span>,
+    dir: Dir = .up,
+    steps: u64 = <span class="tok-num">0</span>,
+
+    <span class="tok-comment">/// The ant's last `path_len` footsteps, as an adjacent chain -&gt; a clean red</span>
+    <span class="tok-comment">/// polyline (consecutive cells always touch, so it never jumps across the</span>
+    <span class="tok-comment">/// board the way connecting scattered turn-cells did). Ring buffer.</span>
+    path: [path_len]Turn = <span class="tok-builtin">@splat</span>(.{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .right = false }),
+    path_head: usize = <span class="tok-num">0</span>,
+    path_n: usize = <span class="tok-num">0</span>,
+
+    paused: bool = true,
+    <span class="tok-comment">/// Simulation rate in steps per second. Below ~60 this is driven by a time</span>
+    <span class="tok-comment">/// accumulator so a slow rate is genuinely slow (1 = one step every second);</span>
+    <span class="tok-comment">/// above 60 we run several steps per frame. Ranges 1 .. 4096.</span>
+    steps_per_sec: f32 = <span class="tok-num">1</span>,
+    <span class="tok-comment">/// Seconds owed toward the next step, for the slow (sub-60/s) regime.</span>
+    step_accum: f64 = <span class="tok-num">0</span>,
+
+    <span class="tok-comment">/// Camera: which cell sits at the screen centre, and pixels per cell.</span>
+    cam_x: f32 = grid_w / <span class="tok-num">2</span>,
+    cam_y: f32 = grid_h / <span class="tok-num">2</span>,
+    zoom: f32 = <span class="tok-num">6.0</span>,
+    follow: bool = true,
+
+    <span class="tok-comment">/// Drag-pan bookkeeping. We anchor the world (cell) point grabbed at press and</span>
+    <span class="tok-comment">/// hold it under the cursor every frame -- absolute, so it can't drift, the way</span>
+    <span class="tok-comment">/// mandel_sidebyside does it. Incremental `cam -= delta/zoom` was the broken</span>
+    <span class="tok-comment">/// version.</span>
+    dragging: bool = false,
+    drag_anchor: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">cell</span>(self: *<span class="tok-kw">const</span> State, x: i32, y: i32) bool {
+        <span class="tok-kw">return</span> self.cells[<span class="tok-builtin">@intCast</span>(y * grid_w + x)];
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">setCell</span>(self: *State, x: i32, y: i32, v: bool) void {
+        self.cells[<span class="tok-builtin">@intCast</span>(y * grid_w + x)] = v;
+    }
+};
+
+<span class="tok-comment">/// Push into a fixed ring buffer: writes at head, advances, grows n up to cap.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ringPush</span>(
+    <span class="tok-kw">comptime</span> cap: usize,
+    buf: *[cap]Turn,
+    head: *usize,
+    n: *usize,
+    t: Turn,
+) void {
+    buf[head.*] = t;
+    head.* = (head.* + <span class="tok-num">1</span>) % cap;
+    <span class="tok-kw">if</span> (n.* &lt; cap) {
+        n.* += <span class="tok-num">1</span>;
+    }
+}
+
+<span class="tok-comment">/// One move of the ant, i.e. the entire simulation.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">step</span>(s: *State) void {
+    <span class="tok-kw">const</span> on_white: bool = s.<span class="tok-fn">cell</span>(s.ant_x, s.ant_y);
+    s.dir = <span class="tok-kw">if</span> (on_white) s.dir.<span class="tok-fn">turnRight</span>() <span class="tok-kw">else</span> s.dir.<span class="tok-fn">turnLeft</span>();
+    s.<span class="tok-fn">setCell</span>(s.ant_x, s.ant_y, !on_white);
+
+    <span class="tok-comment">// Record the cell the ant is standing on as a footstep (for the connected</span>
+    <span class="tok-comment">// trail line) and as a turn (for the L/R glyph). Footsteps are consecutive</span>
+    <span class="tok-comment">// cells, so the line through them is always a clean adjacent path.</span>
+    <span class="tok-kw">const</span> here: Turn = .{ .x = s.ant_x, .y = s.ant_y, .right = on_white };
+    <span class="tok-fn">ringPush</span>(path_len, &amp;s.path, &amp;s.path_head, &amp;s.path_n, here);
+
+    <span class="tok-kw">switch</span> (s.dir) {
+        .up =&gt; s.ant_y -= <span class="tok-num">1</span>,
+        .right =&gt; s.ant_x += <span class="tok-num">1</span>,
+        .down =&gt; s.ant_y += <span class="tok-num">1</span>,
+        .left =&gt; s.ant_x -= <span class="tok-num">1</span>,
+    }
+    <span class="tok-comment">// Wrap at the edges so it runs forever.</span>
+    s.ant_x = <span class="tok-builtin">@mod</span>(s.ant_x, grid_w);
+    s.ant_y = <span class="tok-builtin">@mod</span>(s.ant_y, grid_h);
+    s.steps += <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">reset</span>(s: *State) void {
+    s.cells = <span class="tok-builtin">@splat</span>(true);
+    s.ant_x = grid_w / <span class="tok-num">2</span>;
+    s.ant_y = grid_h / <span class="tok-num">2</span>;
+    s.dir = .up;
+    s.steps = <span class="tok-num">0</span>;
+    s.path_n = <span class="tok-num">0</span>;
+    s.path_head = <span class="tok-num">0</span>;
+    s.cam_x = grid_w / <span class="tok-num">2</span>;
+    s.cam_y = grid_h / <span class="tok-num">2</span>;
+    s.follow = true;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">20</span>),
+        .scratch = std.heap.ArenaAllocator.<span class="tok-fn">init</span>(gpa),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.scratch.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Floor a coordinate to an i32 cell index (the visible-window maths needs ints).</span>
+<span class="tok-comment">/// @trunc would round toward zero, which differs from floor for the negative</span>
+<span class="tok-comment">/// coordinates the camera can reach, so we floor first then convert.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">floorToInt</span>(v: f32) i32 {
+    <span class="tok-comment">// lint:off int-from-float: floor semantics are intentional here, not @trunc</span>
+    <span class="tok-kw">return</span> <span class="tok-builtin">@intFromFloat</span>(<span class="tok-builtin">@floor</span>(v));
+}
+
+<span class="tok-comment">/// The on-screen control bar: a row of buttons across the bottom. Returns the rect</span>
+<span class="tok-comment">/// for button `i` of `count`, sized to the window so it works at any size.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">barButton</span>(f: *z.Frame, i: usize, count: usize) Rect {
+    <span class="tok-kw">const</span> sw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> sh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> pad: f32 = <span class="tok-num">8.0</span>;
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">40.0</span>, sh * <span class="tok-num">0.09</span>);
+    <span class="tok-kw">const</span> total_w: f32 = sw - pad * <span class="tok-num">2.0</span>;
+    <span class="tok-kw">const</span> w: f32 = (total_w - pad * (<span class="tok-fn">float</span>(count) - <span class="tok-num">1.0</span>)) / <span class="tok-fn">float</span>(count);
+    <span class="tok-kw">return</span> .{
+        .x = pad + <span class="tok-fn">float</span>(i) * (w + pad),
+        .y = sh - h - pad,
+        .w = w,
+        .h = h,
+    };
+}
+
+<span class="tok-comment">/// Draw one button and report whether it was tapped this frame.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">button</span>(
+    f: *z.Frame,
+    s: *State,
+    r: Rect,
+    label: []<span class="tok-kw">const</span> u8,
+    tap: ?Vec2,
+) bool {
+    <span class="tok-kw">const</span> hot: bool = <span class="tok-kw">if</span> (tap) |p| r.<span class="tok-fn">contains</span>(p) <span class="tok-kw">else</span> false;
+    f.gl.<span class="tok-fn">rect</span>(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = <span class="tok-kw">if</span> (hot) btn_hot_col <span class="tok-kw">else</span> btn_col });
+    <span class="tok-comment">// Centre the label by eye: ~9 px per glyph at size 16.</span>
+    <span class="tok-kw">const</span> approx_w: f32 = <span class="tok-fn">float</span>(label.len) * <span class="tok-num">9.0</span>;
+    <span class="tok-kw">const</span> tx: f32 = r.x + (r.w - approx_w) / <span class="tok-num">2.0</span>;
+    <span class="tok-kw">const</span> ty: f32 = r.y + r.h / <span class="tok-num">2.0</span> - <span class="tok-num">8.0</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ tx, ty }, label, .{ .size = <span class="tok-num">16</span>, .color = btn_txt_col, .font = &amp;s.font });
+    <span class="tok-kw">return</span> hot;
+}
+
+<span class="tok-comment">/// -1, 0, or +1 as a float, for the sign of an integer delta.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">signf</span>(v: i32) f32 {
+    <span class="tok-kw">if</span> (v &gt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-num">1.0</span>;
+    }
+    <span class="tok-kw">if</span> (v &lt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> -<span class="tok-num">1.0</span>;
+    }
+    <span class="tok-kw">return</span> <span class="tok-num">0.0</span>;
+}
+
+<span class="tok-comment">/// Unit step from cell `a` to cell `b` as a direction (-1,0,1 each axis).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">dirBetween</span>(ax: i32, ay: i32, bx: i32, by: i32) Vec2 {
+    <span class="tok-kw">return</span> .{ <span class="tok-fn">signf</span>(bx - ax), <span class="tok-fn">signf</span>(by - ay) };
+}
+
+<span class="tok-comment">/// Straight half-cell stroke from cell centre `cx,cy` outward (toward=true) or back</span>
+<span class="tok-comment">/// (toward=false) along direction `d`. Used for straight-through cells and for the</span>
+<span class="tok-comment">/// two half-cells that lead into and out of a rounded corner.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawHalfStep</span>(
+    f: *z.Frame,
+    s: *State,
+    cx: i32,
+    cy: i32,
+    d: Vec2,
+    toward: bool,
+    col: Color,
+) void {
+    <span class="tok-kw">const</span> cxf: f32 = <span class="tok-fn">float</span>(cx) + <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> cyf: f32 = <span class="tok-fn">float</span>(cy) + <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> sign: f32 = <span class="tok-kw">if</span> (toward) <span class="tok-num">0.5</span> <span class="tok-kw">else</span> -<span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> a: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, cxf, cyf);
+    <span class="tok-kw">const</span> b: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, cxf + sign * d[<span class="tok-num">0</span>], cyf + sign * d[<span class="tok-num">1</span>]);
+    f.gl.<span class="tok-fn">line</span>(a, b, .{ .color = col, .thickness = <span class="tok-num">3.0</span> });
+}
+
+<span class="tok-comment">/// Draw a rounded corner as a quarter-arc through cell centre `cx,cy`, tangent to</span>
+<span class="tok-comment">/// the incoming (`ind`) and outgoing (`outd`) directions. Centred on the inside</span>
+<span class="tok-comment">/// corner `C + 0.5*(outd - ind)`, radius half a cell, swept the short way. Drawn as</span>
+<span class="tok-comment">/// our own short polyline (circleSectorLines would add radial cap spokes).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawCornerArc</span>(
+    f: *z.Frame,
+    s: *State,
+    cx: i32,
+    cy: i32,
+    ind: Vec2,
+    outd: Vec2,
+    col: Color,
+) void {
+    <span class="tok-kw">const</span> cxf: f32 = <span class="tok-fn">float</span>(cx) + <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> cyf: f32 = <span class="tok-fn">float</span>(cy) + <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> ox: f32 = cxf + <span class="tok-num">0.5</span> * (outd[<span class="tok-num">0</span>] - ind[<span class="tok-num">0</span>]);
+    <span class="tok-kw">const</span> oy: f32 = cyf + <span class="tok-num">0.5</span> * (outd[<span class="tok-num">1</span>] - ind[<span class="tok-num">1</span>]);
+    <span class="tok-kw">const</span> entry_ang: f32 = <span class="tok-fn">atan2Rad</span>(cyf - <span class="tok-num">0.5</span> * ind[<span class="tok-num">1</span>] - oy, cxf - <span class="tok-num">0.5</span> * ind[<span class="tok-num">0</span>] - ox);
+    <span class="tok-kw">const</span> exit_ang: f32 = <span class="tok-fn">atan2Rad</span>(cyf + <span class="tok-num">0.5</span> * outd[<span class="tok-num">1</span>] - oy, cxf + <span class="tok-num">0.5</span> * outd[<span class="tok-num">0</span>] - ox);
+    <span class="tok-kw">var</span> sweep: f32 = exit_ang - entry_ang;
+    <span class="tok-kw">while</span> (sweep &gt; zm.pi) {
+        sweep -= tau;
+    }
+    <span class="tok-kw">while</span> (sweep &lt; -zm.pi) {
+        sweep += tau;
+    }
+
+    <span class="tok-kw">const</span> segs: usize = <span class="tok-num">8</span>;
+    <span class="tok-kw">var</span> prev_pt: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, ox + <span class="tok-num">0.5</span> * <span class="tok-builtin">@cos</span>(entry_ang), oy + <span class="tok-num">0.5</span> * <span class="tok-builtin">@sin</span>(entry_ang));
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (i &lt;= segs) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> frac: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(i))) / <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(segs)));
+        <span class="tok-kw">const</span> a: f32 = entry_ang + sweep * frac;
+        <span class="tok-kw">const</span> pt: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, ox + <span class="tok-num">0.5</span> * <span class="tok-builtin">@cos</span>(a), oy + <span class="tok-num">0.5</span> * <span class="tok-builtin">@sin</span>(a));
+        f.gl.<span class="tok-fn">line</span>(prev_pt, pt, .{ .color = col, .thickness = <span class="tok-num">3.0</span> });
+        prev_pt = pt;
+    }
+}
+
+<span class="tok-comment">/// Cell coordinates -&gt; screen pixels, through the camera.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">worldToScreen</span>(s: *<span class="tok-kw">const</span> State, f: *z.Frame, cx: f32, cy: f32) Vec2 {
+    <span class="tok-kw">const</span> sw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> sh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">return</span> .{
+        sw / <span class="tok-num">2.0</span> + (cx - s.cam_x) * s.zoom,
+        sh / <span class="tok-num">2.0</span> + (cy - s.cam_y) * s.zoom,
+    };
+}
+
+<span class="tok-comment">/// Screen pixels -&gt; cell coordinates: the exact inverse of worldToScreen. Pan and</span>
+<span class="tok-comment">/// zoom both work by holding a screen point's world position fixed, so they need</span>
+<span class="tok-comment">/// this. Getting it wrong (or out of sync with worldToScreen) is what makes pan</span>
+<span class="tok-comment">/// drift or run backwards.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">screenToWorld</span>(s: *<span class="tok-kw">const</span> State, f: *z.Frame, p: Vec2) Vec2 {
+    <span class="tok-kw">const</span> sw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> sh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">return</span> .{
+        s.cam_x + (p[<span class="tok-num">0</span>] - sw / <span class="tok-num">2.0</span>) / s.zoom,
+        s.cam_y + (p[<span class="tok-num">1</span>] - sh / <span class="tok-num">2.0</span>) / s.zoom,
+    };
+}
+
+<span class="tok-comment">/// Apply a zoom factor while holding the world point under `focus` fixed on</span>
+<span class="tok-comment">/// screen. Same shape as mandel_sidebyside: read the world point before, scale,</span>
+<span class="tok-comment">/// read it after, shift the camera by the difference.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">zoomAbout</span>(s: *State, f: *z.Frame, factor: f32, focus: Vec2) void {
+    <span class="tok-kw">const</span> before: Vec2 = <span class="tok-fn">screenToWorld</span>(s, f, focus);
+    s.zoom = <span class="tok-fn">clamp</span>(s.zoom * factor, <span class="tok-num">1.0</span>, <span class="tok-num">40.0</span>);
+    <span class="tok-kw">const</span> after: Vec2 = <span class="tok-fn">screenToWorld</span>(s, f, focus);
+    s.cam_x += before[<span class="tok-num">0</span>] - after[<span class="tok-num">0</span>];
+    s.cam_y += before[<span class="tok-num">1</span>] - after[<span class="tok-num">1</span>];
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// Keyboard (desktop). Harmless on a phone, which has none -- the on-screen</span>
+    <span class="tok-comment">// buttons in update() cover the same actions.</span>
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .space)) {
+        s.paused = !s.paused;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .r)) {
+        <span class="tok-fn">reset</span>(s);
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .f)) {
+        s.follow = !s.follow;
+    }
+    <span class="tok-kw">if</span> (s.paused <span class="tok-kw">and</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .period) <span class="tok-kw">or</span> z.<span class="tok-fn">isKeyPressed</span>(f.input, .right))) {
+        <span class="tok-fn">step</span>(s);
+    }
+    <span class="tok-kw">const</span> digits = [_]z.KeyboardKey{ .one, .two, .three, .four, .five, .six, .seven, .eight, .nine };
+    <span class="tok-kw">const</span> rate_ladder = [_]f32{ <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">5</span>, <span class="tok-num">10</span>, <span class="tok-num">30</span>, <span class="tok-num">60</span>, <span class="tok-num">240</span>, <span class="tok-num">1000</span>, <span class="tok-num">4000</span> };
+    <span class="tok-kw">for</span> (digits, <span class="tok-num">0</span>..) |k, n| {
+        <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, k)) {
+            s.steps_per_sec = rate_ladder[n];
+        }
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .equal)) {
+        <span class="tok-fn">zoomAbout</span>(s, f, <span class="tok-num">1.15</span>, .{ f.window.<span class="tok-fn">widthf</span>() / <span class="tok-num">2.0</span>, f.window.<span class="tok-fn">heightf</span>() / <span class="tok-num">2.0</span> });
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .minus)) {
+        <span class="tok-fn">zoomAbout</span>(s, f, <span class="tok-num">1.0</span> / <span class="tok-num">1.15</span>, .{ f.window.<span class="tok-fn">widthf</span>() / <span class="tok-num">2.0</span>, f.window.<span class="tok-fn">heightf</span>() / <span class="tok-num">2.0</span> });
+    }
+
+    <span class="tok-comment">// Mouse wheel zoom about the cursor (desktop).</span>
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        s.follow = false;
+        <span class="tok-fn">zoomAbout</span>(s, f, <span class="tok-kw">if</span> (wheel &gt; <span class="tok-num">0</span>) <span class="tok-num">1.15</span> <span class="tok-kw">else</span> <span class="tok-num">1.0</span> / <span class="tok-num">1.15</span>, z.<span class="tok-fn">getMousePosition</span>(f.input));
+    }
+
+    <span class="tok-comment">// ---- Touch camera, mirroring mandel_sidebyside ----------------------------</span>
+    z.<span class="tok-fn">updateGestures</span>(&amp;s.gestures, f.input, f.time);
+    <span class="tok-kw">const</span> mouse: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> touch_count: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+
+    <span class="tok-comment">// Two-finger pinch: scale about the midpoint, and pan by the midpoint's motion.</span>
+    <span class="tok-kw">if</span> (touch_count &gt;= <span class="tok-num">2</span>) {
+        s.dragging = false; <span class="tok-comment">// pinch wins over drag</span>
+        s.follow = false;
+        <span class="tok-kw">const</span> scale: f32 = z.<span class="tok-fn">getGesturePinchScale</span>(&amp;s.gestures);
+        <span class="tok-kw">if</span> (scale &gt; <span class="tok-num">0</span> <span class="tok-kw">and</span> scale != <span class="tok-num">1.0</span>) {
+            <span class="tok-fn">zoomAbout</span>(s, f, scale, z.<span class="tok-fn">getGesturePinchMid</span>(&amp;s.gestures));
+            <span class="tok-comment">// Pan by the midpoint's screen motion, converted to cell units.</span>
+            <span class="tok-kw">const</span> md: Vec2 = z.<span class="tok-fn">getGesturePinchMidDelta</span>(&amp;s.gestures);
+            s.cam_x -= md[<span class="tok-num">0</span>] / s.zoom;
+            s.cam_y -= md[<span class="tok-num">1</span>] / s.zoom;
+        }
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-comment">// One-finger / mouse drag to pan: anchor the world point grabbed at press and</span>
+    <span class="tok-comment">// keep it under the cursor. Absolute, so it never drifts. Taps on the control</span>
+    <span class="tok-comment">// bar are not drags.</span>
+    <span class="tok-kw">const</span> on_bar: bool = mouse[<span class="tok-num">1</span>] &gt; f.window.<span class="tok-fn">heightf</span>() - <span class="tok-builtin">@max</span>(<span class="tok-num">40.0</span>, f.window.<span class="tok-fn">heightf</span>() * <span class="tok-num">0.09</span>) - <span class="tok-num">16.0</span>;
+    <span class="tok-kw">const</span> pressed: bool = z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left) <span class="tok-kw">and</span> !on_bar;
+    <span class="tok-kw">if</span> (pressed <span class="tok-kw">and</span> !s.dragging) {
+        s.dragging = true;
+        s.follow = false;
+        s.drag_anchor = <span class="tok-fn">screenToWorld</span>(s, f, mouse);
+    }
+    <span class="tok-kw">if</span> (!pressed) {
+        s.dragging = false;
+    }
+    <span class="tok-kw">if</span> (s.dragging <span class="tok-kw">and</span> pressed) {
+        <span class="tok-comment">// center = anchor - offset/zoom, on both axes (symmetric, so neither pans</span>
+        <span class="tok-comment">// backwards). This holds drag_anchor exactly under the cursor.</span>
+        <span class="tok-kw">const</span> sw: f32 = f.window.<span class="tok-fn">widthf</span>();
+        <span class="tok-kw">const</span> sh: f32 = f.window.<span class="tok-fn">heightf</span>();
+        s.cam_x = s.drag_anchor[<span class="tok-num">0</span>] - (mouse[<span class="tok-num">0</span>] - sw / <span class="tok-num">2.0</span>) / s.zoom;
+        s.cam_y = s.drag_anchor[<span class="tok-num">1</span>] - (mouse[<span class="tok-num">1</span>] - sh / <span class="tok-num">2.0</span>) / s.zoom;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    _ = s.scratch.<span class="tok-fn">reset</span>(.retain_capacity);
+    <span class="tok-kw">const</span> arena: Allocator = s.scratch.<span class="tok-fn">allocator</span>();
+
+    <span class="tok-fn">handleInput</span>(f, s);
+
+    <span class="tok-comment">// Advance the simulation by real elapsed time, so the rate means the same</span>
+    <span class="tok-comment">// thing regardless of frame rate. At 1 step/s this fires once a second; at a</span>
+    <span class="tok-comment">// high rate it runs many steps per frame. Capped so a big rate or a long gap</span>
+    <span class="tok-comment">// (e.g. tab was backgrounded) can't stall the frame.</span>
+    <span class="tok-kw">const</span> dt: f64 = f.time.delta_time;
+    <span class="tok-kw">if</span> (!s.paused) {
+        s.step_accum += dt * <span class="tok-builtin">@as</span>(f64, s.steps_per_sec);
+        <span class="tok-kw">var</span> budget: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (s.step_accum &gt;= <span class="tok-num">1.0</span> <span class="tok-kw">and</span> budget &lt; <span class="tok-num">4096</span>) : (budget += <span class="tok-num">1</span>) {
+            <span class="tok-fn">step</span>(s);
+            s.step_accum -= <span class="tok-num">1.0</span>;
+        }
+    } <span class="tok-kw">else</span> {
+        s.step_accum = <span class="tok-num">0</span>;
+    }
+
+    <span class="tok-kw">if</span> (s.follow) {
+        <span class="tok-comment">// Ease the camera toward the ant.</span>
+        s.cam_x += (<span class="tok-fn">float</span>(s.ant_x) - s.cam_x) * <span class="tok-num">0.1</span>;
+        s.cam_y += (<span class="tok-fn">float</span>(s.ant_y) - s.cam_y) * <span class="tok-num">0.1</span>;
+    }
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    f.gl.<span class="tok-fn">rect</span>(.{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = f.window.<span class="tok-fn">widthf</span>(), .height = f.window.<span class="tok-fn">heightf</span>() }, .{ .color = bg_col });
+
+    <span class="tok-comment">// Only the black cells need drawing (white is the background board colour). We</span>
+    <span class="tok-comment">// walk the visible window of the grid, not all 40k cells.</span>
+    <span class="tok-kw">const</span> sw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> sh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> half_cols: f32 = (sw / <span class="tok-num">2.0</span>) / s.zoom + <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> half_rows: f32 = (sh / <span class="tok-num">2.0</span>) / s.zoom + <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> x0: i32 = <span class="tok-builtin">@max</span>(<span class="tok-num">0</span>, <span class="tok-fn">floorToInt</span>(s.cam_x - half_cols));
+    <span class="tok-kw">const</span> x1: i32 = <span class="tok-builtin">@min</span>(grid_w, <span class="tok-fn">floorToInt</span>(s.cam_x + half_cols) + <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> y0: i32 = <span class="tok-builtin">@max</span>(<span class="tok-num">0</span>, <span class="tok-fn">floorToInt</span>(s.cam_y - half_rows));
+    <span class="tok-kw">const</span> y1: i32 = <span class="tok-builtin">@min</span>(grid_h, <span class="tok-fn">floorToInt</span>(s.cam_y + half_rows) + <span class="tok-num">1</span>);
+
+    <span class="tok-kw">var</span> yy: i32 = y0;
+    <span class="tok-kw">while</span> (yy &lt; y1) : (yy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> xx: i32 = x0;
+        <span class="tok-kw">while</span> (xx &lt; x1) : (xx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">if</span> (s.<span class="tok-fn">cell</span>(xx, yy)) {
+                <span class="tok-kw">continue</span>; <span class="tok-comment">// white == background</span>
+            }
+            <span class="tok-kw">const</span> p: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, <span class="tok-builtin">@floatFromInt</span>(xx), <span class="tok-builtin">@floatFromInt</span>(yy));
+            f.gl.<span class="tok-fn">rect</span>(
+                .{ .x = p[<span class="tok-num">0</span>], .y = p[<span class="tok-num">1</span>], .width = s.zoom + <span class="tok-num">1.0</span>, .height = s.zoom + <span class="tok-num">1.0</span> },
+                .{ .color = white_col },
+            );
+        }
+    }
+
+    <span class="tok-comment">// Faint cell grid, only when zoomed in enough to be useful.</span>
+    <span class="tok-kw">if</span> (s.zoom &gt;= <span class="tok-num">8.0</span>) {
+        <span class="tok-kw">var</span> gx: i32 = x0;
+        <span class="tok-kw">while</span> (gx &lt;= x1) : (gx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> a: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, <span class="tok-builtin">@floatFromInt</span>(gx), <span class="tok-builtin">@floatFromInt</span>(y0));
+            <span class="tok-kw">const</span> b: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, <span class="tok-builtin">@floatFromInt</span>(gx), <span class="tok-builtin">@floatFromInt</span>(y1));
+            f.gl.<span class="tok-fn">line</span>(a, b, .{ .color = grid_col, .thickness = <span class="tok-num">1.0</span> });
+        }
+        <span class="tok-kw">var</span> gy: i32 = y0;
+        <span class="tok-kw">while</span> (gy &lt;= y1) : (gy += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> a: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, <span class="tok-builtin">@floatFromInt</span>(x0), <span class="tok-builtin">@floatFromInt</span>(gy));
+            <span class="tok-kw">const</span> b: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, <span class="tok-builtin">@floatFromInt</span>(x1), <span class="tok-builtin">@floatFromInt</span>(gy));
+            f.gl.<span class="tok-fn">line</span>(a, b, .{ .color = grid_col, .thickness = <span class="tok-num">1.0</span> });
+        }
+    }
+
+    <span class="tok-comment">// The trail follows the ant's last footsteps. At each cell the ant turned, the</span>
+    <span class="tok-comment">// corner is drawn as a quarter-circle ARC rounding it (rather than a sharp</span>
+    <span class="tok-comment">// elbow); straight-through cells stay straight. Each piece is coloured by the</span>
+    <span class="tok-comment">// turn taken leaving that cell: red = right (was white), blue = left (was</span>
+    <span class="tok-comment">// black). Consecutive footsteps are adjacent; at a wrap the ant teleports</span>
+    <span class="tok-comment">// edge-to-edge, so we skip any non-adjacent pair.</span>
+    <span class="tok-kw">if</span> (s.path_n &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> start: usize = (s.path_head + path_len - s.path_n) % path_len;
+        <span class="tok-comment">// Walk interior cells with a prev and next neighbour so we know in/out dir.</span>
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k &lt; s.path_n) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> cur: Turn = s.path[(start + k) % path_len];
+            <span class="tok-kw">const</span> col: Color = <span class="tok-kw">if</span> (cur.right) turn_r_col <span class="tok-kw">else</span> turn_l_col;
+
+            <span class="tok-comment">// Previous cell (or none at the tail); next cell is the following</span>
+            <span class="tok-comment">// footstep, or the ant's live position for the last one.</span>
+            <span class="tok-kw">const</span> has_prev: bool = k &gt; <span class="tok-num">0</span>;
+            <span class="tok-kw">const</span> prev: Turn = <span class="tok-kw">if</span> (has_prev) s.path[(start + k - <span class="tok-num">1</span>) % path_len] <span class="tok-kw">else</span> cur;
+            <span class="tok-kw">const</span> next: Turn = <span class="tok-kw">if</span> (k + <span class="tok-num">1</span> &lt; s.path_n)
+                s.path[(start + k + <span class="tok-num">1</span>) % path_len]
+            <span class="tok-kw">else</span>
+                .{ .x = s.ant_x, .y = s.ant_y, .right = cur.right };
+
+            <span class="tok-kw">const</span> prev_adj: bool = has_prev <span class="tok-kw">and</span> (<span class="tok-builtin">@abs</span>(cur.x - prev.x) + <span class="tok-builtin">@abs</span>(cur.y - prev.y) &lt;= <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> next_adj: bool = <span class="tok-builtin">@abs</span>(next.x - cur.x) + <span class="tok-builtin">@abs</span>(next.y - cur.y) &lt;= <span class="tok-num">1</span>;
+
+            <span class="tok-kw">if</span> (prev_adj <span class="tok-kw">and</span> next_adj) {
+                <span class="tok-kw">const</span> ind: Vec2 = <span class="tok-fn">dirBetween</span>(prev.x, prev.y, cur.x, cur.y);
+                <span class="tok-kw">const</span> outd: Vec2 = <span class="tok-fn">dirBetween</span>(cur.x, cur.y, next.x, next.y);
+                <span class="tok-kw">if</span> (ind[<span class="tok-num">0</span>] == outd[<span class="tok-num">0</span>] <span class="tok-kw">and</span> ind[<span class="tok-num">1</span>] == outd[<span class="tok-num">1</span>]) {
+                    <span class="tok-comment">// Straight through: one full segment across the cell.</span>
+                    <span class="tok-fn">drawHalfStep</span>(f, s, cur.x, cur.y, ind, false, col);
+                    <span class="tok-fn">drawHalfStep</span>(f, s, cur.x, cur.y, outd, true, col);
+                } <span class="tok-kw">else</span> {
+                    <span class="tok-comment">// Turned here: round the corner with an arc.</span>
+                    <span class="tok-fn">drawCornerArc</span>(f, s, cur.x, cur.y, ind, outd, col);
+                }
+            } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (next_adj) {
+                <span class="tok-comment">// Tail cell with no known incoming dir: just the outgoing half.</span>
+                <span class="tok-kw">const</span> outd: Vec2 = <span class="tok-fn">dirBetween</span>(cur.x, cur.y, next.x, next.y);
+                <span class="tok-fn">drawHalfStep</span>(f, s, cur.x, cur.y, outd, true, col);
+            } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (prev_adj) {
+                <span class="tok-kw">const</span> ind: Vec2 = <span class="tok-fn">dirBetween</span>(prev.x, prev.y, cur.x, cur.y);
+                <span class="tok-fn">drawHalfStep</span>(f, s, cur.x, cur.y, ind, false, col);
+            }
+        }
+    }
+
+    <span class="tok-comment">// The ant.</span>
+    <span class="tok-kw">const</span> ap: Vec2 = <span class="tok-fn">worldToScreen</span>(s, f, <span class="tok-fn">float</span>(s.ant_x) + <span class="tok-num">0.5</span>, <span class="tok-fn">float</span>(s.ant_y) + <span class="tok-num">0.5</span>);
+    f.gl.<span class="tok-fn">circle</span>(ap, <span class="tok-builtin">@max</span>(<span class="tok-num">3.0</span>, s.zoom * <span class="tok-num">0.45</span>), .{ .color = ant_col, .segments = <span class="tok-num">24</span> });
+
+    <span class="tok-comment">// On-screen control bar (works with no keyboard). A tap is read once here; if</span>
+    <span class="tok-comment">// it hits a button we act on it. Buttons sit on top of everything else.</span>
+    <span class="tok-kw">const</span> tap: ?Vec2 = <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left)) z.<span class="tok-fn">getMousePosition</span>(f.input) <span class="tok-kw">else</span> null;
+    <span class="tok-kw">const</span> n_btns: usize = <span class="tok-num">6</span>;
+    <span class="tok-kw">if</span> (<span class="tok-fn">button</span>(f, s, <span class="tok-fn">barButton</span>(f, <span class="tok-num">0</span>, n_btns), <span class="tok-kw">if</span> (s.paused) <span class="tok-str">"play"</span> <span class="tok-kw">else</span> <span class="tok-str">"pause"</span>, tap)) {
+        s.paused = !s.paused;
+    }
+    <span class="tok-kw">if</span> (<span class="tok-fn">button</span>(f, s, <span class="tok-fn">barButton</span>(f, <span class="tok-num">1</span>, n_btns), <span class="tok-str">"step"</span>, tap)) {
+        <span class="tok-fn">step</span>(s);
+        s.paused = true;
+    }
+    <span class="tok-kw">if</span> (<span class="tok-fn">button</span>(f, s, <span class="tok-fn">barButton</span>(f, <span class="tok-num">2</span>, n_btns), <span class="tok-str">"slower"</span>, tap)) {
+        s.steps_per_sec = <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, s.steps_per_sec / <span class="tok-num">2.0</span>);
+    }
+    <span class="tok-kw">if</span> (<span class="tok-fn">button</span>(f, s, <span class="tok-fn">barButton</span>(f, <span class="tok-num">3</span>, n_btns), <span class="tok-str">"faster"</span>, tap)) {
+        s.steps_per_sec = <span class="tok-builtin">@min</span>(<span class="tok-num">4096.0</span>, s.steps_per_sec * <span class="tok-num">2.0</span>);
+    }
+    <span class="tok-kw">if</span> (<span class="tok-fn">button</span>(f, s, <span class="tok-fn">barButton</span>(f, <span class="tok-num">4</span>, n_btns), <span class="tok-kw">if</span> (s.follow) <span class="tok-str">"unfollow"</span> <span class="tok-kw">else</span> <span class="tok-str">"follow"</span>, tap)) {
+        s.follow = !s.follow;
+    }
+    <span class="tok-kw">if</span> (<span class="tok-fn">button</span>(f, s, <span class="tok-fn">barButton</span>(f, <span class="tok-num">5</span>, n_btns), <span class="tok-str">"reset"</span>, tap)) {
+        <span class="tok-fn">reset</span>(s);
+    }
+
+    <span class="tok-kw">const</span> caption: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">allocPrint</span>(arena, <span class="tok-str">"langton's ant - {d} steps - {d:.0}/s{s}{s}"</span>, .{
+        s.steps,
+        s.steps_per_sec,
+        <span class="tok-kw">if</span> (s.paused) <span class="tok-str">" - paused"</span> <span class="tok-kw">else</span> <span class="tok-str">""</span>,
+        <span class="tok-kw">if</span> (s.follow) <span class="tok-str">" - following"</span> <span class="tok-kw">else</span> <span class="tok-str">""</span>,
+    }) <span class="tok-kw">catch</span> <span class="tok-str">"langton's ant"</span>;
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, caption);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - langton's ant"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

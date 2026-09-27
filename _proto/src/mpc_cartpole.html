@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>mpc_cartpole — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>mpc_cartpole</h1>
+<figure class="code src-file" data-path="examples/mpc_cartpole/mpc_cartpole.zig" data-lines="535"><figcaption><span>examples/mpc_cartpole/mpc_cartpole.zig</span><span>535 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! mpc_cartpole - model predictive control, planning in front of you, at 60 fps.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * WHAT THIS DEMONSTRATES --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A cartpole with a motor too weak to lift its own pole, swinging itself upright and then</span>
+<span class="tok-comment">//! balancing - with the plan drawn as a ghost trajectory so you can watch the optimiser think.</span>
+<span class="tok-comment">//! Drag the cart to disturb it and the controller re-plans around wherever you left it.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- *** THE FRAME BUDGET IS THE WHOLE ARCHITECTURE, NOT A DETAIL --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A 60 Hz frame is 16.7 ms. Measured on this engine:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!     horizon 60, warm re-solve, 2 iterations ....... 0.35 ms   (2% of a frame)</span>
+<span class="tok-comment">//!     horizon 60, COLD solve from nothing ........... 2.9 ms</span>
+<span class="tok-comment">//!     horizon 150, COLD solve ....................... 32 ms     (drops a frame)</span>
+<span class="tok-comment">//!     the swing-up, cold, horizon 250 ............... ~100 ms    (six dropped frames)</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! So the warm loop is free and **the cold solve is not**. Running one inside `update` would</span>
+<span class="tok-comment">//! freeze the tab for a tenth of a second every time you pressed reset - long enough that a</span>
+<span class="tok-comment">//! drag loses its intermediate samples and the demo stops feeling like a demo.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! * THE UNIT OF WORK IS THEREFORE ONE iLQR ITERATION, never a whole solve. A frame runs as</span>
+<span class="tok-comment">//! many as its measured budget allows and returns; a cold plan converges across however many</span>
+<span class="tok-comment">//! frames it takes, and you watch the ghost trajectory sharpen while it does. Nothing about</span>
+<span class="tok-comment">//! the optimisation changes - same iterations, same order - only when they happen.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** AND A COST THAT ONLY APPEARS WHEN YOU PLAN INSIDE A FRAME --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The smoke runner's call profile for this example reads `js_now_ms = 12225` per frame,</span>
+<span class="tok-comment">//! against ~42 for hello_world. Nothing here calls a clock 12 000 times - the PROFILER does.</span>
+<span class="tok-comment">//! Every `profiler.zoneNamed` takes a timestamp on entry and exit, and one planning frame runs</span>
+<span class="tok-comment">//! roughly 700 `robot.step` calls (60 knots x 6 finite-difference columns x 2 iterations),</span>
+<span class="tok-comment">//! each opening several zones. Six thousand zones, twelve thousand clock reads, and on wasm a</span>
+<span class="tok-comment">//! clock read is a JS boundary crossing.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! * IT IS NOT A LEAK AND NOT A BUG - it is instrumentation priced for a frame that does a</span>
+<span class="tok-comment">//! handful of things, being asked to price a frame that does thousands. `-Dmode=ship` strips</span>
+<span class="tok-comment">//! the profiler entirely and the crossings go with it. Worth knowing before someone benchmarks</span>
+<span class="tok-comment">//! a planner in a release build and concludes the planner is slow.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * AND THE PHYSICS RUNS ON ITS OWN CLOCK --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The simulation is 100 Hz and the display is whatever the device gives. Stepping once per</span>
+<span class="tok-comment">//! frame would play the pole back at 60% speed on a good device and 30% on a struggling one:</span>
+<span class="tok-comment">//! the physics would be right and the motion visibly wrong, in a way that reads as a sluggish</span>
+<span class="tok-comment">//! controller rather than a wrong loop. An accumulator fixes it.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> mpc = z.robot_mpc;
+<span class="tok-kw">const</span> ui = z.ui;
+<span class="tok-kw">const</span> profiler = z.profiler;
+
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> rotationZ = zm.rotationZ;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> vec2 = zm.vec2;
+<span class="tok-kw">const</span> pi = zm.pi;
+
+<span class="tok-kw">const</span> sim_timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">100.0</span>;
+<span class="tok-kw">const</span> rail_limit: f32 = <span class="tok-num">2.4</span>;
+
+<span class="tok-comment">/// -- *** 2.5 s OF LOOKAHEAD, AND IT HAS TO BE THIS LONG --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The first version used 60 knots - 0.6 s - chosen because a cold solve at that length is</span>
+<span class="tok-comment">/// 2.9 ms and fits comfortably in a frame. It balances beautifully and **cannot swing up at</span>
+<span class="tok-comment">/// all**: measured, the pole wandered from 3.0 rad to 58 rad over ten seconds while the cost</span>
+<span class="tok-comment">/// climbed through 1e6. A pump takes more than a second, so a planner that can only see 0.6 s</span>
+<span class="tok-comment">/// ahead never finds one - it is not a tuning problem, the solution is outside the horizon.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// At 250 knots the same loop swings up and balances: theta 3.0 -&gt; 4.09 (pumping) -&gt; 1.73 -&gt;</span>
+<span class="tok-comment">/// 0.003 upright by frame 180, then the cart drifts back to centre and the cost falls to 0.07.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * AND THE COLD SOLVE NO LONGER HAS TO FIT IN A FRAME, which is the point of the budget</span>
+<span class="tok-comment">/// loop below. It is spread across however many frames it takes, with the robot held still and</span>
+<span class="tok-comment">/// the ghost trajectory sharpening while you watch.</span>
+<span class="tok-kw">const</span> horizon: u32 = <span class="tok-num">250</span>;
+
+<span class="tok-comment">/// How much planning to do before letting the robot move.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * MEASURED, NOT PICKED. A cold swing-up needs ~142 iterations to converge fully, but the</span>
+<span class="tok-comment">/// plan is coherent - pumping in the right direction, respecting the rail - well before that.</span>
+<span class="tok-comment">/// Sixty is enough to act on, and the receding horizon polishes the rest while it runs. On a</span>
+<span class="tok-comment">/// phone managing 4 iterations a frame that is fifteen frames, a quarter of a second, instead</span>
+<span class="tok-comment">/// of the indefinite wait that waiting for convergence produced.</span>
+<span class="tok-kw">const</span> warmup_iterations: u32 = <span class="tok-num">60</span>;
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">18</span>, .g = <span class="tok-num">20</span>, .b = <span class="tok-num">28</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> rail_col: Color = .{ .r = <span class="tok-num">64</span>, .g = <span class="tok-num">69</span>, .b = <span class="tok-num">84</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> cart_col: Color = .{ .r = <span class="tok-num">107</span>, .g = <span class="tok-num">158</span>, .b = <span class="tok-num">219</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> pole_col: Color = .{ .r = <span class="tok-num">237</span>, .g = <span class="tok-num">184</span>, .b = <span class="tok-num">89</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> ghost_col: Color = .{ .r = <span class="tok-num">89</span>, .g = <span class="tok-num">204</span>, .b = <span class="tok-num">153</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> limit_col: Color = .{ .r = <span class="tok-num">204</span>, .g = <span class="tok-num">89</span>, .b = <span class="tok-num">89</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// * THE MOTOR CANNOT LIFT THE POLE, and that is the point of the demo. Force 6 N on ~1.1 kg</span>
+<span class="tok-comment">/// gives the cart a ~ 5.45 m/s^2, so the largest torque it can put on the pole is m*a*l = 0.164</span>
+<span class="tok-comment">/// N*m. Gravity at horizontal asks for m*g*l = 0.294 N*m. There is no way up except to swing.</span>
+<span class="tok-kw">const</span> Cartpole = rbt.<span class="tok-fn">Spec</span>(.{
+    .bodies = &amp;.{
+        .{
+            .name = <span class="tok-str">"cart"</span>,
+            .joints = &amp;.{.{
+                .name = <span class="tok-str">"slide"</span>,
+                .kind = .slide,
+                .axis = <span class="tok-fn">vec</span>(<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>),
+                .range = .{ -rail_limit, rail_limit },
+            }},
+            .geoms = &amp;.{.{
+                .shape = .{ .box = .{ .half_extent = <span class="tok-fn">vec</span>(<span class="tok-num">0.1</span>, <span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>) } },
+                .mass = <span class="tok-num">1.0</span>,
+            }},
+        },
+        .{
+            .name = <span class="tok-str">"pole"</span>,
+            .parent = <span class="tok-str">"cart"</span>,
+            .joints = &amp;.{.{ .name = <span class="tok-str">"hinge"</span>, .kind = .hinge, .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>) }},
+            .geoms = &amp;.{.{
+                .shape = .{ .capsule = .{ .half_height = <span class="tok-num">0.3</span>, .radius = <span class="tok-num">0.02</span> } },
+                .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.3</span>, <span class="tok-num">0</span>),
+                .mass = <span class="tok-num">0.1</span>,
+            }},
+        },
+    },
+    .actuators = &amp;.{.{
+        .name = <span class="tok-str">"push"</span>,
+        .on = .{ .joint = .{ .name = <span class="tok-str">"slide"</span>, .gear = <span class="tok-num">6</span> } },
+        .ctrl_range = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span> },
+    }},
+    .options = .{
+        .timestep = sim_timestep,
+        .max_contacts = <span class="tok-num">4</span>,
+        .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">9.81</span>, <span class="tok-num">0</span>),
+    },
+});
+
+<span class="tok-kw">const</span> cart_slide: usize = <span class="tok-num">0</span>;
+<span class="tok-kw">const</span> pole_hinge: usize = <span class="tok-num">1</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    model: rbt.Model,
+    data: rbt.Data,
+    plan: mpc.Plan,
+    reference: []f32,
+    applied: []f32,
+
+    <span class="tok-comment">/// Iterations to spend this frame. Adapted to what the device actually manages.</span>
+    budget: f32,
+    <span class="tok-comment">/// True until the plan is good enough to act on; while set, the loop plans without</span>
+    <span class="tok-comment">/// stepping. See `warmup_iterations`.</span>
+    warming: bool,
+    running: bool,
+    last_iterations: u32,
+    last_cost: f32,
+    <span class="tok-comment">/// Iterations spent on the CURRENT plan since the last reset, and the cost the plan</span>
+    <span class="tok-comment">/// started at - the two numbers that make "still planning" mean something.</span>
+    plan_iterations: u32,
+    first_cost: f32,
+    <span class="tok-comment">/// A short history of the cost, for the progress plot.</span>
+    cost_history: [<span class="tok-num">96</span>]f32,
+    cost_history_len: usize,
+    accumulator: f32,
+    <span class="tok-comment">/// Rolling frame time in milliseconds - what the budget controller is protecting.</span>
+    frame_ms: f32,
+
+    cam: z.OrbitCamera,
+    font: z.Font,
+    ui_host: z.UiHost,
+    cube: z.Mesh,
+    cylinder: z.Mesh,
+    transform: [<span class="tok-num">1</span>]zm.Mat,
+};
+
+<span class="tok-kw">const</span> state_weight = [_]f32{ <span class="tok-num">0.5</span>, <span class="tok-num">10.0</span>, <span class="tok-num">0.1</span>, <span class="tok-num">0.5</span> };
+<span class="tok-kw">const</span> control_weight = [_]f32{<span class="tok-num">0.001</span>};
+<span class="tok-kw">const</span> terminal_weight = [_]f32{ <span class="tok-num">5.0</span>, <span class="tok-num">200.0</span>, <span class="tok-num">5.0</span>, <span class="tok-num">20.0</span> };
+
+<span class="tok-kw">fn</span> <span class="tok-fn">costOf</span>(s: *<span class="tok-kw">const</span> State) mpc.Cost {
+    <span class="tok-kw">return</span> .{
+        .state = &amp;state_weight,
+        .control = &amp;control_weight,
+        .terminal = &amp;terminal_weight,
+        .reference = s.reference,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.model = <span class="tok-kw">try</span> Cartpole.<span class="tok-fn">build</span>(gpa);
+    s.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;s.model);
+    s.plan = <span class="tok-kw">try</span> mpc.Plan.<span class="tok-fn">init</span>(gpa, &amp;s.model, horizon);
+    s.plan.<span class="tok-fn">readLimits</span>(&amp;s.model);
+    s.reference = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, (horizon + <span class="tok-num">1</span>) * s.plan.nstate);
+    <span class="tok-builtin">@memset</span>(s.reference, <span class="tok-num">0</span>); <span class="tok-comment">// upright, centred, at rest</span>
+    s.applied = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.model.nu);
+    <span class="tok-builtin">@memset</span>(s.applied, <span class="tok-num">0</span>);
+
+    s.budget = <span class="tok-num">2</span>;
+    s.warming = true;
+    s.running = true;
+    s.last_iterations = <span class="tok-num">0</span>;
+    s.last_cost = <span class="tok-num">0</span>;
+    s.plan_iterations = <span class="tok-num">0</span>;
+    s.first_cost = <span class="tok-num">0</span>;
+    s.cost_history = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+    s.cost_history_len = <span class="tok-num">0</span>;
+    s.accumulator = <span class="tok-num">0</span>;
+    s.frame_ms = <span class="tok-num">16.7</span>;
+
+    <span class="tok-fn">reset</span>(s, <span class="tok-num">3.0</span>);
+
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.35</span>, <span class="tok-num">0</span>), <span class="tok-num">2.4</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.cylinder = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCylinder</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">12</span>, <span class="tok-num">2</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    <span class="tok-comment">// * THE MESHES TOO. The smoke runner's `managed` check compares live bytes across a full</span>
+    <span class="tok-comment">// init/deinit cycle and caught these missing - a leak that never shows up in a browser,</span>
+    <span class="tok-comment">// because the tab is torn down before anyone notices, and shows up immediately in the</span>
+    <span class="tok-comment">// launcher where examples are created and destroyed as you switch between them.</span>
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cylinder);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cube);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    gpa.<span class="tok-fn">free</span>(s.applied);
+    gpa.<span class="tok-fn">free</span>(s.reference);
+    s.plan.<span class="tok-fn">deinit</span>();
+    s.data.<span class="tok-fn">deinit</span>();
+    s.model.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Put the pole at `angle` (0 upright, pi hanging) and throw away the plan.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">reset</span>(s: *State, angle: f32) void {
+    s.data.<span class="tok-fn">reset</span>(&amp;s.model);
+    s.data.pos[pole_hinge] = angle;
+    rbt.<span class="tok-fn">forward</span>(&amp;s.model, &amp;s.data);
+    <span class="tok-builtin">@memset</span>(s.plan.ctrl, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.plan.feedback, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.plan.feedforward, <span class="tok-num">0</span>);
+    s.warming = true;
+    s.accumulator = <span class="tok-num">0</span>;
+    s.plan_iterations = <span class="tok-num">0</span>;
+    s.first_cost = <span class="tok-num">0</span>;
+    s.cost_history_len = <span class="tok-num">0</span>;
+}
+
+<span class="tok-comment">/// -- *** THE BUDGET LOOP: PLAN A LITTLE, ALWAYS RETURN --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `mpc.optimize` with `iterations = n` does at most n improvement passes and returns. That is</span>
+<span class="tok-comment">/// the hook this whole demo hangs on: the planner is re-entrant across frames because its unit</span>
+<span class="tok-comment">/// of work is one iteration, and a frame simply stops asking.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** THE BUDGET IS DRIVEN BY THE FRAME TIME, NOT BY A STOPWATCH --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The first version timed the planning directly with `performance.now()` and `verify_imports`</span>
+<span class="tok-comment">/// rejected the bundle: `dom.js_now_ms` is not in `bridge.zig`. The smoke runner happens to</span>
+<span class="tok-comment">/// provide it, so the demo passed a headless test and would have shipped a standalone with a</span>
+<span class="tok-comment">/// missing import - which is precisely the gap that gate exists to close.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * AND THE REPLACEMENT IS BETTER THAN WHAT IT REPLACED. `f.time.delta_time` measures the</span>
+<span class="tok-comment">/// thing actually worth protecting - whether frames are landing on time - rather than a proxy</span>
+<span class="tok-comment">/// for it. Planning time is only one contributor; a device struggling with the renderer needs</span>
+<span class="tok-comment">/// the planner to back off just as much, and a stopwatch around `optimize` cannot see that.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The target is 1/60 s. Overshooting costs a visible stutter, so back off fast; undershooting</span>
+<span class="tok-comment">/// only wastes headroom, so grow slowly. A symmetric controller oscillates here, because the</span>
+<span class="tok-comment">/// frame time it measures is the frame time it is changing.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">planWithinFrame</span>(s: *State, delta_time: f32) void {
+    <span class="tok-kw">const</span> target: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">60.0</span>;
+
+    <span class="tok-comment">// -- *** PROFILING IS SUSPENDED ACROSS THE PLANNER, AND IT HAS TO BE --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// `robot.step` is instrumented, which is right for a frame that steps a robot a few times.</span>
+    <span class="tok-comment">// One planning frame here steps it **tens of thousands** of times - 250 knots x 6</span>
+    <span class="tok-comment">// finite-difference columns x up to 40 iterations - and every zone takes two timestamps,</span>
+    <span class="tok-comment">// which on wasm are two JS boundary crossings.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Measured: at horizon 60 the smoke runner already saw 12 225 clock calls per frame. At</span>
+    <span class="tok-comment">// 250 it **exhausted Node's JS heap and the gate died** - and a browser would have been</span>
+    <span class="tok-comment">// paying the same crossings, tens of milliseconds a frame, for a profile nobody can read</span>
+    <span class="tok-comment">// (a flame graph of 60 000 identical `robot.step` zones is not a diagnostic).</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THIS IS NOT PROFILER-BASHING. The instrument is priced for the workload it was built</span>
+    <span class="tok-comment">// for. A planner is a different workload, and the right move is to tell the instrument so.</span>
+    <span class="tok-comment">// Everything outside this call - rendering, UI, the physics the robot actually runs - is</span>
+    <span class="tok-comment">// still profiled normally.</span>
+    <span class="tok-kw">const</span> was_frozen: bool = profiler.<span class="tok-fn">isFrozen</span>();
+    profiler.<span class="tok-fn">freeze</span>();
+    <span class="tok-kw">const</span> iterations: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(s.budget, <span class="tok-num">1.0</span>, <span class="tok-num">40.0</span>));
+    <span class="tok-kw">const</span> result: mpc.Result = mpc.<span class="tok-fn">optimize</span>(&amp;s.model, &amp;s.data, &amp;s.plan, <span class="tok-fn">costOf</span>(s), .{
+        .iterations = iterations,
+    });
+    <span class="tok-kw">if</span> (!was_frozen) {
+        profiler.<span class="tok-fn">unfreeze</span>();
+    }
+    s.last_iterations = result.iterations;
+    s.last_cost = result.cost;
+    s.plan_iterations += result.iterations;
+    <span class="tok-kw">if</span> (s.first_cost == <span class="tok-num">0</span>) {
+        s.first_cost = result.initial_cost;
+    }
+
+    <span class="tok-comment">// -- *** "GOOD ENOUGH TO ACT ON" IS NOT "CONVERGED", AND WAITING FOR THE LATTER IS A BUG --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// This used to hold the robot still until `result.converged`, which on a phone - 4</span>
+    <span class="tok-comment">// iterations a frame, a cold plan starting from a 2.5 s free-fall rollout - meant staring</span>
+    <span class="tok-comment">// at a motionless cartpole under the word "planning" with no way to tell whether it was</span>
+    <span class="tok-comment">// making progress or wedged. That is a worse failure than a wrong answer, because the user</span>
+    <span class="tok-comment">// cannot distinguish it from a hang.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * AND CONVERGENCE IS THE WRONG BAR ANYWAY. MPC re-solves every single tick; the plan</span>
+    <span class="tok-comment">// does not need to be optimal before the first step, it needs to be SANE. A budget of</span>
+    <span class="tok-comment">// iterations buys that, and everything after it is bought while the robot is already</span>
+    <span class="tok-comment">// moving, which is what the receding horizon is for.</span>
+    <span class="tok-kw">if</span> (s.plan_iterations &gt;= warmup_iterations <span class="tok-kw">or</span> result.converged) {
+        s.warming = false;
+    }
+
+    <span class="tok-comment">// Cost history, so "still planning" comes with evidence that it is working.</span>
+    <span class="tok-kw">if</span> (s.cost_history_len &lt; s.cost_history.len) {
+        s.cost_history[s.cost_history_len] = result.cost;
+        s.cost_history_len += <span class="tok-num">1</span>;
+    } <span class="tok-kw">else</span> {
+        std.mem.<span class="tok-fn">copyForwards</span>(f32, s.cost_history[<span class="tok-num">0</span> .. s.cost_history.len - <span class="tok-num">1</span>], s.cost_history[<span class="tok-num">1</span>..]);
+        s.cost_history[s.cost_history.len - <span class="tok-num">1</span>] = result.cost;
+    }
+
+    <span class="tok-comment">// A slow average, so one hitch - a texture upload, a GC pause - does not swing the budget.</span>
+    s.frame_ms += (delta_time * <span class="tok-num">1000.0</span> - s.frame_ms) * <span class="tok-num">0.1</span>;
+    <span class="tok-kw">if</span> (delta_time &gt; target) {
+        s.budget = <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, s.budget * <span class="tok-num">0.75</span>);
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (delta_time &lt; target * <span class="tok-num">0.7</span>) {
+        s.budget = <span class="tok-builtin">@min</span>(<span class="tok-num">40.0</span>, s.budget + <span class="tok-num">0.5</span>);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-comment">// 1. PLAN - bounded, every frame, whether or not the physics advances.</span>
+    <span class="tok-fn">planWithinFrame</span>(s, f.time.delta_time);
+
+    <span class="tok-comment">// 2. ACT - the simulation runs on its own clock, not the display's.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few</span>
+    <span class="tok-comment">// iterations, and applying it would flail the cart around for a quarter of a second before</span>
+    <span class="tok-comment">// the optimiser found anything. Holding still until the first solve converges makes the</span>
+    <span class="tok-comment">// ghost trajectory readable and the start honest: you are watching it think, then act.</span>
+    <span class="tok-kw">if</span> (s.running <span class="tok-kw">and</span> !s.warming) {
+        s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+        <span class="tok-kw">while</span> (s.accumulator &gt;= sim_timestep) : (s.accumulator -= sim_timestep) {
+            <span class="tok-comment">// * `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole</span>
+            <span class="tok-comment">// reason MPC survives a slow solver. The plan in hand was linearised about a state</span>
+            <span class="tok-comment">// the robot has since left - up to two sim steps ago, because physics runs at 100 Hz</span>
+            <span class="tok-comment">// and planning at the display rate. `K_0*dx` is the backward pass's own answer to</span>
+            <span class="tok-comment">// being somewhere else.</span>
+            mpc.<span class="tok-fn">feedbackControl</span>(&amp;s.model, &amp;s.data, &amp;s.plan, s.applied);
+            <span class="tok-builtin">@memcpy</span>(s.data.ctrl, s.applied);
+            rbt.<span class="tok-fn">step</span>(&amp;s.model, &amp;s.data);
+            <span class="tok-comment">// ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the</span>
+            <span class="tok-comment">// robot has advanced a tick, knot 1 is the new now. Shifting before the step</span>
+            <span class="tok-comment">// applies knot 1's control to knot 0's state - off by one, every tick, compounding.</span>
+            mpc.<span class="tok-fn">shift</span>(&amp;s.plan);
+        }
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-kw">const</span> aspect: f32 = f.window.<span class="tok-fn">widthf</span>() / <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, f.window.<span class="tok-fn">heightf</span>());
+    <span class="tok-comment">// * FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost</span>
+    <span class="tok-comment">// trajectory is the thing worth seeing; a distance tuned to the robot alone crops it.</span>
+    s.cam.distance = <span class="tok-fn">clamp</span>(<span class="tok-num">5.2</span> / <span class="tok-builtin">@max</span>(<span class="tok-num">0.35</span>, aspect), <span class="tok-num">4.0</span>, <span class="tok-num">11.0</span>);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">1.2</span>, .max_distance = <span class="tok-num">9.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    <span class="tok-fn">drawScene</span>(s, gl);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(s: *State, gl: *z.WgpuGl) void {
+    <span class="tok-comment">// The rail and its limits.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -<span class="tok-num">0.06</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">2</span> * rail_limit, <span class="tok-num">0.01</span>, <span class="tok-num">0.06</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, rail_col);
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (.{ -rail_limit, rail_limit }) |edge| {
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(edge, <span class="tok-num">0.0</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">0.02</span>, <span class="tok-num">0.12</span>, <span class="tok-num">0.08</span>));
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, limit_col);
+    }
+
+    <span class="tok-comment">// -- * THE PLAN, DRAWN AS GHOSTS. This is the demo's actual subject: the optimiser's</span>
+    <span class="tok-comment">// intention, one faint pole per planned knot, sharpening as it converges. Every fourth</span>
+    <span class="tok-comment">// knot, because sixty overlapping poles is a smear rather than a trajectory.</span>
+    <span class="tok-kw">const</span> ns: u32 = s.plan.nstate;
+    <span class="tok-kw">var</span> knot: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (knot &lt;= s.plan.horizon) : (knot += <span class="tok-num">4</span>) {
+        <span class="tok-kw">const</span> px: f32 = s.plan.states[knot * ns + cart_slide];
+        <span class="tok-kw">const</span> pa: f32 = s.plan.states[knot * ns + pole_hinge];
+        <span class="tok-fn">drawPole</span>(s, gl, px, pa, <span class="tok-num">0.02</span>, ghost_col);
+    }
+
+    <span class="tok-comment">// The robot itself, on top.</span>
+    <span class="tok-kw">const</span> x: f32 = s.data.pos[cart_slide];
+    <span class="tok-kw">const</span> angle: f32 = s.data.pos[pole_hinge];
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(x, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">0.2</span>, <span class="tok-num">0.1</span>, <span class="tok-num">0.1</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, cart_col);
+    <span class="tok-fn">drawPole</span>(s, gl, x, angle, <span class="tok-num">0.035</span>, pole_col);
+}
+
+<span class="tok-comment">/// One pole, drawn from its pivot rather than centred on it - the cylinder mesh spans [0, h]</span>
+<span class="tok-comment">/// along Y, so rotating about the cart's origin puts the pivot where the hinge is.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPole</span>(
+    s: *State,
+    gl: *z.WgpuGl,
+    x: f32,
+    angle: f32,
+    thickness: f32,
+    colour: Color,
+) void {
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(x, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-fn">rotationZ</span>(angle)),
+        <span class="tok-fn">scaling</span>(thickness, <span class="tok-num">0.6</span>, thickness),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, colour);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-kw">const</span> narrow: bool = ui.Ui.<span class="tok-fn">isNarrow</span>(viewport_w);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-kw">if</span> (narrow) viewport_w - <span class="tok-num">16</span> <span class="tok-kw">else</span> <span class="tok-builtin">@min</span>(<span class="tok-num">440.0</span>, viewport_w * <span class="tok-num">0.34</span>);
+    <span class="tok-kw">const</span> font_size: f32 = u.<span class="tok-fn">scaleToViewport</span>(panel_w, <span class="tok-kw">if</span> (narrow) <span class="tok-num">30.0</span> <span class="tok-kw">else</span> <span class="tok-num">22.0</span>);
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-builtin">@min</span>(<span class="tok-num">520.0</span>, viewport_h * <span class="tok-num">0.72</span>) }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"model predictive control"</span>, .{})) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+
+        <span class="tok-kw">const</span> angle: f32 = s.data.pos[pole_hinge];
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"pole {d:&gt;7.3} rad   cart {d:&gt;6.2} m"</span>, .{ angle, s.data.pos[cart_slide] });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"motor {d:&gt;6.2}  (limit +-1)"</span>, .{s.applied[<span class="tok-num">0</span>]});
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// * THE BUDGET IS SHOWN, NOT SET. It is what the device turned out to afford - a</span>
+        <span class="tok-comment">// number worth seeing precisely because a phone and a desktop differ by more than 10x,</span>
+        <span class="tok-comment">// and because it is the reason the frame rate holds.</span>
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"frame {d:.1} ms, planning {d:.0} iters/frame"</span>, .{ s.frame_ms, s.budget });
+
+        <span class="tok-comment">// -- * PROGRESS, NOT A SPINNER. "planning..." with nothing moving is</span>
+        <span class="tok-comment">// indistinguishable from a hang; a count against a target and a falling cost are not.</span>
+        <span class="tok-kw">if</span> (s.warming) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"warming up {d}/{d} iterations"</span>, .{ s.plan_iterations, warmup_iterations });
+            <span class="tok-kw">const</span> done: f32 = <span class="tok-builtin">@floatFromInt</span>(s.plan_iterations);
+            <span class="tok-kw">const</span> target: f32 = <span class="tok-builtin">@floatFromInt</span>(warmup_iterations);
+            u.<span class="tok-fn">progressBar</span>(done / target, <span class="tok-fn">vec2</span>(panel_w - font_size * <span class="tok-num">2.0</span>, font_size), <span class="tok-str">""</span>);
+        } <span class="tok-kw">else</span> {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"planning live, {d} iters on this plan"</span>, .{s.plan_iterations});
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"cost {d:.1}  (started {d:.1})"</span>, .{ s.last_cost, s.first_cost });
+
+        <span class="tok-comment">// * THE COST CURVE IS THE EVIDENCE. A number that is falling tells you to wait; a</span>
+        <span class="tok-comment">// number that has flattened tells you it is done and the rest is the robot's problem.</span>
+        <span class="tok-kw">if</span> (s.cost_history_len &gt; <span class="tok-num">2</span>) {
+            <span class="tok-kw">var</span> top: f32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">for</span> (s.cost_history[<span class="tok-num">0</span>..s.cost_history_len]) |c| {
+                top = <span class="tok-builtin">@max</span>(top, c);
+            }
+            u.<span class="tok-fn">plotLines</span>(<span class="tok-str">""</span>, s.cost_history[<span class="tok-num">0</span>..s.cost_history_len], .{
+                .min = <span class="tok-num">0</span>,
+                .max = <span class="tok-builtin">@max</span>(top, <span class="tok-num">1.0</span>),
+                .width = panel_w - font_size * <span class="tok-num">2.0</span>,
+                .height = font_size * <span class="tok-num">3.5</span>,
+                .overlay = <span class="tok-str">"plan cost"</span>,
+            });
+        }
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// * AND `run` IS AN OVERRIDE, NOT A SUGGESTION. Ticking it while still warming starts</span>
+        <span class="tok-comment">// the robot on whatever plan exists - which is the honest thing to offer someone who</span>
+        <span class="tok-comment">// would rather watch it fail than watch it wait.</span>
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"run (skips the warm-up)"</span>, &amp;s.running)) {
+            <span class="tok-kw">if</span> (s.running) {
+                s.warming = false;
+            }
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"swing up (start hanging)"</span>, .{})) {
+            <span class="tok-fn">reset</span>(s, pi - <span class="tok-num">0.15</span>);
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"balance (start upright)"</span>, .{})) {
+            <span class="tok-fn">reset</span>(s, <span class="tok-num">0.15</span>);
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"shove the pole"</span>, .{})) {
+            <span class="tok-comment">// A disturbance the plan did not see coming, which is what the feedback gain is</span>
+            <span class="tok-comment">// for. Big enough to be alarming, small enough to be recoverable.</span>
+            s.data.vel[pole_hinge] += <span class="tok-num">3.5</span>;
+        }
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - MPC planning in real time"</span>,
+            .width = <span class="tok-num">900</span>,
+            .height = <span class="tok-num">660</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

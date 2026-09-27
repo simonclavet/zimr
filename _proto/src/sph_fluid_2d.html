@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>sph_fluid_2d — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>sph_fluid_2d</h1>
+<figure class="code src-file" data-path="examples/sph_fluid_2d/sph_fluid_2d.zig" data-lines="922"><figcaption><span>examples/sph_fluid_2d/sph_fluid_2d.zig</span><span>922 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/sph_fluid_2d.zig - Particle-based viscoelastic fluid (2D port).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Implementation of:</span>
+<span class="tok-comment">//!   Clavet, Beaudoin, Poulin (2005).  Particle-based Viscoelastic</span>
+<span class="tok-comment">//!   Fluid Simulation.  ACM SIGGRAPH/Eurographics Symposium on</span>
+<span class="tok-comment">//!   Computer Animation, pp. 219-228.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! 2D adaptation targeting WebGL2/wasm.  zimr has no compute</span>
+<span class="tok-comment">//! shaders (WebGL2 lacks them), so the entire simulation runs on</span>
+<span class="tok-comment">//! the CPU; the GPU only renders.  ~2000 particles at 60fps on</span>
+<span class="tok-comment">//! phones; desktop handles considerably more.  A WebGPU compute</span>
+<span class="tok-comment">//! version of the same algorithm at 20000 particles is what this</span>
+<span class="tok-comment">//! is a (slower, simpler) port of.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The simulation step is one big paper-faithful function: each</span>
+<span class="tok-comment">//! algorithm block from the paper appears as a labelled section</span>
+<span class="tok-comment">//! with comments mapping back to the original equations.  Helper</span>
+<span class="tok-comment">//! functions exist only where they are genuinely reused (the</span>
+<span class="tok-comment">//! cell-sort grid rebuild, which runs twice per step).  The 3x3-</span>
+<span class="tok-comment">//! cell neighbour loop is inlined into all three places it appears</span>
+<span class="tok-comment">//! (viscosity, density, pressure) because each has a different</span>
+<span class="tok-comment">//! body and zero-callback overhead matters for the hot path.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Paper map:</span>
+<span class="tok-comment">//!   section 3   Simulation step (Algorithm 1)    - `step` outer flow</span>
+<span class="tok-comment">//!   section 4   Double density relax (Alg. 2)    - `step`, Pass A/B/C</span>
+<span class="tok-comment">//!   section 5.3 Viscosity (Algorithm 5)          - `step`, viscosity</span>
+<span class="tok-comment">//!   section 6   Object interaction               - NOT IMPLEMENTED</span>
+<span class="tok-comment">//!   section 5.1 Elasticity (springs)             - NOT IMPLEMENTED</span>
+<span class="tok-comment">//!   section 5.2 Plasticity                       - NOT IMPLEMENTED</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Controls:</span>
+<span class="tok-comment">//!   Left-drag          : repel particles from the cursor</span>
+<span class="tok-comment">//!   Shift + left-drag  : attract particles to the cursor</span>
+<span class="tok-comment">//!   Sliders            : k (far stiffness), k_near, gravity,</span>
+<span class="tok-comment">//!                        viscosity</span>
+<span class="tok-comment">//!   Reset button       : dam-break initial configuration</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> vec3 = zm.vec3;
+<span class="tok-kw">const</span> assert = zm.assert;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// --- Constants -----------------------------------------------------</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Tunables.  The values come from the paper's "typical" set (section 7.3)</span>
+<span class="tok-comment">// adapted to a smaller canvas:</span>
+<span class="tok-comment">//   h = 22 px        (interaction radius)</span>
+<span class="tok-comment">//   rho_0 = 10       (rest density, dimensionless)</span>
+<span class="tok-comment">//   k = 0.004        (far-pressure stiffness)</span>
+<span class="tok-comment">//   k_near = 0.010   (near-pressure stiffness)</span>
+<span class="tok-comment">//   sigma = 0        (linear viscosity - disabled)</span>
+<span class="tok-comment">//   beta = 0.10      (quadratic viscosity coefficient)</span>
+<span class="tok-comment">// Time unit is 1 step = 1/60 second (one rendered frame).  We run</span>
+<span class="tok-comment">// `substeps` iterations of the algorithm per rendered frame to</span>
+<span class="tok-comment">// improve temporal resolution; visual frame rate is unchanged.</span>
+
+<span class="tok-kw">const</span> screen_w: f32 = <span class="tok-num">800</span>;
+<span class="tok-kw">const</span> screen_h: f32 = <span class="tok-num">450</span>;
+<span class="tok-kw">const</span> num_particles: u32 = <span class="tok-num">2000</span>;
+<span class="tok-kw">const</span> interact_radius: f32 = <span class="tok-num">22.0</span>;
+<span class="tok-kw">const</span> render_radius: f32 = <span class="tok-num">4.5</span>;
+<span class="tok-kw">const</span> substeps: u32 = <span class="tok-num">2</span>;
+<span class="tok-kw">const</span> rest_rho: f32 = <span class="tok-num">10.0</span>;
+<span class="tok-comment">/// Maximum particle speed in pixels per substep.  A hard cap that</span>
+<span class="tok-comment">/// prevents instability if `k` is set high enough to overshoot</span>
+<span class="tok-comment">/// boundaries.  Sliding the speed back down preserves direction</span>
+<span class="tok-comment">/// but silently breaks momentum conservation - band-aid, not a</span>
+<span class="tok-comment">/// feature.</span>
+<span class="tok-kw">const</span> max_speed: f32 = <span class="tok-num">40.0</span>;
+<span class="tok-kw">const</span> mouse_radius: f32 = <span class="tok-num">90.0</span>;
+<span class="tok-kw">const</span> mouse_force_mag: f32 = <span class="tok-num">0.8</span>;
+
+<span class="tok-comment">// Spatial grid: cell size = interaction radius.  +2 border pads</span>
+<span class="tok-comment">// the edges so a particle right on the boundary still has a valid</span>
+<span class="tok-comment">// cell (the algorithm's 3x3 neighbour walk would otherwise OOB).</span>
+<span class="tok-kw">const</span> grid_cols: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@ceil</span>(screen_w / interact_radius) + <span class="tok-num">2</span>);
+<span class="tok-kw">const</span> grid_rows: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@ceil</span>(screen_h / interact_radius) + <span class="tok-num">2</span>);
+<span class="tok-kw">const</span> grid_cells: u32 = grid_cols * grid_rows;
+
+<span class="tok-comment">// --- State --------------------------------------------------------</span>
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">// Particle data, struct-of-arrays.  Each array is</span>
+    <span class="tok-comment">// num_particles long, allocated once at init, never resized.</span>
+    <span class="tok-comment">// SoA chosen because every algorithm pass touches either</span>
+    <span class="tok-comment">// positions+velocities OR densities+positions - the access</span>
+    <span class="tok-comment">// pattern is component-major.</span>
+    positions: []Vec2,
+    prev_positions: []Vec2,
+    velocities: []Vec2,
+    <span class="tok-comment">/// `.x` = rho (linear-spike density), `.y` = rho_near (cubic-</span>
+    <span class="tok-comment">/// spike near-density).  Stored together because the pressure</span>
+    <span class="tok-comment">/// pass reads both fields per neighbour - paired access wins</span>
+    <span class="tok-comment">/// cache lines.</span>
+    densities: []Vec2,
+    <span class="tok-comment">/// Pressure-pass output, applied as a separate sweep so all</span>
+    <span class="tok-comment">/// reads in the force computation see the same predicted</span>
+    <span class="tok-comment">/// positions (no order-dependent drift between particles</span>
+    <span class="tok-comment">/// updated early and late).</span>
+    pos_deltas: []Vec2,
+    <span class="tok-comment">/// Viscosity-pass output.  Same rationale as `pos_deltas`:</span>
+    <span class="tok-comment">/// the gather is over PAIRS, and serial mutation of velocities</span>
+    <span class="tok-comment">/// during the gather would let particle i+1 read an already-</span>
+    <span class="tok-comment">/// damped v[i].  The dam-break spawn correlates index with</span>
+    <span class="tok-comment">/// position (low = upper-left, high = lower-right), so the</span>
+    <span class="tok-comment">/// order dependency manifested as a visible asymmetric damping</span>
+    <span class="tok-comment">/// - rightward-sloshing particles damped less than leftward</span>
+    <span class="tok-comment">/// ones, producing a persistent rightward bias.  Two-pass</span>
+    <span class="tok-comment">/// gather + apply fixes that.</span>
+    visc_deltas: []Vec2,
+
+    <span class="tok-comment">// Spatial hash grid in CSR (compressed sparse row) layout.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//   grid_starts[c]   = first slot in grid_indices for cell c</span>
+    <span class="tok-comment">//   grid_starts[c+1] = one past last slot for cell c</span>
+    <span class="tok-comment">//   grid_indices[k]  = particle index, for k in</span>
+    <span class="tok-comment">//                      [starts[c], starts[c+1])</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Constructed each substep by bucket-count -&gt; exclusive prefix</span>
+    <span class="tok-comment">// sum -&gt; scatter.  No MAX_PER_CELL cap (cells can hold any</span>
+    <span class="tok-comment">// number of particles).  Faster than the WebGPU version's</span>
+    <span class="tok-comment">// atomic-append for hot cells because no contention.</span>
+    grid_starts: []u32,
+    grid_indices: []u32,
+    <span class="tok-comment">/// Scratch cursor used during scatter.  Initialized from</span>
+    <span class="tok-comment">/// `grid_starts` then bumped per write.  Lives in State to</span>
+    <span class="tok-comment">/// avoid per-frame alloc.</span>
+    grid_cursor: []u32,
+    <span class="tok-comment">/// Cached cell index per particle.  Computed during</span>
+    <span class="tok-comment">/// `rebuildGrid` and reused by all three neighbour passes -</span>
+    <span class="tok-comment">/// saves recomputing `x/h, y/h` ~25x per particle per substep.</span>
+    grid_cell_of_particle: []u32,
+
+    <span class="tok-comment">// Simulation parameters - exposed via ImGui sliders.</span>
+    k_far: f32 = <span class="tok-num">0.004</span>,
+    k_near: f32 = <span class="tok-num">0.010</span>,
+    gravity_y: f32 = <span class="tok-num">0.05</span>,
+    visc_beta: f32 = <span class="tok-num">0.10</span>,
+
+    <span class="tok-comment">// Mouse interaction state.</span>
+    mouse_pos: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    mouse_force_active: bool = false,
+    mouse_attract: bool = false,
+
+    <span class="tok-comment">// Render scratch.</span>
+    ui_host: z.UiHost,
+    font: z.Font,
+};
+
+<span class="tok-comment">// --- App bridge ---------------------------------------------------</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    _ = gpa;
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">// --- Init ---------------------------------------------------------</span>
+
+<span class="tok-comment">/// Dam-break initial configuration.  Fills a rectangular block in</span>
+<span class="tok-comment">/// the left ~52% of the canvas with deterministic sub-pixel jitter</span>
+<span class="tok-comment">/// to break exact co-location.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// num_particles must factor as cols*rows exactly - using cols</span>
+<span class="tok-comment">/// computed from a sqrt + ceil produces a partial bottom row, and</span>
+<span class="tok-comment">/// the missing slots on one side give the dam a slight mass</span>
+<span class="tok-comment">/// imbalance that biases the post-release flow.  We choose</span>
+<span class="tok-comment">/// 50 x 40 = 2000 so the block is perfectly rectangular.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">resetParticles</span>(s: *State) void {
+    <span class="tok-kw">const</span> cols: u32 = <span class="tok-num">50</span>;
+    <span class="tok-kw">const</span> rows: u32 = num_particles / cols; <span class="tok-comment">// = 40, exact</span>
+    <span class="tok-kw">comptime</span> {
+        <span class="tok-fn">assert</span>(cols * rows == num_particles, <span class="tok-builtin">@src</span>());
+    }
+    <span class="tok-kw">const</span> fill_w: f32 = screen_w * <span class="tok-num">0.52</span>;
+    <span class="tok-kw">const</span> fill_h: f32 = screen_h * <span class="tok-num">0.92</span>;
+    <span class="tok-kw">const</span> cols_f: f32 = <span class="tok-fn">float</span>(cols);
+    <span class="tok-kw">const</span> rows_f: f32 = <span class="tok-fn">float</span>(rows);
+    <span class="tok-kw">const</span> spacing_x: f32 = fill_w / cols_f;
+    <span class="tok-kw">const</span> spacing_y: f32 = fill_h / rows_f;
+
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = .<span class="tok-fn">init</span>(<span class="tok-num">0x5EED</span>);
+    <span class="tok-kw">const</span> rng: std.Random = prng.<span class="tok-fn">random</span>();
+
+    <span class="tok-kw">for</span> (s.positions, <span class="tok-num">0</span>..) |*p, i| {
+        <span class="tok-kw">const</span> col: u32 = <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)) % cols;
+        <span class="tok-kw">const</span> row: u32 = <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)) / cols;
+        <span class="tok-kw">const</span> jx: f32 = (rng.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * <span class="tok-num">0.6</span>;
+        <span class="tok-kw">const</span> jy: f32 = (rng.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * <span class="tok-num">0.6</span>;
+        p.* = .{
+            <span class="tok-num">6.0</span> + (<span class="tok-fn">float</span>(col) + <span class="tok-num">0.5</span>) * spacing_x + jx,
+            <span class="tok-num">6.0</span> + (<span class="tok-fn">float</span>(row) + <span class="tok-num">0.5</span>) * spacing_y + jy,
+        };
+    }
+    <span class="tok-builtin">@memset</span>(s.velocities, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(
+    gpa: Allocator,
+    f: *z.Frame,
+    s: *State,
+) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>);
+    <span class="tok-kw">const</span> n: u32 = num_particles;
+    s.* = .{
+        .positions = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec2, n),
+        .prev_positions = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec2, n),
+        .velocities = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec2, n),
+        .densities = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec2, n),
+        .pos_deltas = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec2, n),
+        .visc_deltas = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec2, n),
+        .grid_starts = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u32, grid_cells + <span class="tok-num">1</span>),
+        .grid_indices = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u32, n),
+        .grid_cursor = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u32, grid_cells),
+        .grid_cell_of_particle = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u32, n),
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .font = font,
+    };
+    <span class="tok-comment">// Zero everything that the simulation step doesn't initialize</span>
+    <span class="tok-comment">// before reading.  `resetParticles` handles positions /</span>
+    <span class="tok-comment">// prev_positions / velocities; the rest gets touched by</span>
+    <span class="tok-comment">// `step()`'s first invocation in a write-then-read order - BUT</span>
+    <span class="tok-comment">// in ReleaseSafe (which smoke uses) Zig fills `gpa.alloc`</span>
+    <span class="tok-comment">// memory with the 0xAAAAAAAA undefined-sentinel, and any</span>
+    <span class="tok-comment">// read-before-write inside step() would trap on</span>
+    <span class="tok-comment">// `index 2863311530, len 2000`.  In ReleaseSmall (production)</span>
+    <span class="tok-comment">// the same memory is uninitialized garbage but doesn't trap,</span>
+    <span class="tok-comment">// making the bug invisible.  Belt-and-suspenders here means</span>
+    <span class="tok-comment">// the example works under both modes without depending on</span>
+    <span class="tok-comment">// step()'s internal ordering being airtight.</span>
+    <span class="tok-builtin">@memset</span>(s.densities, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> });
+    <span class="tok-builtin">@memset</span>(s.pos_deltas, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> });
+    <span class="tok-builtin">@memset</span>(s.visc_deltas, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> });
+    <span class="tok-builtin">@memset</span>(s.grid_starts, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.grid_indices, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.grid_cursor, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.grid_cell_of_particle, <span class="tok-num">0</span>);
+    <span class="tok-fn">resetParticles</span>(s);
+}
+
+<span class="tok-comment">// --- Per-frame update ---------------------------------------------</span>
+
+<span class="tok-comment">/// Bucket-sort all particles into the spatial hash grid.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Three passes:</span>
+<span class="tok-comment">///   1. Count: bucket per cell + cache cell-of-particle.</span>
+<span class="tok-comment">///   2. Exclusive prefix sum: turn counts into CSR start offsets.</span>
+<span class="tok-comment">///   3. Scatter: walk particles, write into grid_indices using a</span>
+<span class="tok-comment">///      per-cell cursor.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// After this returns, the algorithm-side invariants are:</span>
+<span class="tok-comment">///   - `grid_cell_of_particle[i]` = cell index containing particle i</span>
+<span class="tok-comment">///   - `grid_starts[c] &lt;= grid_starts[c+1]`, and particles in cell c</span>
+<span class="tok-comment">///     occupy slots `[grid_starts[c], grid_starts[c+1])` in</span>
+<span class="tok-comment">///     `grid_indices`</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">rebuildGrid</span>(s: *State) void {
+    <span class="tok-kw">const</span> inv_h: f32 = <span class="tok-num">1.0</span> / interact_radius;
+    <span class="tok-kw">const</span> cols_i32: i32 = <span class="tok-builtin">@intCast</span>(grid_cols);
+    <span class="tok-kw">const</span> rows_i32: i32 = <span class="tok-builtin">@intCast</span>(grid_rows);
+
+    <span class="tok-comment">// 1. Count.  We zero `grid_starts[0 .. grid_cells+1]` then</span>
+    <span class="tok-comment">//    write counts into `grid_starts[c + 1]` - leaves slot 0</span>
+    <span class="tok-comment">//    at zero, which is exactly what we want for the prefix</span>
+    <span class="tok-comment">//    sum below.</span>
+    <span class="tok-builtin">@memset</span>(s.grid_starts, <span class="tok-num">0</span>);
+    <span class="tok-kw">for</span> (s.positions, <span class="tok-num">0</span>..) |p, i| {
+        <span class="tok-kw">var</span> cx: i32 = <span class="tok-builtin">@floor</span>(p[<span class="tok-num">0</span>] * inv_h);
+        <span class="tok-kw">var</span> cy: i32 = <span class="tok-builtin">@floor</span>(p[<span class="tok-num">1</span>] * inv_h);
+        <span class="tok-kw">if</span> (cx &lt; <span class="tok-num">0</span>) {
+            cx = <span class="tok-num">0</span>;
+        }
+        <span class="tok-kw">if</span> (cy &lt; <span class="tok-num">0</span>) {
+            cy = <span class="tok-num">0</span>;
+        }
+        <span class="tok-kw">if</span> (cx &gt;= cols_i32) {
+            cx = cols_i32 - <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">if</span> (cy &gt;= rows_i32) {
+            cy = rows_i32 - <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">const</span> cell: u32 = <span class="tok-builtin">@intCast</span>(cx + cy * cols_i32);
+        s.grid_cell_of_particle[i] = cell;
+        s.grid_starts[cell + <span class="tok-num">1</span>] += <span class="tok-num">1</span>;
+    }
+
+    <span class="tok-comment">// 2. Exclusive prefix sum.  After this loop `grid_starts[c]`</span>
+    <span class="tok-comment">//    is the start slot for cell c, and `grid_starts[c+1]` is</span>
+    <span class="tok-comment">//    its end (= next cell's start).  The</span>
+    <span class="tok-comment">//    `grid_starts[grid_cells]` sentinel equals num_particles.</span>
+    <span class="tok-kw">var</span> sum: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (s.grid_starts) |*x| {
+        <span class="tok-kw">const</span> v: u32 = x.*;
+        x.* = sum;
+        sum += v;
+    }
+
+    <span class="tok-comment">// 3. Scatter.  Copy starts into a cursor; for each particle</span>
+    <span class="tok-comment">//    write its index at cursor[cell] and advance the cursor.</span>
+    <span class="tok-builtin">@memcpy</span>(s.grid_cursor, s.grid_starts[<span class="tok-num">0</span>..grid_cells]);
+    <span class="tok-kw">for</span> (s.grid_cell_of_particle, <span class="tok-num">0</span>..) |cell, i| {
+        <span class="tok-kw">const</span> slot: u32 = s.grid_cursor[cell];
+        s.grid_cursor[cell] += <span class="tok-num">1</span>;
+        s.grid_indices[slot] = <span class="tok-builtin">@intCast</span>(i);
+    }
+}
+
+<span class="tok-comment">/// One substep of the Clavet 2005 algorithm.  Algorithm 1 in the</span>
+<span class="tok-comment">/// paper.  Reads top-to-bottom; each labelled block corresponds to</span>
+<span class="tok-comment">/// a paper section.  No helper functions for the neighbour loop</span>
+<span class="tok-comment">/// because each pass has a different body and inlining matters at</span>
+<span class="tok-comment">/// 2000 particles x 2 substeps x 60 fps x ~9 neighbours = ~2M</span>
+<span class="tok-comment">/// inner-body iterations per second.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">step</span>(s: *State) void {
+    <span class="tok-kw">const</span> dt: f32 = <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> h: f32 = interact_radius;
+    <span class="tok-kw">const</span> inv_h: f32 = <span class="tok-num">1.0</span> / h;
+    <span class="tok-kw">const</span> h_sq: f32 = h * h;
+    <span class="tok-kw">const</span> k: f32 = s.k_far;
+    <span class="tok-kw">const</span> k_near: f32 = s.k_near;
+    <span class="tok-kw">const</span> beta: f32 = s.visc_beta;
+    <span class="tok-kw">const</span> cols_i32: i32 = <span class="tok-builtin">@intCast</span>(grid_cols);
+    <span class="tok-kw">const</span> rows_i32: i32 = <span class="tok-builtin">@intCast</span>(grid_rows);
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Algorithm 1, lines 1-5 - apply gravity + mouse force.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Gravity adds a constant impulse to vy each step.  The mouse</span>
+    <span class="tok-comment">// adds a radial impulse with linear falloff: maximum strength</span>
+    <span class="tok-comment">// at the cursor, fading to zero at mouse_radius.  Attract mode</span>
+    <span class="tok-comment">// just negates the sign.</span>
+    <span class="tok-comment">// ================================================================</span>
+    {
+        <span class="tok-kw">const</span> grav_imp: Vec2 = .{ <span class="tok-num">0</span>, s.gravity_y * dt };
+        <span class="tok-kw">const</span> mouse_force: f32 = blk: {
+            <span class="tok-kw">if</span> (!s.mouse_force_active) {
+                <span class="tok-kw">break</span> :blk <span class="tok-num">0.0</span>;
+            }
+            <span class="tok-kw">break</span> :blk <span class="tok-kw">if</span> (s.mouse_attract)
+                -mouse_force_mag
+            <span class="tok-kw">else</span>
+                mouse_force_mag;
+        };
+        <span class="tok-kw">const</span> mouse_radius_sq: f32 = mouse_radius * mouse_radius;
+        <span class="tok-kw">const</span> m_pos: Vec2 = s.mouse_pos;
+
+        <span class="tok-kw">for</span> (s.velocities, s.positions) |*v, p| {
+            v.* += grav_imp;
+            <span class="tok-kw">if</span> (mouse_force == <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> to_part: Vec2 = p - m_pos;
+            <span class="tok-kw">const</span> dist_sq: f32 = to_part[<span class="tok-num">0</span>] * to_part[<span class="tok-num">0</span>] +
+                to_part[<span class="tok-num">1</span>] * to_part[<span class="tok-num">1</span>];
+            <span class="tok-kw">if</span> (dist_sq &lt; <span class="tok-num">0.25</span> <span class="tok-kw">or</span> dist_sq &gt;= mouse_radius_sq) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(dist_sq);
+            <span class="tok-kw">const</span> falloff: f32 = <span class="tok-num">1.0</span> - dist / mouse_radius;
+            <span class="tok-kw">const</span> scale: f32 = mouse_force * falloff / dist;
+            v.* += to_part * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(scale));
+        }
+    }
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Grid rebuild #1 - on CURRENT positions.  Viscosity needs to</span>
+    <span class="tok-comment">// find neighbours at the particles' actual positions (not yet</span>
+    <span class="tok-comment">// predicted).</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-fn">rebuildGrid</span>(s);
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Algorithm 5 - viscosity damping.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// For each pair (i, j) closer than h with positive inward</span>
+    <span class="tok-comment">// radial velocity, apply an impulse along the connecting line</span>
+    <span class="tok-comment">// that damps the relative motion:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//   u = (v_i - v_j) * r_hat        (positive if approaching)</span>
+    <span class="tok-comment">//   I = dt * (1 - q) * beta * u^2   (paper beta term; sigma omitted)</span>
+    <span class="tok-comment">//   v_i -= I*r_hat / 2,   v_j += I*r_hat / 2</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Paper applies impulses in an ordered-pair scatter (each pair</span>
+    <span class="tok-comment">// touched once).  We use a symmetric gather: each particle</span>
+    <span class="tok-comment">// reads all its neighbours' velocities and accumulates its</span>
+    <span class="tok-comment">// half-impulse.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// The gather MUST be over a velocity snapshot - if we mutated</span>
+    <span class="tok-comment">// s.velocities[i] in place during the loop, later particles</span>
+    <span class="tok-comment">// would read already-damped neighbour velocities and damp less.</span>
+    <span class="tok-comment">// Since dam-break index correlates with position, that</span>
+    <span class="tok-comment">// asymmetry biases the fluid rightward.  Hence two passes:</span>
+    <span class="tok-comment">// gather into visc_deltas (read-only on velocities), then</span>
+    <span class="tok-comment">// apply.  Same pattern as the pressure pass below.</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-kw">for</span> (s.positions, s.velocities, s.visc_deltas, <span class="tok-num">0</span>..) |
+        p_i,
+        v_i,
+        *visc_out,
+        i_usize,
+    | {
+        <span class="tok-kw">const</span> i: u32 = <span class="tok-builtin">@intCast</span>(i_usize);
+        <span class="tok-kw">var</span> accum: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+
+        <span class="tok-kw">const</span> cell_i: u32 = s.grid_cell_of_particle[i];
+        <span class="tok-kw">const</span> cx: i32 = <span class="tok-builtin">@intCast</span>(cell_i % grid_cols);
+        <span class="tok-kw">const</span> cy: i32 = <span class="tok-builtin">@intCast</span>(cell_i / grid_cols);
+
+        <span class="tok-comment">// 3x3-cell neighbourhood walk.  Same pattern in density</span>
+        <span class="tok-comment">// and pressure passes below.</span>
+        <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+            <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+            <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> nx: i32 = cx + dx;
+                <span class="tok-kw">const</span> ny: i32 = cy + dy;
+                <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> nx &gt;= cols_i32 <span class="tok-kw">or</span> ny &gt;= rows_i32) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> ncell: u32 = <span class="tok-builtin">@intCast</span>(nx + ny * cols_i32);
+                <span class="tok-kw">const</span> start: u32 = s.grid_starts[ncell];
+                <span class="tok-kw">const</span> end: u32 = s.grid_starts[ncell + <span class="tok-num">1</span>];
+
+                <span class="tok-kw">var</span> slot: u32 = start;
+                <span class="tok-kw">while</span> (slot &lt; end) : (slot += <span class="tok-num">1</span>) {
+                    <span class="tok-kw">const</span> j: u32 = s.grid_indices[slot];
+                    <span class="tok-kw">if</span> (j == i) {
+                        <span class="tok-kw">continue</span>;
+                    }
+
+                    <span class="tok-kw">const</span> r: Vec2 = s.positions[j] - p_i;
+                    <span class="tok-kw">const</span> r_sq: f32 = r[<span class="tok-num">0</span>] * r[<span class="tok-num">0</span>] + r[<span class="tok-num">1</span>] * r[<span class="tok-num">1</span>];
+                    <span class="tok-comment">// Only skip exact co-location (numerical NaN</span>
+                    <span class="tok-comment">// guard).  Threshold lowered from 0.01 -&gt; 0.0001</span>
+                    <span class="tok-comment">// - anything past r ~ 0.01 px gives a sane r_hat.</span>
+                    <span class="tok-kw">if</span> (r_sq &gt;= h_sq <span class="tok-kw">or</span> r_sq &lt; <span class="tok-num">0.0001</span>) {
+                        <span class="tok-kw">continue</span>;
+                    }
+
+                    <span class="tok-kw">const</span> r_dist: f32 = <span class="tok-builtin">@sqrt</span>(r_sq);
+                    <span class="tok-kw">const</span> inv_r: f32 = <span class="tok-num">1.0</span> / r_dist;
+                    <span class="tok-kw">const</span> r_hat: Vec2 = r * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(inv_r));
+                    <span class="tok-kw">const</span> q: f32 = r_dist * inv_h;
+                    <span class="tok-kw">const</span> dv: Vec2 = v_i - s.velocities[j];
+                    <span class="tok-kw">const</span> u_radial: f32 = dv[<span class="tok-num">0</span>] * r_hat[<span class="tok-num">0</span>] + dv[<span class="tok-num">1</span>] * r_hat[<span class="tok-num">1</span>];
+
+                    <span class="tok-comment">// Linear drag, applied to ALL pairs - approaching</span>
+                    <span class="tok-comment">// AND separating, not just u &gt; 0 as the paper does.</span>
+                    <span class="tok-comment">//</span>
+                    <span class="tok-comment">// Why linear instead of paper's beta*u^2:</span>
+                    <span class="tok-comment">//   Quadratic scaling kills slow-motion damping.</span>
+                    <span class="tok-comment">//   For bulk creep at u ~ 1 with beta = 0.10, the</span>
+                    <span class="tok-comment">//   impulse is 0.05 - essentially zero.  That's</span>
+                    <span class="tok-comment">//   why the rightward drift would never settle:</span>
+                    <span class="tok-comment">//   no part of our viscosity model opposed it.</span>
+                    <span class="tok-comment">//   Linear (sigma*u) gives uniform drag regardless of</span>
+                    <span class="tok-comment">//   speed, which is what damps bulk flow.</span>
+                    <span class="tok-comment">//</span>
+                    <span class="tok-comment">// Why both directions (no u &gt; 0 gate):</span>
+                    <span class="tok-comment">//   Real viscous drag opposes relative motion in</span>
+                    <span class="tok-comment">//   either direction.  Paper gates by u &gt; 0</span>
+                    <span class="tok-comment">//   ("only when running into each other") to</span>
+                    <span class="tok-comment">//   preserve explosion energy in collisions - but</span>
+                    <span class="tok-comment">//   our problem is the opposite, fluid that</span>
+                    <span class="tok-comment">//   refuses to settle.  Damping separation too</span>
+                    <span class="tok-comment">//   makes the simulation actually equilibriate.</span>
+                    <span class="tok-comment">//</span>
+                    <span class="tok-comment">// Momentum still conserves exactly: u is symmetric</span>
+                    <span class="tok-comment">// in i&lt;-&gt;j (dv flips sign, r_hat flips sign, sign-of-</span>
+                    <span class="tok-comment">// product is invariant), so mag is identical for</span>
+                    <span class="tok-comment">// both processings, and the equal-and-opposite r_hat</span>
+                    <span class="tok-comment">// gives equal-and-opposite half-impulses.</span>
+                    <span class="tok-kw">const</span> i_mag: f32 =
+                        dt * (<span class="tok-num">1.0</span> - q) * beta * u_radial * <span class="tok-num">0.5</span>;
+                    accum -= r_hat * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(i_mag));
+                }
+            }
+        }
+        visc_out.* = accum;
+    }
+    <span class="tok-comment">// Apply viscosity deltas (sweep over velocities only).</span>
+    <span class="tok-kw">for</span> (s.velocities, s.visc_deltas) |*v, dv| {
+        v.* += dv;
+    }
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Algorithm 1, lines 6-10 - predict + boundary contact.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Save current pos, then move particles forward by v*dt.  The</span>
+    <span class="tok-comment">// double-density relaxation below operates on PREDICTED</span>
+    <span class="tok-comment">// positions; velocity is recovered at the end of the substep</span>
+    <span class="tok-comment">// as (new_pos - prev_pos) / dt, so any positional edits in</span>
+    <span class="tok-comment">// between (pressure, boundary) automatically become velocity</span>
+    <span class="tok-comment">// changes.  This is the paper's prediction-relaxation trick.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Boundary contact is resolved HERE, not after pressure</span>
+    <span class="tok-comment">// relaxation.  Two reasons:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//   1. If we only clamped after relaxation, a particle whose</span>
+    <span class="tok-comment">//      predicted pos lies outside the domain would still</span>
+    <span class="tok-comment">//      contribute to pressure as if it were 5 px through the</span>
+    <span class="tok-comment">//      wall - neighbour density on the wall side is wrong.</span>
+    <span class="tok-comment">//      Catching it at predict keeps the predicted layout</span>
+    <span class="tok-comment">//      physically valid.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//   2. The wall must absorb momentum, not amplify it, AND it</span>
+    <span class="tok-comment">//      must not pile particles into a single-row-thick stack.</span>
+    <span class="tok-comment">//      An earlier version teleported penetrating particles</span>
+    <span class="tok-comment">//      TO the wall margin - but that compressed every wall</span>
+    <span class="tok-comment">//      contact into the same y-line (or x-line), spiking</span>
+    <span class="tok-comment">//      neighbour density there and launching adjacent</span>
+    <span class="tok-comment">//      particles as a fountain on the next pressure pass.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//      Fix: when an axis penetrates, the particle simply</span>
+    <span class="tok-comment">//      doesn't move on that axis this substep.  Position</span>
+    <span class="tok-comment">//      stays at the start-of-substep value, velocity</span>
+    <span class="tok-comment">//      component on that axis is zeroed.  Wall absorbs the</span>
+    <span class="tok-comment">//      motion cleanly without concentrating density.  This</span>
+    <span class="tok-comment">//      is the user-pointed approach: "if pred pos penetrates,</span>
+    <span class="tok-comment">//      zero penetrating vel and put it back at prev pos".</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Local v_local copy avoids depending on whether Zig emits</span>
+    <span class="tok-comment">// correct code for `ptr_to_vector.*[component] = value`; the</span>
+    <span class="tok-comment">// boring read-modify-write through a stack copy is</span>
+    <span class="tok-comment">// unambiguous.</span>
+    <span class="tok-comment">// ================================================================</span>
+    {
+        <span class="tok-kw">const</span> margin_lo: Vec2 = .{ <span class="tok-num">1.5</span>, <span class="tok-num">1.5</span> };
+        <span class="tok-kw">const</span> margin_hi: Vec2 = .{ screen_w - <span class="tok-num">1.5</span>, screen_h - <span class="tok-num">1.5</span> };
+        <span class="tok-kw">for</span> (s.positions, s.prev_positions, s.velocities) |*p, *pp, *v| {
+            <span class="tok-kw">const</span> p_start: Vec2 = p.*;
+            <span class="tok-kw">var</span> v_local: Vec2 = v.*;
+            <span class="tok-kw">var</span> predicted: Vec2 = p_start + v_local * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(dt));
+            <span class="tok-kw">if</span> (predicted[<span class="tok-num">0</span>] &lt; margin_lo[<span class="tok-num">0</span>] <span class="tok-kw">or</span> predicted[<span class="tok-num">0</span>] &gt; margin_hi[<span class="tok-num">0</span>]) {
+                predicted[<span class="tok-num">0</span>] = p_start[<span class="tok-num">0</span>];
+                v_local[<span class="tok-num">0</span>] = <span class="tok-num">0</span>;
+            }
+            <span class="tok-kw">if</span> (predicted[<span class="tok-num">1</span>] &lt; margin_lo[<span class="tok-num">1</span>] <span class="tok-kw">or</span> predicted[<span class="tok-num">1</span>] &gt; margin_hi[<span class="tok-num">1</span>]) {
+                predicted[<span class="tok-num">1</span>] = p_start[<span class="tok-num">1</span>];
+                v_local[<span class="tok-num">1</span>] = <span class="tok-num">0</span>;
+            }
+            pp.* = p_start;
+            p.* = predicted;
+            v.* = v_local;
+        }
+    }
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Grid rebuild #2 - on PREDICTED positions.  Density and</span>
+    <span class="tok-comment">// pressure both use the same predicted layout, so one rebuild</span>
+    <span class="tok-comment">// covers both.</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-fn">rebuildGrid</span>(s);
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Algorithm 2 - double density relaxation.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// PASS A: density.  For each particle i, sum two kernels over</span>
+    <span class="tok-comment">// neighbours:</span>
+    <span class="tok-comment">//   rho_i      = sum_j (1 - r_ij/h)^2    (linear-spike, eq. 1)</span>
+    <span class="tok-comment">//   rho_near_i = sum_j (1 - r_ij/h)^3    (sharp cubic, eq. 4)</span>
+    <span class="tok-comment">// The sharper near-density kernel reacts only to very-close</span>
+    <span class="tok-comment">// pairs, which gives the algorithm its anti-clustering</span>
+    <span class="tok-comment">// property (paper section 4.3).</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-kw">for</span> (s.densities, s.positions, <span class="tok-num">0</span>..) |*d, p_i, i_usize| {
+        <span class="tok-kw">const</span> i: u32 = <span class="tok-builtin">@intCast</span>(i_usize);
+        <span class="tok-kw">var</span> rho: f32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> rho_near: f32 = <span class="tok-num">0</span>;
+
+        <span class="tok-kw">const</span> cell_i: u32 = s.grid_cell_of_particle[i];
+        <span class="tok-kw">const</span> cx: i32 = <span class="tok-builtin">@intCast</span>(cell_i % grid_cols);
+        <span class="tok-kw">const</span> cy: i32 = <span class="tok-builtin">@intCast</span>(cell_i / grid_cols);
+
+        <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+            <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+            <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> nx: i32 = cx + dx;
+                <span class="tok-kw">const</span> ny: i32 = cy + dy;
+                <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> nx &gt;= cols_i32 <span class="tok-kw">or</span> ny &gt;= rows_i32) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> ncell: u32 = <span class="tok-builtin">@intCast</span>(nx + ny * cols_i32);
+                <span class="tok-kw">const</span> start: u32 = s.grid_starts[ncell];
+                <span class="tok-kw">const</span> end: u32 = s.grid_starts[ncell + <span class="tok-num">1</span>];
+
+                <span class="tok-kw">var</span> slot: u32 = start;
+                <span class="tok-kw">while</span> (slot &lt; end) : (slot += <span class="tok-num">1</span>) {
+                    <span class="tok-kw">const</span> j: u32 = s.grid_indices[slot];
+                    <span class="tok-kw">if</span> (j == i) {
+                        <span class="tok-kw">continue</span>;
+                    }
+
+                    <span class="tok-kw">const</span> r: Vec2 = s.positions[j] - p_i;
+                    <span class="tok-kw">const</span> r_sq: f32 = r[<span class="tok-num">0</span>] * r[<span class="tok-num">0</span>] + r[<span class="tok-num">1</span>] * r[<span class="tok-num">1</span>];
+                    <span class="tok-kw">if</span> (r_sq &gt;= h_sq) {
+                        <span class="tok-kw">continue</span>;
+                    }
+
+                    <span class="tok-kw">const</span> one_minus_q: f32 = <span class="tok-num">1.0</span> - <span class="tok-builtin">@sqrt</span>(r_sq) * inv_h;
+                    <span class="tok-kw">const</span> omq_sq: f32 = one_minus_q * one_minus_q;
+                    rho += omq_sq;
+                    rho_near += omq_sq * one_minus_q;
+                }
+            }
+        }
+        d.* = .{ rho, rho_near };
+    }
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Algorithm 2 - PASS B: compute pressure displacements.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//   P_i      = k * (rho_i - rho_0)     (signed, paper eq. 2)</span>
+    <span class="tok-comment">//   P_near_i = k_near * rho_near_i     (always positive, eq. 5)</span>
+    <span class="tok-comment">//   dr_ij    = dt^2 * (P * (1-q) + P_near * (1-q)^2) * r_hat</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Surface tension emerges from P being NEGATIVE at the fluid</span>
+    <span class="tok-comment">// surface (rho &lt; rho_0): the linear-kernel term pulls</span>
+    <span class="tok-comment">// neighbours closer, but the sharp-spike near-pressure term</span>
+    <span class="tok-comment">// still repels at very short range - net effect is a smooth</span>
+    <span class="tok-comment">// surface with stable drops and filaments (paper section 4.4).</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Paper uses asymmetric scatter (each pair touched once).</span>
+    <span class="tok-comment">// We use symmetric gather: each particle reads its OWN and its</span>
+    <span class="tok-comment">// NEIGHBOUR's pressures, applying half the pair force.  The</span>
+    <span class="tok-comment">// 0.5 factor below compensates for the double-count.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Co-location: when r ~ 0 the normalised direction is</span>
+    <span class="tok-comment">// undefined.  We pick a deterministic antisymmetric cardinal</span>
+    <span class="tok-comment">// so the pair separates (smaller index goes -x, larger goes</span>
+    <span class="tok-comment">// +x).  Init jitter makes this rare in practice but it's free</span>
+    <span class="tok-comment">// insurance.</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-kw">const</span> dt_sq: f32 = dt * dt;
+    <span class="tok-kw">for</span> (
+        s.pos_deltas,
+        s.positions,
+        s.densities,
+        <span class="tok-num">0</span>..,
+    ) |*delta_i, p_i, dens_i, i_usize| {
+        <span class="tok-kw">const</span> i: u32 = <span class="tok-builtin">@intCast</span>(i_usize);
+        <span class="tok-kw">const</span> big_p_i: f32 = k * (dens_i[<span class="tok-num">0</span>] - rest_rho);
+        <span class="tok-kw">const</span> big_pn_i: f32 = k_near * dens_i[<span class="tok-num">1</span>];
+
+        <span class="tok-kw">var</span> accum: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+
+        <span class="tok-kw">const</span> cell_i: u32 = s.grid_cell_of_particle[i];
+        <span class="tok-kw">const</span> cx: i32 = <span class="tok-builtin">@intCast</span>(cell_i % grid_cols);
+        <span class="tok-kw">const</span> cy: i32 = <span class="tok-builtin">@intCast</span>(cell_i / grid_cols);
+
+        <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+            <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+            <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> nx: i32 = cx + dx;
+                <span class="tok-kw">const</span> ny: i32 = cy + dy;
+                <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> nx &gt;= cols_i32 <span class="tok-kw">or</span> ny &gt;= rows_i32) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> ncell: u32 = <span class="tok-builtin">@intCast</span>(nx + ny * cols_i32);
+                <span class="tok-kw">const</span> start: u32 = s.grid_starts[ncell];
+                <span class="tok-kw">const</span> end: u32 = s.grid_starts[ncell + <span class="tok-num">1</span>];
+
+                <span class="tok-kw">var</span> slot: u32 = start;
+                <span class="tok-kw">while</span> (slot &lt; end) : (slot += <span class="tok-num">1</span>) {
+                    <span class="tok-kw">const</span> j: u32 = s.grid_indices[slot];
+                    <span class="tok-kw">if</span> (j == i) {
+                        <span class="tok-kw">continue</span>;
+                    }
+
+                    <span class="tok-kw">const</span> r: Vec2 = s.positions[j] - p_i;
+                    <span class="tok-kw">const</span> r_sq: f32 = r[<span class="tok-num">0</span>] * r[<span class="tok-num">0</span>] + r[<span class="tok-num">1</span>] * r[<span class="tok-num">1</span>];
+                    <span class="tok-kw">if</span> (r_sq &gt;= h_sq) {
+                        <span class="tok-kw">continue</span>;
+                    }
+
+                    <span class="tok-kw">var</span> r_hat: Vec2 = undefined;
+                    <span class="tok-kw">var</span> r_dist: f32 = undefined;
+                    <span class="tok-kw">if</span> (r_sq &gt; <span class="tok-num">0.25</span>) {
+                        r_dist = <span class="tok-builtin">@sqrt</span>(r_sq);
+                        r_hat = r * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(<span class="tok-num">1.0</span> / r_dist));
+                    } <span class="tok-kw">else</span> {
+                        <span class="tok-comment">// Co-location fallback: r ~ 0 -&gt; r_hat undefined.</span>
+                        <span class="tok-comment">// 1D x-only would force all of a corner-clamped</span>
+                        <span class="tok-comment">// stack's pressure into +/-x and rocket the</span>
+                        <span class="tok-comment">// extreme-indexed particles out.  Fan across 4</span>
+                        <span class="tok-comment">// cardinals using a deterministic hash of the</span>
+                        <span class="tok-comment">// pair: (i+j)&amp;3 picks the axis, i&lt;j flips the</span>
+                        <span class="tok-comment">// sign so the pair separates antisymmetrically</span>
+                        <span class="tok-comment">// (action-reaction is preserved when particle j</span>
+                        <span class="tok-comment">// processes this same pair).</span>
+                        <span class="tok-kw">const</span> axis: u32 = (i +% j) &amp; <span class="tok-num">3</span>;
+                        <span class="tok-kw">const</span> sign: f32 = <span class="tok-kw">if</span> (i &lt; j) -<span class="tok-num">1.0</span> <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+                        r_hat = <span class="tok-kw">switch</span> (axis) {
+                            <span class="tok-num">0</span> =&gt; .{ sign, <span class="tok-num">0</span> },
+                            <span class="tok-num">1</span> =&gt; .{ <span class="tok-num">0</span>, sign },
+                            <span class="tok-num">2</span> =&gt; .{ -sign, <span class="tok-num">0</span> },
+                            <span class="tok-kw">else</span> =&gt; .{ <span class="tok-num">0</span>, -sign },
+                        };
+                        r_dist = <span class="tok-num">0.5</span>;
+                    }
+
+                    <span class="tok-kw">const</span> q: f32 = r_dist * inv_h;
+                    <span class="tok-kw">const</span> one_minus_q: f32 = <span class="tok-num">1.0</span> - q;
+                    <span class="tok-kw">const</span> dens_j: Vec2 = s.densities[j];
+                    <span class="tok-kw">const</span> big_p_j: f32 = k * (dens_j[<span class="tok-num">0</span>] - rest_rho);
+                    <span class="tok-kw">const</span> big_pn_j: f32 = k_near * dens_j[<span class="tok-num">1</span>];
+
+                    <span class="tok-comment">// Symmetric gather x 0.5 matches paper scatter total.</span>
+                    <span class="tok-kw">const</span> mag: f32 = <span class="tok-num">0.5</span> * dt_sq *
+                        ((big_p_i + big_p_j) * one_minus_q +
+                            (big_pn_i + big_pn_j) * one_minus_q * one_minus_q);
+
+                    <span class="tok-comment">// r_hat points FROM i TO j; pressure pushes i</span>
+                    <span class="tok-comment">// away -&gt; subtract.</span>
+                    accum -= r_hat * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(mag));
+                }
+            }
+        }
+        <span class="tok-comment">// Note: no per-particle displacement cap.  An earlier</span>
+        <span class="tok-comment">// version had one, but it breaks pair-momentum</span>
+        <span class="tok-comment">// conservation - when accum exceeds the cap, the per-</span>
+        <span class="tok-comment">// particle scaling shrinks one side of every pair this</span>
+        <span class="tok-comment">// particle participates in, while its pair partners</span>
+        <span class="tok-comment">// (typically less dense, not capped) keep their full</span>
+        <span class="tok-comment">// contribution.  Repeated over a pile's many pairs, the</span>
+        <span class="tok-comment">// asymmetry pumps net momentum into surface particles</span>
+        <span class="tok-comment">// and launches them as a fountain.  Co-location NaNs</span>
+        <span class="tok-comment">// (the original reason for the cap) are handled cleanly</span>
+        <span class="tok-comment">// by spawn jitter + the 4-cardinal r_hat fallback above.</span>
+        delta_i.* = accum;
+    }
+
+    <span class="tok-comment">// PASS C: apply deltas.  Separated from B so all reads in B</span>
+    <span class="tok-comment">// saw consistent predicted positions; if we'd folded apply</span>
+    <span class="tok-comment">// into B, particles processed later would have read partially-</span>
+    <span class="tok-comment">// updated positions from particles processed earlier, biasing</span>
+    <span class="tok-comment">// the result by processing order.</span>
+    <span class="tok-kw">for</span> (s.positions, s.pos_deltas) |*p, dp| {
+        p.* += dp;
+    }
+
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Algorithm 1, lines 18-20 - boundary clamp + velocity recompute.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Clamp positions inside the domain (small margin so render</span>
+    <span class="tok-comment">// circles don't intersect the edge), then recover velocity as</span>
+    <span class="tok-comment">// (new_pos - prev_pos) / dt.  This is the prediction-</span>
+    <span class="tok-comment">// relaxation payoff: every positional edit from pressure,</span>
+    <span class="tok-comment">// boundary, etc. automatically becomes a velocity change</span>
+    <span class="tok-comment">// without explicit force integration.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-comment">// Final boundary clamp + velocity recompute.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Defensive backstop for the rare case where pressure on its</span>
+    <span class="tok-comment">// own pushed a particle outside the domain (predict-clamp</span>
+    <span class="tok-comment">// already handles the velocity-driven case).  When firing,</span>
+    <span class="tok-comment">// clamp to the wall and zero the velocity component on that</span>
+    <span class="tok-comment">// axis - same inelastic-wall response as the predict clamp.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Speed cap is a remaining band-aid for high-stiffness</span>
+    <span class="tok-comment">// setups; breaks momentum conservation when triggered but is</span>
+    <span class="tok-comment">// strictly better than letting particles tunnel out of the</span>
+    <span class="tok-comment">// domain at max_speed-exceeding velocity.</span>
+    <span class="tok-comment">// ================================================================</span>
+    <span class="tok-kw">const</span> margin_lo: Vec2 = .{ <span class="tok-num">1.5</span>, <span class="tok-num">1.5</span> };
+    <span class="tok-kw">const</span> margin_hi: Vec2 = .{ screen_w - <span class="tok-num">1.5</span>, screen_h - <span class="tok-num">1.5</span> };
+    <span class="tok-kw">const</span> max_speed_sq: f32 = max_speed * max_speed;
+    <span class="tok-kw">const</span> inv_dt: f32 = <span class="tok-num">1.0</span> / dt;
+    <span class="tok-kw">for</span> (s.positions, s.prev_positions, s.velocities) |*p, pp, *v| {
+        <span class="tok-kw">var</span> p_local: Vec2 = p.*;
+        <span class="tok-kw">var</span> new_v: Vec2 = (p_local - pp) * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(inv_dt));
+        <span class="tok-kw">if</span> (p_local[<span class="tok-num">0</span>] &lt; margin_lo[<span class="tok-num">0</span>]) {
+            p_local[<span class="tok-num">0</span>] = margin_lo[<span class="tok-num">0</span>];
+            new_v[<span class="tok-num">0</span>] = <span class="tok-num">0</span>;
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p_local[<span class="tok-num">0</span>] &gt; margin_hi[<span class="tok-num">0</span>]) {
+            p_local[<span class="tok-num">0</span>] = margin_hi[<span class="tok-num">0</span>];
+            new_v[<span class="tok-num">0</span>] = <span class="tok-num">0</span>;
+        }
+        <span class="tok-kw">if</span> (p_local[<span class="tok-num">1</span>] &lt; margin_lo[<span class="tok-num">1</span>]) {
+            p_local[<span class="tok-num">1</span>] = margin_lo[<span class="tok-num">1</span>];
+            new_v[<span class="tok-num">1</span>] = <span class="tok-num">0</span>;
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p_local[<span class="tok-num">1</span>] &gt; margin_hi[<span class="tok-num">1</span>]) {
+            p_local[<span class="tok-num">1</span>] = margin_hi[<span class="tok-num">1</span>];
+            new_v[<span class="tok-num">1</span>] = <span class="tok-num">0</span>;
+        }
+        <span class="tok-kw">const</span> speed_sq: f32 = new_v[<span class="tok-num">0</span>] * new_v[<span class="tok-num">0</span>] + new_v[<span class="tok-num">1</span>] * new_v[<span class="tok-num">1</span>];
+        <span class="tok-kw">if</span> (speed_sq &gt; max_speed_sq) {
+            <span class="tok-kw">const</span> scale: f32 = max_speed / <span class="tok-builtin">@sqrt</span>(speed_sq);
+            new_v *= <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(scale));
+        }
+        p.* = p_local;
+        v.* = new_v;
+    }
+}
+
+<span class="tok-comment">/// Map normalized density `t in [0,1]` to a 3-stop blue-&gt;cyan-&gt;white</span>
+<span class="tok-comment">/// gradient that highlights surface (low density) and interior</span>
+<span class="tok-comment">/// (high) regions.  Matches the WGSL fragment shader from the</span>
+<span class="tok-comment">/// WebGPU version of this demo.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">densityToColor</span>(t: f32) Color {
+    <span class="tok-kw">const</span> lo: Vec3 = <span class="tok-fn">vec3</span>(<span class="tok-num">0.02</span>, <span class="tok-num">0.15</span>, <span class="tok-num">0.70</span>);
+    <span class="tok-kw">const</span> mid: Vec3 = <span class="tok-fn">vec3</span>(<span class="tok-num">0.05</span>, <span class="tok-num">0.65</span>, <span class="tok-num">1.00</span>);
+    <span class="tok-kw">const</span> hi: Vec3 = <span class="tok-fn">vec3</span>(<span class="tok-num">0.80</span>, <span class="tok-num">0.95</span>, <span class="tok-num">1.00</span>);
+    <span class="tok-kw">const</span> c: Vec3 = <span class="tok-kw">if</span> (t &lt; <span class="tok-num">0.5</span>) blk: {
+        <span class="tok-kw">const</span> u: f32 = t * <span class="tok-num">2.0</span>;
+        <span class="tok-kw">break</span> :blk <span class="tok-fn">vec3</span>(
+            lo[<span class="tok-num">0</span>] + (mid[<span class="tok-num">0</span>] - lo[<span class="tok-num">0</span>]) * u,
+            lo[<span class="tok-num">1</span>] + (mid[<span class="tok-num">1</span>] - lo[<span class="tok-num">1</span>]) * u,
+            lo[<span class="tok-num">2</span>] + (mid[<span class="tok-num">2</span>] - lo[<span class="tok-num">2</span>]) * u,
+        );
+    } <span class="tok-kw">else</span> blk: {
+        <span class="tok-kw">const</span> u: f32 = (t - <span class="tok-num">0.5</span>) * <span class="tok-num">2.0</span>;
+        <span class="tok-kw">break</span> :blk <span class="tok-fn">vec3</span>(
+            mid[<span class="tok-num">0</span>] + (hi[<span class="tok-num">0</span>] - mid[<span class="tok-num">0</span>]) * u,
+            mid[<span class="tok-num">1</span>] + (hi[<span class="tok-num">1</span>] - mid[<span class="tok-num">1</span>]) * u,
+            mid[<span class="tok-num">2</span>] + (hi[<span class="tok-num">2</span>] - mid[<span class="tok-num">2</span>]) * u,
+        );
+    };
+    <span class="tok-kw">return</span> .{
+        .r = <span class="tok-builtin">@trunc</span>(c[<span class="tok-num">0</span>] * <span class="tok-num">255.0</span>),
+        .g = <span class="tok-builtin">@trunc</span>(c[<span class="tok-num">1</span>] * <span class="tok-num">255.0</span>),
+        .b = <span class="tok-builtin">@trunc</span>(c[<span class="tok-num">2</span>] * <span class="tok-num">255.0</span>),
+        .a = <span class="tok-num">255</span>,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// Mouse state for this frame.  Capture before the substep loop</span>
+    <span class="tok-comment">// so all substeps see the same input (no intra-frame drift).</span>
+    s.mouse_pos = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    s.mouse_force_active = z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left);
+    s.mouse_attract = z.<span class="tok-fn">isKeyDown</span>(f.input, .left_shift) <span class="tok-kw">or</span>
+        z.<span class="tok-fn">isKeyDown</span>(f.input, .right_shift);
+
+    <span class="tok-comment">// Run the simulation.  Multiple substeps per rendered frame</span>
+    <span class="tok-comment">// improves temporal resolution under high stiffness without</span>
+    <span class="tok-comment">// increasing visible frame rate.</span>
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; substeps) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-fn">step</span>(s);
+    }
+
+    <span class="tok-comment">// --- Render -----------------------------------------------------</span>
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">1</span>, .g = <span class="tok-num">3</span>, .b = <span class="tok-num">8</span>, .a = <span class="tok-num">255</span> });
+
+    <span class="tok-comment">// Density-coloured particles.  Color stops match the WGSL</span>
+    <span class="tok-comment">// fragment shader from the WebGPU version:</span>
+    <span class="tok-comment">//   low density  (surface)  -&gt; deep blue</span>
+    <span class="tok-comment">//   rest density            -&gt; cyan</span>
+    <span class="tok-comment">//   high density (interior) -&gt; near-white</span>
+    <span class="tok-kw">const</span> inv_max_density: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">15.0</span>; <span class="tok-comment">// rest_rho * 1.5</span>
+    <span class="tok-kw">for</span> (s.positions, s.densities) |p, d| {
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-fn">clamp</span>(d[<span class="tok-num">0</span>] * inv_max_density, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+        <span class="tok-kw">const</span> col: Color = <span class="tok-fn">densityToColor</span>(t);
+        f.gl.<span class="tok-fn">circle</span>(p, render_radius, .{ .color = col, .segments = <span class="tok-num">16</span> });
+    }
+
+    <span class="tok-comment">// --- ImGui control panel ----------------------------------------</span>
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"controls"</span>, .{ .initial_pos = .{ <span class="tok-num">12</span>, <span class="tok-num">12</span> } })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"{d} particles, {d} substep(s)/frame"</span>, .{
+            num_particles,
+            substeps,
+        });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"fps {d:.0}"</span>, .{<span class="tok-num">1.0</span> / f.time.delta_time});
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"k (far)"</span>, &amp;s.k_far, .{
+            .min = <span class="tok-num">0</span>,
+            .max = <span class="tok-num">0.02</span>,
+            .fmt = <span class="tok-str">"{d:.4}"</span>,
+        });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"k_near"</span>, &amp;s.k_near, .{
+            .min = <span class="tok-num">0</span>,
+            .max = <span class="tok-num">0.05</span>,
+            .fmt = <span class="tok-str">"{d:.4}"</span>,
+        });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"gravity"</span>, &amp;s.gravity_y, .{
+            .min = <span class="tok-num">0</span>,
+            .max = <span class="tok-num">0.3</span>,
+        });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"viscosity β"</span>, &amp;s.visc_beta, .{
+            .min = <span class="tok-num">0</span>,
+            .max = <span class="tok-num">0.5</span>,
+        });
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"reset"</span>, .{})) {
+            <span class="tok-fn">resetParticles</span>(s);
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"left-drag: push    shift+drag: pull"</span>, .{});
+    }
+    s.ui_host.<span class="tok-fn">render</span>(f);
+}
+
+<span class="tok-comment">// --- Simulation step (the heart) -----------------------------------</span>
+
+<span class="tok-comment">// --- Spatial grid rebuild ------------------------------------------</span>
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"SPH viscoelastic fluid — Clavet 2005"</span>,
+            .width = <span class="tok-builtin">@trunc</span>(screen_w),
+            .height = <span class="tok-builtin">@trunc</span>(screen_h),
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>decal_sw — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>decal_sw</h1>
+<figure class="code src-file" data-path="examples/decal_sw/decal_sw.zig" data-lines="586"><figcaption><span>examples/decal_sw/decal_sw.zig</span><span>586 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! decal_sw - ONE Zig decal shader, TWO renderers, side by side.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `src/shaders/decal_vs.zig` + `decal_fs.zig` are the SAME files the build</span>
+<span class="tok-comment">//! compiles to SPIR-V -&gt; WGSL for the GPU decal pipeline. Here they are also</span>
+<span class="tok-comment">//! imported as plain Zig (`z.decal_shaders`) and run by the software rasterizer</span>
+<span class="tok-comment">//! per vertex / per fragment, so the projector math - world -&gt; decal-box space,</span>
+<span class="tok-comment">//! the inside-box mask, the facing mask - runs bit-identically on hardware and</span>
+<span class="tok-comment">//! in software:</span>
+<span class="tok-comment">//!   - RIGHT (GPU): the receiver sphere is drawn flat, then the decals are</span>
+<span class="tok-comment">//!     painted by `z.drawDecal`'s WebGPU pipeline, into an offscreen render</span>
+<span class="tok-comment">//!     texture composited as 2D.</span>
+<span class="tok-comment">//!   - LEFT (CPU): the same sphere is filled flat, then the SAME decal_vs /</span>
+<span class="tok-comment">//!     decal_fs `shaderMain`s run over the receiver triangles through</span>
+<span class="tok-comment">//!     `raster_shader.rasterizeTriangles`, depth-tested `.less_equal` with no</span>
+<span class="tok-comment">//!     depth write and alpha-over blend - matching the GPU decal pipeline's</span>
+<span class="tok-comment">//!     `.less_equal_no_write` overlay state.</span>
+<span class="tok-comment">//! Same mesh, same projector matrices, same DecalUbo values, same decal</span>
+<span class="tok-comment">//! texture, same camera. The base surface is a flat unlit colour on both sides</span>
+<span class="tok-comment">//! (trivially identical) so every visible difference is the decal itself.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Drag to orbit, wheel/pinch to zoom; the splitter follows the pointer. The</span>
+<span class="tok-comment">//! known v1 divergence, visible if you look closely: the CPU half renders at a</span>
+<span class="tok-comment">//! reduced pixel budget and samples the decal texture nearest (the GPU view is</span>
+<span class="tok-comment">//! bilinear).</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> Vec2i = zm.Vec2i;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> rotationZ = zm.rotationZ;
+<span class="tok-kw">const</span> compose = zm.compose;
+<span class="tok-kw">const</span> radFromDeg = zm.radFromDeg;
+<span class="tok-kw">const</span> Color = zm.Color;
+
+<span class="tok-kw">const</span> decal = z.decal_shaders;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// The CPU half renders a constant pixel budget shaped to the live canvas</span>
+<span class="tok-comment">// aspect, so rotating the phone never stretches and never changes the per-frame</span>
+<span class="tok-comment">// CPU cost. ~30k px ~ 220x136.</span>
+<span class="tok-kw">const</span> cpu_pixel_budget: f32 = <span class="tok-num">30_000</span>;
+
+<span class="tok-kw">const</span> decal_tex_edge: u32 = <span class="tok-num">64</span>;
+<span class="tok-kw">const</span> decal_size: f32 = <span class="tok-num">0.7</span>; <span class="tok-comment">// world-space edge of the decal projector box</span>
+<span class="tok-kw">const</span> max_decals: u32 = <span class="tok-num">24</span>;
+<span class="tok-kw">const</span> sphere_radius: f32 = <span class="tok-num">1.0</span>;
+
+<span class="tok-kw">const</span> cam_target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+<span class="tok-kw">const</span> fovy: f32 = <span class="tok-num">0.85</span>;
+<span class="tok-kw">const</span> z_near: f32 = <span class="tok-num">0.05</span>;
+<span class="tok-kw">const</span> z_far: f32 = <span class="tok-num">100.0</span>;
+
+<span class="tok-kw">const</span> base_color: Color = .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">130</span>, .b = <span class="tok-num">150</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> bg_clear: Color = .{ .r = <span class="tok-num">10</span>, .g = <span class="tok-num">12</span>, .b = <span class="tok-num">20</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// A recorded decal: the world-&gt;box projector, the projector facing dir (the</span>
+<span class="tok-comment">/// surface normal at the hit), and its tint. Both halves consume these.</span>
+<span class="tok-kw">const</span> Decal = <span class="tok-kw">struct</span> {
+    projector: Mat,
+    forward: Vec,
+    color: Color,
+};
+
+<span class="tok-comment">/// The fragment-stage uniform the decal FS reads, built ONCE per decal and fed</span>
+<span class="tok-comment">/// to both renderers. Mirrors `draw3d`'s `DecalUbo` field-for-field (the same</span>
+<span class="tok-comment">/// `params = {half_size, 1/size, 0, 0}` recipe `drawDecal` writes on the GPU).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">buildDecalUbo</span>(d: Decal) decal.fs.Ubo {
+    <span class="tok-kw">const</span> col: [<span class="tok-num">4</span>]f32 = Color.<span class="tok-fn">toFloats</span>(d.color);
+    <span class="tok-kw">const</span> half_size: f32 = <span class="tok-num">0.5</span> * decal_size;
+    <span class="tok-kw">return</span> .{
+        .projector = d.projector,
+        .color = .{ col[<span class="tok-num">0</span>], col[<span class="tok-num">1</span>], col[<span class="tok-num">2</span>], col[<span class="tok-num">3</span>] },
+        .params = .{ half_size, <span class="tok-num">1.0</span> / decal_size, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .forward = d.forward,
+    };
+}
+
+<span class="tok-comment">/// Build the world-&gt;box projector for a hit point + surface normal, spun a</span>
+<span class="tok-comment">/// deterministic amount about its own axis - the SAME construction the decals</span>
+<span class="tok-comment">/// example uses (look from just outside the surface toward the hit, then spin</span>
+<span class="tok-comment">/// in-plane). `compose(first, then)` reads in application order.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">buildProjector</span>(hit_point: Vec, hit_normal: Vec, spin_deg: f32) Mat {
+    <span class="tok-kw">const</span> eye: Vec = <span class="tok-fn">vec</span>(
+        hit_point[<span class="tok-num">0</span>] + hit_normal[<span class="tok-num">0</span>],
+        hit_point[<span class="tok-num">1</span>] + hit_normal[<span class="tok-num">1</span>],
+        hit_point[<span class="tok-num">2</span>] + hit_normal[<span class="tok-num">2</span>],
+    );
+    <span class="tok-kw">const</span> look: Mat = <span class="tok-fn">lookAtRh</span>(hit_point, eye, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">return</span> <span class="tok-fn">compose</span>(look, <span class="tok-fn">rotationZ</span>(<span class="tok-fn">radFromDeg</span>(spin_deg)));
+}
+
+<span class="tok-comment">/// One CPU-side decal texture: owned RGBA8 pixels handed to the fragment shader</span>
+<span class="tok-comment">/// as a `TextureRef`. The GPU view is `rgba8_unorm` (linear), so no sRGB here.</span>
+<span class="tok-kw">const</span> CpuTex = <span class="tok-kw">struct</span> {
+    pixels: []u8,
+    width: u32,
+    height: u32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">ref</span>(self: CpuTex) decal.fs.TextureRef {
+        <span class="tok-kw">return</span> .{ .pixels = self.pixels, .width = self.width, .height = self.height, .srgb = false };
+    }
+};
+
+<span class="tok-comment">/// A de-indexed triangle-soup copy of the receiver mesh (position + normal per</span>
+<span class="tok-comment">/// vertex), matching how `uploadDecalReceiver` de-indexes for the GPU - so the</span>
+<span class="tok-comment">/// CPU decal pass rasterizes the exact same triangles.</span>
+<span class="tok-kw">const</span> CpuReceiver = <span class="tok-kw">struct</span> {
+    positions: [][<span class="tok-num">3</span>]f32,
+    normals: [][<span class="tok-num">3</span>]f32,
+    vcount: u32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(self: *CpuReceiver, gpa: Allocator) void {
+        gpa.<span class="tok-fn">free</span>(self.positions);
+        gpa.<span class="tok-fn">free</span>(self.normals);
+    }
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    <span class="tok-comment">// ---- GPU half ----</span>
+    sphere_model: z.Model,
+    receiver: u32, <span class="tok-comment">// decal-receiver handle</span>
+    decal_tex: z.WgpuTexture,
+    <span class="tok-comment">// ---- CPU half ----</span>
+    cpu_recv: CpuReceiver,
+    cpu_tex: CpuTex,
+    vs_outs: []decal.vs.Out,
+    indices_u32: []u32,
+    sw: z.raster.Context,
+    sw_fb: z.CpuFramebuffer,
+    <span class="tok-comment">// ---- shared scene ----</span>
+    decals: [max_decals]Decal,
+    decal_count: u32,
+    place_timer: f32,
+    place_index: u32,
+    <span class="tok-comment">// ---- shared camera / UI ----</span>
+    font: z.Font,
+    cam_yaw: f32,
+    cam_pitch: f32,
+    cam_dist: f32,
+    dragging: bool,
+    prev_pinch_dist: f32,
+    last_mouse: Vec2,
+    divider_frac: f32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    z.<span class="tok-fn">unloadModel</span>(gpa, s.sphere_model);
+    s.decal_tex.<span class="tok-fn">deinit</span>();
+    s.sw_fb.<span class="tok-fn">deinit</span>();
+    s.cpu_recv.<span class="tok-fn">deinit</span>(gpa);
+    gpa.<span class="tok-fn">free</span>(s.cpu_tex.pixels);
+    gpa.<span class="tok-fn">free</span>(s.vs_outs);
+    gpa.<span class="tok-fn">free</span>(s.indices_u32);
+    s.sw.<span class="tok-fn">deinit</span>(gpa);
+}
+
+<span class="tok-comment">/// The procedural decal texture as raw RGBA8 bytes - a concentric-ring target</span>
+<span class="tok-comment">/// that fades to transparent well inside the box edge, so the box clip only</span>
+<span class="tok-comment">/// ever cuts already-transparent texels. Returns owned pixels; the GPU half</span>
+<span class="tok-comment">/// wraps the same data in an `z.Image`.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">makeDecalPixels</span>(gpa: Allocator) ![]u8 {
+    <span class="tok-kw">const</span> n: usize = decal_tex_edge;
+    <span class="tok-kw">const</span> px: []u8 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u8, n * n * <span class="tok-num">4</span>);
+    <span class="tok-kw">const</span> c: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(n))) * <span class="tok-num">0.5</span> - <span class="tok-num">0.5</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |y| {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |x| {
+            <span class="tok-kw">const</span> dx: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(x))) - c;
+            <span class="tok-kw">const</span> dy: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(y))) - c;
+            <span class="tok-kw">const</span> r: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy) / c;
+            <span class="tok-kw">var</span> a: u8 = <span class="tok-num">0</span>;
+            <span class="tok-kw">var</span> col: [<span class="tok-num">3</span>]u8 = .{ <span class="tok-num">255</span>, <span class="tok-num">220</span>, <span class="tok-num">60</span> };
+            <span class="tok-kw">if</span> (r &lt; <span class="tok-num">0.72</span>) {
+                a = <span class="tok-num">255</span>;
+                <span class="tok-kw">const</span> band: f32 = <span class="tok-builtin">@mod</span>(r * <span class="tok-num">5.0</span>, <span class="tok-num">1.0</span>);
+                col = <span class="tok-kw">if</span> (band &lt; <span class="tok-num">0.5</span>) .{ <span class="tok-num">230</span>, <span class="tok-num">60</span>, <span class="tok-num">60</span> } <span class="tok-kw">else</span> .{ <span class="tok-num">255</span>, <span class="tok-num">220</span>, <span class="tok-num">60</span> };
+                <span class="tok-kw">if</span> (r &gt; <span class="tok-num">0.55</span>) {
+                    a = <span class="tok-builtin">@round</span>(<span class="tok-num">255.0</span> * (<span class="tok-num">0.72</span> - r) / <span class="tok-num">0.17</span>);
+                }
+            }
+            <span class="tok-kw">const</span> i: usize = (y * n + x) * <span class="tok-num">4</span>;
+            px[i + <span class="tok-num">0</span>] = col[<span class="tok-num">0</span>];
+            px[i + <span class="tok-num">1</span>] = col[<span class="tok-num">1</span>];
+            px[i + <span class="tok-num">2</span>] = col[<span class="tok-num">2</span>];
+            px[i + <span class="tok-num">3</span>] = a;
+        }
+    }
+    <span class="tok-kw">return</span> px;
+}
+
+<span class="tok-comment">/// De-index a sphere mesh into a triangle soup of positions + normals, matching</span>
+<span class="tok-comment">/// `uploadDecalReceiver`'s de-indexing so both halves rasterize identical</span>
+<span class="tok-comment">/// triangles.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">buildCpuReceiver</span>(gpa: Allocator, mesh: z.types.Mesh) !CpuReceiver {
+    <span class="tok-kw">const</span> tri_count: usize = <span class="tok-builtin">@intCast</span>(mesh.triangleCount);
+    <span class="tok-kw">const</span> vcount: usize = tri_count * <span class="tok-num">3</span>;
+    <span class="tok-kw">const</span> positions: [][<span class="tok-num">3</span>]f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>([<span class="tok-num">3</span>]f32, vcount);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(positions);
+    <span class="tok-kw">const</span> normals: [][<span class="tok-num">3</span>]f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>([<span class="tok-num">3</span>]f32, vcount);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(normals);
+    <span class="tok-kw">const</span> verts: [*c]f32 = mesh.vertices;
+    <span class="tok-kw">const</span> norms: [*c]f32 = mesh.normals;
+    <span class="tok-kw">const</span> idx: [*c]u16 = mesh.indices;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; vcount) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> vi: usize = <span class="tok-kw">if</span> (idx != null) <span class="tok-builtin">@intCast</span>(idx[i]) <span class="tok-kw">else</span> i;
+        positions[i] = .{ verts[vi * <span class="tok-num">3</span> + <span class="tok-num">0</span>], verts[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>], verts[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>] };
+        <span class="tok-kw">if</span> (norms != null) {
+            normals[i] = .{ norms[vi * <span class="tok-num">3</span> + <span class="tok-num">0</span>], norms[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>], norms[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>] };
+        } <span class="tok-kw">else</span> {
+            normals[i] = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> };
+        }
+    }
+    <span class="tok-kw">return</span> .{ .positions = positions, .normals = normals, .vcount = <span class="tok-builtin">@intCast</span>(vcount) };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-comment">// ---- Receiver mesh: one sphere, used by BOTH halves ----</span>
+    <span class="tok-kw">const</span> mesh: z.types.Mesh = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, sphere_radius, <span class="tok-num">32</span>, <span class="tok-num">24</span>);
+
+    <span class="tok-comment">// GPU: a drawable model + a decal receiver from the same mesh.</span>
+    <span class="tok-kw">const</span> sphere_model: z.Model = <span class="tok-kw">try</span> z.<span class="tok-fn">loadModelFromMesh</span>(f.gl, gpa, mesh);
+    <span class="tok-kw">const</span> receiver: u32 = z.<span class="tok-fn">uploadDecalReceiver</span>(f.gl, mesh) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.DecalReceiverFailed;
+
+    <span class="tok-comment">// CPU: a de-indexed triangle soup of the same mesh.</span>
+    <span class="tok-kw">var</span> cpu_recv: CpuReceiver = <span class="tok-kw">try</span> <span class="tok-fn">buildCpuReceiver</span>(gpa, mesh);
+    <span class="tok-kw">errdefer</span> cpu_recv.<span class="tok-fn">deinit</span>(gpa);
+
+    <span class="tok-comment">// ---- Decal texture: one procedural target, shared by both halves ----</span>
+    <span class="tok-kw">const</span> tex_pixels: []u8 = <span class="tok-kw">try</span> <span class="tok-fn">makeDecalPixels</span>(gpa);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(tex_pixels);
+    <span class="tok-kw">const</span> cpu_tex: CpuTex = .{ .pixels = tex_pixels, .width = decal_tex_edge, .height = decal_tex_edge };
+    <span class="tok-comment">// GPU texture wraps a COPY of the same bytes (genImageColor owns its data).</span>
+    <span class="tok-kw">const</span> img: z.Image = <span class="tok-kw">try</span> z.<span class="tok-fn">genImageColor</span>(
+        gpa,
+        <span class="tok-builtin">@intCast</span>(decal_tex_edge),
+        <span class="tok-builtin">@intCast</span>(decal_tex_edge),
+        .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">0</span> },
+    );
+    <span class="tok-builtin">@memcpy</span>(<span class="tok-builtin">@as</span>([*]u8, <span class="tok-builtin">@ptrCast</span>(img.data.?))[<span class="tok-num">0</span> .. decal_tex_edge * decal_tex_edge * <span class="tok-num">4</span>], tex_pixels);
+    <span class="tok-kw">const</span> decal_tex: z.WgpuTexture = z.<span class="tok-fn">loadTextureFromImage</span>(f.gl, img);
+    <span class="tok-kw">defer</span> z.<span class="tok-fn">unloadImage</span>(gpa, img);
+
+    <span class="tok-comment">// Per-vertex VS output scratch + u32 index list for the CPU decal pass</span>
+    <span class="tok-comment">// (the receiver soup is already de-indexed, so indices are 0, 1, 2, ...).</span>
+    <span class="tok-kw">const</span> vs_outs: []decal.vs.Out = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(decal.vs.Out, cpu_recv.vcount);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(vs_outs);
+    <span class="tok-kw">const</span> indices_u32: []u32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u32, cpu_recv.vcount);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(indices_u32);
+    <span class="tok-kw">for</span> (indices_u32, <span class="tok-num">0</span>..) |*iv, i| {
+        iv.* = <span class="tok-builtin">@intCast</span>(i);
+    }
+
+    <span class="tok-kw">const</span> sw: z.raster.Context = <span class="tok-kw">try</span> z.raster.Context.<span class="tok-fn">init</span>(gpa, <span class="tok-num">220</span>, <span class="tok-num">136</span>);
+    <span class="tok-kw">const</span> sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+        f.gpu.device,
+        f.gpu.queue,
+        <span class="tok-num">220</span>,
+        <span class="tok-num">136</span>,
+        sw.<span class="tok-fn">colorBufferBytes</span>(),
+        <span class="tok-str">"decal_sw"</span>,
+    );
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+
+    s.* = .{
+        .gpa = gpa,
+        .sphere_model = sphere_model,
+        .receiver = receiver,
+        .decal_tex = decal_tex,
+        .cpu_recv = cpu_recv,
+        .cpu_tex = cpu_tex,
+        .vs_outs = vs_outs,
+        .indices_u32 = indices_u32,
+        .sw = sw,
+        .sw_fb = sw_fb,
+        .decals = undefined,
+        .decal_count = <span class="tok-num">0</span>,
+        .place_timer = <span class="tok-num">0</span>,
+        .place_index = <span class="tok-num">0</span>,
+        .font = font,
+        .cam_yaw = <span class="tok-num">0.7</span>,
+        .cam_pitch = <span class="tok-num">0.35</span>,
+        .cam_dist = <span class="tok-num">3.6</span>,
+        .dragging = false,
+        .prev_pinch_dist = <span class="tok-num">0</span>,
+        .last_mouse = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span> },
+        .divider_frac = <span class="tok-num">0.5</span>,
+    };
+}
+
+<span class="tok-comment">/// Scatter decals around the sphere over time, one every ~0.35 s, at</span>
+<span class="tok-comment">/// deterministic points on the surface (a spiral of directions), so both</span>
+<span class="tok-comment">/// halves paint the exact same set. Each projector faces along the surface</span>
+<span class="tok-comment">/// normal (= the outward direction on a unit sphere).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">maybePlaceDecal</span>(s: *State, dt: f32) void {
+    <span class="tok-kw">if</span> (s.decal_count &gt;= max_decals) {
+        <span class="tok-kw">return</span>;
+    }
+    s.place_timer += dt;
+    <span class="tok-kw">if</span> (s.place_timer &lt; <span class="tok-num">0.35</span>) {
+        <span class="tok-kw">return</span>;
+    }
+    s.place_timer = <span class="tok-num">0</span>;
+
+    <span class="tok-comment">// Fibonacci-ish spiral of surface points: deterministic, well-spread.</span>
+    <span class="tok-kw">const</span> i: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(s.place_index)));
+    <span class="tok-kw">const</span> golden: f32 = <span class="tok-num">2.399963</span>; <span class="tok-comment">// golden angle in radians</span>
+    <span class="tok-kw">const</span> yv: f32 = <span class="tok-num">1.0</span> - <span class="tok-num">2.0</span> * (i + <span class="tok-num">0.5</span>) / <span class="tok-fn">float</span>(max_decals);
+    <span class="tok-kw">const</span> rr: f32 = <span class="tok-builtin">@sqrt</span>(<span class="tok-builtin">@max</span>(<span class="tok-num">0.0</span>, <span class="tok-num">1.0</span> - yv * yv));
+    <span class="tok-kw">const</span> spiral_angle: f32 = i * golden;
+    <span class="tok-kw">const</span> dir: Vec3 = .{ rr * <span class="tok-builtin">@cos</span>(spiral_angle), yv, rr * <span class="tok-builtin">@sin</span>(spiral_angle) };
+    <span class="tok-kw">const</span> normal: Vec = <span class="tok-fn">vec</span>(dir[<span class="tok-num">0</span>], dir[<span class="tok-num">1</span>], dir[<span class="tok-num">2</span>]);
+    <span class="tok-kw">const</span> point: Vec = <span class="tok-fn">vec</span>(dir[<span class="tok-num">0</span>] * sphere_radius, dir[<span class="tok-num">1</span>] * sphere_radius, dir[<span class="tok-num">2</span>] * sphere_radius);
+    <span class="tok-kw">const</span> spin_deg: f32 = <span class="tok-builtin">@mod</span>(i * <span class="tok-num">47.0</span>, <span class="tok-num">360.0</span>) - <span class="tok-num">180.0</span>;
+
+    s.decals[s.decal_count] = .{
+        .projector = <span class="tok-fn">buildProjector</span>(point, normal, spin_deg),
+        .forward = normal,
+        .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> },
+    };
+    s.decal_count += <span class="tok-num">1</span>;
+    s.place_index += <span class="tok-num">1</span>;
+}
+
+<span class="tok-comment">/// The CPU half: fill the sphere flat, then run decal_vs + decal_fs over the</span>
+<span class="tok-comment">/// receiver triangles once per decal, depth-tested `.less_equal` (no write) and</span>
+<span class="tok-comment">/// alpha-blended over - the software mirror of the GPU decal overlay.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">renderCpu</span>(s: *State, view: Mat, proj: Mat) void {
+    s.sw.<span class="tok-fn">clearColor</span>(bg_clear);
+    s.sw.<span class="tok-fn">clearDepth</span>(<span class="tok-num">1.0</span>);
+    s.sw.<span class="tok-fn">clear</span>(.{ .color = true, .depth = true });
+
+    <span class="tok-comment">// ---- Base surface: flat unlit fill of the sphere, depth-writing so the</span>
+    <span class="tok-comment">//      decal overlay can depth-test against it. Runs decal_vs for the</span>
+    <span class="tok-comment">//      geometry (position + world varyings), and a trivial flat FS. ----</span>
+    <span class="tok-kw">const</span> vp: Mat = <span class="tok-fn">compose</span>(view, proj); <span class="tok-comment">// apply view then projection</span>
+
+    <span class="tok-kw">var</span> vs_io: decal.vs.Io = undefined;
+    vs_io.u = .{ .vp = vp };
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.cpu_recv.vcount) |i| {
+        vs_io.p = s.cpu_recv.positions[i];
+        vs_io.n = s.cpu_recv.normals[i];
+        s.vs_outs[i] = decal.vs.<span class="tok-fn">shaderMain</span>(vs_io);
+    }
+
+    <span class="tok-comment">// Base pass: same VS outputs, a flat colour FS, depth write ON so the</span>
+    <span class="tok-comment">// sphere occludes its own back and the decals depth-test against it.</span>
+    <span class="tok-kw">const</span> base_rgba: [<span class="tok-num">4</span>]f32 = <span class="tok-fn">colorToLinear</span>(base_color);
+    <span class="tok-fn">fillTrianglesFlat</span>(s, base_rgba);
+
+    <span class="tok-comment">// ---- Decal overlay: the SHARED decal_fs, once per decal. ----</span>
+    <span class="tok-kw">const</span> connect: <span class="tok-kw">fn</span> (decal.vs.Out, *decal.fs.Io) void = <span class="tok-kw">comptime</span> z.shader.<span class="tok-fn">autoConnect</span>(decal.vs.Out, decal.fs.Io);
+    <span class="tok-kw">var</span> base_fs_io: decal.fs.Io = undefined;
+    base_fs_io._decal = s.cpu_tex.<span class="tok-fn">ref</span>();
+    <span class="tok-kw">var</span> di: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (di &lt; s.decal_count) : (di += <span class="tok-num">1</span>) {
+        base_fs_io.u = <span class="tok-fn">buildDecalUbo</span>(s.decals[di]);
+        z.raster_shader.<span class="tok-fn">rasterizeTriangles</span>(
+            decal.vs,
+            decal.fs,
+            &amp;s.sw,
+            s.vs_outs,
+            s.indices_u32,
+            base_fs_io,
+            connect,
+            .{
+                .front_face = .none, <span class="tok-comment">// sphere winding varies; the facing mask handles culling</span>
+                .depth_test = true,
+                .depth_compare = .less_equal,
+                .depth_write = false,
+                .blend = true,
+            },
+        );
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">colorToLinear</span>(c: Color) [<span class="tok-num">4</span>]f32 {
+    <span class="tok-kw">const</span> f: [<span class="tok-num">4</span>]f32 = Color.<span class="tok-fn">toFloats</span>(c);
+    <span class="tok-kw">return</span> .{ f[<span class="tok-num">0</span>], f[<span class="tok-num">1</span>], f[<span class="tok-num">2</span>], f[<span class="tok-num">3</span>] };
+}
+
+<span class="tok-comment">/// Flat-fill the receiver triangles into the CPU colour+depth buffer (base</span>
+<span class="tok-comment">/// surface), depth-writing with `.less` so the sphere is solid. Uses the shared</span>
+<span class="tok-comment">/// rasterizer with a constant-colour path by writing directly - a tiny inline</span>
+<span class="tok-comment">/// FS-free fill keeps the base trivially identical to the GPU's flat draw.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">fillTrianglesFlat</span>(s: *State, rgba: [<span class="tok-num">4</span>]f32) void {
+    <span class="tok-kw">const</span> connect: <span class="tok-kw">fn</span> (decal.vs.Out, *FlatFs.Io) void = <span class="tok-kw">comptime</span> z.shader.<span class="tok-fn">autoConnect</span>(decal.vs.Out, FlatFs.Io);
+    <span class="tok-kw">const</span> fs_io: FlatFs.Io = .{ .u = .{ .rgba = rgba }, .o_world = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> }, .o_normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } };
+    z.raster_shader.<span class="tok-fn">rasterizeTriangles</span>(
+        decal.vs,
+        FlatFs,
+        &amp;s.sw,
+        s.vs_outs,
+        s.indices_u32,
+        fs_io,
+        connect,
+        .{
+            .front_face = .none,
+            .depth_test = true,
+            .depth_compare = .less,
+            .depth_write = true,
+            .blend = false,
+        },
+    );
+}
+
+<span class="tok-comment">/// A trivial flat-colour fragment shader for the base sphere fill, sharing the</span>
+<span class="tok-comment">/// decal VS's `Out` (it reads no varyings, just writes a constant). Written in</span>
+<span class="tok-comment">/// the same `shaderMain` shape the rasterizer expects, so the base pass goes</span>
+<span class="tok-comment">/// through the identical code path as the overlay.</span>
+<span class="tok-kw">const</span> FlatFs = <span class="tok-kw">struct</span> {
+    <span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> { rgba: [<span class="tok-num">4</span>]f32 };
+    <span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = <span class="tok-kw">struct</span> {
+        u: FlatFs.Ubo,
+        o_world: Vec3,
+        o_normal: Vec3,
+        <span class="tok-comment">/// The rasterizer reads `Io.Ubo` (mirroring the generated IoT); alias</span>
+        <span class="tok-comment">/// the outer type so `buildDecalUbo`-style callers and the rasterizer</span>
+        <span class="tok-comment">/// agree on one uniform type.</span>
+        <span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = FlatFs.Ubo;
+    };
+    <span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = <span class="tok-kw">struct</span> { final_color: Vec };
+    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+        <span class="tok-kw">return</span> .{ .final_color = io_in.u.rgba };
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">clampDist</span>(s: *State) void {
+    s.cam_dist = <span class="tok-fn">clamp</span>(s.cam_dist, <span class="tok-num">1.8</span>, <span class="tok-num">8.0</span>);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> touch_count: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touch_count &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> t0: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> t1: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> dx: f32 = t1[<span class="tok-num">0</span>] - t0[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = t1[<span class="tok-num">1</span>] - t0[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> d: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (s.prev_pinch_dist &lt; <span class="tok-num">1.0</span> <span class="tok-kw">or</span> d &lt; <span class="tok-num">1.0</span>) {
+            s.prev_pinch_dist = d;
+        } <span class="tok-kw">else</span> {
+            s.cam_dist *= s.prev_pinch_dist / d;
+            s.prev_pinch_dist = d;
+            <span class="tok-fn">clampDist</span>(s);
+        }
+        s.dragging = false;
+        <span class="tok-kw">return</span>;
+    }
+    s.prev_pinch_dist = <span class="tok-num">0</span>;
+
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        s.cam_dist *= <span class="tok-num">1.0</span> - wheel * <span class="tok-num">0.1</span>;
+        <span class="tok-fn">clampDist</span>(s);
+    }
+
+    <span class="tok-kw">const</span> down: bool = z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left);
+    <span class="tok-kw">const</span> m: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">if</span> (down <span class="tok-kw">and</span> s.dragging) {
+        <span class="tok-kw">const</span> ddx: f32 = m[<span class="tok-num">0</span>] - s.last_mouse[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> ddy: f32 = m[<span class="tok-num">1</span>] - s.last_mouse[<span class="tok-num">1</span>];
+        s.cam_yaw -= ddx * <span class="tok-num">0.01</span>;
+        s.cam_pitch = <span class="tok-fn">clamp</span>(s.cam_pitch - ddy * <span class="tok-num">0.01</span>, -<span class="tok-num">1.4</span>, <span class="tok-num">1.4</span>);
+    }
+    s.dragging = down;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureTargets</span>(f, s);
+    <span class="tok-fn">handleInput</span>(f, s);
+    <span class="tok-fn">maybePlaceDecal</span>(s, <span class="tok-num">1.0</span> / <span class="tok-num">60.0</span>);
+
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">8</span>, .g = <span class="tok-num">9</span>, .b = <span class="tok-num">14</span>, .a = <span class="tok-num">255</span> });
+
+    <span class="tok-comment">// ---- Shared orbit camera - BOTH halves consume these matrices ----</span>
+    <span class="tok-kw">const</span> cp: f32 = <span class="tok-builtin">@cos</span>(s.cam_pitch);
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sin</span>(s.cam_pitch);
+    <span class="tok-kw">const</span> sy: f32 = <span class="tok-builtin">@sin</span>(s.cam_yaw);
+    <span class="tok-kw">const</span> cyaw: f32 = <span class="tok-builtin">@cos</span>(s.cam_yaw);
+    <span class="tok-kw">const</span> eye: Vec = <span class="tok-fn">vec</span>(s.cam_dist * cp * sy, s.cam_dist * sp, s.cam_dist * cp * cyaw);
+    <span class="tok-kw">const</span> view: Mat = <span class="tok-fn">lookAtRh</span>(eye, cam_target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> aspect: f32 = vw / vh;
+    <span class="tok-kw">const</span> proj: Mat = <span class="tok-fn">perspectiveFovRh</span>(fovy, aspect, z_near, z_far);
+
+    <span class="tok-comment">// ---- CPU: flat sphere + decal_vs/decal_fs on the software rasterizer ----</span>
+    <span class="tok-fn">renderCpu</span>(s, view, proj);
+    s.sw_fb.<span class="tok-fn">update</span>(f.gpu.queue, s.sw.<span class="tok-fn">colorBufferBytes</span>());
+
+    <span class="tok-comment">// ---- GPU: flat sphere + the SAME decal shaders via WGSL, drawn directly</span>
+    <span class="tok-comment">//      into the live frame across the full canvas (the immediate-3D path</span>
+    <span class="tok-comment">//      renders to the main framebuffer; the CPU half then composites over</span>
+    <span class="tok-comment">//      the left of the splitter). ----</span>
+    z.<span class="tok-fn">beginMode3D</span>(f.gl, .{
+        .position = .{ eye[<span class="tok-num">0</span>], eye[<span class="tok-num">1</span>], eye[<span class="tok-num">2</span>], <span class="tok-num">0</span> },
+        .target = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .up = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .fovy_deg = fovy * <span class="tok-num">57.29578</span>,
+    });
+    z.<span class="tok-fn">drawModel</span>(f.gl, s.sphere_model, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> }, <span class="tok-num">1.0</span>, base_color);
+    <span class="tok-kw">var</span> di: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (di &lt; s.decal_count) : (di += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> d: Decal = s.decals[di];
+        z.<span class="tok-fn">drawDecal</span>(f.gl, s.receiver, d.projector, s.decal_tex, .{
+            .size = decal_size,
+            .tint = d.color,
+            .forward = d.forward,
+        });
+    }
+    z.<span class="tok-fn">endMode3D</span>(f.gl);
+
+    <span class="tok-comment">// ---- Composite: the GPU scene fills the frame; draw the CPU framebuffer</span>
+    <span class="tok-comment">//      over the left of the splitter. ----</span>
+    <span class="tok-kw">const</span> m: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> is_first_zero: bool = s.last_mouse[<span class="tok-num">0</span>] &lt; <span class="tok-num">0</span> <span class="tok-kw">and</span> m[<span class="tok-num">0</span>] == <span class="tok-num">0</span> <span class="tok-kw">and</span> m[<span class="tok-num">1</span>] == <span class="tok-num">0</span>;
+    <span class="tok-kw">if</span> (!is_first_zero <span class="tok-kw">and</span> !s.dragging <span class="tok-kw">and</span> (m[<span class="tok-num">0</span>] != s.last_mouse[<span class="tok-num">0</span>] <span class="tok-kw">or</span> m[<span class="tok-num">1</span>] != s.last_mouse[<span class="tok-num">1</span>])) {
+        s.divider_frac = <span class="tok-fn">clamp</span>(m[<span class="tok-num">0</span>] / vw, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+    }
+    s.last_mouse = m;
+    <span class="tok-kw">const</span> divider_x: f32 = s.divider_frac * vw;
+    z.<span class="tok-fn">beginScissorMode</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, divider_x, vh);
+    s.sw_fb.<span class="tok-fn">present</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, vw, vh);
+    z.<span class="tok-fn">endScissorMode</span>(f.gl);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = divider_x - <span class="tok-num">1.5</span>, .y = <span class="tok-num">0</span>, .width = <span class="tok-num">3</span>, .height = vh },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } },
+    );
+
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"CPU decal_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ vw - <span class="tok-num">150</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"GPU decal_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+}
+
+<span class="tok-comment">/// Keep the CPU raster buffer matched to the live canvas: `cpu_pixel_budget`</span>
+<span class="tok-comment">/// pixels shaped to the canvas aspect (constant cost at any orientation). The</span>
+<span class="tok-comment">/// GPU half draws straight into the live frame, so it needs no target here.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureTargets</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> aspect: f32 = vw / vh;
+    <span class="tok-kw">const</span> want_w: i32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@round</span>(<span class="tok-builtin">@sqrt</span>(cpu_pixel_budget * aspect)), <span class="tok-num">16</span>));
+    <span class="tok-kw">const</span> want_h: i32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@round</span>(<span class="tok-fn">float</span>(want_w) / aspect), <span class="tok-num">16</span>));
+    <span class="tok-kw">const</span> dims: Vec2i = s.sw.<span class="tok-fn">colorBufferDims</span>();
+    <span class="tok-kw">if</span> (dims[<span class="tok-num">0</span>] != want_w <span class="tok-kw">or</span> dims[<span class="tok-num">1</span>] != want_h) {
+        s.sw.<span class="tok-fn">resize</span>(s.gpa, want_w, want_h) <span class="tok-kw">catch</span> <span class="tok-kw">return</span>;
+        s.sw_fb.<span class="tok-fn">resize</span>(f.gl, <span class="tok-builtin">@intCast</span>(want_w), <span class="tok-builtin">@intCast</span>(want_h), s.sw.<span class="tok-fn">colorBufferBytes</span>(), <span class="tok-str">"decal_sw"</span>);
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"decal_sw — one decal shader, CPU vs GPU"</span>,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .update = update,
+    .deinit = deinit,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> z.<span class="tok-fn">run</span>(app);
+}
+</code></pre></figure>
+</body>
+</html>

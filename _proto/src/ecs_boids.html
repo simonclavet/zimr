@@ -1,0 +1,523 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ecs_boids — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>ecs_boids</h1>
+<figure class="code src-file" data-path="examples/ecs_boids/ecs_boids.zig" data-lines="243"><figcaption><span>examples/ecs_boids/ecs_boids.zig</span><span>243 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! ecs_boids - Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live</span>
+<span class="tok-comment">//! in an archetype of Pos + Vel components. Each frame: a snapshot via `iterator` feeds a</span>
+<span class="tok-comment">//! steering `forEach` (separation/alignment/cohesion), then integrate-and-wrap, then a</span>
+<span class="tok-comment">//! render `iterator`. Proves the ECS subsystem (Registry, archetypes, iterator, forEach)</span>
+<span class="tok-comment">//! on the wgpu backend. Self-running, viewport-relative under `.responsive`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! IMPORTANT: Pos and Vel are DISTINCT struct types, not both `Vec2`. The ECS keys</span>
+<span class="tok-comment">//! components by type, so two components of the same type collide into one - reading Pos</span>
+<span class="tok-comment">//! would return Vel data. Each component needs its own nominal type.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> tau = zm.tau;
+<span class="tok-kw">const</span> ecs = z.ecs;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = Color;
+
+<span class="tok-kw">const</span> num_boids: usize = <span class="tok-num">160</span>;
+<span class="tok-kw">const</span> max_speed: f32 = <span class="tok-num">140</span>;
+<span class="tok-kw">const</span> min_speed: f32 = <span class="tok-num">60</span>;
+
+<span class="tok-kw">const</span> Pos = <span class="tok-kw">struct</span> { x: f32 = <span class="tok-num">0</span>, y: f32 = <span class="tok-num">0</span> };
+<span class="tok-kw">const</span> Vel = <span class="tok-kw">struct</span> { x: f32 = <span class="tok-num">0</span>, y: f32 = <span class="tok-num">0</span> };
+<span class="tok-kw">const</span> Snap = <span class="tok-kw">struct</span> { p: Pos, v: Vel };
+
+<span class="tok-kw">const</span> Params = <span class="tok-kw">struct</span> {
+    neighbor_radius: f32 = <span class="tok-num">60</span>,
+    separation_radius: f32 = <span class="tok-num">18</span>,
+    alignment_factor: f32 = <span class="tok-num">0.06</span>,
+    cohesion_factor: f32 = <span class="tok-num">0.0009</span>,
+    separation_factor: f32 = <span class="tok-num">1.4</span>,
+};
+<span class="tok-kw">const</span> params: Params = .{};
+
+<span class="tok-kw">const</span> SteerCtx = <span class="tok-kw">struct</span> {
+    snap: []<span class="tok-kw">const</span> Snap,
+};
+
+<span class="tok-kw">const</span> IntegrateCtx = <span class="tok-kw">struct</span> {
+    dt: f32,
+    w: f32,
+    h: f32,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    es: ecs.Registry,
+    rng: std.Random.DefaultPrng,
+    snap: [num_boids]Snap = undefined,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.es.<span class="tok-fn">deinit</span>(gpa);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>);
+    <span class="tok-kw">var</span> es: ecs.Registry = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(.{
+        .gpa = gpa,
+        .cap = .{ .entities = num_boids + <span class="tok-num">16</span>, .arches = <span class="tok-num">4</span>, .chunks = <span class="tok-num">8</span>, .chunk = <span class="tok-num">4096</span> },
+    });
+    <span class="tok-kw">errdefer</span> es.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">var</span> rng: std.Random.DefaultPrng = .<span class="tok-fn">init</span>(<span class="tok-num">0xB01D5</span>);
+    <span class="tok-kw">const</span> r: std.Random = rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">64.0</span>, f.window.<span class="tok-fn">widthf</span>());
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">64.0</span>, f.window.<span class="tok-fn">heightf</span>());
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..num_boids) |_| {
+        <span class="tok-kw">const</span> e: ecs.Entity = <span class="tok-kw">try</span> ecs.Entity.<span class="tok-fn">reserveImmediateOrErr</span>(&amp;es);
+        <span class="tok-kw">const</span> angle: f32 = r.<span class="tok-fn">float</span>(f32) * tau;
+        <span class="tok-kw">const</span> speed: f32 = min_speed + r.<span class="tok-fn">float</span>(f32) * (max_speed - min_speed);
+        _ = <span class="tok-kw">try</span> e.<span class="tok-fn">changeArchImmediateOrErr</span>(&amp;es, gpa, <span class="tok-kw">struct</span> {
+            pos: Pos,
+            vel: Vel,
+        }, .{
+            .add = .{
+                .pos = .{ .x = r.<span class="tok-fn">float</span>(f32) * w, .y = r.<span class="tok-fn">float</span>(f32) * h },
+                .vel = .{ .x = <span class="tok-builtin">@cos</span>(angle) * speed, .y = <span class="tok-builtin">@sin</span>(angle) * speed },
+            },
+        });
+    }
+    s.* = .{ .font = font, .es = es, .rng = rng };
+}
+
+<span class="tok-comment">/// Three Reynolds rules from the immutable snapshot, then a speed clamp.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">steerBoid</span>(
+    ctx: SteerCtx,
+    p: *<span class="tok-kw">const</span> Pos,
+    v: *Vel,
+) void {
+    <span class="tok-kw">var</span> sep_x: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> sep_y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> ali_x: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> ali_y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> coh_x: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> coh_y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> neighbor_count: usize = <span class="tok-num">0</span>;
+
+    <span class="tok-kw">for</span> (ctx.snap) |other| {
+        <span class="tok-kw">if</span> (other.p.x == p.x <span class="tok-kw">and</span> other.p.y == p.y <span class="tok-kw">and</span> other.v.x == v.x <span class="tok-kw">and</span> other.v.y == v.y) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> dx: f32 = other.p.x - p.x;
+        <span class="tok-kw">const</span> dy: f32 = other.p.y - p.y;
+        <span class="tok-kw">const</span> d: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (d &gt; params.neighbor_radius) {
+            <span class="tok-kw">continue</span>;
+        }
+        coh_x += other.p.x;
+        coh_y += other.p.y;
+        ali_x += other.v.x;
+        ali_y += other.v.y;
+        neighbor_count += <span class="tok-num">1</span>;
+        <span class="tok-kw">if</span> (d &lt; params.separation_radius <span class="tok-kw">and</span> d &gt; <span class="tok-num">0.001</span>) {
+            <span class="tok-kw">const</span> inv: f32 = <span class="tok-num">1.0</span> / d;
+            sep_x += -dx * inv;
+            sep_y += -dy * inv;
+        }
+    }
+
+    <span class="tok-kw">if</span> (neighbor_count &gt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">const</span> inv_count: f32 = <span class="tok-num">1.0</span> / <span class="tok-fn">float</span>(neighbor_count);
+        v.x += (ali_x * inv_count - v.x) * params.alignment_factor;
+        v.y += (ali_y * inv_count - v.y) * params.alignment_factor;
+        v.x += (coh_x * inv_count - p.x) * params.cohesion_factor;
+        v.y += (coh_y * inv_count - p.y) * params.cohesion_factor;
+        v.x += sep_x * params.separation_factor;
+        v.y += sep_y * params.separation_factor;
+    }
+
+    <span class="tok-kw">const</span> speed: f32 = <span class="tok-builtin">@sqrt</span>(v.x * v.x + v.y * v.y);
+    <span class="tok-kw">if</span> (speed &gt; max_speed) {
+        <span class="tok-kw">const</span> scale: f32 = max_speed / speed;
+        v.x *= scale;
+        v.y *= scale;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (speed &lt; min_speed <span class="tok-kw">and</span> speed &gt; <span class="tok-num">0.001</span>) {
+        <span class="tok-kw">const</span> scale: f32 = min_speed / speed;
+        v.x *= scale;
+        v.y *= scale;
+    }
+}
+
+<span class="tok-comment">/// Move by velocity; toroidal wrap against the live viewport.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">integrateAndWrap</span>(
+    ctx: IntegrateCtx,
+    p: *Pos,
+    v: *<span class="tok-kw">const</span> Vel,
+) void {
+    p.x += v.x * ctx.dt;
+    p.y += v.y * ctx.dt;
+    <span class="tok-kw">if</span> (p.x &lt; <span class="tok-num">0</span>) {
+        p.x += ctx.w;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p.x &gt;= ctx.w) {
+        p.x -= ctx.w;
+    }
+    <span class="tok-kw">if</span> (p.y &lt; <span class="tok-num">0</span>) {
+        p.y += ctx.h;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p.y &gt;= ctx.h) {
+        p.y -= ctx.h;
+    }
+}
+
+<span class="tok-comment">/// A small triangle pointing along the boid's velocity.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawBoid</span>(
+    gl: <span class="tok-kw">anytype</span>,
+    pos: Pos,
+    vel: Vel,
+) void {
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sqrt</span>(vel.x * vel.x + vel.y * vel.y);
+    <span class="tok-kw">const</span> dx: f32 = <span class="tok-kw">if</span> (sp &gt; <span class="tok-num">0.001</span>) vel.x / sp <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> dy: f32 = <span class="tok-kw">if</span> (sp &gt; <span class="tok-num">0.001</span>) vel.y / sp <span class="tok-kw">else</span> <span class="tok-num">0.0</span>;
+    <span class="tok-kw">const</span> size: f32 = <span class="tok-num">6.0</span>;
+    <span class="tok-kw">const</span> tip: Vec2 = .{ pos.x + dx * size, pos.y + dy * size };
+    <span class="tok-kw">const</span> bx: f32 = pos.x - dx * size * <span class="tok-num">0.6</span>;
+    <span class="tok-kw">const</span> by: f32 = pos.y - dy * size * <span class="tok-num">0.6</span>;
+    <span class="tok-kw">const</span> lft: Vec2 = .{ bx - dy * size * <span class="tok-num">0.5</span>, by + dx * size * <span class="tok-num">0.5</span> };
+    <span class="tok-kw">const</span> rgt: Vec2 = .{ bx + dy * size * <span class="tok-num">0.5</span>, by - dx * size * <span class="tok-num">0.5</span> };
+    <span class="tok-kw">const</span> col: Color = c.<span class="tok-fn">init</span>(<span class="tok-num">120</span>, <span class="tok-num">190</span>, <span class="tok-num">245</span>, <span class="tok-num">255</span>);
+    gl.<span class="tok-fn">line</span>(tip, lft, .{ .color = col, .thickness = <span class="tok-num">1.5</span> });
+    gl.<span class="tok-fn">line</span>(tip, rgt, .{ .color = col, .thickness = <span class="tok-num">1.5</span> });
+    gl.<span class="tok-fn">line</span>(lft, rgt, .{ .color = col, .thickness = <span class="tok-num">1.5</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-comment">// 1. Snapshot every boid's (pos, vel) so steering reads a stable world.</span>
+    <span class="tok-kw">var</span> n: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> snap_it = s.es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+        p: *<span class="tok-kw">const</span> Pos,
+        v: *<span class="tok-kw">const</span> Vel,
+    });
+    <span class="tok-kw">while</span> (snap_it.<span class="tok-fn">next</span>(&amp;s.es)) |view| {
+        <span class="tok-kw">if</span> (n &gt;= s.snap.len) {
+            <span class="tok-kw">break</span>;
+        }
+        s.snap[n] = .{ .p = view.p.*, .v = view.v.* };
+        n += <span class="tok-num">1</span>;
+    }
+
+    <span class="tok-comment">// 2. Steer, 3. integrate + wrap.</span>
+    s.es.<span class="tok-fn">forEach</span>(steerBoid, SteerCtx{ .snap = s.snap[<span class="tok-num">0</span>..n] });
+    s.es.<span class="tok-fn">forEach</span>(integrateAndWrap, IntegrateCtx{ .dt = dt, .w = w, .h = h });
+
+    <span class="tok-comment">// 4. Render.</span>
+    z.<span class="tok-fn">clearViewport</span>(f, c.<span class="tok-fn">init</span>(<span class="tok-num">8</span>, <span class="tok-num">10</span>, <span class="tok-num">16</span>, <span class="tok-num">255</span>));
+    <span class="tok-kw">var</span> draw_it = s.es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+        p: *<span class="tok-kw">const</span> Pos,
+        v: *<span class="tok-kw">const</span> Vel,
+    });
+    <span class="tok-kw">while</span> (draw_it.<span class="tok-fn">next</span>(&amp;s.es)) |view| {
+        <span class="tok-fn">drawBoid</span>(f.gl, view.p.*, view.v.*);
+    }
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">40</span>]u8 = undefined;
+    <span class="tok-kw">const</span> lbl: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"ECS boids: {d} entities"</span>, .{n}) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">12</span>, <span class="tok-num">12</span> }, lbl, .{ .size = <span class="tok-num">16</span>, .color = c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">220</span>), .font = &amp;s.font });
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - ECS boids"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+</body>
+</html>

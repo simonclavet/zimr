@@ -1,0 +1,1210 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>zimr — a graphics tutorial from scratch</title>
+        <meta
+            name="description"
+            content="Your first contact with real-time graphics, taught through zimr: a pure-Zig engine where shaders are Zig functions, the same function runs on the GPU and the CPU, and WebGPU is set up for you. From drawing a circle to raymarched metaballs."
+        />
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+    </head>
+    <body>
+        <main class="page">
+            <p class="eyebrow">a graphics tutorial · from your very first pixel</p>
+            <h1 class="title">zimr, from scratch</h1>
+            <p class="lede">
+                You have never written a shader. You are not sure what a GPU
+                <em>does</em>, exactly. This page starts there and ends with you
+                reading — and understanding — a fragment shader that
+                sphere-traces glowing metaballs and makes them collide with
+                ordinary cubes.
+            </p>
+            <p class="lede muted">
+                We learn through <strong>zimr</strong>: a small engine written
+                entirely in one language, Zig, where shaders are just functions,
+                the GPU is set up for you, and — the idea everything else hangs
+                on — <em>the same function you write for the GPU also runs on
+                the CPU</em>. That turns out to be the best teaching tool in
+                graphics, because you can read a shader like normal code before
+                you ever trust it to a chip you can't step through.
+            </p>
+
+            <nav class="toc" aria-label="Lessons">
+                <div class="toc-title">The path — each lesson adds one idea</div>
+                <ol>
+                    <li><a href="#l1">What a GPU is really doing</a></li>
+                    <li><a href="#l2">The smallest zimr program</a></li>
+                    <li><a href="#l3">The frame, and drawing in 2D</a></li>
+                    <li><a href="#l4">Your first shader is a function</a></li>
+                    <li><a href="#l5">One function, three homes</a></li>
+                    <li><a href="#l6">Vertices, varyings, and the schema</a></li>
+                    <li><a href="#l7">The uniform block, both sides</a></li>
+                    <li><a href="#l8">Light: the whole trick</a></li>
+                    <li><a href="#l9">Cel shading — one line changes everything</a></li>
+                    <li><a href="#l10">Sharing a vertex stage</a></li>
+                    <li><a href="#l11">How WebGPU actually gets set up</a></li>
+                    <li><a href="#l12">The showpiece: raymarched metaballs</a></li>
+                    <li><a href="#l13">The GPU as a calculator (compute)</a></li>
+                    <li><a href="#l14">Where to go next</a></li>
+                </ol>
+            </nav>
+            <!-- ============================================================ -->
+            <section class="lesson" id="l1">
+                <span class="lesson-num">Lesson 01</span>
+                <h2 class="lesson-title">What a GPU is really doing</h2>
+                <p class="lesson-goal">
+                    Goal: replace the word "GPU" with a mental picture you can
+                    actually reason about.
+                </p>
+
+                <p>
+                    Here is the whole idea. Your screen is a grid of pixels —
+                    say two million of them. To draw a frame, some code has to
+                    decide on a color for every one of those two million pixels,
+                    sixty times a second. That is a hundred and twenty million
+                    color decisions per second, and that is a <em>slow</em>
+                    frame.
+                </p>
+                <p>
+                    A CPU is a few very clever workers who do tasks one after
+                    another, extremely fast. A <strong>GPU</strong> is the
+                    opposite bargain: thousands of simpler workers who all do
+                    the <em>same</em> task at the same time, each on a different
+                    piece of data. Two million pixels is exactly that shape of
+                    problem — the same "what color are you?" question, asked two
+                    million times, with no pixel needing to know the answer for
+                    any other. So we hand it to the crowd.
+                </p>
+                <p>
+                    The small program that the crowd runs — the recipe every
+                    worker follows to answer "what color are you?" — is called a
+                    <strong>shader</strong>. That is the entire mystery. A shader
+                    is a function. It runs once per pixel (or once per corner of
+                    a triangle), millions of copies at once, and its job is to
+                    return a color or a position. When people say a shader "runs
+                    on the GPU," they mean: the crowd all runs this one function,
+                    each on their own pixel.
+                </p>
+
+                <div class="callout">
+                    <span class="tag">Two shaders, two jobs</span>
+                    Almost everything on screen is triangles. A
+                    <strong>vertex shader</strong> runs once per triangle corner
+                    and decides <em>where</em> that corner lands on screen. Then
+                    the hardware fills in the triangle and runs a
+                    <strong>fragment shader</strong> once per pixel inside it, to
+                    decide <em>what color</em> that pixel is. Position, then
+                    color. Hold onto that pair — the rest of this page is just
+                    those two functions getting more interesting.
+                </div>
+
+                <p>
+                    The catch, historically, is that these functions had to be
+                    written in a separate little language (GLSL, or on the web,
+                    WGSL), shipped as text, compiled by the driver at runtime,
+                    and debugged by staring at a black screen because you can't
+                    put a breakpoint inside a crowd of two million. zimr's whole
+                    bet is to make that catch go away.
+                </p>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l2">
+                <span class="lesson-num">Lesson 02</span>
+                <h2 class="lesson-title">The smallest zimr program</h2>
+                <p class="lesson-goal">
+                    Goal: see that an app is a struct of state plus three
+                    functions — and there is no main loop to write.
+                </p>
+
+                <p>
+                    Before any graphics, meet the shape of a program. In zimr an
+                    app is a piece of <em>state</em> (a plain struct — your
+                    variables) plus a lifecycle of three functions. The host owns
+                    the browser's frame loop and calls your
+                    <code>update</code> sixty times a second. You never write
+                    <code>while (true)</code>.
+                </p>
+
+                <pre>a complete app — bounce a circle<code class="zig"><span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);  <span class="tok-comment">// the engine: draw*, input, textures…</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);   <span class="tok-comment">// the math: Vec, Mat, dot, normalize…</span>
+
+<span class="tok-comment">// Your state. An ordinary struct. No globals, no singletons.</span>
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    pos: zm.Vec2 = .{ <span class="tok-num">200</span>, <span class="tok-num">150</span> },
+    vel: zm.Vec2 = .{ <span class="tok-num">3</span>, <span class="tok-num">2</span> },
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{ .window = .{ .title = <span class="tok-str">"bounce"</span>, .width = <span class="tok-num">800</span>, .height = <span class="tok-num">450</span> } },
+    .init = initState,   <span class="tok-comment">// once, at startup → returns State</span>
+    .update = update,    <span class="tok-comment">// every frame → input + draw</span>
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">return</span> .{}; <span class="tok-comment">// defaults are fine here</span>
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.pos += s.vel; <span class="tok-comment">// Vec2 arithmetic is just +  (see Lesson 06)</span>
+    <span class="tok-kw">if</span> (s.pos[<span class="tok-num">0</span>] &lt; <span class="tok-num">20</span> <span class="tok-kw">or</span> s.pos[<span class="tok-num">0</span>] &gt; <span class="tok-num">780</span>) s.vel[<span class="tok-num">0</span>] = -s.vel[<span class="tok-num">0</span>];
+    <span class="tok-kw">if</span> (s.pos[<span class="tok-num">1</span>] &lt; <span class="tok-num">20</span> <span class="tok-kw">or</span> s.pos[<span class="tok-num">1</span>] &gt; <span class="tok-num">430</span>) s.vel[<span class="tok-num">1</span>] = -s.vel[<span class="tok-num">1</span>];
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, z.Color.ray_white);
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, s.pos, <span class="tok-num">20</span>, z.Color.maroon);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}</code></pre>
+
+                <p>
+                    That is a real, running program. Three things to notice,
+                    because they are true of <em>every</em> zimr app:
+                </p>
+                <ul>
+                    <li>
+                        <strong>State is returned by value</strong> from
+                        <code>init</code> and threaded into every
+                        <code>update</code> as <code>s</code>. There are no
+                        module-level mutable globals anywhere in the engine — two
+                        copies of this app couldn't share a byte. That sounds
+                        pedantic now; it is why nothing ever mysteriously
+                        interferes with anything else later.
+                    </li>
+                    <li>
+                        <strong>Everything flows through
+                        <code>f: *z.Frame</code></strong> — the one argument
+                        handed to you each frame. It carries the draw context
+                        (<code>f.gl</code>), input (<code>f.input</code>), timing
+                        (<code>f.time</code>), and the lower-level GPU handle
+                        (<code>f.gpu</code>) you'll meet in Lesson&nbsp;11.
+                    </li>
+                    <li>
+                        <strong>Drawing is bracketed</strong> by
+                        <code>beginDrawing</code> / <code>endDrawing</code>. If
+                        you've used raylib, this is deliberately the same
+                        vocabulary — zimr is a Zig port of it, so the names carry
+                        over.
+                    </li>
+                </ul>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l3">
+                <span class="lesson-num">Lesson 03</span>
+                <h2 class="lesson-title">The frame, and drawing in 2D</h2>
+                <p class="lesson-goal">
+                    Goal: understand "immediate mode" and why adding draw calls
+                    is cheap.
+                </p>
+
+                <p>
+                    When you call <code>drawCircleV</code>, nothing is sent to
+                    the GPU yet. zimr is <strong>immediate mode</strong>: each
+                    draw call quietly appends triangles to a growing list (a
+                    circle is a fan of thin triangles; a line is two). Only at
+                    <code>endDrawing</code> does that whole list get handed to
+                    the GPU in a single go — one <em>render pass</em>.
+                </p>
+                <p>
+                    That's why a scene with two hundred shapes is not two hundred
+                    trips to the GPU; it is one trip carrying more triangles. The
+                    cost of a draw call is <em>vertices</em>, not conversations
+                    with the hardware. Reading input works the same relaxed way —
+                    the frame holds a <em>snapshot</em> and you ask it questions:
+                </p>
+
+                <pre>input is polled, not pushed at you<code class="zig"><span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .space)) s.paused = !s.paused; <span class="tok-comment">// once, on the down-edge</span>
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .right))  s.pos[<span class="tok-num">0</span>] += <span class="tok-num">4</span>;            <span class="tok-comment">// every frame it's held</span>
+
+    <span class="tok-kw">const</span> touches: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);        <span class="tok-comment">// phones report multitouch</span>
+    <span class="tok-kw">const</span> dt: f32 = <span class="tok-builtin">@floatCast</span>(f.time.delta_time);            <span class="tok-comment">// seconds since last frame</span>
+    ...
+}</code></pre>
+
+                <div class="callout">
+                    <span class="tag">Why every zimr demo works on a phone</span>
+                    Because input is just a snapshot you interrogate, the engine
+                    can offer a gesture layer on top — taps, holds, swipes,
+                    pinches — and every 3D demo in the tree shares one idiom:
+                    one finger drags to orbit the camera, two fingers pinch to
+                    zoom. The drag is gated on whether the UI wants the touch
+                    first, so grabbing a slider never also spins the world.
+                </div>
+            </section>
+            <!-- ============================================================ -->
+            <section class="lesson" id="l4">
+                <span class="lesson-num">Lesson 04</span>
+                <h2 class="lesson-title">Your first shader is a function</h2>
+                <p class="lesson-goal">
+                    Goal: write a fragment shader and realize it is just Zig.
+                </p>
+
+                <p>
+                    So far the engine has been coloring pixels for us. Now we
+                    take the wheel. Remember the fragment shader: it runs once
+                    per pixel and returns a color. In zimr you write it as an
+                    ordinary Zig function named <code>shaderMain</code>. Here is
+                    one that paints a smooth vertical gradient — no textures, no
+                    tricks, just "turn my vertical position into a color":
+                </p>
+
+                <div class="runs">
+                    <span class="chip gpu on">runs on GPU</span>
+                    <span class="chip cpu on">runs on CPU</span>
+                    <span class="chip ct">comptime</span>
+                </div>
+                <pre>a fragment shader that is a gradient<code class="zig"><span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-comment">// frag_uv is (0,0) at one corner, (1,1) at the opposite corner.</span>
+    <span class="tok-comment">// It was handed to us per-pixel, smoothly interpolated. (Lesson 06.)</span>
+    <span class="tok-kw">const</span> uv: Vec2 = io_in.frag_uv;
+
+    <span class="tok-comment">// Bottom is warm, top is cool. That's it — a color per pixel.</span>
+    out.final_color = .{ uv[<span class="tok-num">1</span>], <span class="tok-num">0.3</span>, <span class="tok-num">1.0</span> - uv[<span class="tok-num">1</span>], <span class="tok-num">1.0</span> };
+    <span class="tok-kw">return</span> out;
+}</code></pre>
+
+                <p>
+                    There is no new language here. <code>Vec2</code> is a Zig
+                    vector; <code>uv[1]</code> is its second component; the return
+                    value is four floats — red, green, blue, alpha. If you can
+                    read Zig, you can read a shader, because the shader
+                    <em>is</em> Zig. The build system, not you, turns this into
+                    the WGSL that the browser's GPU actually consumes. You never
+                    see that WGSL, the same way you never see the assembly your C
+                    compiler emits.
+                </p>
+
+                <div class="flow"><span class="hi">your shaderMain (Zig)</span>
+   │  zig build-obj  -target spirv32
+   ▼
+SPIR-V  (a portable GPU bytecode)
+   │  <span class="hi2">spv2wgsl</span>  (a translator, itself written in Zig)
+   ▼
+WGSL  →  the browser  →  the GPU
+</div>
+
+                <p>
+                    That middle tool, <code>spv2wgsl</code>, is doing real work —
+                    GPU bytecode and WGSL disagree about how loops and branches
+                    are even shaped, so it rebuilds the control flow — but from
+                    where you sit, it's invisible. You wrote a function; a color
+                    appeared on two million pixels.
+                </p>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l5">
+                <span class="lesson-num">Lesson 05</span>
+                <h2 class="lesson-title">One function, three homes</h2>
+                <p class="lesson-goal">
+                    Goal: the central idea of the whole engine — and why it makes
+                    you a better graphics programmer.
+                </p>
+
+                <p>
+                    Look again at that gradient shader. Nothing in it is
+                    GPU-specific. It takes some numbers in, does arithmetic,
+                    returns numbers out. So here is zimr's core move: that
+                    <em>exact same function</em> is compiled to run in three
+                    different places.
+                </p>
+
+                <div class="three-homes">
+                    <div class="home">
+                        <div class="glyph">▦</div>
+                        <div class="where">the GPU</div>
+                        <div class="via">
+                            → SPIR-V → WGSL. Two million copies, in parallel, at
+                            full speed. The real thing.
+                        </div>
+                    </div>
+                    <div class="home">
+                        <div class="glyph">▤</div>
+                        <div class="where">the CPU</div>
+                        <div class="via">
+                            zimr has a software rasterizer — it calls the same
+                            <code>shaderMain</code> per pixel, in plain Zig you
+                            can step through.
+                        </div>
+                    </div>
+                    <div class="home">
+                        <div class="glyph">◈</div>
+                        <div class="where">comptime</div>
+                        <div class="via">
+                            some shaders are even run by the Zig compiler at
+                            build time, baking their output straight into the
+                            binary.
+                        </div>
+                    </div>
+                </div>
+
+                <p>
+                    Why does this matter to <em>you</em>, on your first day?
+                    Because it dissolves the worst thing about learning graphics.
+                    Normally a shader is a black box: it runs somewhere you can't
+                    reach, and when it's wrong you get a black screen and no
+                    error. With zimr, before a GPU ever sees your shader, the
+                    engine can run the identical function on the CPU and show you
+                    the picture — and there you can add a print statement, set a
+                    breakpoint, and watch a single pixel's math step by step.
+                </p>
+
+                <div class="callout aha">
+                    <span class="tag">The aha</span>
+                    A shader stops being a mysterious thing that runs "on the
+                    graphics card" and becomes what it always was underneath: a
+                    function from numbers to numbers. The GPU is just the fastest
+                    place to run it. Every stylized demo further down this page
+                    is checked on the CPU first — pixel-for-pixel — and only then
+                    trusted to the GPU. You get to learn the same way.
+                </div>
+
+                <p>
+                    One source of truth, three execution sites, decided by the
+                    build and not by you. Keep this picture; the "runs on…" chips
+                    above each code block from here on tell you which homes that
+                    particular snippet lives in.
+                </p>
+            </section>
+            <!-- ============================================================ -->
+            <section class="lesson" id="l6">
+                <span class="lesson-num">Lesson 06</span>
+                <h2 class="lesson-title">Vertices, varyings, and the schema</h2>
+                <p class="lesson-goal">
+                    Goal: understand where <code>frag_uv</code> came from, and
+                    meet the typed schema that ties the two shaders together.
+                </p>
+
+                <p>
+                    In Lesson 04 the fragment shader received
+                    <code>io_in.frag_uv</code>. Where did that come from? It was
+                    produced by the <em>vertex</em> shader and smoothly blended
+                    across the triangle on the way to each pixel. A value that
+                    the vertex stage computes at the corners and the hardware
+                    interpolates for every pixel in between is called a
+                    <strong>varying</strong>. Position in, varying out; that
+                    interpolation is free hardware magic and it is where a
+                    surprising amount of graphics beauty comes from.
+                </p>
+                <p>
+                    For the two shaders to agree on what's being passed between
+                    them, zimr asks you to declare it — as plain Zig structs, in
+                    a sibling file. A shader is two small files: the body
+                    (<code>foo_fs.zig</code>) and its schema
+                    (<code>foo_fs_io.zig</code>). Here is a real one, the vertex
+                    stage that every lit 3D material in the engine shares:
+                </p>
+
+                <pre>src/shaders/gbuffer_vs.zig — a real vertex shader<code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-comment">// WHERE this corner lands on screen: multiply the vertex by the</span>
+    <span class="tok-comment">// model-view-projection matrix. This one line is 3D graphics.</span>
+    out.position = <span class="tok-fn">mulMatPoint</span>(io_in.u.mvp, io_in.vertex_position);
+
+    <span class="tok-comment">// Two facts the fragment stage will want, computed here and passed</span>
+    <span class="tok-comment">// along as varyings: the world-space position and the world normal.</span>
+    <span class="tok-kw">const</span> world: Vec = <span class="tok-fn">mulMatPoint</span>(io_in.u.model, io_in.vertex_position);
+    out.frag_world_pos = Vec3{ world[<span class="tok-num">0</span>], world[<span class="tok-num">1</span>], world[<span class="tok-num">2</span>] };
+
+    <span class="tok-kw">const</span> n: Vec3 = io_in.vertex_normal;
+    <span class="tok-kw">const</span> wn: Vec = <span class="tok-fn">mulMatVec</span>(io_in.u.normal_matrix, <span class="tok-fn">vec4</span>(n[<span class="tok-num">0</span>], n[<span class="tok-num">1</span>], n[<span class="tok-num">2</span>], <span class="tok-num">0.0</span>));
+    out.frag_world_normal = Vec3{ wn[<span class="tok-num">0</span>], wn[<span class="tok-num">1</span>], wn[<span class="tok-num">2</span>] };
+
+    <span class="tok-kw">return</span> out;
+}</code></pre>
+
+                <p>
+                    That single line —
+                    <code>out.position = mulMatPoint(mvp, vertex_position)</code>
+                    — is the beating heart of all 3D. A <strong>matrix</strong>
+                    (<code>zm.Mat</code>, a 4×4 grid of numbers) encodes "move the
+                    camera here, point it there, apply perspective." Multiplying
+                    a point by it projects that point onto the screen. You will
+                    build these matrices with helpers like
+                    <code>lookAtRh</code> (aim a camera) and
+                    <code>perspectiveFovRh</code> (add perspective) and mostly
+                    not think about their insides — but now you know what the
+                    vertex shader is <em>for</em>.
+                </p>
+
+                <div class="callout">
+                    <span class="tag">Why the math reads like math</span>
+                    <code>zm.Vec</code> is literally <code>@Vector(4, f32)</code>
+                    — a native Zig vector. So <code>a + b</code>,
+                    <code>a * scalar</code>, and <code>uv[1]</code> just work,
+                    with no library ceremony. The engine leans on this hard:
+                    everything from a physics step to a fragment shader speaks
+                    the same <code>zm</code> vocabulary, which is exactly what
+                    lets one function run in all three homes.
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l7">
+                <span class="lesson-num">Lesson 07</span>
+                <h2 class="lesson-title">The uniform block, from both sides</h2>
+                <p class="lesson-goal">
+                    Goal: get data from your CPU program into a running shader —
+                    without the two sides ever disagreeing about the layout.
+                </p>
+
+                <p>
+                    Your shader needs values that are the same for every pixel
+                    this frame: the light's direction, the camera position, a
+                    color, the current time. That bundle is called a
+                    <strong>uniform block</strong> (uniform = same for all
+                    pixels). You declare it once, as a Zig struct, in the schema
+                    file:
+                </p>
+
+                <pre>src/shaders/fog_fs_io.zig — the schema (condensed)<code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    base_color: Vec,
+    view_pos:   Vec,   <span class="tok-comment">// where the camera is, in world space</span>
+    light_dir:  Vec,   <span class="tok-comment">// which way the light points</span>
+    fog_color:  Vec,   <span class="tok-comment">// what the distance dissolves into</span>
+    params:     Vec,   <span class="tok-comment">// { fog_density, 0, 0, 0 }</span>
+};</code></pre>
+
+                <p>
+                    Now the payoff of declaring it in Zig. On the host — your
+                    normal CPU-side program — you ask for that <em>exact same
+                    type</em> back, fill it in, and upload it:
+                </p>
+
+                <div class="runs">
+                    <span class="chip cpu on">host side</span>
+                    <span class="chip gpu">the same struct, in the shader</span>
+                </div>
+                <pre>on the host — fill the block and send it<code class="zig"><span class="tok-comment">// Take the shader's uniform type straight from the shader's Io.</span>
+<span class="tok-kw">const</span> FsUbo = <span class="tok-builtin">@FieldType</span>(fog_fs.Io, <span class="tok-str">"u"</span>);
+
+<span class="tok-kw">var</span> ubo: FsUbo = .{
+    .base_color = .{ <span class="tok-num">0.8</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.3</span>, <span class="tok-num">1</span> },
+    .light_dir  = .{ <span class="tok-num">0.4</span>, <span class="tok-num">0.8</span>, <span class="tok-num">0.4</span>, <span class="tok-num">0</span> },
+    .fog_color  = .{ <span class="tok-num">0.1</span>, <span class="tok-num">0.1</span>, <span class="tok-num">0.12</span>, <span class="tok-num">1</span> },
+    .params     = .{ s.density, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    ...
+};
+z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, s.fs_ubo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">asBytes</span>(&amp;ubo));</code></pre>
+
+                <div class="callout aha">
+                    <span class="tag">The aha</span>
+                    The host and the shader are reading the <em>same struct
+                    definition</em>. There is no hand-written list of "byte 0 is
+                    the color, byte 16 is the light direction" that the two sides
+                    have to keep in sync by hand — the classic way a shader
+                    silently renders garbage. One Zig type is the single source
+                    of truth for the memory layout, used by both sides. If you
+                    add a field, both sides see it, or neither compiles.
+                </div>
+
+                <p>
+                    Textures work the same tidy way: a sampler is a field
+                    (<code>texture0: shader.Sampler2D(...)</code>) and reading it
+                    is a function call in the shader
+                    (<code>io_in.texture0(uv)</code>). Declare it, then call it.
+                </p>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l8">
+                <span class="lesson-num">Lesson 08</span>
+                <h2 class="lesson-title">Light: the whole trick</h2>
+                <p class="lesson-goal">
+                    Goal: understand the one equation that makes 3D look 3D.
+                </p>
+
+                <p>
+                    Here is the single most useful fact in shading. A surface
+                    looks bright when it faces the light and dark when it faces
+                    away. "How much a surface faces the light" has an exact
+                    measure: the <strong>dot product</strong> of the surface's
+                    normal (the little arrow pointing straight out of it) and the
+                    direction to the light. Facing dead-on gives 1; edge-on gives
+                    0; facing away goes negative, which we clamp to 0. That's it.
+                    That's <em>Lambert lighting</em>, and it is most of what your
+                    eye reads as shape.
+                </p>
+
+                <pre>the four lines under almost every lit surface<code class="zig"><span class="tok-kw">const</span> normal: Vec3 = <span class="tok-fn">normalize</span>(io_in.frag_world_normal);      <span class="tok-comment">// the surface's arrow</span>
+<span class="tok-kw">const</span> light_dir: Vec3 = <span class="tok-fn">normalize</span>(/* toward the light */);
+<span class="tok-kw">const</span> n_dot_l: f32 = <span class="tok-builtin">@max</span>(<span class="tok-fn">dot</span>(normal, light_dir), <span class="tok-num">0.0</span>);   <span class="tok-comment">// how much it faces the light</span>
+<span class="tok-kw">const</span> lit: Vec3 = base_color * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(n_dot_l)); <span class="tok-comment">// dim it by that amount</span></code></pre>
+
+                <p>
+                    Notice <code>dot</code> and <code>normalize</code> are just
+                    <code>zm</code> functions — the same ones a CPU simulation
+                    would call. A pixel that faces the sun keeps its full color;
+                    one that faces away goes dark. Wrap a sphere in this and it
+                    suddenly reads as round. Everything fancier — specular
+                    highlights, fog, shadows — is a refinement bolted onto this
+                    skeleton. The distance-fog material in the tree, for
+                    instance, does exactly this and then mixes the result toward
+                    a fog color by distance, using raylib's exponential curve.
+                </p>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l9">
+                <span class="lesson-num">Lesson 09</span>
+                <h2 class="lesson-title">Cel shading — one line changes everything</h2>
+                <p class="lesson-goal">
+                    Goal: feel how a tiny change to the lighting math becomes a
+                    whole art style. This is the fun part.
+                </p>
+
+                <p>
+                    Take that smooth Lambert term — <code>n_dot_l</code>, a
+                    number sliding continuously from 0 to 1 across a curved
+                    surface — and do one violent thing to it: snap it to a few
+                    discrete steps. Smooth becomes stair-stepped, and a rounded
+                    object suddenly looks hand-inked, like a comic book. This is
+                    <strong>cel shading</strong>, and it is genuinely almost one
+                    line. Here is the real shader from the tree:
+                </p>
+
+                <div class="runs">
+                    <span class="chip gpu on">GPU</span>
+                    <span class="chip cpu on">CPU (verified here first)</span>
+                    <span class="chip ct">comptime</span>
+                </div>
+                <pre>src/shaders/cel_fs.zig — toon shading, the real thing<code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> normal: Vec3 = <span class="tok-fn">normalize</span>(io_in.frag_world_normal);
+    <span class="tok-kw">const</span> light_dir: Vec3 = <span class="tok-fn">normalize</span>(Vec3{
+        io_in.u.light_dir[<span class="tok-num">0</span>], io_in.u.light_dir[<span class="tok-num">1</span>], io_in.u.light_dir[<span class="tok-num">2</span>],
+    });
+    <span class="tok-kw">const</span> n_dot_l: f32 = <span class="tok-builtin">@max</span>(<span class="tok-fn">dot</span>(normal, light_dir), <span class="tok-num">0.0</span>);
+
+    <span class="tok-comment">// THE PUNCHLINE: snap the smooth 0..1 falloff into `bands` flat</span>
+    <span class="tok-comment">// plateaus. floor() is the whole trick — it turns a gradient into steps.</span>
+    <span class="tok-kw">const</span> bands: f32 = <span class="tok-builtin">@max</span>(io_in.u.params[<span class="tok-num">0</span>], <span class="tok-num">2.0</span>);
+    <span class="tok-kw">const</span> quantized: f32 =
+        <span class="tok-builtin">@min</span>(<span class="tok-builtin">@floor</span>(n_dot_l * bands), bands - <span class="tok-num">1.0</span>) / (bands - <span class="tok-num">1.0</span>);
+
+    <span class="tok-kw">const</span> lighting: f32 = <span class="tok-builtin">@min</span>(ambient_floor + quantized, <span class="tok-num">1.0</span>);
+    out.final_color = .{
+        io_in.u.base_color[<span class="tok-num">0</span>] * lighting,
+        io_in.u.base_color[<span class="tok-num">1</span>] * lighting,
+        io_in.u.base_color[<span class="tok-num">2</span>] * lighting,
+        <span class="tok-num">1.0</span>,
+    };
+    <span class="tok-kw">return</span> out;
+}</code></pre>
+
+                <p>
+                    Read that <code>quantized</code> line slowly, because it's a
+                    perfect example of what shader programming actually
+                    <em>is</em>. <code>n_dot_l</code> is between 0 and 1. Multiply
+                    by <code>bands</code> (say 4) to get 0–4, <code>floor</code>
+                    it to get a whole step (0, 1, 2, or 3), divide back down. A
+                    continuous ramp becomes four flat regions with hard borders
+                    between them. One <code>@floor</code> is the entire art
+                    style.
+                </p>
+
+                <div class="callout watch">
+                    <span class="tag">A scar in the comments</span>
+                    The real file divides by <code>bands - 1</code>, not
+                    <code>bands</code>, so the brightest plateau reaches a full
+                    1.0. The comment next to it says: <em>"divide by bands and
+                    nothing ever hits white — the whole render reads
+                    underexposed; ask us how we know."</em> Shaders are full of
+                    these off-by-a-hair traps, which is exactly why being able to
+                    run the thing on the CPU and inspect one pixel's arithmetic
+                    is worth so much.
+                </div>
+            </section>
+            <!-- ============================================================ -->
+            <section class="lesson" id="l10">
+                <span class="lesson-num">Lesson 10</span>
+                <h2 class="lesson-title">Sharing a vertex stage</h2>
+                <p class="lesson-goal">
+                    Goal: see the design idea the whole shader library is
+                    organized around — and why adding a new look is one file.
+                </p>
+
+                <p>
+                    You may have noticed the cel shader and the fog shader both
+                    read <code>frag_world_normal</code> and
+                    <code>frag_world_pos</code>. That is not a coincidence — they
+                    share a vertex shader, the <code>gbuffer_vs</code> from
+                    Lesson 06. Because varyings are a named Zig struct, a fragment
+                    shader that wants those inputs just aliases them:
+                </p>
+
+                <pre>a fragment schema borrowing a shared vertex stage<code class="zig"><span class="tok-comment">// src/shaders/fog_fs_io.zig</span>
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"gbuffer_common_io.zig"</span>);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = common.Interp; <span class="tok-comment">// ← "I take exactly what gbuffer_vs emits"</span></code></pre>
+
+                <p>
+                    That one line means fog, cel shading, terrain banding, the
+                    maze walls in the voxel demos — every world-lit material —
+                    all pair with the <em>same</em> vertex shader.
+                    Stage-to-stage compatibility is guaranteed by the type
+                    system, not by matching up numbered slots by hand (the
+                    traditional, error-prone way). So the engine has grown two
+                    universal vertex stages that most materials just plug into:
+                </p>
+
+                <table class="z">
+                    <thead>
+                        <tr>
+                            <th>shared vertex stage</th>
+                            <th>what it emits</th>
+                            <th>who plugs in</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>gbuffer_vs</code></td>
+                            <td>clip position + world position + world normal</td>
+                            <td>
+                                every lit surface — fog, cel, terrain, maze
+                                walls. A new material is <em>one fragment
+                                file.</em>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><code>deferred_shading_vs</code></td>
+                            <td>a full-screen quad and its UV</td>
+                            <td>
+                                every screen-space effect — wave distortion,
+                                bloom, the raymarcher below. A new effect is
+                                <em>one fragment file.</em>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="callout aha">
+                    <span class="tag">The aha</span>
+                    "Add a new visual style" collapses to "write one small
+                    fragment function." That is why the effects gallery in the
+                    engine is dozens of looks deep without dozens of pipelines —
+                    they nearly all borrow one of these two vertex stages and
+                    differ only in the per-pixel math you now know how to read.
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l11">
+                <span class="lesson-num">Lesson 11</span>
+                <h2 class="lesson-title">How WebGPU actually gets set up</h2>
+                <p class="lesson-goal">
+                    Goal: peek under <code>beginDrawing</code> and see the real
+                    WebGPU objects — so the word stops being scary.
+                </p>
+
+                <p>
+                    For 2D and the immediate-mode 3D batch, zimr does all of this
+                    for you. But when a demo wants its own shader (the heightmap,
+                    the metaballs), it drops one level down to
+                    <code>f.gpu</code> and talks to <strong>WebGPU</strong>
+                    directly. WebGPU is the modern browser graphics API; here are
+                    its four nouns, in the order you meet them.
+                </p>
+
+                <table class="z">
+                    <thead><tr><th>noun</th><th>what it is</th></tr></thead>
+                    <tbody>
+                        <tr><td><strong>Buffer</strong></td><td>a block of GPU memory — your vertices live here, your uniform block lives here.</td></tr>
+                        <tr><td><strong>Shader module</strong></td><td>your compiled <code>shaderMain</code>, loaded onto the device.</td></tr>
+                        <tr><td><strong>Pipeline</strong></td><td>the recipe tying it together: this vertex layout, this vertex + fragment shader, draw triangles, test depth this way.</td></tr>
+                        <tr><td><strong>Bind group</strong></td><td>the wiring that says "uniform buffer #2 goes to the shader's <code>u</code>." Built from the layout the schema generated.</td></tr>
+                    </tbody>
+                </table>
+
+                <p>
+                    Setup happens once, in <code>init</code>. This is condensed
+                    from the real heightmap demo — a generated terrain mesh drawn
+                    with a custom material — and it is representative of every
+                    custom-pipeline demo in the tree:
+                </p>
+
+                <div class="runs"><span class="chip cpu on">host — init, runs once</span></div>
+                <pre>creating a pipeline (condensed from examples/heightmap)<code class="zig"><span class="tok-comment">// 1. GPU memory for the mesh vertices and the uniform blocks.</span>
+<span class="tok-kw">const</span> vbo = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{ .size = cap, .usage = .{ .vertex = true, .copy_dst = true } });
+<span class="tok-kw">const</span> vs_ubo = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{ .size = <span class="tok-builtin">@sizeOf</span>(VsUbo), .usage = .{ .uniform = true, .copy_dst = true } });
+
+<span class="tok-comment">// 2. Load the two shaders (compiled from Zig → WGSL by the build).</span>
+<span class="tok-kw">const</span> vs_mod = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, gbuffer_vs_wgsl, <span class="tok-str">"gbuffer_vs"</span>);
+<span class="tok-kw">const</span> fs_mod = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, terrain_fs_wgsl, <span class="tok-str">"terrain_fs"</span>);
+
+<span class="tok-comment">// 3. The pipeline: vertex layout + shaders + how to draw.</span>
+<span class="tok-kw">const</span> combo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(.triangle_list, .none, .less, .back, .rgba8_unorm, .depth24_plus, <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> pipeline = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(device, layout, vs_mod, fs_mod, pipe_blob, <span class="tok-str">"hm_pipe"</span>);</code></pre>
+
+                <p>
+                    Then each frame you fill the uniform buffer (Lesson 07),
+                    open a pass, set the pipeline and bind groups, and draw. It
+                    is more ceremony than <code>drawCircleV</code>, but every
+                    piece is a noun from the table above, and — crucially — the
+                    scary layout-matching part is gone, because the vertex layout
+                    and the bind-group layout were both generated from your Zig
+                    schema.
+                </p>
+
+                <div class="callout watch">
+                    <span class="tag">A real bug this design catches</span>
+                    WebGPU runs every buffer upload <em>before</em> the frame
+                    draws. So writing the same uniform buffer twice in one frame
+                    means only the last write survives — a classic way to get a
+                    corrupted or "duplicated" look. zimr ships a headless smoke
+                    test that scans each frame's uploads and <em>fails the
+                    build</em> if it catches the same buffer written twice. It
+                    recently caught exactly this in the shared 3D batch: a
+                    leftover startup write to the camera buffer, harmless but
+                    flagged, and removed. The tooling watches the seams so you
+                    don't have to.
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l12">
+                <span class="lesson-num">Lesson 12</span>
+                <h2 class="lesson-title">The showpiece: raymarched metaballs</h2>
+                <p class="lesson-goal">
+                    Goal: read a genuinely advanced shader and find that you
+                    understand every idea in it.
+                </p>
+
+                <p>
+                    Everything so far has drawn triangles. This one doesn't. A
+                    <strong>raymarching</strong> shader runs on a plain
+                    full-screen quad, and for each pixel it shoots a ray out into
+                    an imaginary world and <em>marches</em> along it in steps
+                    until it bumps into a surface — a surface defined not by
+                    triangles but by a math formula (a "signed distance
+                    function"). It is a whole 3D scene conjured purely inside the
+                    fragment shader.
+                </p>
+                <p>
+                    The one in the tree,
+                    <code>src/shaders/hybrid_raymarch_fs.zig</code>, marches
+                    three metaballs that melt into each other (a smooth-minimum
+                    union) floating over a checkerboard floor. Its header comment
+                    describes the scene and then the clever bit:
+                </p>
+
+                <pre>src/shaders/hybrid_raymarch_fs.zig — the header<code class="zig"><span class="tok-comment">//! The scene: three metaballs orbiting each other (polynomial</span>
+<span class="tok-comment">//! smooth-min union) over an analytically-intersected checkerboard</span>
+<span class="tok-comment">//! floor.  Shading is a tetrahedron-gradient normal, Lambert from a</span>
+<span class="tok-comment">//! fixed sun, a rim term on the blobs, and distance fade on the floor.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The hybrid trick: on a hit, the world-space point is projected</span>
+<span class="tok-comment">//! through the SAME view-projection the raster pass uses and</span>
+<span class="tok-comment">//! clip.z / clip.w goes out through the FragDepth builtin — so</span>
+<span class="tok-comment">//! rasterized cubes and these marched blobs depth-test against each</span>
+<span class="tok-comment">//! other with zero coordination.</span></code></pre>
+
+                <p>
+                    Look at how much of that you can now decode. "Lambert from a
+                    fixed sun" — that's Lesson 08, the dot product. "A normal" —
+                    the surface arrow the lighting needs; here it's recovered
+                    from the distance formula instead of read from a mesh.
+                    "Projected through the same view-projection the raster pass
+                    uses" — that's the vertex-shader matrix from Lesson 06,
+                    reused so that these formula-defined blobs and ordinary
+                    triangle cubes correctly hide each other. Different technique,
+                    same handful of ideas.
+                </p>
+
+                <div class="callout aha">
+                    <span class="tag">And it was debugged on the CPU</span>
+                    A raymarcher is the last thing you'd want to debug blind on a
+                    GPU — it's a loop with branches, per pixel. Because this
+                    <code>shaderMain</code> is plain Zig over <code>zm</code>, it
+                    ran first in the software rasterizer, where a wrong ray is an
+                    ordinary Zig bug you can print and step. Lesson 05's promise,
+                    cashed in on the hardest shader in the tree.
+                </div>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l13">
+                <span class="lesson-num">Lesson 13</span>
+                <h2 class="lesson-title">The GPU as a calculator (compute)</h2>
+                <p class="lesson-goal">
+                    Goal: see that the GPU's crowd-of-workers is useful even when
+                    you're not drawing.
+                </p>
+
+                <p>
+                    A shader doesn't have to make pixels. If you have a big array
+                    and the same simple operation to do to every element, the
+                    GPU's thousands of workers will chew through it far faster
+                    than the CPU. That's a <strong>compute shader</strong>, and
+                    zimr writes them in the same one-source style. Here is the
+                    smallest possible one — "double every number" — and notice
+                    the comment:
+                </p>
+
+                <div class="runs">
+                    <span class="chip gpu on">GPU (thousands at once)</span>
+                    <span class="chip cpu on">CPU (identical loop)</span>
+                </div>
+                <pre>examples/compute_smoke/double_it.zig<code class="zig"><span class="tok-comment">/// The kernel. Identical on CPU and GPU; buffers reached via `b_data`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">double</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id &gt;= c.params.count) <span class="tok-kw">return</span>; <span class="tok-comment">// which element am I? (my worker id)</span>
+    b_data[c.id] = b_data[c.id] * <span class="tok-num">2.0</span>;
+}</code></pre>
+
+                <p>
+                    Each worker gets an id — "you handle element 7" — checks it's
+                    in range, and does its one small job. Launch a thousand
+                    workers and a thousand elements double at once. The same
+                    kernel runs as a plain CPU loop when you want to verify it.
+                    zimr uses this for particle systems, a fluid simulation, and
+                    a smoke sim — all the same pattern: a small function, run
+                    across a huge array, checkable on the CPU first.
+                </p>
+            </section>
+
+            <!-- ============================================================ -->
+            <section class="lesson" id="l14">
+                <span class="lesson-num">Lesson 14</span>
+                <h2 class="lesson-title">Where to go next</h2>
+                <p class="lesson-goal">
+                    Goal: turn understanding into a first change of your own.
+                </p>
+
+                <p>
+                    You started not knowing what a GPU does. You can now read a
+                    lit material, a toon shader, and the header of a raymarcher,
+                    and see the same small set of ideas — position by a matrix,
+                    color by a dot product, data shared through a typed struct —
+                    dressed up in different clothes. That is most of graphics.
+                </p>
+                <p>The shortest path from here to a change you made yourself:</p>
+                <ul>
+                    <li>
+                        <strong>Change one number in the cel shader.</strong>
+                        Open <code>src/shaders/cel_fs.zig</code>, find
+                        <code>bands</code>, and feed it 3 instead of 4 from the
+                        host. Watch the poster regions get chunkier. You just
+                        edited a shader.
+                    </li>
+                    <li>
+                        <strong>Recolor a gradient.</strong> Lesson 04's
+                        <code>final_color</code> is four numbers. Swap the red and
+                        blue channels; run it on the CPU rasterizer first and
+                        confirm the picture before the GPU ever sees it.
+                    </li>
+                    <li>
+                        <strong>Write a new material.</strong> Copy
+                        <code>fog_fs.zig</code> + its io file, keep
+                        <code>pub const Inputs = common.Interp;</code> so it
+                        borrows <code>gbuffer_vs</code>, and change only the
+                        per-pixel math. That's the whole "add a look" loop from
+                        Lesson 10.
+                    </li>
+                </ul>
+                <p>
+                    Every shader you read here lives in
+                    <code>src/shaders/</code>; every demo lives in
+                    <code>examples/</code>. They are all just Zig — which means
+                    the compiler, the debugger, and the print statement you
+                    already know work on the whole stack, GPU and CPU alike. Go
+                    change a number and watch the pixels move.
+                </p>
+            </section>
+
+            <hr class="rule" />
+
+            <footer>
+                <p>
+                    <strong>zimr</strong> — a Zig port of raylib, Dear ImGui,
+                    ImPlot, and Jolt, compiled to wasm32-wasi and rendered
+                    through WebGPU. No third-party libraries; the renderer, math,
+                    UI, physics, the Zig&rarr;WGSL and Zig&rarr;JS transpilers,
+                    and the software rasterizer are all Zig in one repository.
+                </p>
+                <p class="muted" style="color: var(--text-faint)">
+                    This is a teaching companion to the project readme. The API
+                    surface and example list change often; code shown here is
+                    condensed from real files in <code>src/</code> and
+                    <code>examples/</code> and lightly trimmed for reading. Not a
+                    stable contract.
+                </p>
+            </footer>
+        </main>
+    </body>
+</html>

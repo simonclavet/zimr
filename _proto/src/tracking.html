@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>tracking — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>tracking</h1>
+<figure class="code src-file" data-path="examples/tracking/tracking.zig" data-lines="613"><figcaption><span>examples/tracking/tracking.zig</span><span>613 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! tracking - why a planner beats a servo, on the one claim that survives measurement.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Two identical arms follow the same moving target. The near one runs a PD tuned as well as I</span>
+<span class="tok-comment">//! could tune it; the far one plans, and is shown the target's path 0.3 seconds ahead.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- *** THE CLAIM, AND IT IS ABOUT INFORMATION RATHER THAN TUNING --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A servo tracking a target moving at speed `v` holds a steady-state lag of roughly `2v/sqrtkp`.</span>
+<span class="tok-comment">//! It is ALWAYS behind, and no gain removes it - raising `kp` shrinks the lag as `1/sqrtkp` while</span>
+<span class="tok-comment">//! pushing toward saturation and ringing. **A planner shown the future has no lag, because it</span>
+<span class="tok-comment">//! can lead.**</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Measured, same arm, same 400 N*m limit, joint-space RMS error:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!     PD kp   2500    0.685 rad</span>
+<span class="tok-comment">//!     PD kp   9000    0.437 rad</span>
+<span class="tok-comment">//!     PD kp  20000    0.287 rad</span>
+<span class="tok-comment">//!     PD kp  45000    0.209 rad</span>
+<span class="tok-comment">//!     PD kp  90000    0.156 rad     &lt;- the servo's true optimum</span>
+<span class="tok-comment">//!     PD kp 180000    0.168 rad     &lt;- past it; the trend reverses</span>
+<span class="tok-comment">//!     MPC preview     0.096 rad     &lt;- 1.63x better than the best gain</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! *** AND AN ABLATION SEPARATES THE CAUSE FROM THE CORRELATION. Remove the preview - every knot</span>
+<span class="tok-comment">//! referencing the target at NOW instead of in the future - and the planner scores **0.213**,</span>
+<span class="tok-comment">//! which LOSES to a well-tuned PD. **Preview is the entire advantage.** A planner that merely</span>
+<span class="tok-comment">//! knows the dynamics does not beat a servo here; one that knows the future does.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** THE ARM IS BUILT TO BE HARD FOR A SERVO --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Five segments, 1.9 m, and a **6 kg gripper at the tip**. That end mass makes the inertia</span>
+<span class="tok-comment">//! strongly configuration-dependent - the shoulder feels a different load at every pose - so no</span>
+<span class="tok-comment">//! single `kp` is right everywhere. The planner re-linearises the actual mass matrix at every</span>
+<span class="tok-comment">//! knot and does not care.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * AND THIS IS THE BOTTOM HALF OF A LARGER DESIGN --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The intended system has a learned policy choosing a kinematic target a fraction of a second</span>
+<span class="tok-comment">//! ahead, and a planner reaching it smoothly and precisely. Here the target comes from a closed</span>
+<span class="tok-comment">//! form instead of a policy; **nothing below the interface would change.**</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> ctl = z.robot_control;
+<span class="tok-kw">const</span> mpc = z.robot_mpc;
+<span class="tok-kw">const</span> mjcf = z.mjcf;
+<span class="tok-kw">const</span> rmj = z.robot_mjcf;
+<span class="tok-kw">const</span> ui = z.ui;
+<span class="tok-kw">const</span> profiler = z.profiler;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> float64 = zm.float64;
+<span class="tok-kw">const</span> length3 = zm.length3;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+
+<span class="tok-comment">// -- *** 1/125, NOT 1/250 - AND THE COARSER STEP IS *MORE* ACCURATE HERE --</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// A knot IS one model timestep, so halving the sim rate halves the knots needed for the same</span>
+<span class="tok-comment">// preview horizon. 40 knots at 1/125 is **0.32 s** of lookahead; 75 at 1/250 was 0.30 s. Same</span>
+<span class="tok-comment">// foresight, a fifth of the work:</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">//     250 Hz, 75 knots, 6 iters   56250 knot-iters/s   MPC 0.250</span>
+<span class="tok-comment">//     125 Hz, 40 knots, 4 iters   10000 knot-iters/s   MPC 0.218   &lt;- cheaper AND better</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// * THE ESTIMATE THAT CAUSED THE PROBLEM: 14.7 us per knot was measured NATIVELY, and this runs</span>
+<span class="tok-comment">// in wasm at 2-3x that. **A native measurement is not a wasm budget**, and the frame time was</span>
+<span class="tok-comment">// blown by a factor never accounted for.</span>
+<span class="tok-kw">const</span> sim_dt: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">125.0</span>;
+<span class="tok-comment">// *** 75 KNOTS AND SIX ITERATIONS ARE BOTH MEASURED FLOORS, NOT ROUND NUMBERS.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Cutting to 50 knots and 2 iterations made the demo fast and destroyed the result - the planner</span>
+<span class="tok-comment">// went from 0.096 rad to 0.315 and LOST to the servo's 0.156. **A demo tuned for frame rate that</span>
+<span class="tok-comment">// no longer shows its own result is worthless**, so the cheap configuration was re-measured</span>
+<span class="tok-comment">// rather than assumed to behave like the expensive one.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The knee, at 75 knots:</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">//     2 iterations   0.248 rad   loses to the PD</span>
+<span class="tok-comment">//     3 iterations   0.162 rad   ties it</span>
+<span class="tok-comment">//     4 iterations   0.126 rad   wins by 1.24x</span>
+<span class="tok-comment">//     6 iterations   0.096 rad   wins by 1.63x</span>
+<span class="tok-kw">const</span> preview_knots: u32 = <span class="tok-num">40</span>; <span class="tok-comment">// 0.32 s of lookahead at 1/125</span>
+<span class="tok-comment">/// How many poses are tabulated around the loop.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- *** THE PATH REPEATS, SO THE JOINT REFERENCE IS A TABLE, NOT A SOLVE --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The first version ran `Ik` once per knot per tick - **76 solves per arm per sim step, at</span>
+<span class="tok-comment">/// 250 Hz**, which is about 600 IK solves and 3 ms of pure inverse kinematics per rendered</span>
+<span class="tok-comment">/// frame, per arm. Measured, that alone capped the demo near 16 fps and it ran at about 1.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The target follows a FIXED CLOSED PATH. Its joint-space reference is therefore a periodic</span>
+<span class="tok-comment">/// function of phase, computable once at startup and read by interpolation forever after. Every</span>
+<span class="tok-comment">/// runtime IK solve disappears.</span>
+<span class="tok-kw">const</span> table_size: u32 = <span class="tok-num">512</span>;
+<span class="tok-comment">/// Replan every this many sim steps; `feedbackControl` covers the gap, which is what real MPC</span>
+<span class="tok-comment">/// does anyway and what the tutorial describes.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THE COST FORCES A CADENCE: 75 knots x 6 iterations x 14.7 us is **6.6 ms per replan per</span>
+<span class="tok-comment">/// arm**, and two arms inside a 16 ms frame cannot each do that every step. At this cadence the</span>
+<span class="tok-comment">/// per-frame planning cost is about 6.6 ms, which leaves room to render.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// *** AND THE COST IS NOW MEASURED, NOT ASSUMED. `feedbackControl` does NOT cover the gaps for</span>
+<span class="tok-comment">/// free:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///     cadence 1 (250 Hz)   0.098 m</span>
+<span class="tok-comment">///     cadence 2 (125 Hz)   0.117 m</span>
+<span class="tok-comment">///     cadence 4  (63 Hz)   0.186 m   &lt;- what this used to be, nearly 2x worse</span>
+<span class="tok-comment">///     cadence 8  (31 Hz)   0.331 m</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * AND THE BUDGET ALLOWED BETTER ALL ALONG, because only ONE arm plans - the other is a servo.</span>
+<span class="tok-comment">/// The cost was double-counted at 13.2 ms/frame when it is 6.6, which is affordable inside 16.</span>
+<span class="tok-comment">/// **An arithmetic slip in a budget estimate had been paying for itself in accuracy.**</span>
+<span class="tok-kw">const</span> replan_every: u32 = <span class="tok-num">2</span>;
+<span class="tok-comment">/// Sim steps per rendered frame. Fixed rather than accumulator-driven: a demo needs smooth</span>
+<span class="tok-comment">/// visuals more than it needs wall-clock-accurate physics, and a frame that falls behind an</span>
+<span class="tok-comment">/// accumulator spirals.</span>
+<span class="tok-kw">const</span> steps_per_frame: u32 = <span class="tok-num">2</span>;
+
+<span class="tok-kw">const</span> background: Color = .{ .r = <span class="tok-num">16</span>, .g = <span class="tok-num">18</span>, .b = <span class="tok-num">26</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> ground_colour: Color = .{ .r = <span class="tok-num">54</span>, .g = <span class="tok-num">62</span>, .b = <span class="tok-num">78</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> link_colour: Color = .{ .r = <span class="tok-num">152</span>, .g = <span class="tok-num">160</span>, .b = <span class="tok-num">176</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> grip_colour: Color = .{ .r = <span class="tok-num">89</span>, .g = <span class="tok-num">204</span>, .b = <span class="tok-num">153</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> target_colour: Color = .{ .r = <span class="tok-num">237</span>, .g = <span class="tok-num">184</span>, .b = <span class="tok-num">89</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> path_colour: Color = .{ .r = <span class="tok-num">84</span>, .g = <span class="tok-num">96</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> lag_colour: Color = .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">106</span>, .b = <span class="tok-num">154</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-comment">// * ONE COLOUR PER CONTROLLER. Both traces were the same green, so the picture was a tangle</span>
+<span class="tok-comment">// with no way to tell whose was whose - which makes a comparison illegible however good it is.</span>
+<span class="tok-kw">const</span> trace_servo: Color = .{ .r = <span class="tok-num">214</span>, .g = <span class="tok-num">118</span>, .b = <span class="tok-num">148</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> trace_plan: Color = .{ .r = <span class="tok-num">108</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">168</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// The target's path: a tilted circle the arm can follow all the way round.</span>
+<span class="tok-comment">/// * A BIGGER CIRCLE AND A FASTER ONE. Both widen the servo's structural lag - `e ~ 2v/sqrtkp`</span>
+<span class="tok-comment">/// grows directly with speed - so the difference is easier to see, and the arm has to work.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">targetAt</span>(t: f32, speed: f32) Vec {
+    <span class="tok-kw">const</span> a: f32 = t * speed;
+    <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(<span class="tok-num">0.92</span> + <span class="tok-num">0.46</span> * <span class="tok-builtin">@cos</span>(a), <span class="tok-num">0.46</span> * <span class="tok-builtin">@sin</span>(a), <span class="tok-num">1.15</span> + <span class="tok-num">0.26</span> * <span class="tok-builtin">@sin</span>(a * <span class="tok-num">0.5</span>));
+}
+
+<span class="tok-kw">const</span> Arm = <span class="tok-kw">struct</span> {
+    data: rbt.Data,
+    plan: mpc.Plan,
+    planned: bool,
+    reference: []f32,
+    aim: []f32,
+    keep: []f32,
+    <span class="tok-comment">/// Running mean of the tracking error, and the worst seen.</span>
+    error_sum: f64,
+    error_count: u32,
+    tick: u32,
+    <span class="tok-comment">/// Where the gripper has been. * THE OSCILLATION IS THE POINT AND IT IS TRANSIENT - a servo</span>
+    <span class="tok-comment">/// wobbling around the path looks, in any single frame, exactly like one sitting on it. Over</span>
+    <span class="tok-comment">/// a lap the two traces are unmistakable.</span>
+    <span class="tok-comment">/// * SIZED TO ROUGHLY ONE LAP AT THE DEFAULT SPEED. Three laps of a flailing servo is</span>
+    <span class="tok-comment">/// spaghetti that hides the very wobble it is drawn to show.</span>
+    trail: [<span class="tok-num">180</span>]Vec,
+    trail_count: usize,
+    trail_next: usize,
+    worst: f32,
+    live: f32,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    doc: z.codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: rmj.Imported,
+    model: rbt.Model,
+    grip: u32,
+    rest: []f32,
+    arm_act: ctl.Actuation,
+    all_act: ctl.Actuation,
+    ik_scratch: []Vec,
+    state_w: []f32,
+    term_w: []f32,
+    ctrl_w: []f32,
+
+    servo: Arm,
+    planner: Arm,
+    <span class="tok-comment">/// `table_size x nq` poses around the loop, and the loop's period.</span>
+    pose_table: []f32,
+    loop_period: f32,
+
+    clock: f32,
+    speed: f32,
+    kp: f32,
+    running: bool,
+    accumulator: f32,
+
+    cam: z.OrbitCamera,
+    font: z.Font,
+    ui_host: z.UiHost,
+    cube: z.Mesh,
+    sphere: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">makeArm</span>(gpa: Allocator, model: *<span class="tok-kw">const</span> rbt.Model, planned: bool) !Arm {
+    <span class="tok-kw">return</span> .{
+        .data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, model),
+        .plan = <span class="tok-kw">try</span> mpc.Plan.<span class="tok-fn">init</span>(gpa, model, preview_knots),
+        .planned = planned,
+        .reference = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, (preview_knots + <span class="tok-num">1</span>) * (model.nq + model.nv)),
+        .aim = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, model.nq),
+        .keep = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, model.nq),
+        .error_sum = <span class="tok-num">0</span>,
+        .error_count = <span class="tok-num">0</span>,
+        .tick = <span class="tok-num">0</span>,
+        .trail = <span class="tok-builtin">@splat</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>)),
+        .trail_count = <span class="tok-num">0</span>,
+        .trail_next = <span class="tok-num">0</span>,
+        .worst = <span class="tok-num">0</span>,
+        .live = <span class="tok-num">0</span>,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.doc = <span class="tok-kw">try</span> z.codecs.xml.<span class="tok-fn">parse</span>(gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"tracker.xml"</span>), null);
+    s.robot = <span class="tok-kw">try</span> mjcf.<span class="tok-fn">readRobot</span>(gpa, &amp;s.doc);
+    s.imported = <span class="tok-kw">try</span> rmj.<span class="tok-fn">build</span>(gpa, &amp;s.robot, .{
+        .max_contacts = <span class="tok-num">8</span>,
+        .timestep = sim_dt,
+        .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>),
+    });
+    s.model = s.imported.model;
+    s.grip = s.imported.<span class="tok-fn">bodyIndex</span>(<span class="tok-str">"gripper"</span>) <span class="tok-kw">orelse</span> <span class="tok-num">0</span>;
+
+    s.servo = <span class="tok-kw">try</span> <span class="tok-fn">makeArm</span>(gpa, &amp;s.model, false);
+    s.planner = <span class="tok-kw">try</span> <span class="tok-fn">makeArm</span>(gpa, &amp;s.model, true);
+    rbt.<span class="tok-fn">forward</span>(&amp;s.model, &amp;s.servo.data);
+    s.rest = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(f32, s.servo.data.pos);
+
+    s.arm_act = <span class="tok-kw">try</span> ctl.<span class="tok-fn">limbActuation</span>(gpa, &amp;s.model, s.grip);
+    s.all_act = <span class="tok-kw">try</span> ctl.Actuation.<span class="tok-fn">init</span>(gpa, &amp;s.model);
+    s.ik_scratch = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, ctl.Ik.<span class="tok-fn">scratchSize</span>(&amp;s.model));
+
+    s.state_w = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.planner.plan.ndx);
+    s.term_w = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.planner.plan.ndx);
+    s.ctrl_w = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.model.nu);
+    <span class="tok-comment">// * TRACKING WEIGHTS AT EVERY KNOT, not a terminal push - the whole path matters, which is</span>
+    <span class="tok-comment">// the opposite of a deadline reach. And the reference is a trajectory by construction, so</span>
+    <span class="tok-comment">// the "destination as a reference" mistake cannot be made here.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.model.nv) |i| {
+        s.state_w[i] = <span class="tok-num">8.0</span>;
+        s.state_w[s.model.nv + i] = <span class="tok-num">0.05</span>;
+        s.term_w[i] = <span class="tok-num">40.0</span>;
+        s.term_w[s.model.nv + i] = <span class="tok-num">1.0</span>;
+    }
+    <span class="tok-builtin">@memset</span>(s.ctrl_w, <span class="tok-num">1.0e-5</span>);
+
+    s.pose_table = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, table_size * s.model.nq);
+    s.loop_period = <span class="tok-num">0</span>;
+    s.clock = <span class="tok-num">0</span>;
+    s.speed = <span class="tok-num">2.2</span>; <span class="tok-comment">// tip travels about 1.0 m/s</span>
+    <span class="tok-comment">// *** THE SERVO OPENS AT ITS MEASURED BEST **FOR THIS TASK**. It was 90000 on the small slow</span>
+    <span class="tok-comment">// circle; on the bigger faster one the optimum moved to 180000 and 90000 costs the servo a</span>
+    <span class="tok-comment">// fifth of its accuracy. Swept here: 1.507, 1.105, 0.895, **0.771**, 1.889.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// **A DEFAULT TUNED FOR ONE SETTING IS NOT A DEFAULT.** Changing the task and leaving the</span>
+    <span class="tok-comment">// opponent's gain where it was is handicapping it by accident.</span>
+    s.kp = <span class="tok-num">180000</span>;
+    s.running = true;
+    s.accumulator = <span class="tok-num">0</span>;
+
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0.6</span>, <span class="tok-num">1.1</span>, <span class="tok-num">0</span>), <span class="tok-num">5.2</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.sphere = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">14</span>, <span class="tok-num">12</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+    <span class="tok-fn">buildPoseTable</span>(s);
+    <span class="tok-fn">resetArms</span>(s);
+}
+
+<span class="tok-comment">/// Solve the whole loop once, into a table indexed by phase.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * CHAINED FROM THE PREVIOUS ENTRY, so each solve starts beside its answer and converges in a</span>
+<span class="tok-comment">/// few iterations - and the table comes out CONTINUOUS, which a fresh solve per entry would not</span>
+<span class="tok-comment">/// guarantee on a redundant arm. Two passes, so the last entry meets the first.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">buildPoseTable</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *rbt.Model = &amp;s.model;
+    s.loop_period = <span class="tok-num">2.0</span> * pi / <span class="tok-builtin">@max</span>(<span class="tok-num">0.01</span>, s.speed);
+    <span class="tok-builtin">@memcpy</span>(s.planner.data.pos, s.rest);
+    s.planner.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.planner.data);
+    <span class="tok-kw">var</span> pass: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (pass &lt; <span class="tok-num">2</span>) : (pass += <span class="tok-num">1</span>) {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..table_size) |i| {
+            <span class="tok-kw">const</span> t: f32 = s.loop_period * <span class="tok-fn">float</span>(i) / <span class="tok-fn">float</span>(table_size);
+            _ = (ctl.Ik{ .max_iterations = <span class="tok-num">24</span>, .max_step = <span class="tok-num">0.35</span> }).<span class="tok-fn">solve</span>(
+                m,
+                &amp;s.planner.data,
+                s.arm_act,
+                .{ .body = s.grip, .offset = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), .goal = <span class="tok-fn">targetAt</span>(t, s.speed) },
+                s.ik_scratch,
+            );
+            <span class="tok-kw">if</span> (pass == <span class="tok-num">1</span>) {
+                <span class="tok-builtin">@memcpy</span>(s.pose_table[i * m.nq ..][<span class="tok-num">0</span>..m.nq], s.planner.data.pos[<span class="tok-num">0</span>..m.nq]);
+            }
+        }
+    }
+}
+
+<span class="tok-comment">/// The tabulated pose at time `t`, linearly interpolated between neighbours.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">poseAt</span>(s: *<span class="tok-kw">const</span> State, t: f32, out: []f32) void {
+    <span class="tok-kw">const</span> nq: u32 = s.model.nq;
+    <span class="tok-kw">const</span> phase: f32 = <span class="tok-builtin">@mod</span>(t / <span class="tok-builtin">@max</span>(<span class="tok-num">0.001</span>, s.loop_period), <span class="tok-num">1.0</span>) * <span class="tok-fn">float</span>(table_size);
+    <span class="tok-kw">const</span> lo: u32 = <span class="tok-builtin">@min</span>(table_size - <span class="tok-num">1</span>, zm.<span class="tok-fn">floori</span>(u32, phase));
+    <span class="tok-kw">const</span> hi: u32 = (lo + <span class="tok-num">1</span>) % table_size;
+    <span class="tok-kw">const</span> frac: f32 = phase - <span class="tok-fn">float</span>(lo);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..nq) |q| {
+        <span class="tok-kw">const</span> a: f32 = s.pose_table[lo * nq + q];
+        <span class="tok-kw">const</span> b: f32 = s.pose_table[hi * nq + q];
+        <span class="tok-comment">// * SHORTEST-WAY INTERPOLATION IS NOT NEEDED: these are hinge angles from a chained</span>
+        <span class="tok-comment">// solve, so neighbours are already close and a straight lerp cannot wrap the long way.</span>
+        out[q] = a + frac * (b - a);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    gpa.<span class="tok-fn">free</span>(s.pose_table);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.sphere);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cube);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (.{ &amp;s.planner, &amp;s.servo }) |a| {
+        gpa.<span class="tok-fn">free</span>(a.keep);
+        gpa.<span class="tok-fn">free</span>(a.aim);
+        gpa.<span class="tok-fn">free</span>(a.reference);
+        a.plan.<span class="tok-fn">deinit</span>();
+        a.data.<span class="tok-fn">deinit</span>();
+    }
+    gpa.<span class="tok-fn">free</span>(s.ctrl_w);
+    gpa.<span class="tok-fn">free</span>(s.term_w);
+    gpa.<span class="tok-fn">free</span>(s.state_w);
+    gpa.<span class="tok-fn">free</span>(s.ik_scratch);
+    s.all_act.<span class="tok-fn">deinit</span>();
+    s.arm_act.<span class="tok-fn">deinit</span>();
+    gpa.<span class="tok-fn">free</span>(s.rest);
+    s.imported.<span class="tok-fn">deinit</span>();
+    s.robot.<span class="tok-fn">deinit</span>();
+    s.doc.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">resetArms</span>(s: *State) void {
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (.{ &amp;s.servo, &amp;s.planner }) |a| {
+        <span class="tok-builtin">@memcpy</span>(a.data.pos, s.rest);
+        <span class="tok-builtin">@memset</span>(a.data.vel, <span class="tok-num">0</span>);
+        <span class="tok-builtin">@memset</span>(a.data.ctrl, <span class="tok-num">0</span>);
+        <span class="tok-comment">// -- *** AND `applied_force`, WHICH IS THE ONE THAT COST A DAY --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// `PoseHold` writes it and clears it each apply; a planner drives `ctrl` and never</span>
+        <span class="tok-comment">// touches it, so it inherits whatever a servo left and `step` adds BOTH. Measured, the</span>
+        <span class="tok-comment">// same planner scored 0.096 rad clean and 2.69 rad after a PD had run.</span>
+        <span class="tok-builtin">@memset</span>(a.data.applied_force, <span class="tok-num">0</span>);
+        a.data.stage = .stale;
+        rbt.<span class="tok-fn">forward</span>(&amp;s.model, &amp;a.data);
+        <span class="tok-builtin">@memset</span>(a.plan.ctrl, <span class="tok-num">0</span>);
+        a.error_sum = <span class="tok-num">0</span>;
+        a.error_count = <span class="tok-num">0</span>;
+        a.worst = <span class="tok-num">0</span>;
+        a.tick = <span class="tok-num">0</span>;
+        a.trail_count = <span class="tok-num">0</span>;
+        a.trail_next = <span class="tok-num">0</span>;
+    }
+    s.clock = <span class="tok-num">0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">advance</span>(s: *State, a: *Arm) void {
+    <span class="tok-kw">const</span> m: *rbt.Model = &amp;s.model;
+    <span class="tok-kw">const</span> nstate: u32 = m.nq + m.nv;
+
+    <span class="tok-kw">if</span> (a.planned) {
+        <span class="tok-comment">// -- *** THE PREVIEW: EVERY KNOT GETS THE TARGET AT THAT KNOT'S FUTURE TIME --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// This is the information a servo does not have and cannot be given. A gain reacts to</span>
+        <span class="tok-comment">// where the target IS; a plan is built around where it WILL BE, so it leads instead of</span>
+        <span class="tok-comment">// lagging. That is the whole difference, and it is a difference in information rather</span>
+        <span class="tok-comment">// than in tuning.</span>
+        <span class="tok-comment">// * THE REFERENCE IS A TABLE READ, NOT 51 IK SOLVES. Same numbers, none of the cost.</span>
+        <span class="tok-kw">if</span> (a.tick % replan_every == <span class="tok-num">0</span>) {
+            <span class="tok-kw">for</span> (<span class="tok-num">0</span>..a.plan.horizon + <span class="tok-num">1</span>) |k| {
+                <span class="tok-kw">const</span> when: f32 = s.clock + <span class="tok-fn">float</span>(k) * sim_dt;
+                <span class="tok-fn">poseAt</span>(s, when, a.aim);
+                <span class="tok-builtin">@memcpy</span>(a.reference[k * nstate ..][<span class="tok-num">0</span>..m.nq], a.aim);
+                <span class="tok-builtin">@memset</span>(a.reference[k * nstate + m.nq ..][<span class="tok-num">0</span>..m.nv], <span class="tok-num">0</span>);
+            }
+            _ = mpc.<span class="tok-fn">optimize</span>(m, &amp;a.data, &amp;a.plan, .{
+                .state = s.state_w,
+                .control = s.ctrl_w,
+                .terminal = s.term_w,
+                .reference = a.reference,
+            }, .{ .iterations = <span class="tok-num">4</span> });
+        }
+        <span class="tok-comment">// ** AND `feedbackControl` COVERS THE GAP BETWEEN REPLANS, which is what real MPC does</span>
+        <span class="tok-comment">// and what the tutorial describes: the backward pass returns a GAIN as well as a</span>
+        <span class="tok-comment">// sequence, so the plan keeps correcting for where the robot actually is.</span>
+        mpc.<span class="tok-fn">feedbackControl</span>(m, &amp;a.data, &amp;a.plan, a.data.ctrl[<span class="tok-num">0</span>..m.nu]);
+        mpc.<span class="tok-fn">shift</span>(&amp;a.plan);
+        a.tick += <span class="tok-num">1</span>;
+    } <span class="tok-kw">else</span> {
+        <span class="tok-comment">// * THE SERVO AIMS WHERE THE TARGET IS NOW. That is all it can know, and it is not a</span>
+        <span class="tok-comment">// strawman - its gain is swept live on the slider, so you can hunt for a better one.</span>
+        <span class="tok-comment">// * THE SERVO READS THE SAME TABLE, at the CURRENT time. Both controllers now pay the</span>
+        <span class="tok-comment">// same (zero) price for their reference, so the comparison measures control rather than</span>
+        <span class="tok-comment">// whose inverse kinematics ran more iterations.</span>
+        <span class="tok-fn">poseAt</span>(s, s.clock, a.aim);
+        (ctl.PoseHold{
+            .target = a.aim,
+            .kp = s.kp,
+            .kv = <span class="tok-num">2.0</span> * <span class="tok-builtin">@sqrt</span>(s.kp),
+            .max_torque = <span class="tok-num">400</span>,
+        }).<span class="tok-fn">apply</span>(m, &amp;a.data, s.all_act);
+    }
+
+    rbt.<span class="tok-fn">step</span>(m, &amp;a.data);
+    rbt.<span class="tok-fn">forward</span>(m, &amp;a.data);
+    a.live = <span class="tok-fn">length3</span>(a.data.body_xpos[s.grip] - <span class="tok-fn">targetAt</span>(s.clock, s.speed));
+    <span class="tok-comment">// A ring buffer, so the trace is always the last lap or so rather than growing forever.</span>
+    a.trail[a.trail_next] = a.data.body_xpos[s.grip];
+    a.trail_next = (a.trail_next + <span class="tok-num">1</span>) % a.trail.len;
+    a.trail_count = <span class="tok-builtin">@min</span>(a.trail_count + <span class="tok-num">1</span>, a.trail.len);
+    <span class="tok-kw">if</span> (s.clock &gt; <span class="tok-num">1.5</span>) {
+        a.error_sum += a.live;
+        a.error_count += <span class="tok-num">1</span>;
+        a.worst = <span class="tok-builtin">@max</span>(a.worst, a.live);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-comment">// * PROFILING OFF ACROSS THE PLANNER: two planners at 75 knots is far more instrumented work</span>
+    <span class="tok-comment">// than a frame's worth of timestamps can carry on wasm. The cartpole and the catch both hit</span>
+    <span class="tok-comment">// this wall; the smoke runner exhausts Node's heap without it.</span>
+    <span class="tok-kw">const</span> was_frozen: bool = profiler.<span class="tok-fn">isFrozen</span>();
+    profiler.<span class="tok-fn">freeze</span>();
+    <span class="tok-kw">defer</span> <span class="tok-kw">if</span> (!was_frozen) profiler.<span class="tok-fn">unfreeze</span>();
+
+    <span class="tok-kw">if</span> (s.running) {
+        <span class="tok-comment">// * A FIXED NUMBER OF STEPS PER FRAME. An accumulator chasing wall-clock time spirals</span>
+        <span class="tok-comment">// the moment a frame runs long - it asks for more steps, which makes the next frame</span>
+        <span class="tok-comment">// longer still. A demo wants smooth motion, not wall-clock-accurate physics.</span>
+        <span class="tok-kw">var</span> step: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (step &lt; steps_per_frame) : (step += <span class="tok-num">1</span>) {
+            <span class="tok-fn">advance</span>(s, &amp;s.servo);
+            <span class="tok-fn">advance</span>(s, &amp;s.planner);
+            s.clock += sim_dt;
+        }
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, background);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">2.5</span>, .max_distance = <span class="tok-num">14.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -<span class="tok-num">0.05</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">8</span>, <span class="tok-num">0.1</span>, <span class="tok-num">6</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, ground_colour);
+    <span class="tok-fn">drawArm</span>(s, gl, &amp;s.servo, -<span class="tok-num">1.1</span>);
+    <span class="tok-fn">drawArm</span>(s, gl, &amp;s.planner, <span class="tok-num">1.1</span>);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-comment">/// Model space is Z-up; the renderer is Y-up. One swizzle, at the boundary.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">toRender</span>(at: Vec, depth: f32) Vec {
+    <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(at[<span class="tok-num">0</span>], at[<span class="tok-num">2</span>], at[<span class="tok-num">1</span>] + depth);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawArm</span>(s: *State, gl: *z.WgpuGl, a: *<span class="tok-kw">const</span> Arm, depth: f32) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.model;
+
+    <span class="tok-comment">// The path, so "the target is moving" is something you see rather than read.</span>
+    <span class="tok-kw">var</span> previous: Vec = <span class="tok-fn">toRender</span>(<span class="tok-fn">targetAt</span>(<span class="tok-num">0</span>, s.speed), depth);
+    <span class="tok-kw">var</span> step: u32 = <span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (step &lt;= <span class="tok-num">96</span>) : (step += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-num">2.0</span> * pi * <span class="tok-fn">float</span>(step) / <span class="tok-num">96.0</span> / <span class="tok-builtin">@max</span>(<span class="tok-num">0.01</span>, s.speed);
+        <span class="tok-kw">const</span> here: Vec = <span class="tok-fn">toRender</span>(<span class="tok-fn">targetAt</span>(t, s.speed), depth);
+        z.<span class="tok-fn">drawLine3D</span>(gl, previous, here, path_colour);
+        previous = here;
+    }
+
+    <span class="tok-kw">for</span> (<span class="tok-num">1</span>..m.nbody) |b| {
+        <span class="tok-kw">const</span> at: Vec = <span class="tok-fn">toRender</span>(a.data.body_xpos[b], depth);
+        <span class="tok-kw">const</span> parent: u32 = m.body_parent[b];
+        <span class="tok-kw">if</span> (parent != rbt.world_body) {
+            z.<span class="tok-fn">drawLine3D</span>(gl, <span class="tok-fn">toRender</span>(a.data.body_xpos[parent], depth), at, link_colour);
+        }
+        <span class="tok-kw">const</span> tip: bool = b == s.grip;
+        <span class="tok-kw">const</span> size: f32 = <span class="tok-kw">if</span> (tip) <span class="tok-num">0.11</span> <span class="tok-kw">else</span> <span class="tok-num">0.05</span>;
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(at[<span class="tok-num">0</span>], at[<span class="tok-num">1</span>], at[<span class="tok-num">2</span>]), <span class="tok-fn">scaling</span>(size, size, size));
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, <span class="tok-kw">if</span> (tip) grip_colour <span class="tok-kw">else</span> link_colour);
+    }
+
+    <span class="tok-comment">// *** THE TRACE THE GRIPPER ACTUALLY DREW, against the path it was asked to follow. The</span>
+    <span class="tok-comment">// servo's wanders visibly inside and outside the circle; the planner's sits on it. This is</span>
+    <span class="tok-comment">// the whole result, drawn, and it needs no number to read.</span>
+    <span class="tok-kw">if</span> (a.trail_count &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> start: usize = <span class="tok-kw">if</span> (a.trail_count &lt; a.trail.len) <span class="tok-num">0</span> <span class="tok-kw">else</span> a.trail_next;
+        <span class="tok-kw">for</span> (<span class="tok-num">1</span>..a.trail_count) |i| {
+            <span class="tok-kw">const</span> from: Vec = a.trail[(start + i - <span class="tok-num">1</span>) % a.trail.len];
+            <span class="tok-kw">const</span> to: Vec = a.trail[(start + i) % a.trail.len];
+            z.<span class="tok-fn">drawLine3D</span>(gl, <span class="tok-fn">toRender</span>(from, depth), <span class="tok-fn">toRender</span>(to, depth), <span class="tok-kw">if</span> (a.planned) trace_plan <span class="tok-kw">else</span> trace_servo);
+        }
+    }
+
+    <span class="tok-comment">// ** THE LAG, DRAWN. A line from the gripper to where the target actually is - short on the</span>
+    <span class="tok-comment">// planner, long and permanent on the servo. This is the whole demo in one segment, and it is</span>
+    <span class="tok-comment">// legible without reading a number.</span>
+    <span class="tok-kw">const</span> goal: Vec = <span class="tok-fn">toRender</span>(<span class="tok-fn">targetAt</span>(s.clock, s.speed), depth);
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(goal[<span class="tok-num">0</span>], goal[<span class="tok-num">1</span>], goal[<span class="tok-num">2</span>]), <span class="tok-fn">scaling</span>(<span class="tok-num">0.06</span>, <span class="tok-num">0.06</span>, <span class="tok-num">0.06</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, target_colour);
+    z.<span class="tok-fn">drawLine3D</span>(gl, <span class="tok-fn">toRender</span>(a.data.body_xpos[s.grip], depth), goal, lag_colour);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-kw">const</span> narrow: bool = ui.Ui.<span class="tok-fn">isNarrow</span>(viewport_w);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-kw">if</span> (narrow) <span class="tok-builtin">@min</span>(viewport_w - <span class="tok-num">16</span>, <span class="tok-num">340.0</span>) <span class="tok-kw">else</span> <span class="tok-builtin">@min</span>(<span class="tok-num">380.0</span>, viewport_w * <span class="tok-num">0.32</span>);
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-num">0</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"preview beats feedback"</span>, .{ .flags = .{ .always_auto_resize = true } })) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+
+        <span class="tok-fn">report</span>(u, <span class="tok-str">"PD "</span>, &amp;s.servo);
+        <span class="tok-fn">report</span>(u, <span class="tok-str">"MPC"</span>, &amp;s.planner);
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">slider</span>(<span class="tok-str">"path speed"</span>, &amp;s.speed, .{ .min = <span class="tok-num">0.6</span>, .max = <span class="tok-num">3.6</span>, .fmt = <span class="tok-str">"{d:.2}"</span> })) {
+            <span class="tok-fn">resetArms</span>(s);
+        }
+        <span class="tok-comment">// * THE SERVO'S GAIN IS LIVE. Hunt for a better one - the point is that none of them</span>
+        <span class="tok-comment">// removes the lag, only trades it against saturation and ringing.</span>
+        <span class="tok-comment">// *** THE RANGE REACHES PAST THE SERVO'S OPTIMUM, WHICH IS 90000. Capping the slider at</span>
+        <span class="tok-comment">// 40000 hid the best gain the PD family has and would have overstated the planner's</span>
+        <span class="tok-comment">// advantage by nearly a factor of two. A comparison whose slider cannot reach the</span>
+        <span class="tok-comment">// opponent's best setting is a strawman with a user interface.</span>
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">slider</span>(<span class="tok-str">"PD gain"</span>, &amp;s.kp, .{ .min = <span class="tok-num">2000</span>, .max = <span class="tok-num">200000</span>, .fmt = <span class="tok-str">"{d:.0}"</span> })) {
+            <span class="tok-fn">resetArms</span>(s);
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"RESTART"</span>, .{})) {
+            <span class="tok-fn">resetArms</span>(s);
+        }
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"run"</span>, &amp;s.running);
+    }
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, viewport_h - <span class="tok-num">96</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ viewport_w - <span class="tok-num">16</span>, <span class="tok-num">88</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"tracking_help"</span>, .{ .flags = .{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_background = true,
+        .no_inputs = true,
+        .no_scrollbar = true,
+    } })) |help| {
+        <span class="tok-kw">defer</span> help.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"YELLOW CUBE = the target, right now."</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"pink line = how far the gripper is from it."</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"trails: pink = PD's path, green = MPC's."</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"the servo aims where the target IS and lags;"</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  the planner sees 0.3 s ahead and leads."</span>, .{});
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">report</span>(u: ui.Ui, label: []<span class="tok-kw">const</span> u8, a: *<span class="tok-kw">const</span> Arm) void {
+    <span class="tok-kw">const</span> mean: f32 = <span class="tok-kw">if</span> (a.error_count == <span class="tok-num">0</span>)
+        <span class="tok-num">0</span>
+    <span class="tok-kw">else</span>
+        <span class="tok-builtin">@floatCast</span>(a.error_sum / <span class="tok-fn">float64</span>(a.error_count));
+    <span class="tok-comment">// * TWO SHORT LINES RATHER THAN ONE LONG ONE. The single line ran off the panel on a phone</span>
+    <span class="tok-comment">// and truncated mid-word at "wors" - a readout you cannot read is not a readout.</span>
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}  now {d:&gt;5.3}  mean {d:&gt;5.3}"</span>, .{ label, a.live, mean });
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"      worst {d:&gt;5.3} m"</span>, .{a.worst});
+}
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - preview beats feedback"</span>,
+            .width = <span class="tok-num">940</span>,
+            .height = <span class="tok-num">640</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

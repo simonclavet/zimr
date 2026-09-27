@@ -1,0 +1,631 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>balance_flywheel — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>balance_flywheel</h1>
+<figure class="code src-file" data-path="examples/balance_flywheel/balance_flywheel.zig" data-lines="351"><figcaption><span>examples/balance_flywheel/balance_flywheel.zig</span><span>351 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! balance_flywheel - why a balancing robot windmills its arms.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Two identical inverted pendulums get the same shove. The near one may only shift its centre</span>
+<span class="tok-comment">//! of pressure inside its foot; the far one may also spin its arms. Both are driven by the same</span>
+<span class="tok-comment">//! planner, the same cost and the same horizon - **the only difference is whether the arms are</span>
+<span class="tok-comment">//! allowed to move.**</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** WHAT THE ARMS ACTUALLY DO, BECAUSE IT IS NOT WHAT IT LOOKS LIKE --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! They are a momentum SINK, not a momentum source. Internal joint torques cannot change a</span>
+<span class="tok-comment">//! body's angular momentum about its own centre of mass - that is Newton's third law, and it is</span>
+<span class="tok-comment">//! provable in one line. What changes it is the GROUND:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!     L_dot = (p - c) x f          -&gt;     L_dot_y = -h*f_x - (p_x - c_x)*m*g</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Two independent knobs fall out. The **centre of pressure** `p`, limited by the foot. And the</span>
+<span class="tok-comment">//! **tangential force** `f_x`, limited by friction. Once the foot has run out of room the first</span>
+<span class="tok-comment">//! is finished - but you can still push sideways, and that generates angular momentum which has</span>
+<span class="tok-comment">//! to go somewhere. Into the arms, or the body rotates and you fall over.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! * SO THE WINDMILLING IS THE PRICE OF THE SIDEWAYS PUSH, NOT THE PUSH ITSELF. Watch the near</span>
+<span class="tok-comment">//! pendulum: its pressure marker pins to the edge of the foot and then it has nothing left.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- *** AND WHY THIS NEEDS A PLANNER RATHER THAN A GAIN --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Angular momentum is bounded in EXCURSION - arms only rotate so far. So spending it is</span>
+<span class="tok-comment">//! BORROWING: you take momentum now to arrest the fall and must give it back before the arms</span>
+<span class="tok-comment">//! run out. That is a finite-horizon trade with a terminal condition, and there is no gain that</span>
+<span class="tok-comment">//! means "spend now, repay in 400 ms". Measured, the foot alone survives 0.30 m/s and the arms</span>
+<span class="tok-comment">//! take it to 0.85 - **2.8x** - and the whole of that margin is momentum the planner knows it</span>
+<span class="tok-comment">//! can return.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> mpc = z.robot_mpc;
+<span class="tok-kw">const</span> ui = z.ui;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+
+<span class="tok-kw">const</span> sim_timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">100.0</span>;
+<span class="tok-kw">const</span> horizon_knots: u32 = <span class="tok-num">60</span>;
+<span class="tok-comment">/// Roughly a human on one foot: 40.8 kg with its mass 0.83 m up.</span>
+<span class="tok-kw">const</span> body: mpc.BalanceModel = .{ .mass = <span class="tok-num">40.8</span>, .height = <span class="tok-num">0.83</span>, .gravity = <span class="tok-num">9.81</span> };
+<span class="tok-comment">/// How much the visible arms weigh, for turning momentum into an angle to draw.</span>
+<span class="tok-kw">const</span> arm_inertia: f32 = <span class="tok-num">1.6</span>;
+
+<span class="tok-kw">const</span> background: Color = .{ .r = <span class="tok-num">18</span>, .g = <span class="tok-num">20</span>, .b = <span class="tok-num">28</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> foot_colour: Color = .{ .r = <span class="tok-num">70</span>, .g = <span class="tok-num">78</span>, .b = <span class="tok-num">96</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> rod_colour: Color = .{ .r = <span class="tok-num">148</span>, .g = <span class="tok-num">156</span>, .b = <span class="tok-num">172</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> mass_ok: Color = .{ .r = <span class="tok-num">107</span>, .g = <span class="tok-num">158</span>, .b = <span class="tok-num">219</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> mass_lost: Color = .{ .r = <span class="tok-num">214</span>, .g = <span class="tok-num">92</span>, .b = <span class="tok-num">92</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> arm_colour: Color = .{ .r = <span class="tok-num">237</span>, .g = <span class="tok-num">184</span>, .b = <span class="tok-num">89</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> pressure_free: Color = .{ .r = <span class="tok-num">89</span>, .g = <span class="tok-num">204</span>, .b = <span class="tok-num">153</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> pressure_pinned: Color = .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">106</span>, .b = <span class="tok-num">154</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// One pendulum: its own planner, its own state, its own permission to use its arms.</span>
+<span class="tok-kw">const</span> Pendulum = <span class="tok-kw">struct</span> {
+    plan: mpc.BalancePlan,
+    <span class="tok-comment">/// `[com_xy, vel_xy, momentum_xy]`.</span>
+    state: [mpc.lipm_state_dim]f32,
+    <span class="tok-comment">/// Where the arms have rotated to, from integrating the momentum. Drawing only.</span>
+    arm_angle: f32,
+    limits: mpc.BalanceLimits,
+    fallen: bool,
+    <span class="tok-comment">/// The centre of pressure the planner asked for last tick.</span>
+    pressure: [<span class="tok-num">2</span>]f32,
+    pinned: bool,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    foot_only: Pendulum,
+    with_arms: Pendulum,
+    push_speed: f32,
+    running: bool,
+    accumulator: f32,
+    <span class="tok-comment">/// Seconds since the last shove, so the readouts mean something.</span>
+    since_push: f32,
+
+    cam: z.OrbitCamera,
+    font: z.Font,
+    ui_host: z.UiHost,
+    cube: z.Mesh,
+    sphere: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+};
+
+<span class="tok-comment">// Cost weights, in state order [com_x, com_y, vel_x, vel_y, momentum_x, momentum_y].</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// * MOMENTUM IS BARELY PENALISED ALONG THE WAY AND HEAVILY AT THE END. That asymmetry IS the</span>
+<span class="tok-comment">// borrowing: the planner is free to take on momentum mid-horizon and must have given it back by</span>
+<span class="tok-comment">// the last knot. Penalising it uniformly would forbid the very thing the arms are for.</span>
+<span class="tok-kw">const</span> state_weight = [_]f32{ <span class="tok-num">400</span>, <span class="tok-num">400</span>, <span class="tok-num">40</span>, <span class="tok-num">40</span>, <span class="tok-num">0.02</span>, <span class="tok-num">0.02</span> };
+<span class="tok-kw">const</span> control_weight = [_]f32{ <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.002</span>, <span class="tok-num">0.002</span> };
+<span class="tok-kw">const</span> terminal_weight = [_]f32{ <span class="tok-num">4000</span>, <span class="tok-num">4000</span>, <span class="tok-num">400</span>, <span class="tok-num">400</span>, <span class="tok-num">0.2</span>, <span class="tok-num">0.2</span> };
+
+<span class="tok-kw">fn</span> <span class="tok-fn">weights</span>() mpc.Weights {
+    <span class="tok-kw">return</span> .{ .state = &amp;state_weight, .control = &amp;control_weight, .terminal = &amp;terminal_weight };
+}
+
+<span class="tok-comment">/// One human foot: about 10 cm of usable travel fore-and-aft, 3 cm across.</span>
+<span class="tok-kw">const</span> foot_half = [<span class="tok-num">2</span>]f32{ <span class="tok-num">0.10</span>, <span class="tok-num">0.03</span> };
+
+<span class="tok-kw">fn</span> <span class="tok-fn">makePendulum</span>(gpa: Allocator, momentum_rate: f32) !Pendulum {
+    <span class="tok-kw">const</span> plan: mpc.BalancePlan = <span class="tok-kw">try</span> mpc.BalancePlan.<span class="tok-fn">init</span>(gpa, horizon_knots);
+    <span class="tok-builtin">@memset</span>(plan.ctrl, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(plan.reference, <span class="tok-num">0</span>);
+    <span class="tok-kw">return</span> .{
+        .plan = plan,
+        .state = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+        .arm_angle = <span class="tok-num">0</span>,
+        .limits = .{ .foot_half = foot_half, .max_momentum_rate = momentum_rate },
+        .fallen = false,
+        .pressure = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .pinned = false,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.foot_only = <span class="tok-kw">try</span> <span class="tok-fn">makePendulum</span>(gpa, <span class="tok-num">0.0</span>);
+    s.with_arms = <span class="tok-kw">try</span> <span class="tok-fn">makePendulum</span>(gpa, <span class="tok-num">60.0</span>);
+    s.push_speed = <span class="tok-num">0.55</span>;
+    s.running = true;
+    s.accumulator = <span class="tok-num">0</span>;
+    s.since_push = <span class="tok-num">99</span>;
+
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0</span>), <span class="tok-num">2.2</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.sphere = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">12</span>, <span class="tok-num">10</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.sphere);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cube);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    s.with_arms.plan.<span class="tok-fn">deinit</span>();
+    s.foot_only.plan.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">resetAll</span>(s: *State) void {
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (.{ &amp;s.foot_only, &amp;s.with_arms }) |p| {
+        p.state = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+        p.arm_angle = <span class="tok-num">0</span>;
+        p.fallen = false;
+        p.pressure = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+        p.pinned = false;
+        <span class="tok-builtin">@memset</span>(p.plan.ctrl, <span class="tok-num">0</span>);
+    }
+    s.since_push = <span class="tok-num">99</span>;
+    s.accumulator = <span class="tok-num">0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">shove</span>(s: *State) void {
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (.{ &amp;s.foot_only, &amp;s.with_arms }) |p| {
+        p.state[mpc.lipm_vel_offset] += s.push_speed;
+    }
+    s.since_push = <span class="tok-num">0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">advance</span>(p: *Pendulum) void {
+    <span class="tok-kw">if</span> (p.fallen) {
+        <span class="tok-kw">return</span>;
+    }
+    _ = mpc.<span class="tok-fn">solveBalance</span>(body, &amp;p.plan, &amp;p.state, <span class="tok-fn">weights</span>(), p.limits, sim_timestep, <span class="tok-num">3</span>);
+    p.pressure = .{ p.plan.ctrl[mpc.lipm_cop_offset], p.plan.ctrl[mpc.lipm_cop_offset + <span class="tok-num">1</span>] };
+    <span class="tok-comment">// * SATURATION IS THE STORY, so it gets its own flag and its own colour. The near pendulum</span>
+    <span class="tok-comment">// spends almost the whole recovery pinned to the edge of its foot with nothing left.</span>
+    p.pinned = <span class="tok-builtin">@abs</span>(p.pressure[<span class="tok-num">0</span>]) &gt; <span class="tok-num">0.98</span> * foot_half[<span class="tok-num">0</span>];
+
+    p.state = mpc.<span class="tok-fn">lipmStep</span>(body, &amp;p.state, p.plan.ctrl[<span class="tok-num">0</span>..mpc.lipm_control_dim], sim_timestep);
+
+    <span class="tok-comment">// The arms carry whatever angular momentum the ground has handed over, so their ANGLE is</span>
+    <span class="tok-comment">// its integral. This is the only reason the momentum is visible at all.</span>
+    p.arm_angle += (p.state[mpc.lipm_momentum_offset + <span class="tok-num">1</span>] / arm_inertia) * sim_timestep;
+
+    <span class="tok-comment">// Past about a third of a metre a real body has stepped or gone down; the model stops</span>
+    <span class="tok-comment">// describing anything useful either way.</span>
+    <span class="tok-kw">if</span> (<span class="tok-builtin">@abs</span>(p.state[mpc.lipm_com_offset]) &gt; <span class="tok-num">0.35</span>) {
+        p.fallen = true;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-kw">if</span> (s.running) {
+        s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+        <span class="tok-kw">while</span> (s.accumulator &gt;= sim_timestep) : (s.accumulator -= sim_timestep) {
+            <span class="tok-fn">advance</span>(&amp;s.foot_only);
+            <span class="tok-fn">advance</span>(&amp;s.with_arms);
+            s.since_push += sim_timestep;
+        }
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, background);
+    <span class="tok-kw">const</span> aspect: f32 = f.window.<span class="tok-fn">widthf</span>() / <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, f.window.<span class="tok-fn">heightf</span>());
+    s.cam.distance = <span class="tok-fn">clamp</span>(<span class="tok-num">2.4</span> / <span class="tok-builtin">@max</span>(<span class="tok-num">0.35</span>, aspect), <span class="tok-num">1.8</span>, <span class="tok-num">5.5</span>);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">1.0</span>, .max_distance = <span class="tok-num">8.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(gl, <span class="tok-num">12</span>, <span class="tok-num">0.25</span>);
+    <span class="tok-fn">drawPendulum</span>(s, gl, &amp;s.foot_only, -<span class="tok-num">0.55</span>);
+    <span class="tok-fn">drawPendulum</span>(s, gl, &amp;s.with_arms, <span class="tok-num">0.55</span>);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-comment">/// Draw one pendulum at render depth `offset`. The model plane is (x, y) with the mass at</span>
+<span class="tok-comment">/// height `h`; the render is Y-up, so model x is render x and model height is render y.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPendulum</span>(s: *State, gl: *z.WgpuGl, p: *<span class="tok-kw">const</span> Pendulum, offset: f32) void {
+    <span class="tok-kw">const</span> com_x: f32 = p.state[mpc.lipm_com_offset];
+    <span class="tok-kw">const</span> mass_at: Vec = <span class="tok-fn">vec</span>(com_x, body.height, offset);
+
+    <span class="tok-comment">// The foot: the box the centre of pressure is allowed to live in.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, <span class="tok-num">0.005</span>, offset),
+        <span class="tok-fn">scaling</span>(<span class="tok-num">2.0</span> * foot_half[<span class="tok-num">0</span>], <span class="tok-num">0.01</span>, <span class="tok-num">0.16</span>),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, foot_colour);
+
+    <span class="tok-comment">// Where the pressure actually is, and whether it has run out of room.</span>
+    <span class="tok-kw">const</span> cop: Vec = <span class="tok-fn">vec</span>(p.pressure[<span class="tok-num">0</span>], <span class="tok-num">0.02</span>, offset);
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(cop[<span class="tok-num">0</span>], cop[<span class="tok-num">1</span>], cop[<span class="tok-num">2</span>]), <span class="tok-fn">scaling</span>(<span class="tok-num">0.03</span>, <span class="tok-num">0.03</span>, <span class="tok-num">0.03</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(
+        gl,
+        &amp;s.sphere,
+        &amp;s.transform,
+        <span class="tok-kw">if</span> (p.pinned) pressure_pinned <span class="tok-kw">else</span> pressure_free,
+    );
+
+    <span class="tok-comment">// The body: a rod from the support to the mass.</span>
+    z.<span class="tok-fn">drawLine3D</span>(gl, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, offset), mass_at, rod_colour);
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">translation</span>(mass_at[<span class="tok-num">0</span>], mass_at[<span class="tok-num">1</span>], mass_at[<span class="tok-num">2</span>]),
+        <span class="tok-fn">scaling</span>(<span class="tok-num">0.09</span>, <span class="tok-num">0.09</span>, <span class="tok-num">0.09</span>),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, <span class="tok-kw">if</span> (p.fallen) mass_lost <span class="tok-kw">else</span> mass_ok);
+
+    <span class="tok-comment">// * THE ARMS. Their angle is the integral of the angular momentum, so a pendulum with no</span>
+    <span class="tok-comment">// momentum authority simply never moves them - which is the comparison, drawn.</span>
+    <span class="tok-kw">const</span> arm_length: f32 = <span class="tok-num">0.34</span>;
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> ([_]f32{ <span class="tok-num">0.0</span>, zm.pi }) |side| {
+        <span class="tok-kw">const</span> angle: f32 = p.arm_angle + side;
+        <span class="tok-kw">const</span> tip: Vec = <span class="tok-fn">vec</span>(
+            mass_at[<span class="tok-num">0</span>] + arm_length * <span class="tok-builtin">@cos</span>(angle),
+            mass_at[<span class="tok-num">1</span>] + arm_length * <span class="tok-builtin">@sin</span>(angle),
+            offset,
+        );
+        z.<span class="tok-fn">drawLine3D</span>(gl, mass_at, tip, arm_colour);
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+            <span class="tok-fn">translation</span>(tip[<span class="tok-num">0</span>], tip[<span class="tok-num">1</span>], tip[<span class="tok-num">2</span>]),
+            <span class="tok-fn">scaling</span>(<span class="tok-num">0.045</span>, <span class="tok-num">0.045</span>, <span class="tok-num">0.045</span>),
+        );
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, arm_colour);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-comment">// * THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to</span>
+    <span class="tok-comment">// know how tall the viewport is. Kept in the signature because every example shares it.</span>
+    _ = viewport_h;
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-kw">const</span> narrow: bool = ui.Ui.<span class="tok-fn">isNarrow</span>(viewport_w);
+    <span class="tok-comment">// * AUTO-SIZED, AND NARROW ON A PHONE. These panels asked for 70-80% of the viewport height,</span>
+    <span class="tok-comment">// which on a phone left the thing the demo is ABOUT as a sliver at the bottom. Letting the</span>
+    <span class="tok-comment">// window size to its content keeps it as small as it can be, and capping the width stops it</span>
+    <span class="tok-comment">// spanning the screen.</span>
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-kw">if</span> (narrow) <span class="tok-builtin">@min</span>(viewport_w - <span class="tok-num">16</span>, <span class="tok-num">340.0</span>) <span class="tok-kw">else</span> <span class="tok-builtin">@min</span>(<span class="tok-num">380.0</span>, viewport_w * <span class="tok-num">0.32</span>);
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-num">0</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"why a robot windmills"</span>, .{ .flags = .{ .always_auto_resize = true } })) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"same shove, same planner, same cost."</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"the only difference is the arms."</span>, .{});
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-fn">report</span>(u, <span class="tok-str">"foot only "</span>, &amp;s.foot_only);
+        <span class="tok-fn">report</span>(u, <span class="tok-str">"with arms "</span>, &amp;s.with_arms);
+        u.<span class="tok-fn">separator</span>();
+
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"shove m/s"</span>, &amp;s.push_speed, .{ .min = <span class="tok-num">0.1</span>, .max = <span class="tok-num">1.6</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"foot alone survives ~0.30; arms ~0.85"</span>, .{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"SHOVE BOTH"</span>, .{})) {
+            <span class="tok-fn">shove</span>(s);
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"reset"</span>, .{})) {
+            <span class="tok-fn">resetAll</span>(s);
+        }
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"run"</span>, &amp;s.running);
+        u.<span class="tok-fn">separator</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"pink pressure marker = pinned to the"</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  foot edge, no authority left"</span>, .{});
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">report</span>(u: ui.Ui, label: []<span class="tok-kw">const</span> u8, p: *<span class="tok-kw">const</span> Pendulum) void {
+    <span class="tok-kw">if</span> (p.fallen) {
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"{s} FELL"</span>, .{label});
+        <span class="tok-kw">return</span>;
+    }
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"{s} lean {d:&gt;6.3} m  speed {d:&gt;6.3}"</span>, .{
+        label,
+        p.state[mpc.lipm_com_offset],
+        p.state[mpc.lipm_vel_offset],
+    });
+    u.<span class="tok-fn">text</span>(<span class="tok-str">"           momentum {d:&gt;7.2}  cop {d:&gt;6.3}{s}"</span>, .{
+        p.state[mpc.lipm_momentum_offset + <span class="tok-num">1</span>],
+        p.pressure[<span class="tok-num">0</span>],
+        <span class="tok-kw">if</span> (p.pinned) <span class="tok-str">" PINNED"</span> <span class="tok-kw">else</span> <span class="tok-str">""</span>,
+    });
+}
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - why a robot windmills its arms"</span>,
+            .width = <span class="tok-num">900</span>,
+            .height = <span class="tok-num">660</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

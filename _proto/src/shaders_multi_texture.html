@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>shaders_multi_texture — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>shaders_multi_texture</h1>
+<figure class="code src-file" data-path="examples/shaders_multi_texture/shaders_multi_texture.zig" data-lines="358"><figcaption><span>examples/shaders_multi_texture/shaders_multi_texture.zig</span><span>358 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/shaders_multi_texture.zig - one fragment shader, three textures.</span>
+<span class="tok-comment">// MERGES raylib's `shaders_simple_mask` and `shaders_multi_sample2d`, because</span>
+<span class="tok-comment">// they are the same shader wearing two hats: sample two sources, produce a blend</span>
+<span class="tok-comment">// factor, mix. Only the factor differs -</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">//   MASK     the blend factor is a third texture's luminance. Here the mask is</span>
+<span class="tok-comment">//            LIVE (a radial gradient that follows your finger), which is strictly</span>
+<span class="tok-comment">//            more convincing than raylib's static mask image: you can see the two</span>
+<span class="tok-comment">//            sources swap under the spotlight as you drag it.</span>
+<span class="tok-comment">//   DIVIDER  the blend factor is a position along x - a wipe between the two</span>
+<span class="tok-comment">//            sources at a draggable split. That is multi_sample2d.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// All three textures are RENDER TEXTURES generated at runtime (no assets):</span>
+<span class="tok-comment">//   A  a live scene - bouncing discs on a dark field</span>
+<span class="tok-comment">//   B  a procedural checkerboard</span>
+<span class="tok-comment">//   M  the mask - a radial gradient drawn at the pointer</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// ENGINE WORK this drove: `effects2d.Host` previously bound exactly ONE source</span>
+<span class="tok-comment">// texture. It now takes `HostOptions{ .textures = N }` and binds N of them -</span>
+<span class="tok-comment">// texture at @group(1) binding 2i, its sampler at 2i+1, which is precisely the</span>
+<span class="tok-comment">// layout the shader DSL generates for N `Sampler2D` fields (verified against the</span>
+<span class="tok-comment">// PBR shader's WGSL before writing a line of it).</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Leak-clean (`.memory = .managed`): three render textures + the effect host are</span>
+<span class="tok-comment">// released in deinit.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+<span class="tok-kw">const</span> shading_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"deferred_shading_vs.wgsl"</span>);
+<span class="tok-kw">const</span> mask_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"effect_mask_fs.wgsl"</span>);
+
+<span class="tok-kw">const</span> fx = z.effect_shaders;
+<span class="tok-kw">const</span> MaskUbo = <span class="tok-builtin">@FieldType</span>(fx.mask_fs.Io, <span class="tok-str">"u"</span>);
+
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> c = Color;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+
+<span class="tok-kw">const</span> disc_count: usize = <span class="tok-num">6</span>;
+
+<span class="tok-kw">const</span> Mode = <span class="tok-kw">enum</span> { mask, divider };
+
+<span class="tok-kw">const</span> Disc = <span class="tok-kw">struct</span> {
+    pos: Vec2,
+    vel: Vec2,
+    radius: f32,
+    color: Color,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    ui_host: z.UiHost,
+    font: z.Font,
+    ui_font: z.Font,
+
+    fx_host: z.effects2d.Host,
+    effect: z.effects2d.Effect,
+    sampler: z.wgpu.SamplerHandle,
+
+    rt_a: z.RenderTexture = .{}, <span class="tok-comment">// live scene</span>
+    rt_b: z.RenderTexture = .{}, <span class="tok-comment">// checkerboard</span>
+    rt_mask: z.RenderTexture = .{}, <span class="tok-comment">// radial gradient at the pointer</span>
+    rt_out: z.RenderTexture = .{}, <span class="tok-comment">// the blended result</span>
+
+    mode: Mode = .mask,
+    divider: f32 = <span class="tok-num">0.5</span>,
+    softness: f32 = <span class="tok-num">0.01</span>,
+    mask_radius: f32 = <span class="tok-num">170.0</span>,
+    mask_at: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    mask_set: bool = false,
+
+    discs: [disc_count]Disc = undefined,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> device: z.wgpu.DeviceHandle = f.gpu.device;
+
+    <span class="tok-kw">const</span> sampler: z.wgpu.SamplerHandle = z.wgpu.<span class="tok-fn">createSampler</span>(device, .{
+        .mag_filter_linear = true,
+        .min_filter_linear = true,
+        .address_mode = .clamp_to_edge,
+    });
+
+    <span class="tok-comment">// THREE sources - the reason effects2d grew a texture count.</span>
+    <span class="tok-kw">var</span> fx_host: z.effects2d.Host = <span class="tok-kw">try</span> z.effects2d.Host.<span class="tok-fn">init</span>(
+        gpa,
+        f.gl,
+        shading_vs_wgsl,
+        .{ .textures = <span class="tok-num">3</span> },
+    );
+    <span class="tok-kw">const</span> effect: z.effects2d.Effect = <span class="tok-kw">try</span> fx_host.<span class="tok-fn">load</span>(
+        gpa,
+        device,
+        mask_fs_wgsl,
+        <span class="tok-builtin">@sizeOf</span>(MaskUbo),
+        <span class="tok-str">"fx_mask"</span>,
+    );
+
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = .<span class="tok-fn">init</span>(<span class="tok-num">0xB14D_E5A1</span>);
+    <span class="tok-kw">const</span> rnd: std.Random = prng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">var</span> discs: [disc_count]Disc = undefined;
+    <span class="tok-kw">const</span> palette = [disc_count]Color{
+        .{ .r = <span class="tok-num">245</span>, .g = <span class="tok-num">120</span>, .b = <span class="tok-num">90</span>, .a = <span class="tok-num">255</span> },
+        .{ .r = <span class="tok-num">90</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> },
+        .{ .r = <span class="tok-num">250</span>, .g = <span class="tok-num">210</span>, .b = <span class="tok-num">100</span>, .a = <span class="tok-num">255</span> },
+        .{ .r = <span class="tok-num">160</span>, .g = <span class="tok-num">240</span>, .b = <span class="tok-num">150</span>, .a = <span class="tok-num">255</span> },
+        .{ .r = <span class="tok-num">220</span>, .g = <span class="tok-num">130</span>, .b = <span class="tok-num">240</span>, .a = <span class="tok-num">255</span> },
+        .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">250</span>, .a = <span class="tok-num">255</span> },
+    };
+    <span class="tok-kw">for</span> (&amp;discs, <span class="tok-num">0</span>..) |*d, i| {
+        d.* = .{
+            .pos = .{ <span class="tok-num">80.0</span> + rnd.<span class="tok-fn">float</span>(f32) * <span class="tok-num">560.0</span>, <span class="tok-num">90.0</span> + rnd.<span class="tok-fn">float</span>(f32) * <span class="tok-num">260.0</span> },
+            .vel = .{ (rnd.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * <span class="tok-num">190.0</span>, (rnd.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * <span class="tok-num">190.0</span> },
+            .radius = <span class="tok-num">22.0</span> + rnd.<span class="tok-fn">float</span>(f32) * <span class="tok-num">26.0</span>,
+            .color = palette[i],
+        };
+    }
+
+    <span class="tok-kw">const</span> ui_font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>);
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">16</span>);
+
+    s.* = .{
+        .gpa = gpa,
+        .ui_font = ui_font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, ui_font),
+        .font = font,
+        .fx_host = fx_host,
+        .effect = effect,
+        .sampler = sampler,
+        .discs = discs,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.ui_font);
+    s.rt_a.<span class="tok-fn">deinit</span>();
+    s.rt_b.<span class="tok-fn">deinit</span>();
+    s.rt_mask.<span class="tok-fn">deinit</span>();
+    s.rt_out.<span class="tok-fn">deinit</span>();
+    s.effect.<span class="tok-fn">deinit</span>();
+    s.fx_host.<span class="tok-fn">deinit</span>();
+    z.wgpu.<span class="tok-fn">destroySampler</span>(s.sampler);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// (Re)allocate the four targets and re-point the shader's three inputs at them.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureTargets</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> backing: z.wgpu.SurfaceSize = z.wgpu.<span class="tok-fn">getSurfaceSize</span>(f.gpu.surface);
+    <span class="tok-kw">const</span> bw: u32 = <span class="tok-builtin">@max</span>(backing.width, <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> bh: u32 = <span class="tok-builtin">@max</span>(backing.height, <span class="tok-num">1</span>);
+    <span class="tok-kw">if</span> (s.rt_a.color != .invalid <span class="tok-kw">and</span> s.rt_a.width == bw <span class="tok-kw">and</span> s.rt_a.height == bh) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">if</span> (s.rt_a.color != .invalid) {
+        z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt_a);
+        z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt_b);
+        z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt_mask);
+        z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt_out);
+    }
+    s.rt_a = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(bw), <span class="tok-builtin">@intCast</span>(bh));
+    s.rt_b = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(bw), <span class="tok-builtin">@intCast</span>(bh));
+    s.rt_mask = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(bw), <span class="tok-builtin">@intCast</span>(bh));
+    s.rt_out = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(bw), <span class="tok-builtin">@intCast</span>(bh));
+
+    <span class="tok-comment">// The order here IS the shader's slot order: tex_a, tex_b, tex_mask.</span>
+    s.fx_host.<span class="tok-fn">setSources</span>(
+        s.gpa,
+        f.gpu.device,
+        &amp;.{
+            s.rt_a.<span class="tok-fn">asTexture</span>().view,
+            s.rt_b.<span class="tok-fn">asTexture</span>().view,
+            s.rt_mask.<span class="tok-fn">asTexture</span>().view,
+        },
+        s.sampler,
+    ) <span class="tok-kw">catch</span> <span class="tok-kw">return</span>;
+}
+
+<span class="tok-comment">/// Source A - bouncing discs.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawSceneA</span>(f: *z.Frame, s: *State, dt: f32) void {
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-fn">float</span>(s.rt_a.width);
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-fn">float</span>(s.rt_a.height);
+    <span class="tok-kw">for</span> (&amp;s.discs) |*d| {
+        d.pos += d.vel * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(dt));
+        <span class="tok-kw">if</span> (d.pos[<span class="tok-num">0</span>] &lt; d.radius <span class="tok-kw">or</span> d.pos[<span class="tok-num">0</span>] &gt; w - d.radius) {
+            d.vel[<span class="tok-num">0</span>] = -d.vel[<span class="tok-num">0</span>];
+            d.pos[<span class="tok-num">0</span>] = <span class="tok-fn">clamp</span>(d.pos[<span class="tok-num">0</span>], d.radius, w - d.radius);
+        }
+        <span class="tok-kw">if</span> (d.pos[<span class="tok-num">1</span>] &lt; d.radius <span class="tok-kw">or</span> d.pos[<span class="tok-num">1</span>] &gt; h - d.radius) {
+            d.vel[<span class="tok-num">1</span>] = -d.vel[<span class="tok-num">1</span>];
+            d.pos[<span class="tok-num">1</span>] = <span class="tok-fn">clamp</span>(d.pos[<span class="tok-num">1</span>], d.radius, h - d.radius);
+        }
+    }
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_a, .{ .r = <span class="tok-num">18</span>, .g = <span class="tok-num">20</span>, .b = <span class="tok-num">30</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">for</span> (s.discs) |d| {
+        f.gl.<span class="tok-fn">circle</span>(d.pos, d.radius, .{ .color = d.color });
+    }
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+}
+
+<span class="tok-comment">/// Source B - a procedural checkerboard, drawn once per frame (cheap, and it keeps</span>
+<span class="tok-comment">/// the example free of any asset).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawSceneB</span>(f: *z.Frame, s: *State, t: f32) void {
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-fn">float</span>(s.rt_b.width);
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-fn">float</span>(s.rt_b.height);
+    <span class="tok-kw">const</span> cell: f32 = <span class="tok-num">46.0</span>;
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_b, .{ .r = <span class="tok-num">26</span>, .g = <span class="tok-num">30</span>, .b = <span class="tok-num">38</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">var</span> y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> row: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (y &lt; h) : ({
+        y += cell;
+        row += <span class="tok-num">1</span>;
+    }) {
+        <span class="tok-kw">var</span> x: f32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> col: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (x &lt; w) : ({
+            x += cell;
+            col += <span class="tok-num">1</span>;
+        }) {
+            <span class="tok-kw">if</span> ((row + col) % <span class="tok-num">2</span> == <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-comment">// A slow hue drift, so it is obvious the second source is LIVE too and</span>
+            <span class="tok-comment">// not a frozen image.</span>
+            <span class="tok-kw">const</span> k: f32 = <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.7</span> + <span class="tok-fn">float</span>(row) * <span class="tok-num">0.35</span> + <span class="tok-fn">float</span>(col) * <span class="tok-num">0.2</span>) * <span class="tok-num">0.5</span> + <span class="tok-num">0.5</span>;
+            f.gl.<span class="tok-fn">rect</span>(
+                .{ .x = x, .y = y, .width = cell, .height = cell },
+                .{ .color = .{
+                    .r = <span class="tok-builtin">@trunc</span>(<span class="tok-num">60.0</span> + <span class="tok-num">60.0</span> * k),
+                    .g = <span class="tok-builtin">@trunc</span>(<span class="tok-num">150.0</span> + <span class="tok-num">70.0</span> * k),
+                    .b = <span class="tok-builtin">@trunc</span>(<span class="tok-num">180.0</span> + <span class="tok-num">60.0</span> * k),
+                    .a = <span class="tok-num">255</span>,
+                } },
+            );
+        }
+    }
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+}
+
+<span class="tok-comment">/// Source M - the mask. Black everywhere, a white radial gradient at the pointer.</span>
+<span class="tok-comment">/// The shader reads its LUMINANCE, so white = show B, black = show A.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawMask</span>(f: *z.Frame, s: *State) void {
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_mask, c.black);
+    f.gl.<span class="tok-fn">circleGradient</span>(s.mask_at, s.mask_radius, c.white, c.black);
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureTargets</span>(f, s);
+
+    <span class="tok-kw">const</span> fw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> fh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+
+    <span class="tok-kw">if</span> (!s.mask_set) {
+        s.mask_at = .{ fw * <span class="tok-num">0.5</span>, fh * <span class="tok-num">0.62</span> };
+        s.mask_set = true;
+    }
+    <span class="tok-kw">if</span> (!u.<span class="tok-fn">wantCaptureMouse</span>() <span class="tok-kw">and</span> z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left)) {
+        <span class="tok-kw">const</span> p: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+        <span class="tok-kw">if</span> (s.mode == .mask) {
+            s.mask_at = p;
+        } <span class="tok-kw">else</span> {
+            s.divider = <span class="tok-fn">clamp</span>(p[<span class="tok-num">0</span>] / fw, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+        }
+    }
+
+    <span class="tok-comment">// ---- the three sources -------------------------------------------------</span>
+    <span class="tok-fn">drawSceneA</span>(f, s, dt);
+    <span class="tok-fn">drawSceneB</span>(f, s, t);
+    <span class="tok-fn">drawMask</span>(f, s);
+
+    <span class="tok-comment">// ---- one shader, three textures ---------------------------------------</span>
+    <span class="tok-kw">var</span> ubo: MaskUbo = .{ .params = .{
+        <span class="tok-kw">if</span> (s.mode == .mask) <span class="tok-num">0.0</span> <span class="tok-kw">else</span> <span class="tok-num">1.0</span>,
+        s.divider,
+        s.softness,
+        <span class="tok-num">0</span>,
+    } };
+    s.effect.<span class="tok-fn">setValues</span>(f.gpu.queue, &amp;ubo);
+
+    z.<span class="tok-fn">beginTextureModeRaw</span>(f.gl, s.rt_out, c.black);
+    z.effects2d.<span class="tok-fn">beginShaderMode</span>(f.gl, &amp;s.fx_host, s.effect);
+    z.effects2d.<span class="tok-fn">drawFullscreen</span>(f.gl);
+    z.effects2d.<span class="tok-fn">endShaderMode</span>(f.gl);
+    z.<span class="tok-fn">endTextureModeRaw</span>(f.gl);
+
+    <span class="tok-comment">// ---- screen ------------------------------------------------------------</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearViewport</span>(f, c.black);
+    f.gl.<span class="tok-fn">texture</span>(
+        .{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = fw, .height = fh },
+        s.rt_out.<span class="tok-fn">asTexture</span>(),
+        .{},
+    );
+
+    <span class="tok-kw">if</span> (s.mode == .divider) {
+        <span class="tok-comment">// Draw the split so the wipe's position is legible, not guessed.</span>
+        <span class="tok-kw">const</span> x: f32 = s.divider * fw;
+        f.gl.<span class="tok-fn">line</span>(.{ x, <span class="tok-num">0</span> }, .{ x, fh }, .{ .color = c.raywhite, .thickness = <span class="tok-num">2</span> });
+    }
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ fw - <span class="tok-num">16.0</span>, <span class="tok-num">250</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Multi-texture shader"</span>, .{})) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"mask"</span>, .{})) {
+            s.mode = .mask;
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"divider"</span>, .{})) {
+            s.mode = .divider;
+        }
+        u.<span class="tok-fn">separator</span>();
+        <span class="tok-kw">switch</span> (s.mode) {
+            .mask =&gt; {
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"Drag: move the reveal."</span>, .{});
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"radius"</span>, &amp;s.mask_radius, .{ .min = <span class="tok-num">60</span>, .max = <span class="tok-num">340</span>, .fmt = <span class="tok-str">"{d:.0}"</span> });
+            },
+            .divider =&gt; {
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"Drag: move the split."</span>, .{});
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"split"</span>, &amp;s.divider, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">1.0</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"softness"</span>, &amp;s.softness, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.2</span> });
+            },
+        }
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"3 textures, 1 fragment shader"</span>, .{});
+    }
+
+    s.ui_host.<span class="tok-fn">render</span>(f);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - shaders - multi-texture (mask + divider)"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+            .depth_format = null,
+            .clear = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">1.0</span> },
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+</body>
+</html>

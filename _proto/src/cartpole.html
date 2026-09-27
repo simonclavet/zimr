@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cartpole — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>cartpole</h1>
+<figure class="code src-file" data-path="examples/cartpole/cartpole.zig" data-lines="522"><figcaption><span>examples/cartpole/cartpole.zig</span><span>522 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! cartpole - a policy learning to balance, live, in a browser tab.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * WHAT THIS DEMONSTRATES --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The whole robot stack in its smallest honest form, doing the thing the stack exists for:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * a model, a controller and a REWARD, wired into `ctl.Env` - reset, step, observe;</span>
+<span class="tok-comment">//!   * **cross-entropy method**, about twenty lines and no gradients, training a four-weight</span>
+<span class="tok-comment">//!     linear policy from scratch while you watch;</span>
+<span class="tok-comment">//!   * the reward curve climbing beside the robot it belongs to.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! ** THIS IS THE THING MuJoCo CANNOT DO CASUALLY. Not because its physics is worse - it is</span>
+<span class="tok-comment">//! not - but because getting a MuJoCo training loop in front of someone means an install, a</span>
+<span class="tok-comment">//! Python environment, and a plotting library. This is a file you open.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * WHY CROSS-ENTROPY AND NOT A GRADIENT METHOD --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! CEM samples policies, keeps the best few, and refits a Gaussian to them. That is the entire</span>
+<span class="tok-comment">//! algorithm, and it fits on screen next to the robot - which for a demonstration is worth more</span>
+<span class="tok-comment">//! than sample efficiency. Measured on this engine it solves cartpole in **four to eight</span>
+<span class="tok-comment">//! generations**, from an elite score of ~180 to the 500-step ceiling.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** THE NUMBERS THAT MADE IT FEASIBLE --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! One generation is 40 policies x 4 seeds x up to 500 steps = 80 000 steps, and a cartpole</span>
+<span class="tok-comment">//! step costs 824 ns - so ~66 ms in the worst case, with most episodes ending long before 500.</span>
+<span class="tok-comment">//! Training is therefore spread across frames rather than blocking one: `generations_per_frame`</span>
+<span class="tok-comment">//! is a slider, and turning it up makes the curve climb faster and the frame rate drop, which</span>
+<span class="tok-comment">//! is an honest thing for a demo to show.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> ctl = z.robot_control;
+<span class="tok-kw">const</span> ui = z.ui;
+
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> rotationZ = zm.rotationZ;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> cart_slide: usize = <span class="tok-num">0</span>;
+<span class="tok-kw">const</span> pole_hinge: usize = <span class="tok-num">1</span>;
+
+<span class="tok-comment">/// How far the pole may lean before the episode ends, and how far the cart may travel.</span>
+<span class="tok-kw">const</span> fail_angle: f32 = <span class="tok-num">0.25</span>;
+<span class="tok-kw">const</span> fail_position: f32 = <span class="tok-num">2.0</span>;
+<span class="tok-comment">/// The most steps an episode may last - also the best possible score.</span>
+<span class="tok-kw">const</span> max_steps: usize = <span class="tok-num">500</span>;
+<span class="tok-comment">/// The model's timestep, restated so the display loop can pace itself against wall time.</span>
+<span class="tok-kw">const</span> sim_timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">100.0</span>;
+
+<span class="tok-comment">/// * THE START IS INSIDE THE FAIL LIMIT, and that is not a detail. A first version tilted the</span>
+<span class="tok-comment">/// pole further than the limit allowed, so a fixed fraction of episodes scored ZERO before the</span>
+<span class="tok-comment">/// policy acted - and the learning curve plateaued at exactly three quarters of the maximum. A</span>
+<span class="tok-comment">/// plateau at a round fraction is arithmetic, not a ceiling.</span>
+<span class="tok-kw">const</span> start_tilt: f32 = <span class="tok-num">0.30</span>;
+
+<span class="tok-kw">const</span> population: usize = <span class="tok-num">40</span>;
+<span class="tok-kw">const</span> elite: usize = <span class="tok-num">8</span>;
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">15</span>, .g = <span class="tok-num">16</span>, .b = <span class="tok-num">22</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> rail_col: Color = .{ .r = <span class="tok-num">62</span>, .g = <span class="tok-num">60</span>, .b = <span class="tok-num">70</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> cart_col: Color = .{ .r = <span class="tok-num">95</span>, .g = <span class="tok-num">190</span>, .b = <span class="tok-num">180</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> pole_col: Color = .{ .r = <span class="tok-num">230</span>, .g = <span class="tok-num">175</span>, .b = <span class="tok-num">85</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> fail_col: Color = .{ .r = <span class="tok-num">190</span>, .g = <span class="tok-num">70</span>, .b = <span class="tok-num">70</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// A four-weight linear policy: `action = w * (cart x, pole angle, cart v, pole v)`.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * LINEAR IS ENOUGH, and saying so matters. Cartpole is solvable by a plane through the state</span>
+<span class="tok-comment">/// space, so nothing here rests on a neural network being correctly implemented - what is being</span>
+<span class="tok-comment">/// demonstrated is the SIMULATOR and the loop around it.</span>
+<span class="tok-kw">const</span> Policy = [<span class="tok-num">4</span>]f32;
+
+<span class="tok-kw">const</span> Cartpole = rbt.<span class="tok-fn">Spec</span>(.{
+    .bodies = &amp;.{
+        .{
+            .name = <span class="tok-str">"cart"</span>,
+            .joints = &amp;.{.{
+                .name = <span class="tok-str">"slide"</span>,
+                .kind = .slide,
+                .axis = <span class="tok-fn">vec</span>(<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>),
+                .range = .{ -<span class="tok-num">2.4</span>, <span class="tok-num">2.4</span> },
+            }},
+            .geoms = &amp;.{.{ .shape = .{ .box = .{ .half_extent = <span class="tok-fn">vec</span>(<span class="tok-num">0.1</span>, <span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>) } }, .mass = <span class="tok-num">1.0</span> }},
+        },
+        .{
+            .name = <span class="tok-str">"pole"</span>,
+            .parent = <span class="tok-str">"cart"</span>,
+            .joints = &amp;.{.{ .name = <span class="tok-str">"hinge"</span>, .kind = .hinge, .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>) }},
+            .geoms = &amp;.{.{
+                .shape = .{ .capsule = .{ .half_height = <span class="tok-num">0.3</span>, .radius = <span class="tok-num">0.02</span> } },
+                .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.3</span>, <span class="tok-num">0</span>),
+                .mass = <span class="tok-num">0.1</span>,
+            }},
+        },
+    },
+    <span class="tok-comment">// * GEAR 6, NOT 10. A stronger motor makes the task trivial - the first random batch of</span>
+    <span class="tok-comment">// forty policies already contained a perfect one, and a demo whose curve starts at the</span>
+    <span class="tok-comment">// ceiling shows nothing.</span>
+    .actuators = &amp;.{.{
+        .name = <span class="tok-str">"push"</span>,
+        .on = .{ .joint = .{ .name = <span class="tok-str">"slide"</span>, .gear = <span class="tok-num">6</span> } },
+        .ctrl_range = .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span> },
+    }},
+    .options = .{ .timestep = <span class="tok-num">1.0</span> / <span class="tok-num">100.0</span>, .max_contacts = <span class="tok-num">4</span>, .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">9.81</span>, <span class="tok-num">0</span>) },
+});
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    model: rbt.Model,
+    <span class="tok-comment">/// The environment the search runs in.</span>
+    trainer: ctl.Env,
+    <span class="tok-comment">/// A second environment, so the on-screen robot is not disturbed by training.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// * TWO ENVIRONMENTS, ONE MODEL - which `robot.zig` proves is safe, and which is the</span>
+    <span class="tok-comment">/// whole reason a batch is affordable. Sharing one would make the display flicker through</span>
+    <span class="tok-comment">/// forty policies a frame.</span>
+    display: ctl.Env,
+    display_seed: u64,
+    display_steps: usize,
+    display_accumulator: f32,
+
+    ui_host: z.UiHost,
+    font: z.Font,
+    cam: z.OrbitCamera,
+    cube: z.Mesh,
+    cylinder: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+
+    mean: Policy,
+    sigma: Policy,
+    rng: std.Random.DefaultPrng,
+    generation: u32,
+    <span class="tok-comment">/// Elite score per generation, for the plot.</span>
+    history: [<span class="tok-num">256</span>]f32,
+    history_len: usize,
+    best_ever: f32,
+
+    training: bool,
+    show_best: bool,
+
+    <span class="tok-comment">// -- *** A GENERATION IN PROGRESS, NOT A GENERATION PER FRAME --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// The first version ran a whole generation inside `update`. A generation is 40 policies x 4</span>
+    <span class="tok-comment">// seeds x up to 500 steps - about 66 ms on a desktop and several times that on a phone -</span>
+    <span class="tok-comment">// so the frame took most of a second and **the demo was not interactive at all**: a swipe</span>
+    <span class="tok-comment">// needs several samples to read as a drag, and a tap needs its press and release to land in</span>
+    <span class="tok-comment">// frames that actually happen.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THE UNIT OF WORK IS NOW ONE POLICY EVALUATION. A frame does as many as its budget</span>
+    <span class="tok-comment">// allows and returns; the generation completes across however many frames it takes. Nothing</span>
+    <span class="tok-comment">// about the search changes - the same 40 policies are scored against the same seeds, in the</span>
+    <span class="tok-comment">// same order - only when.</span>
+    samples: [population]Policy,
+    scores: [population]f32,
+    <span class="tok-comment">/// How many of `population` have been scored so far this generation.</span>
+    evaluated: usize,
+    <span class="tok-comment">/// How many to score per frame, adapted to what the device can actually do.</span>
+    budget: f32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.model = <span class="tok-kw">try</span> Cartpole.<span class="tok-fn">build</span>(gpa);
+    s.trainer = <span class="tok-kw">try</span> ctl.Env.<span class="tok-fn">init</span>(gpa, &amp;s.model);
+    s.display = <span class="tok-kw">try</span> ctl.Env.<span class="tok-fn">init</span>(gpa, &amp;s.model);
+    s.display_seed = <span class="tok-num">1</span>;
+    s.display_steps = <span class="tok-num">0</span>;
+    s.display_accumulator = <span class="tok-num">0</span>;
+
+    s.mean = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+    s.sigma = <span class="tok-builtin">@splat</span>(<span class="tok-num">1.0</span>);
+    s.rng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">7</span>);
+    s.generation = <span class="tok-num">0</span>;
+    s.history = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+    s.history_len = <span class="tok-num">0</span>;
+    s.best_ever = <span class="tok-num">0</span>;
+
+    s.training = true;
+    s.show_best = true;
+    s.samples = undefined;
+    s.scores = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+    s.evaluated = population; <span class="tok-comment">// forces a fresh sample set on the first frame</span>
+    s.budget = <span class="tok-num">2</span>;
+
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.35</span>, <span class="tok-num">0</span>), <span class="tok-num">2.2</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.cylinder = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCylinder</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">12</span>, <span class="tok-num">2</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    s.display.<span class="tok-fn">deinit</span>();
+    s.trainer.<span class="tok-fn">deinit</span>();
+    s.model.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Put an environment at a randomised start, inside the fail limit.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">beginEpisode</span>(env: *ctl.Env, seed: u64) void {
+    <span class="tok-kw">var</span> rng: std.Random.DefaultPrng = .<span class="tok-fn">init</span>(seed);
+    <span class="tok-kw">const</span> r: std.Random = rng.<span class="tok-fn">random</span>();
+    _ = env.<span class="tok-fn">reset</span>();
+    env.data.pos[pole_hinge] = (r.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * start_tilt;
+    env.data.vel[pole_hinge] = (r.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * start_tilt * <span class="tok-num">2.0</span>;
+    env.data.stage = .stale;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">actionFor</span>(env: *<span class="tok-kw">const</span> ctl.Env, policy: Policy) f32 {
+    <span class="tok-kw">const</span> observation = [<span class="tok-num">4</span>]f32{
+        env.data.pos[cart_slide],
+        env.data.pos[pole_hinge],
+        env.data.vel[cart_slide],
+        env.data.vel[pole_hinge],
+    };
+    <span class="tok-kw">var</span> action: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (observation, policy) |value, weight| {
+        action += value * weight;
+    }
+    <span class="tok-kw">return</span> <span class="tok-fn">clamp</span>(action, -<span class="tok-num">1</span>, <span class="tok-num">1</span>);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">hasFallen</span>(env: *<span class="tok-kw">const</span> ctl.Env) bool {
+    <span class="tok-kw">return</span> <span class="tok-builtin">@abs</span>(env.data.pos[pole_hinge]) &gt; fail_angle <span class="tok-kw">or</span>
+        <span class="tok-builtin">@abs</span>(env.data.pos[cart_slide]) &gt; fail_position;
+}
+
+<span class="tok-comment">/// One episode, scored by how long the pole stayed up.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">score</span>(env: *ctl.Env, policy: Policy, seed: u64) f32 {
+    <span class="tok-fn">beginEpisode</span>(env, seed);
+    <span class="tok-kw">var</span> survived: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..max_steps) |_| {
+        _ = env.<span class="tok-fn">step</span>(&amp;.{<span class="tok-fn">actionFor</span>(env, policy)});
+        <span class="tok-kw">if</span> (<span class="tok-fn">hasFallen</span>(env)) {
+            <span class="tok-kw">break</span>;
+        }
+        survived += <span class="tok-num">1</span>;
+    }
+    <span class="tok-kw">return</span> survived;
+}
+
+<span class="tok-comment">/// Draw a fresh population from the current Gaussian, to be scored over the coming frames.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">beginGeneration</span>(s: *State) void {
+    <span class="tok-kw">const</span> r: std.Random = s.rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..population) |i| {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |k| {
+            s.samples[i][k] = s.mean[k] + s.sigma[k] * r.<span class="tok-fn">floatNorm</span>(f32);
+        }
+    }
+    s.evaluated = <span class="tok-num">0</span>;
+}
+
+<span class="tok-comment">/// Score one policy, on four seeds.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * FOUR SEEDS, NOT ONE. On a single start a policy that happens to suit that one tilt wins,</span>
+<span class="tok-comment">/// the elite set fills with specialists, and the mean goes nowhere.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">evaluateOne</span>(s: *State, index: usize) void {
+    <span class="tok-kw">var</span> total: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">1</span>..<span class="tok-num">5</span>) |seed| {
+        total += <span class="tok-fn">score</span>(&amp;s.trainer, s.samples[index], seed);
+    }
+    s.scores[index] = total / <span class="tok-num">4.0</span>;
+}
+
+<span class="tok-comment">/// Rank the finished population, keep the best, and refit the Gaussian to them.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- * THE WHOLE OF CROSS-ENTROPY METHOD --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// No gradients, no learning rate, no network: draw, rank, refit.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">finishGeneration</span>(s: *State) void {
+    <span class="tok-kw">var</span> order: [population]usize = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..population) |i| {
+        order[i] = i;
+    }
+    <span class="tok-kw">const</span> Ranking = <span class="tok-kw">struct</span> {
+        by: []<span class="tok-kw">const</span> f32,
+        <span class="tok-kw">fn</span> <span class="tok-fn">better</span>(self: <span class="tok-builtin">@This</span>(), a: usize, b: usize) bool {
+            <span class="tok-kw">return</span> self.by[a] &gt; self.by[b];
+        }
+    };
+    std.mem.<span class="tok-fn">sort</span>(usize, &amp;order, Ranking{ .by = &amp;s.scores }, Ranking.better);
+
+    <span class="tok-kw">var</span> next: Policy = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+    <span class="tok-kw">for</span> (order[<span class="tok-num">0</span>..elite]) |i| {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |k| {
+            next[k] += s.samples[i][k] / <span class="tok-builtin">@as</span>(f32, elite);
+        }
+    }
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |k| {
+        <span class="tok-kw">var</span> spread: f32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (order[<span class="tok-num">0</span>..elite]) |i| {
+            <span class="tok-kw">const</span> d: f32 = s.samples[i][k] - next[k];
+            spread += d * d;
+        }
+        <span class="tok-comment">// * A FLOOR ON THE SPREAD. Without it the Gaussian collapses onto the first decent</span>
+        <span class="tok-comment">// policy it finds and the search stops - the classic CEM failure, and it looks like</span>
+        <span class="tok-comment">// convergence rather than like giving up.</span>
+        s.sigma[k] = <span class="tok-builtin">@max</span>(<span class="tok-num">0.03</span>, <span class="tok-builtin">@sqrt</span>(spread / <span class="tok-builtin">@as</span>(f32, elite)));
+        s.mean[k] = next[k];
+    }
+
+    <span class="tok-kw">var</span> elite_mean: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (order[<span class="tok-num">0</span>..elite]) |i| {
+        elite_mean += s.scores[i] / <span class="tok-builtin">@as</span>(f32, elite);
+    }
+    s.best_ever = <span class="tok-builtin">@max</span>(s.best_ever, s.scores[order[<span class="tok-num">0</span>]]);
+    <span class="tok-kw">if</span> (s.history_len &lt; s.history.len) {
+        s.history[s.history_len] = elite_mean;
+        s.history_len += <span class="tok-num">1</span>;
+    } <span class="tok-kw">else</span> {
+        std.mem.<span class="tok-fn">copyForwards</span>(f32, s.history[<span class="tok-num">0</span> .. s.history.len - <span class="tok-num">1</span>], s.history[<span class="tok-num">1</span>..]);
+        s.history[s.history.len - <span class="tok-num">1</span>] = elite_mean;
+    }
+    s.generation += <span class="tok-num">1</span>;
+}
+
+<span class="tok-comment">/// Do as much training as this frame can afford, and no more.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** THE BUDGET ADAPTS, BECAUSE THE DEVICE IS UNKNOWN --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// A fixed count tuned on a desktop is far too much for a phone, and a phone-safe count wastes</span>
+<span class="tok-comment">/// a desktop. Last frame's `delta_time` says which one this is: below 12 ms there is room for</span>
+<span class="tok-comment">/// more, above 22 ms there is not, and the budget walks between those bounds.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THE FLOOR IS ONE POLICY PER FRAME. Training slowly is a demo that works; training in</span>
+<span class="tok-comment">/// bursts that eat the frame is a demo you cannot touch.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">trainWithinFrame</span>(s: *State, delta_time: f32) void {
+    <span class="tok-kw">if</span> (delta_time &gt; <span class="tok-num">0.022</span>) {
+        s.budget = <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, s.budget * <span class="tok-num">0.8</span>);
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (delta_time &lt; <span class="tok-num">0.012</span>) {
+        <span class="tok-comment">// * THE CEILING IS LOW ON PURPOSE. Letting this reach the full population means one</span>
+        <span class="tok-comment">// frame doing a whole generation - the very thing that made the demo untouchable - and</span>
+        <span class="tok-comment">// then fifteen more frames shrinking back from it. Eight policies is a few milliseconds</span>
+        <span class="tok-comment">// even late in training, when episodes run their full length.</span>
+        s.budget = <span class="tok-builtin">@min</span>(<span class="tok-num">8.0</span>, s.budget + <span class="tok-num">0.5</span>);
+    }
+    <span class="tok-kw">var</span> remaining: f32 = s.budget;
+    <span class="tok-kw">while</span> (remaining &gt;= <span class="tok-num">1.0</span>) : (remaining -= <span class="tok-num">1.0</span>) {
+        <span class="tok-kw">if</span> (s.evaluated &gt;= population) {
+            <span class="tok-fn">finishGeneration</span>(s);
+            <span class="tok-fn">beginGeneration</span>(s);
+        }
+        <span class="tok-fn">evaluateOne</span>(s, s.evaluated);
+        s.evaluated += <span class="tok-num">1</span>;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-kw">if</span> (s.training) {
+        <span class="tok-fn">trainWithinFrame</span>(s, f.time.delta_time);
+    }
+
+    <span class="tok-comment">// The displayed robot runs the current best policy, restarting when it falls.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * AN ACCUMULATOR, NOT ONE STEP PER FRAME. The simulation runs at 100 Hz and the display</span>
+    <span class="tok-comment">// at whatever the device gives - 60, or 30 under load - so stepping once per frame plays</span>
+    <span class="tok-comment">// the pole back at 60% speed on a good device and 30% on a struggling one. The physics</span>
+    <span class="tok-comment">// would be right and the motion visibly wrong, in a way that reads as the policy being</span>
+    <span class="tok-comment">// sluggish rather than the loop being wrong.</span>
+    <span class="tok-kw">if</span> (s.show_best) {
+        s.display_accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+        <span class="tok-kw">while</span> (s.display_accumulator &gt;= sim_timestep) : (s.display_accumulator -= sim_timestep) {
+            _ = s.display.<span class="tok-fn">step</span>(&amp;.{<span class="tok-fn">actionFor</span>(&amp;s.display, s.mean)});
+            s.display_steps += <span class="tok-num">1</span>;
+            <span class="tok-kw">if</span> (<span class="tok-fn">hasFallen</span>(&amp;s.display) <span class="tok-kw">or</span> s.display_steps &gt;= max_steps) {
+                s.display_seed += <span class="tok-num">1</span>;
+                s.display_steps = <span class="tok-num">0</span>;
+                <span class="tok-fn">beginEpisode</span>(&amp;s.display, s.display_seed);
+            }
+        }
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-comment">// * PULL BACK ON A TALL, NARROW VIEWPORT. The rail is 4.8 m wide and a portrait phone sees</span>
+    <span class="tok-comment">// far less of it horizontally than a desktop does, so a fixed distance frames the scene for</span>
+    <span class="tok-comment">// one and crops it for the other.</span>
+    <span class="tok-kw">const</span> aspect: f32 = f.window.<span class="tok-fn">widthf</span>() / <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, f.window.<span class="tok-fn">heightf</span>());
+    s.cam.distance = <span class="tok-fn">clamp</span>(<span class="tok-num">2.4</span> / <span class="tok-builtin">@max</span>(<span class="tok-num">0.35</span>, aspect), <span class="tok-num">2.2</span>, <span class="tok-num">6.0</span>);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">1.0</span>, .max_distance = <span class="tok-num">8.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    <span class="tok-fn">drawScene</span>(s, gl);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(s: *State, gl: *z.WgpuGl) void {
+    <span class="tok-kw">const</span> x: f32 = s.display.data.pos[cart_slide];
+    <span class="tok-kw">const</span> angle: f32 = s.display.data.pos[pole_hinge];
+
+    <span class="tok-comment">// The rail, and the limits the episode ends at.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -<span class="tok-num">0.06</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">2</span> * fail_position, <span class="tok-num">0.01</span>, <span class="tok-num">0.06</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, rail_col);
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (.{ -fail_position, fail_position }) |edge| {
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(edge, <span class="tok-num">0.0</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">0.02</span>, <span class="tok-num">0.12</span>, <span class="tok-num">0.08</span>));
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, fail_col);
+    }
+
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(x, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-fn">scaling</span>(<span class="tok-num">0.2</span>, <span class="tok-num">0.1</span>, <span class="tok-num">0.1</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, cart_col);
+
+    <span class="tok-comment">// * THE POLE IS DRAWN FROM ITS PIVOT, not centred on it - the cylinder mesh spans [0, h]</span>
+    <span class="tok-comment">// along Y, measured from the mesh's own bounds rather than assumed from the generator,</span>
+    <span class="tok-comment">// which remaps axes as it writes.</span>
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(x, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-fn">rotationZ</span>(angle)),
+        <span class="tok-fn">scaling</span>(<span class="tok-num">0.03</span>, <span class="tok-num">0.6</span>, <span class="tok-num">0.03</span>),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, <span class="tok-kw">if</span> (<span class="tok-builtin">@abs</span>(angle) &gt; fail_angle) fail_col <span class="tok-kw">else</span> pole_col);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+
+    <span class="tok-comment">// -- * SIZED TO THE VIEWPORT, NOT TO PIXELS --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// This shipped with a hardcoded 380x400 panel and a fixed font, which on a phone left the</span>
+    <span class="tok-comment">// plot's label hanging outside its own box and most of the screen empty. The panel takes a</span>
+    <span class="tok-comment">// FRACTION of the width and everything inside follows from it.</span>
+    <span class="tok-kw">const</span> narrow: bool = ui.Ui.<span class="tok-fn">isNarrow</span>(viewport_w);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-kw">if</span> (narrow) viewport_w - <span class="tok-num">16</span> <span class="tok-kw">else</span> <span class="tok-builtin">@min</span>(<span class="tok-num">430.0</span>, viewport_w * <span class="tok-num">0.34</span>);
+    <span class="tok-comment">// * ~30 CHARACTERS ACROSS a full-width panel, ~22 across a floating one - the widest line</span>
+    <span class="tok-comment">// below is "spread 0.043 0.031 0.030 0.030", and a panel narrower than its widest line is</span>
+    <span class="tok-comment">// a panel with a horizontal scrollbar.</span>
+    <span class="tok-kw">const</span> font_size: f32 = u.<span class="tok-fn">scaleToViewport</span>(panel_w, <span class="tok-kw">if</span> (narrow) <span class="tok-num">30.0</span> <span class="tok-kw">else</span> <span class="tok-num">22.0</span>);
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    <span class="tok-comment">// Height capped to the viewport: auto-size lets the window run off a short screen.</span>
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-builtin">@min</span>(<span class="tok-num">470.0</span>, viewport_h * <span class="tok-num">0.7</span>) }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"a policy learning to balance"</span>, .{})) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"generation {d}   best ever {d:.0} / {d}"</span>, .{ s.generation, s.best_ever, max_steps });
+        <span class="tok-kw">if</span> (s.history_len &gt; <span class="tok-num">1</span>) {
+            <span class="tok-comment">// * THE WIDTH IS GIVEN. Without it the plot defaults to something wider than the</span>
+            <span class="tok-comment">// panel and its label renders OUTSIDE the box - which is exactly how this looked</span>
+            <span class="tok-comment">// on a phone, and the kind of thing only a device screenshot shows.</span>
+            u.<span class="tok-fn">plotLines</span>(<span class="tok-str">""</span>, s.history[<span class="tok-num">0</span>..s.history_len], .{
+                .min = <span class="tok-num">0</span>,
+                .max = <span class="tok-builtin">@floatFromInt</span>(max_steps),
+                .width = panel_w - font_size * <span class="tok-num">2.0</span>,
+                .height = font_size * <span class="tok-num">5.0</span>,
+                .overlay = <span class="tok-str">"elite score, best 8 of 40"</span>,
+            });
+        } <span class="tok-kw">else</span> {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  (training...)"</span>, .{});
+        }
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// * THE POLICY IS FOUR NUMBERS, SHOWN. Watching them move is most of what makes this</span>
+        <span class="tok-comment">// legible: the search is not a black box, it is a Gaussian walking across a plane.</span>
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"policy  x {d:&gt;6.2}  angle {d:&gt;6.2}"</span>, .{ s.mean[<span class="tok-num">0</span>], s.mean[<span class="tok-num">1</span>] });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"        v {d:&gt;6.2}  omega {d:&gt;6.2}"</span>, .{ s.mean[<span class="tok-num">2</span>], s.mean[<span class="tok-num">3</span>] });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"spread  {d:.3} {d:.3} {d:.3} {d:.3}"</span>, .{ s.sigma[<span class="tok-num">0</span>], s.sigma[<span class="tok-num">1</span>], s.sigma[<span class="tok-num">2</span>], s.sigma[<span class="tok-num">3</span>] });
+        u.<span class="tok-fn">separator</span>();
+
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"training"</span>, &amp;s.training);
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"show the current best"</span>, &amp;s.show_best);
+        <span class="tok-comment">// * TURNING THIS UP MAKES THE CURVE CLIMB AND THE FRAME RATE DROP, which is an honest</span>
+        <span class="tok-comment">// thing to show: a generation is 40 policies x 4 seeds x up to 500 steps, about 66 ms</span>
+        <span class="tok-comment">// in the worst case.</span>
+        <span class="tok-comment">// * THE BUDGET IS SHOWN, NOT SET. It is what the device turned out to be able to</span>
+        <span class="tok-comment">// afford, adapted from the frame time - a number worth seeing precisely because it</span>
+        <span class="tok-comment">// differs so much between a desktop and a phone.</span>
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"{d:.0} policies/frame, {d}/{d} this generation"</span>, .{
+            s.budget,
+            s.evaluated,
+            population,
+        });
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"start over"</span>, .{})) {
+            s.mean = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+            s.sigma = <span class="tok-builtin">@splat</span>(<span class="tok-num">1.0</span>);
+            s.generation = <span class="tok-num">0</span>;
+            s.history_len = <span class="tok-num">0</span>;
+            s.best_ever = <span class="tok-num">0</span>;
+            s.rng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">7</span>);
+            s.evaluated = population; <span class="tok-comment">// a fresh population on the next frame</span>
+            <span class="tok-fn">beginEpisode</span>(&amp;s.display, s.display_seed);
+        }
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - a policy learning to balance"</span>,
+            .width = <span class="tok-num">860</span>,
+            .height = <span class="tok-num">640</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

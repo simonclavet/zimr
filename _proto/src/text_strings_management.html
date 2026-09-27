@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>text_strings_management — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>text_strings_management</h1>
+<figure class="code src-file" data-path="examples/text_strings_management/text_strings_management.zig" data-lines="381"><figcaption><span>examples/text_strings_management/text_strings_management.zig</span><span>381 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! text_strings_management - raylib's [text] strings-management sample, reimagined</span>
+<span class="tok-comment">//! as a hands-on playground for the string ops themselves.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! raylib's version demos TextSubtext / TextSplit / TextJoin by turning a</span>
+<span class="tok-comment">//! sentence into draggable "text particles" you slice and glue. We keep that</span>
+<span class="tok-comment">//! spirit but lean into what's fun on a phone: every word is a chip you can drag</span>
+<span class="tok-comment">//! with a finger, and the two gestures ARE the two headline operations -</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * TAP a chip            -&gt; SHATTER it into one chip per character  (a split)</span>
+<span class="tok-comment">//!   * DROP a chip onto       -&gt; GLUE the two chips into one, text joined (a join)</span>
+<span class="tok-comment">//!     another chip</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The HUD rebuilds the whole sentence live by joining every chip left-to-right,</span>
+<span class="tok-comment">//! so you can watch the string come apart and go back together. No engine feature</span>
+<span class="tok-comment">//! needed - just text, rects, and touch; the "string library" is plain Zig slices.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-kw">const</span> atkinson = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> font_size: f32 = <span class="tok-num">28</span>;
+<span class="tok-kw">const</span> chip_h: f32 = font_size + <span class="tok-num">20</span>;
+<span class="tok-kw">const</span> pad_x: f32 = <span class="tok-num">16</span>; <span class="tok-comment">// horizontal breathing room inside a chip</span>
+<span class="tok-kw">const</span> max_chips: usize = <span class="tok-num">64</span>; <span class="tok-comment">// a short sentence shattered to characters fits</span>
+<span class="tok-kw">const</span> tap_slop: f32 = <span class="tok-num">8</span>; <span class="tok-comment">// finger travel under this counts as a tap, not a drag</span>
+
+<span class="tok-comment">// Colors, pulled out so the draw calls stay short and readable.</span>
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">17</span>, .g = <span class="tok-num">24</span>, .b = <span class="tok-num">39</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> ink: Color = .{ .r = <span class="tok-num">15</span>, .g = <span class="tok-num">23</span>, .b = <span class="tok-num">42</span>, .a = <span class="tok-num">255</span> }; <span class="tok-comment">// chip label on bright chip</span>
+<span class="tok-kw">const</span> title_col: Color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">240</span>, .b = <span class="tok-num">250</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> sub_col: Color = .{ .r = <span class="tok-num">148</span>, .g = <span class="tok-num">163</span>, .b = <span class="tok-num">184</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> hud_bg: Color = .{ .r = <span class="tok-num">12</span>, .g = <span class="tok-num">17</span>, .b = <span class="tok-num">28</span>, .a = <span class="tok-num">235</span> };
+<span class="tok-kw">const</span> hud_col: Color = .{ .r = <span class="tok-num">203</span>, .g = <span class="tok-num">213</span>, .b = <span class="tok-num">225</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> shadow: Color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">90</span> };
+
+<span class="tok-kw">const</span> palette = [_]Color{
+    .{ .r = <span class="tok-num">56</span>, .g = <span class="tok-num">189</span>, .b = <span class="tok-num">248</span>, .a = <span class="tok-num">255</span> }, <span class="tok-comment">// sky</span>
+    .{ .r = <span class="tok-num">251</span>, .g = <span class="tok-num">146</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> }, <span class="tok-comment">// orange</span>
+    .{ .r = <span class="tok-num">163</span>, .g = <span class="tok-num">230</span>, .b = <span class="tok-num">53</span>, .a = <span class="tok-num">255</span> }, <span class="tok-comment">// lime</span>
+    .{ .r = <span class="tok-num">244</span>, .g = <span class="tok-num">114</span>, .b = <span class="tok-num">182</span>, .a = <span class="tok-num">255</span> }, <span class="tok-comment">// pink</span>
+    .{ .r = <span class="tok-num">168</span>, .g = <span class="tok-num">132</span>, .b = <span class="tok-num">247</span>, .a = <span class="tok-num">255</span> }, <span class="tok-comment">// violet</span>
+    .{ .r = <span class="tok-num">45</span>, .g = <span class="tok-num">212</span>, .b = <span class="tok-num">191</span>, .a = <span class="tok-num">255</span> }, <span class="tok-comment">// teal</span>
+};
+
+<span class="tok-kw">const</span> Rect = <span class="tok-kw">struct</span> { x: f32, y: f32, w: f32, h: f32 };
+
+<span class="tok-comment">/// One draggable piece of text. `pos` is the chip's CENTER; the on-screen rect is</span>
+<span class="tok-comment">/// derived each frame from the measured text width so a chip hugs its letters.</span>
+<span class="tok-kw">const</span> Chip = <span class="tok-kw">struct</span> {
+    buf: [<span class="tok-num">96</span>]u8 = undefined,
+    len: usize = <span class="tok-num">0</span>,
+    pos: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    vel: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    tint: usize = <span class="tok-num">0</span>,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">text</span>(self: *<span class="tok-kw">const</span> Chip) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> self.buf[<span class="tok-num">0</span>..self.len];
+    }
+    <span class="tok-kw">fn</span> <span class="tok-fn">setText</span>(self: *Chip, s: []<span class="tok-kw">const</span> u8) void {
+        <span class="tok-kw">const</span> n: usize = <span class="tok-builtin">@min</span>(s.len, self.buf.len);
+        <span class="tok-builtin">@memcpy</span>(self.buf[<span class="tok-num">0</span>..n], s[<span class="tok-num">0</span>..n]);
+        self.len = n;
+    }
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    chips: [max_chips]Chip = undefined,
+    count: usize = <span class="tok-num">0</span>,
+    grabbed: ?usize = null,
+    grab_offset: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }, <span class="tok-comment">// finger-to-chip-center offset, set on grab</span>
+    press: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }, <span class="tok-comment">// where the current press started (for tap vs drag)</span>
+    laid_out: bool = false, <span class="tok-comment">// seed the row once, when we first know the viewport</span>
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson, font_size) };
+}
+
+<span class="tok-comment">// ---- chip helpers ----------------------------------------------------------</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">chipWidth</span>(s: *State, ch: *<span class="tok-kw">const</span> Chip) f32 {
+    <span class="tok-kw">return</span> z.<span class="tok-fn">measureText</span>(s.font, ch.<span class="tok-fn">text</span>(), font_size)[<span class="tok-num">0</span>] + pad_x * <span class="tok-num">2</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">chipRect</span>(s: *State, ch: *<span class="tok-kw">const</span> Chip) Rect {
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-fn">chipWidth</span>(s, ch);
+    <span class="tok-kw">return</span> .{ .x = ch.pos[<span class="tok-num">0</span>] - w * <span class="tok-num">0.5</span>, .y = ch.pos[<span class="tok-num">1</span>] - chip_h * <span class="tok-num">0.5</span>, .w = w, .h = chip_h };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">addChip</span>(s: *State, text: []<span class="tok-kw">const</span> u8, pos: Vec2) void {
+    <span class="tok-kw">if</span> (s.count &gt;= max_chips) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">var</span> ch: Chip = .{ .pos = pos, .tint = s.count % palette.len };
+    ch.<span class="tok-fn">setText</span>(text);
+    s.chips[s.count] = ch;
+    s.count += <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">resetRect</span>(vw: f32) Rect {
+    <span class="tok-kw">return</span> .{ .x = vw - <span class="tok-num">92</span> - <span class="tok-num">16</span>, .y = <span class="tok-num">16</span>, .w = <span class="tok-num">92</span>, .h = <span class="tok-num">40</span> };
+}
+
+<span class="tok-comment">/// The sentence, split on spaces into a centered row of word-chips. This is the</span>
+<span class="tok-comment">/// "reset" state and the first-frame seed.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">layout</span>(s: *State, vw: f32, vh: f32) void {
+    s.count = <span class="tok-num">0</span>;
+    s.grabbed = null;
+    <span class="tok-kw">const</span> sentence: []<span class="tok-kw">const</span> u8 = <span class="tok-str">"strings are just bytes you can rearrange"</span>;
+    <span class="tok-kw">var</span> total: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> it = std.mem.<span class="tok-fn">tokenizeScalar</span>(u8, sentence, <span class="tok-str">' '</span>);
+    <span class="tok-kw">while</span> (it.<span class="tok-fn">next</span>()) |word| {
+        total += z.<span class="tok-fn">measureText</span>(s.font, word, font_size)[<span class="tok-num">0</span>] + pad_x * <span class="tok-num">2</span> + <span class="tok-num">12</span>;
+    }
+    <span class="tok-kw">var</span> x: f32 = (vw - total) * <span class="tok-num">0.5</span> + pad_x;
+    it = std.mem.<span class="tok-fn">tokenizeScalar</span>(u8, sentence, <span class="tok-str">' '</span>);
+    <span class="tok-kw">while</span> (it.<span class="tok-fn">next</span>()) |word| {
+        <span class="tok-kw">const</span> w: f32 = z.<span class="tok-fn">measureText</span>(s.font, word, font_size)[<span class="tok-num">0</span>] + pad_x * <span class="tok-num">2</span>;
+        <span class="tok-fn">addChip</span>(s, word, .{ x + w * <span class="tok-num">0.5</span>, vh * <span class="tok-num">0.42</span> });
+        x += w + <span class="tok-num">12</span>;
+    }
+}
+
+<span class="tok-comment">/// SPLIT: replace chip `idx` with one chip per character, fanned outward from</span>
+<span class="tok-comment">/// where it stood. Spaces are dropped so you get pure letters to play with.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">shatter</span>(s: *State, idx: usize) void {
+    <span class="tok-kw">const</span> src: Chip = s.chips[idx];
+    s.chips[idx] = s.chips[s.count - <span class="tok-num">1</span>]; <span class="tok-comment">// swap-remove the source</span>
+    s.count -= <span class="tok-num">1</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (src.<span class="tok-fn">text</span>()) |byte| {
+        <span class="tok-kw">if</span> (byte == <span class="tok-str">' '</span>) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> a: f32 = <span class="tok-fn">float</span>(i) * <span class="tok-num">0.9</span>;
+        <span class="tok-kw">const</span> one = [_]u8{byte};
+        <span class="tok-fn">addChip</span>(s, &amp;one, .{ src.pos[<span class="tok-num">0</span>] + <span class="tok-builtin">@cos</span>(a) * <span class="tok-num">6</span>, src.pos[<span class="tok-num">1</span>] + <span class="tok-builtin">@sin</span>(a) * <span class="tok-num">6</span> });
+        <span class="tok-kw">if</span> (s.count &gt; <span class="tok-num">0</span>) {
+            s.chips[s.count - <span class="tok-num">1</span>].vel = .{ <span class="tok-builtin">@cos</span>(a) * <span class="tok-num">220</span>, <span class="tok-builtin">@sin</span>(a) * <span class="tok-num">220</span> - <span class="tok-num">60</span> };
+        }
+        i += <span class="tok-num">1</span>;
+    }
+}
+
+<span class="tok-comment">/// JOIN: fold chip `b`'s text onto chip `a` (a space between) and drop `b`.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">glue</span>(s: *State, a: usize, b: usize) void {
+    <span class="tok-kw">var</span> joined: [<span class="tok-num">96</span>]u8 = undefined;
+    <span class="tok-kw">const</span> merged: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;joined, <span class="tok-str">"{s} {s}"</span>, .{ s.chips[a].<span class="tok-fn">text</span>(), s.chips[b].<span class="tok-fn">text</span>() }) <span class="tok-kw">catch</span> <span class="tok-kw">return</span>;
+    s.chips[a].<span class="tok-fn">setText</span>(merged);
+    s.chips[b] = s.chips[s.count - <span class="tok-num">1</span>];
+    s.count -= <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">pointInRect</span>(p: Vec2, r: Rect) bool {
+    <span class="tok-kw">return</span> p[<span class="tok-num">0</span>] &gt;= r.x <span class="tok-kw">and</span> p[<span class="tok-num">0</span>] &lt;= r.x + r.w <span class="tok-kw">and</span> p[<span class="tok-num">1</span>] &gt;= r.y <span class="tok-kw">and</span> p[<span class="tok-num">1</span>] &lt;= r.y + r.h;
+}
+
+<span class="tok-comment">/// Topmost chip under the pointer, or null. Later chips draw on top, so we scan</span>
+<span class="tok-comment">/// back-to-front to grab the one you can actually see.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">chipAt</span>(s: *State, p: Vec2) ?usize {
+    <span class="tok-kw">var</span> i: usize = s.count;
+    <span class="tok-kw">while</span> (i &gt; <span class="tok-num">0</span>) {
+        i -= <span class="tok-num">1</span>;
+        <span class="tok-kw">if</span> (<span class="tok-fn">pointInRect</span>(p, <span class="tok-fn">chipRect</span>(s, &amp;s.chips[i]))) {
+            <span class="tok-kw">return</span> i;
+        }
+    }
+    <span class="tok-kw">return</span> null;
+}
+
+<span class="tok-comment">/// A chip (other than `gi`) whose rect overlaps `gi`'s - the glue target.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">overlapTarget</span>(s: *State, gi: usize) ?usize {
+    <span class="tok-kw">const</span> g: Rect = <span class="tok-fn">chipRect</span>(s, &amp;s.chips[gi]);
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.count) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (i == gi) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> r: Rect = <span class="tok-fn">chipRect</span>(s, &amp;s.chips[i]);
+        <span class="tok-kw">const</span> hit: bool = g.x &lt; r.x + r.w <span class="tok-kw">and</span> g.x + g.w &gt; r.x <span class="tok-kw">and</span> g.y &lt; r.y + r.h <span class="tok-kw">and</span> g.y + g.h &gt; r.y;
+        <span class="tok-kw">if</span> (hit) {
+            <span class="tok-kw">return</span> i;
+        }
+    }
+    <span class="tok-kw">return</span> null;
+}
+
+<span class="tok-comment">/// Gentle physics: nudge overlapping idle chips apart, coast on any velocity from</span>
+<span class="tok-comment">/// a shatter, and keep everything on screen. Alive, but damped enough to read.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">settle</span>(s: *State, vw: f32, vh: f32, dt: f32) void {
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.count) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> j: usize = i + <span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (j &lt; s.count) : (j += <span class="tok-num">1</span>) {
+            <span class="tok-kw">if</span> (s.grabbed == i <span class="tok-kw">or</span> s.grabbed == j) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> dx: f32 = s.chips[i].pos[<span class="tok-num">0</span>] - s.chips[j].pos[<span class="tok-num">0</span>];
+            <span class="tok-kw">const</span> dy: f32 = s.chips[i].pos[<span class="tok-num">1</span>] - s.chips[j].pos[<span class="tok-num">1</span>];
+            <span class="tok-kw">const</span> min_x: f32 = (<span class="tok-fn">chipWidth</span>(s, &amp;s.chips[i]) + <span class="tok-fn">chipWidth</span>(s, &amp;s.chips[j])) * <span class="tok-num">0.5</span>;
+            <span class="tok-kw">if</span> (<span class="tok-builtin">@abs</span>(dx) &lt; min_x <span class="tok-kw">and</span> <span class="tok-builtin">@abs</span>(dy) &lt; chip_h) {
+                <span class="tok-kw">const</span> push: f32 = <span class="tok-kw">if</span> (dx &gt;= <span class="tok-num">0</span>) <span class="tok-num">8</span> <span class="tok-kw">else</span> -<span class="tok-num">8</span>;
+                s.chips[i].vel[<span class="tok-num">0</span>] += push;
+                s.chips[j].vel[<span class="tok-num">0</span>] -= push;
+            }
+        }
+    }
+    i = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.count) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (s.grabbed == i) {
+            <span class="tok-kw">continue</span>;
+        }
+        s.chips[i].pos[<span class="tok-num">0</span>] += s.chips[i].vel[<span class="tok-num">0</span>] * dt;
+        s.chips[i].pos[<span class="tok-num">1</span>] += s.chips[i].vel[<span class="tok-num">1</span>] * dt;
+        s.chips[i].vel[<span class="tok-num">0</span>] *= <span class="tok-num">0.86</span>;
+        s.chips[i].vel[<span class="tok-num">1</span>] *= <span class="tok-num">0.86</span>;
+        <span class="tok-kw">const</span> w: f32 = <span class="tok-fn">chipWidth</span>(s, &amp;s.chips[i]);
+        s.chips[i].pos[<span class="tok-num">0</span>] = <span class="tok-fn">clamp</span>(s.chips[i].pos[<span class="tok-num">0</span>], w * <span class="tok-num">0.5</span>, vw - w * <span class="tok-num">0.5</span>);
+        s.chips[i].pos[<span class="tok-num">1</span>] = <span class="tok-fn">clamp</span>(s.chips[i].pos[<span class="tok-num">1</span>], chip_h * <span class="tok-num">0.5</span> + <span class="tok-num">64</span>, vh - chip_h * <span class="tok-num">0.5</span> - <span class="tok-num">96</span>);
+    }
+}
+
+<span class="tok-comment">// ---- update ----------------------------------------------------------------</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">if</span> (!s.laid_out) {
+        <span class="tok-fn">layout</span>(s, vw, vh);
+        s.laid_out = true;
+    }
+
+    <span class="tok-kw">const</span> ptr: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> pressed: bool = z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left);
+    <span class="tok-comment">// Raw held-state + press origin - the phone-safe way (delta accumulation</span>
+    <span class="tok-comment">// jumps on touch because the pre-touch pointer is stale). Follow the finger</span>
+    <span class="tok-comment">// absolutely: chip.pos = finger - grab_offset. Same recipe as ui_phone_gestures.</span>
+    <span class="tok-kw">const</span> down: bool = f.input.mouse.current_button[<span class="tok-num">0</span>] != <span class="tok-num">0</span>;
+    <span class="tok-kw">const</span> press: Vec2 = f.input.mouse.press_position[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> over_reset: bool = <span class="tok-fn">pointInRect</span>(ptr, <span class="tok-fn">resetRect</span>(vw));
+
+    <span class="tok-kw">if</span> (pressed <span class="tok-kw">and</span> over_reset) {
+        <span class="tok-fn">layout</span>(s, vw, vh);
+        <span class="tok-fn">drawScene</span>(f, s, vw, vh);
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">if</span> (pressed <span class="tok-kw">and</span> !over_reset) {
+        <span class="tok-comment">// Hit-test where the press LANDED, not the current pointer.</span>
+        s.grabbed = <span class="tok-fn">chipAt</span>(s, press);
+        s.press = press;
+        <span class="tok-kw">if</span> (s.grabbed) |gi| {
+            s.grab_offset = .{ press[<span class="tok-num">0</span>] - s.chips[gi].pos[<span class="tok-num">0</span>], press[<span class="tok-num">1</span>] - s.chips[gi].pos[<span class="tok-num">1</span>] };
+        }
+    }
+    <span class="tok-kw">if</span> (down) {
+        <span class="tok-kw">if</span> (s.grabbed) |gi| {
+            s.chips[gi].pos = .{ ptr[<span class="tok-num">0</span>] - s.grab_offset[<span class="tok-num">0</span>], ptr[<span class="tok-num">1</span>] - s.grab_offset[<span class="tok-num">1</span>] };
+            s.chips[gi].vel = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+        }
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.grabbed) |gi| {
+        <span class="tok-comment">// Released: a press that barely travelled is a tap (split); one that was</span>
+        <span class="tok-comment">// dragged onto a neighbour is a join.</span>
+        <span class="tok-kw">const</span> dx: f32 = ptr[<span class="tok-num">0</span>] - s.press[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = ptr[<span class="tok-num">1</span>] - s.press[<span class="tok-num">1</span>];
+        <span class="tok-kw">if</span> (dx * dx + dy * dy &lt;= tap_slop * tap_slop) {
+            <span class="tok-fn">shatter</span>(s, gi);
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (<span class="tok-fn">overlapTarget</span>(s, gi)) |ti| {
+            <span class="tok-fn">glue</span>(s, ti, gi);
+        }
+        s.grabbed = null;
+    }
+
+    <span class="tok-fn">settle</span>(s, vw, vh, f.time.delta_time);
+    <span class="tok-fn">drawScene</span>(f, s, vw, vh);
+}
+
+<span class="tok-comment">// ---- draw ------------------------------------------------------------------</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">label</span>(
+    f: *z.Frame,
+    s: *State,
+    pos: Vec2,
+    str: []<span class="tok-kw">const</span> u8,
+    size: f32,
+    col: Color,
+) void {
+    f.gl.<span class="tok-fn">text</span>(pos, str, .{ .size = size, .color = col, .font = &amp;s.font });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-fn">label</span>(f, s, .{ <span class="tok-num">20</span>, <span class="tok-num">22</span> }, <span class="tok-str">"String Playground"</span>, <span class="tok-num">22</span>, title_col);
+    <span class="tok-fn">label</span>(f, s, .{ <span class="tok-num">20</span>, <span class="tok-num">50</span> }, <span class="tok-str">"tap a chip to shatter into letters . drag one onto another to glue"</span>, <span class="tok-num">15</span>, sub_col);
+
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.count) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> ch: *<span class="tok-kw">const</span> Chip = &amp;s.chips[i];
+        <span class="tok-kw">const</span> r: Rect = <span class="tok-fn">chipRect</span>(s, ch);
+        <span class="tok-kw">const</span> lifted: bool = (s.grabbed == i);
+        <span class="tok-kw">const</span> oy: f32 = <span class="tok-kw">if</span> (lifted) <span class="tok-num">6</span> <span class="tok-kw">else</span> <span class="tok-num">3</span>;
+        f.gl.<span class="tok-fn">rect</span>(.{ .x = r.x + <span class="tok-num">2</span>, .y = r.y + oy, .width = r.w, .height = r.h }, .{ .color = shadow });
+        f.gl.<span class="tok-fn">rect</span>(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = palette[ch.tint] });
+        <span class="tok-kw">const</span> edge: Color = <span class="tok-kw">if</span> (lifted)
+            .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }
+        <span class="tok-kw">else</span>
+            .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">70</span> };
+        f.gl.<span class="tok-fn">rect</span>(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = edge, .outline = <span class="tok-num">1.5</span> });
+        <span class="tok-kw">const</span> tw: f32 = z.<span class="tok-fn">measureText</span>(s.font, ch.<span class="tok-fn">text</span>(), font_size)[<span class="tok-num">0</span>];
+        <span class="tok-fn">label</span>(f, s, .{ ch.pos[<span class="tok-num">0</span>] - tw * <span class="tok-num">0.5</span>, ch.pos[<span class="tok-num">1</span>] - font_size * <span class="tok-num">0.5</span> }, ch.<span class="tok-fn">text</span>(), font_size, ink);
+    }
+
+    <span class="tok-kw">const</span> rr: Rect = <span class="tok-fn">resetRect</span>(vw);
+    <span class="tok-kw">const</span> over: bool = <span class="tok-fn">pointInRect</span>(z.<span class="tok-fn">getMousePosition</span>(f.input), rr);
+    <span class="tok-kw">const</span> btn: Color = <span class="tok-kw">if</span> (over)
+        .{ .r = <span class="tok-num">71</span>, .g = <span class="tok-num">85</span>, .b = <span class="tok-num">105</span>, .a = <span class="tok-num">255</span> }
+    <span class="tok-kw">else</span>
+        .{ .r = <span class="tok-num">51</span>, .g = <span class="tok-num">65</span>, .b = <span class="tok-num">85</span>, .a = <span class="tok-num">255</span> };
+    f.gl.<span class="tok-fn">rect</span>(.{ .x = rr.x, .y = rr.y, .width = rr.w, .height = rr.h }, .{ .color = btn });
+    <span class="tok-fn">label</span>(f, s, .{ rr.x + <span class="tok-num">20</span>, rr.y + <span class="tok-num">11</span> }, <span class="tok-str">"reset"</span>, <span class="tok-num">18</span>, .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">232</span>, .b = <span class="tok-num">240</span>, .a = <span class="tok-num">255</span> });
+
+    <span class="tok-fn">drawHud</span>(f, s, vw, vh);
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"tap = split into letters, drag-and-drop = join - the two string ops as gestures"</span>);
+}
+
+<span class="tok-comment">/// Join every chip back into one sentence in visual (left-to-right) order and</span>
+<span class="tok-comment">/// show it live, so the string ops read as one evolving string.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawHud</span>(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
+    <span class="tok-kw">var</span> order: [max_chips]usize = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.count) |k| {
+        order[k] = k;
+    }
+    std.sort.<span class="tok-fn">pdq</span>(usize, order[<span class="tok-num">0</span>..s.count], s, cmpByX);
+    <span class="tok-kw">var</span> joined: [<span class="tok-num">1024</span>]u8 = undefined;
+    <span class="tok-kw">var</span> w: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (order[<span class="tok-num">0</span>..s.count], <span class="tok-num">0</span>..) |ci, n| {
+        <span class="tok-kw">const</span> t: []<span class="tok-kw">const</span> u8 = s.chips[ci].<span class="tok-fn">text</span>();
+        <span class="tok-kw">if</span> (n != <span class="tok-num">0</span> <span class="tok-kw">and</span> w &lt; joined.len) {
+            joined[w] = <span class="tok-str">' '</span>;
+            w += <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">const</span> take: usize = <span class="tok-builtin">@min</span>(t.len, joined.len - w);
+        <span class="tok-builtin">@memcpy</span>(joined[w .. w + take], t[<span class="tok-num">0</span>..take]);
+        w += take;
+    }
+    <span class="tok-kw">var</span> hud: [<span class="tok-num">1100</span>]u8 = undefined;
+    <span class="tok-kw">const</span> line: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;hud, <span class="tok-str">"{d} chips  |  {s}"</span>, .{ s.count, joined[<span class="tok-num">0</span>..w] }) <span class="tok-kw">catch</span> joined[<span class="tok-num">0</span>..w];
+    f.gl.<span class="tok-fn">rect</span>(.{ .x = <span class="tok-num">0</span>, .y = vh - <span class="tok-num">64</span>, .width = vw, .height = <span class="tok-num">64</span> }, .{ .color = hud_bg });
+    <span class="tok-fn">label</span>(f, s, .{ <span class="tok-num">20</span>, vh - <span class="tok-num">44</span> }, line, <span class="tok-num">17</span>, hud_col);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">cmpByX</span>(s: *State, a: usize, b: usize) bool {
+    <span class="tok-kw">return</span> s.chips[a].pos[<span class="tok-num">0</span>] &lt; s.chips[b].pos[<span class="tok-num">0</span>];
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - text - strings management (playground)"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

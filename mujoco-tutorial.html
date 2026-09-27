@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MuJoCo, and how it becomes robot.zig</title>
+<meta name="description" content="A detailed tutorial on MuJoCo's reduced-coordinate physics, and a plan for a Zig- and zimr-idiomatic robot.zig that complements zimrphysics.zig." />
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body>
+<div class="doc">
+
+<h1>MuJoCo, and how it becomes <span style="color:var(--accent-gen)">robot.zig</span></h1>
+<p class="sub">What a reduced-coordinate robotics simulator actually does &mdash; and the parts of it worth having in zimr, given that zimrphysics.zig already exists.</p>
+
+<div class="eq">
+  <em>M</em>(q) <em>v̇</em> + <em>c</em>(q,v) = <em>&tau;</em> + <em>J</em>(q)<sup>T</sup> <em>f</em>
+</div>
+
+<p class="lede">That is the whole of MuJoCo in one line, and it is <em>not</em> the equation zimrphysics solves. Understanding why is most of the work; the rest of this document is the consequences.</p>
+
+<p>zimrphysics.zig is a Jolt port. It thinks in <strong>maximal coordinates</strong>: every body carries a full 6-DOF pose in world space, joints are <em>constraints</em> that remove unwanted freedom, and a solver iterates until the constraint violations are small. That is the right model for a game &mdash; ragdolls, crates, vehicles, thousands of loose objects.</p>
+
+<p>MuJoCo thinks in <strong>generalized coordinates</strong>. A robot arm with four hinges has exactly four numbers, not four bodies &times; seven numbers with constraints holding them together. The joints are not enforced; they are <em>structurally impossible to violate</em>, because the unwanted freedom was never represented. This is the difference between a simulator that drifts and one that cannot.</p>
+
+<h2>1. The two worldviews, side by side</h2>
+
+<table>
+  <tr><th>&nbsp;</th><th style="color:var(--accent-color)">Maximal (zimrphysics / Jolt)</th><th style="color:var(--accent-gen)">Generalized (MuJoCo)</th></tr>
+  <tr><td>State of a 4-hinge arm</td><td class="max">4 bodies &times; (pos+quat+vel+angvel) = 52 numbers</td><td class="gen">4 angles + 4 rates = 8 numbers</td></tr>
+  <tr><td>A joint is&hellip;</td><td class="max">a constraint the solver enforces each step</td><td class="gen">a coordinate; nothing to enforce</td></tr>
+  <tr><td>Joint error</td><td class="max">small but nonzero, drifts, needs stabilization</td><td class="gen">exactly zero, always, by construction</td></tr>
+  <tr><td>Mass matrix</td><td class="max">block-diagonal and trivial (per-body)</td><td class="gen">dense-ish <code>nv&times;nv</code>, must be computed</td></tr>
+  <tr><td>Hard part</td><td class="max">the constraint solver</td><td class="gen">the dynamics (M, c) <em>and</em> the constraint solver</td></tr>
+  <tr><td>Loops (closed chains)</td><td class="max">free &mdash; everything is a constraint anyway</td><td class="gen">need explicit equality constraints</td></tr>
+  <tr><td>Good at</td><td class="max">many loose bodies, games, destruction</td><td class="gen">articulated mechanisms, contact-rich manipulation, control</td></tr>
+  <tr><td>Cost scaling</td><td class="max">O(bodies), solver dominates</td><td class="gen">O(nv) tree passes + solver</td></tr>
+</table>
+
+<p>Neither is better. They are good at different things, which is exactly why <code>robot.zig</code> should be a <em>sibling</em> of zimrphysics rather than a replacement or a rewrite of it.</p>
+
+<h2>2. The model / data split</h2>
+
+<p>MuJoCo's single most transferable architectural idea has nothing to do with physics. It splits everything in two:</p>
+
+<ul>
+  <li><code>mjModel</code> &mdash; <strong>constant</strong>. The robot's structure: tree topology, joint types and axes, body inertias, actuator parameters, solver settings. Compiled once from XML, then never written. One <code>mjModel</code> can be shared by many simulations.</li>
+  <li><code>mjData</code> &mdash; <strong>everything that changes</strong>. Positions, velocities, all intermediates, and every derived quantity. One per simulation instance.</li>
+</ul>
+
+<p>This is why MuJoCo can run thousands of parallel rollouts of the same robot cheaply (the whole premise of MJX, its JAX/GPU sibling), and why its API is a flat list of free functions <code>mj_xxx(m, d)</code> that read <code>m</code>, write <code>d</code>, and hold no state of their own.</p>
+
+<div class="note">
+<b>Note the discipline:</b> MuJoCo's pipeline is <em>entirely imperative &mdash; nothing happens automatically</em>. Set <code>qpos</code> and the Cartesian body positions are simply stale until you call <code>mj_kinematics</code>. There is no invalidation, no dirty flag, no lazy recompute. The docs call this out because it surprises people. It should not surprise anyone reading zimr's code, which makes the same bet everywhere.
+</div>
+
+<h2>3. The kinematic tree, and why <code>nq &ne; nv</code></h2>
+
+<p>Bodies form a tree. Each body carries zero or more joints, and each joint contributes coordinates. There are exactly four joint types:</p>
+
+<table>
+  <tr><th>Joint</th><th>qpos (nq)</th><th>qvel (nv)</th><th>Meaning</th></tr>
+  <tr><td><code>free</code></td><td>7</td><td>6</td><td>position + quaternion, relative to world</td></tr>
+  <tr><td><code>ball</code></td><td>4</td><td>3</td><td>quaternion, relative to parent</td></tr>
+  <tr><td><code>slide</code></td><td>1</td><td>1</td><td>translation along a body-fixed axis</td></tr>
+  <tr><td><code>hinge</code></td><td>1</td><td>1</td><td>rotation about a body-fixed axis</td></tr>
+</table>
+
+<p>A body with <em>no</em> joint is welded to its parent &mdash; free and correct, no constraint required. This is how you build a rigid multi-geom link.</p>
+
+<p><strong>Position and velocity have different dimensions.</strong> Orientations live on the unit sphere in 4D (SO(3)); velocities live in its 3D tangent space. So <code>qpos</code> has length <code>nq</code>, <code>qvel</code> has length <code>nv</code>, and <code>nq &gt; nv</code> in any model containing a ball or free joint. You cannot subtract two <code>qpos</code> vectors to get a velocity &mdash; MuJoCo provides <code>mj_differentiatePos</code> for that, and <code>mj_integratePos</code> for the reverse. Every quaternion-aware operation in the codebase exists because of this one fact.</p>
+
+<h2>4. Smooth dynamics: five passes over a tree</h2>
+
+<p>The "smooth" part of MuJoCo &mdash; everything except constraints &mdash; is five tree traversals, and it is much smaller than you would guess.</p>
+
+<h3>mj_kinematics &mdash; forward pass</h3>
+<p>Walk the tree parent&rarr;child, composing each body's local pose with its joint's contribution, producing global position and orientation for every body, geom and site. Normalizes quaternions on the way through.</p>
+
+<h3>mj_comPos &mdash; center-of-mass frames</h3>
+<p>MuJoCo does its dynamics in <em>global</em> frames (so collision detection shares them) but translated to each kinematic subtree's center of mass. That translation is purely for floating-point accuracy: inertias expressed about a distant origin lose precision badly. This produces <code>cdof</code> (each DOF's motion axis as a 6D spatial vector) and <code>cinert</code> (each body's 10-parameter inertia).</p>
+
+<h3>mj_crb &mdash; the mass matrix</h3>
+<p>Composite Rigid Body. Backward pass accumulating each subtree's total inertia into its parent, then for each DOF <code>i</code>, walk up the <em>DOF ancestor chain</em> writing <code>M[i][j] = cdof_j &middot; (crb_i &times; cdof_i)</code>. The entire algorithm is about sixty lines of C. Two things fall out of it:</p>
+<ul>
+  <li><code>M</code> is sparse, and its sparsity pattern is <strong>exactly the ancestor relation in the tree</strong> &mdash; <code>M[i][j]</code> is nonzero only if DOF <code>i</code> and <code>j</code> lie on a common root path. This is fixed by the model, not by the state.</li>
+  <li><em>Armature</em> (rotor inertia reflected through a gearbox) is simply added to the diagonal. One number per DOF, and it is the single most effective stabilizer for stiff geared robots.</li>
+</ul>
+
+<h3>mj_factorM / mj_solveM &mdash; sparse L<sup>T</sup>DL</h3>
+<p>Because <code>M</code> is needed as <code>M<sup>-1</sup>x</code> repeatedly, it is factorized once per step into L<sup>T</sup>DL, in an elimination order that preserves the tree sparsity exactly &mdash; no fill-in. Then every <code>M<sup>-1</sup>x</code> is two sparse back-substitutions.</p>
+
+<h3>mj_rne &mdash; bias forces</h3>
+<p>Recursive Newton-Euler run with acceleration set to zero, which yields exactly <code>c(q,v)</code>: Coriolis, centrifugal and gravitational forces combined. Forward pass propagates velocities, backward pass accumulates forces. RNE is also how inverse dynamics is computed, with the real acceleration instead of zero.</p>
+
+<div class="note">
+With <code>M</code> and <code>c</code> in hand, <b>forward dynamics is a single line</b>: <code>v̇ = M⁻¹(&tau; + J<sup>T</sup>f &minus; c)</code>. Everything before this point is computing <code>M</code> and <code>c</code>; everything after is computing <code>f</code>.
+</div>
+
+<h2>5. Jacobians, the bridge between spaces</h2>
+
+<p><code>J</code> maps joint velocities into constraint (or task) space, and <code>J<sup>T</sup></code> maps forces back the other way. This one object serves several jobs that look unrelated until you see them written down:</p>
+
+<ul>
+  <li>a <strong>contact</strong> is a row of <code>J</code> in the contact normal direction;</li>
+  <li>a <strong>joint limit</strong> is a row of <code>J</code> that is just a unit vector on that DOF;</li>
+  <li>an <strong>equality constraint</strong> is <code>&part;r/&part;q</code> for its residual;</li>
+  <li>an <strong>actuator</strong>'s moment arm is <code>&nabla;l(q)</code>, the gradient of its transmission length;</li>
+  <li>an <strong>end-effector task</strong> ("move the gripper this way") is the body Jacobian.</li>
+</ul>
+
+<p>Getting Jacobians right once buys all five. In a tree, the Jacobian of a point is assembled by walking that body's ancestor chain and taking each DOF's contribution &mdash; the same chain the CRB walk uses.</p>
+
+<h2>6. The soft constraint model</h2>
+
+<p>This is MuJoCo's real signature, and the thing most worth stealing.</p>
+
+<p>Every other rigid-body engine treats contact as a <em>hard</em> complementarity problem: either the bodies touch and there is force, or they separate and there is none. That is an LCP, it is NP-hard with friction, and it has no unique solution in the general case.</p>
+
+<p>MuJoCo drops strict complementarity and makes every constraint <strong>soft</strong>, giving a <em>convex</em> optimization problem instead &mdash; always solvable, always unique, differentiable. Contacts can push back slightly before touching, and penetrate slightly under load. That is not a bug being tolerated; it is the model.</p>
+
+<p>Each scalar constraint gets three numbers:</p>
+
+<div class="eq" style="font-size:1.05rem">
+  R<sub>ii</sub> = (1&minus;<em>d</em><sub>i</sub>)/<em>d</em><sub>i</sub> &middot; Â<sub>ii</sub> &nbsp;&nbsp;&nbsp;&nbsp; a<sup>ref</sup><sub>i</sub> = &minus;<em>b</em><sub>i</sub>(Jv)<sub>i</sub> &minus; <em>k</em><sub>i</sub> r<sub>i</sub>
+</div>
+
+<ul>
+  <li><strong>impedance</strong> <code>d &isin; (0,1)</code> &mdash; how hard the constraint is. <code>d&rarr;1</code> is rigid, <code>d&rarr;0</code> is absent. It interpolates the achieved acceleration between the reference and the unconstrained one.</li>
+  <li><strong>stiffness k</strong> and <strong>damping b</strong> &mdash; the reference acceleration is a spring-damper pulling the residual to zero. Authored as <code>solref = (timeconst, dampratio)</code>, so you specify <em>how fast and how bouncy</em>, not raw gains.</li>
+</ul>
+
+<p>The crucial trick is the <code>Â</code> in the regularizer: <code>R</code> is scaled by an approximation of the constraint-space inertia, precomputed at the reference pose. That is what makes <code>solref</code> mean the same thing on a 1 g finger and a 100 kg torso &mdash; the penetration under load becomes independent of effective mass. Without that scaling, every contact would need hand-tuned gains. It is a small idea with an enormous usability payoff.</p>
+
+<p>Constraints are assembled in a fixed order &mdash; equality, friction loss, limit, contact &mdash; into one system of <code>nc</code> rows, and one solver handles all of them uniformly. Limits are literally frictionless contacts internally.</p>
+
+<h2>7. Actuators: three independent pieces</h2>
+
+<p>MuJoCo factors an actuator into three parts you configure separately, and the combinations give you everything from a DC motor to a muscle:</p>
+
+<ol>
+  <li><strong>Transmission</strong> &mdash; where the force goes. Attach to a <code>joint</code>, a <code>tendon</code>, a <code>site</code> (Cartesian thrust: jets, propellers), a <code>body</code> (adhesion, vacuum grippers), or a <code>slider-crank</code>. Each defines a scalar length <code>l(q)</code>; its gradient <code>&nabla;l</code> is the moment-arm vector that maps scalar force to joint forces.</li>
+  <li><strong>Activation dynamics</strong> &mdash; optional internal state <code>w</code> with first-order dynamics, making the system third-order. Types: <code>integrator</code> (ẇ = u), <code>filter</code> (ẇ = (u&minus;w)/&tau;), <code>filterexact</code> (the same, integrated analytically so it cannot diverge when &tau; &lt; timestep), <code>muscle</code>, and DC-motor/PID variants.</li>
+  <li><strong>Force generation</strong> &mdash; affine: <code>p = a&middot;(w or u) + b₀ + b₁l + b₂l̇</code>. Choosing gain and bias turns the same machinery into a torque motor (b=0), a position servo (b₁ = &minus;kp), or a velocity servo (b₂ = &minus;kv).</li>
+</ol>
+
+<p>Because force generation is affine, inverse dynamics can recover the controls from the required force with a pseudo-inverse. That property is the reason the whole model is deliberately kept affine.</p>
+
+<h2>8. Tendons</h2>
+
+<p>A tendon is a scalar length defined over the model &mdash; either a fixed linear combination of joint coordinates, or a spatial path through sites, wrapping around spheres and cylinders with proper minimal-length geodesics. It can have its own spring, damper, friction and limits, and actuators can pull on it.</p>
+
+<p>Two joints coupled by a fixed tendon is how you build a differential, a car's steering linkage, or a coupled finger &mdash; without introducing a closed kinematic loop. In the car model above, "forward" and "turn" are tendon actuators over the two wheel joints, so two controls drive a differential drive directly.</p>
+
+<h2>9. Sensors, and why they are in the engine</h2>
+
+<p>Sensors are declared in the model and evaluated at three points in the pipeline &mdash; after position, after velocity, after force. That is not a convenience feature: a physically meaningful accelerometer or force/torque reading is only available <em>at the right stage</em>, and computing it afterwards from finite differences would be both wrong and noisy. For a robotics simulator the sensor set is part of the physics, not part of the application.</p>
+
+<h2>10. Integrators</h2>
+
+<table>
+  <tr><th>Integrator</th><th>Cost</th><th>Use when</th></tr>
+  <tr><td><code>Euler</code></td><td>1 evaluation</td><td>default; semi-implicit (position uses the <em>new</em> velocity)</td></tr>
+  <tr><td><code>RK4</code></td><td>4 evaluations</td><td>smooth systems, long-horizon energy conservation</td></tr>
+  <tr><td><code>implicitfast</code></td><td>1 + a Cholesky</td><td>damping, drag, stiff actuators &mdash; usually the best choice</td></tr>
+  <tr><td><code>implicit</code></td><td>1 + an LU</td><td>as above, plus fast-tumbling free bodies</td></tr>
+</table>
+
+<p>Implicit-in-velocity is worth understanding because it is cheap and it buys a lot. Instead of <code>v&larr;v+h&middot;a(v)</code>, it solves <code>v&larr;v+h&middot;a(v<sub>new</sub>)</code> by one Newton step, giving <code>(M &minus; hD)v<sub>new</sub> = &hellip;</code> where <code>D = &part;(forces)/&part;v</code>. Velocity-dependent forces &mdash; damping, fluid drag, velocity servos &mdash; stop being an explicit-integration stability hazard. You get to raise damping without lowering the timestep.</p>
+
+<h2>11. The pipeline</h2>
+
+<p class="lede">26 stages, strictly ordered, each consuming the last. The numbers are the point: this is a dependency chain, and the reason MuJoCo's API exposes <code>mj_step1</code>/<code>mj_step2</code> is so a controller can run between stage 19 and 20 &mdash; after everything derived from state, before anything derived from force.</p>
+
+<p class="legend">
+  <span style="color:var(--accent-gen)">&#9632; port into robot.zig</span>
+  <span style="color:var(--accent-color)">&#9632; reuse zimrphysics / zimrmath</span>
+  <span style="color:#6b5a4a">&#9632; out of scope</span>
+</p>
+
+<div class="spine">
+
+  <div class="phase-name">check</div>
+  <div class="stage"><div class="n">1</div><div class="what">validate <code>qpos</code>/<code>qvel</code> for divergence <span class="fn">mj_checkPos, mj_checkVel</span></div><div class="tag t-port">port</div></div>
+
+  <div class="phase-name">position &mdash; depends on q</div>
+  <div class="stage"><div class="n">2</div><div class="what">forward kinematics; normalize quaternions <span class="fn">mj_kinematics</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">3</div><div class="what">body inertias + joint axes in subtree-COM frames <span class="fn">mj_comPos</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">4</div><div class="what">deformable flex objects <span class="fn">mj_flex</span></div><div class="tag t-skip">skip</div></div>
+  <div class="stage"><div class="n">5</div><div class="what">tendon lengths and moment arms <span class="fn">mj_tendon</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">6</div><div class="what">composite rigid body &rarr; mass matrix M <span class="fn">mj_makeM</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">7</div><div class="what">sparse L<sup>T</sup>DL factorization of M <span class="fn">mj_factorM</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">8</div><div class="what">broad-phase + near-phase collision <span class="fn">mj_collision</span></div><div class="tag t-reuse">reuse</div></div>
+  <div class="stage"><div class="n">9</div><div class="what">build constraint Jacobian and residuals <span class="fn">mj_makeConstraint</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">10</div><div class="what">actuator lengths and moment arms <span class="fn">mj_transmission</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">11</div><div class="what">constraint-space matrices (A, R, a<sup>ref</sup>) <span class="fn">mj_projectConstraint</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">12</div><div class="what">position sensors, potential energy <span class="fn">mj_sensorPos</span></div><div class="tag t-port">port</div></div>
+
+  <div class="phase-name">velocity &mdash; depends on q and v</div>
+  <div class="stage"><div class="n">13</div><div class="what">tendon and actuator velocities <span class="fn">mj_fwdVelocity</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">14</div><div class="what">body velocities, joint-axis rates <span class="fn">mj_comVel</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">15</div><div class="what">passive forces: springs, dampers, fluid <span class="fn">mj_passive</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">16</div><div class="what">velocity sensors, kinetic energy <span class="fn">mj_sensorVel</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">17</div><div class="what">reference constraint acceleration <span class="fn">mj_referenceConstraint</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">18</div><div class="what">bias force c: Coriolis, centrifugal, gravity <span class="fn">mj_rne</span></div><div class="tag t-port">port</div></div>
+
+  <div class="phase-name">control &mdash; the user's hook</div>
+  <div class="stage"><div class="n">19</div><div class="what">control callback &mdash; everything above is known, no forces yet <span class="fn">mjcb_control</span></div><div class="tag t-port">port</div></div>
+
+  <div class="phase-name">force &rarr; acceleration</div>
+  <div class="stage"><div class="n">20</div><div class="what">actuator forces + activation dynamics <span class="fn">mj_fwdActuation</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">21</div><div class="what">unconstrained acceleration <span class="fn">mj_fwdAcceleration</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">22</div><div class="what">solve for constraint forces; correct acceleration <span class="fn">mj_fwdConstraint</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">23</div><div class="what">force/acceleration sensors <span class="fn">mj_sensorAcc</span></div><div class="tag t-port">port</div></div>
+
+  <div class="phase-name">advance</div>
+  <div class="stage"><div class="n">24</div><div class="what">check acceleration for divergence <span class="fn">mj_checkAcc</span></div><div class="tag t-port">port</div></div>
+  <div class="stage"><div class="n">25</div><div class="what">compare forward vs inverse (solver diagnostic) <span class="fn">mj_compareFwdInv</span></div><div class="tag t-skip">later</div></div>
+  <div class="stage"><div class="n">26</div><div class="what">integrate <span class="fn">mj_Euler / mj_RungeKutta / mj_implicit</span></div><div class="tag t-port">port</div></div>
+
+</div>
+
+<hr />
+
+<h2>12. Making it Zig, and making it zimr</h2>
+
+<p>A faithful transliteration of MuJoCo would be a mistake. Most of its complexity is a consequence of two constraints zimr does not have: it is C, and its models arrive as XML at runtime. Both facts force the same thing &mdash; <strong>everything must be dynamically sized, so everything becomes an index into a flat array with a runtime-built sparsity table</strong>. That is where <code>mjModel</code>'s 900 lines of parallel arrays come from.</p>
+
+<h3>The central bet: the model is comptime</h3>
+
+<p>A robot's <em>structure</em> does not change while it runs. Its tree, its joint types, <code>nq</code>, <code>nv</code>, and therefore the entire sparsity pattern of <code>M</code>, are all known before the program starts. Zig can know them at compile time.</p>
+
+<pre><code class="zig"><span class="tok-kw">const</span> Arm = robot.<span class="tok-fn">Model</span>(.{
+    .bodies = .{
+        .{ .name = <span class="tok-str">"base"</span>,     .parent = null,       .inertia = &amp;hellip; },
+        .{ .name = <span class="tok-str">"upper"</span>,    .parent = <span class="tok-str">"base"</span>,     .joint = .{ .hinge = .{ .axis = zm.<span class="tok-fn">vec3</span>(<span class="tok-num">0</span>,<span class="tok-num">0</span>,<span class="tok-num">1</span>) } } },
+        .{ .name = <span class="tok-str">"fore"</span>,     .parent = <span class="tok-str">"upper"</span>,    .joint = .{ .hinge = .{ .axis = zm.<span class="tok-fn">vec3</span>(<span class="tok-num">0</span>,<span class="tok-num">1</span>,<span class="tok-num">0</span>) } } },
+        .{ .name = <span class="tok-str">"hand"</span>,     .parent = <span class="tok-str">"fore"</span>,     .joint = .{ .ball = .{} } },
+    },
+    .actuators = .{
+        .{ .name = <span class="tok-str">"shoulder"</span>, .on = .{ .joint = <span class="tok-str">"upper"</span> }, .kind = .{ .position = .{ .kp = <span class="tok-num">40</span> } } },
+    },
+});
+
+<span class="tok-comment">// nq, nv and the sparsity of M are comptime constants of the TYPE.</span>
+<span class="tok-kw">var</span> data: Arm.Data = .init;          <span class="tok-comment">// fixed-size arrays. no allocator.</span>
+Arm.<span class="tok-fn">step</span>(&amp;data, dt);</code></pre>
+
+<p>What this buys, concretely:</p>
+<ul>
+  <li><strong>No allocator in the hot path, ever.</strong> <code>Data</code> is a plain struct of <code>[nv]f32</code>-shaped fields. It can live on the stack, in an arena, or in a GPU buffer.</li>
+  <li><strong>The sparsity tables disappear.</strong> MuJoCo carries <code>M_rownnz</code>, <code>M_rowadr</code>, <code>dof_parentid</code> and walks them at runtime. With a comptime tree, the ancestor chains are known and the CRB inner loop can be an <code>inline for</code> over exactly the nonzero entries. The sparse structure stops being data and becomes control flow.</li>
+  <li><strong>Wrong models fail at compile time.</strong> A parent that does not exist, an actuator on a missing joint, a ball joint given a 1-D gear &mdash; all <code>@compileError</code> with a message, not a runtime validation pass.</li>
+  <li><strong>It is the zimr house style already.</strong> Designated struct literals as the API, Options-structs, no builders. Compare <code>zp.createBody(world, .{ &hellip; })</code>: the same shape, one level more comptime.</li>
+</ul>
+
+<div class="note">
+<b>The escape hatch matters too.</b> Comptime models cannot come from a file at runtime, and eventually someone will want to load a URDF or an MJCF. The answer is not to abandon the comptime path but to keep <code>Data</code> and the algorithms generic over a <code>Model</code> <em>interface</em>, so a runtime-built model can implement the same shape at the cost of runtime-sized slices. Design for that from the start; build only the comptime path first.
+</div>
+
+<h3>Where robot.zig meets zimrphysics.zig</h3>
+
+<p>This is the hinge that makes the two feel like one library rather than two. MuJoCo contains a whole collision engine &mdash; GJK, box-box, convex, height fields, SDFs, broad-phase. <strong>zimrphysics already has all of that</strong>, device-tested, and it is the single largest chunk of MuJoCo by volume.</p>
+
+<p>So robot.zig should not port collision at all. It should consume it:</p>
+
+<pre><code class="zig"><span class="tok-comment">// zimrphysics owns: shapes, GJK/SAT, the BVH broad-phase, manifolds.</span>
+<span class="tok-comment">// robot.zig owns:   the tree, M, c, J, actuators, the constraint solve.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The seam is one function: a contact manifold in, constraint rows out.</span>
+<span class="tok-kw">const</span> contacts = zp.<span class="tok-fn">collideAll</span>(&amp;scene, robot_geom_poses, scratch);
+robot.<span class="tok-fn">addContactConstraints</span>(&amp;data, contacts);</code></pre>
+
+<p>The same seam works in the other direction later: a robot can be an <em>actor</em> in a zimrphysics world, pushing loose objects around, with the robot solved in generalized coordinates and the debris solved in maximal ones. That is a genuinely good architecture and it is what most robotics stacks converge on anyway.</p>
+
+<p>Likewise <code>zimrmath</code> already provides <code>Vec</code>, <code>Quat</code>, <code>Mat</code>, and the quaternion vocabulary. robot.zig adds only what is missing: <strong>spatial (6D) motion and force vectors</strong>, and the 10-parameter inertia. Those are genuinely new &mdash; and they belong in robot.zig rather than zimrmath, because zimrmath is shader-safe and must stay small.</p>
+
+<h3>Naming and idiom</h3>
+
+<p>MuJoCo's names are terse C (<code>qfrc_bias</code>, <code>cdof</code>, <code>efc_J</code>). zimr's rules say otherwise. A translation table, applied consistently:</p>
+
+<table>
+  <tr><th>MuJoCo</th><th>robot.zig</th><th>why</th></tr>
+  <tr><td><code>d->qpos</code>, <code>d->qvel</code></td><td><code>data.pos</code>, <code>data.vel</code></td><td>the <code>q</code> prefix meant "generalized" in a C namespace that had no namespaces</td></tr>
+  <tr><td><code>d->qfrc_bias</code></td><td><code>data.bias_force</code></td><td>spell words; the linter enforces it</td></tr>
+  <tr><td><code>d->qacc</code></td><td><code>data.acc</code></td><td>&nbsp;</td></tr>
+  <tr><td><code>d->efc_*</code></td><td><code>data.constraint.*</code></td><td>a struct, not a prefix</td></tr>
+  <tr><td><code>mj_step(m,d)</code></td><td><code>Robot.step(&amp;data, dt)</code></td><td>model is the type; free fn on the namespace, like zimrphysics</td></tr>
+  <tr><td><code>solref/solimp</code></td><td><code>.softness = .{ .time_const_s, .damp_ratio }</code></td><td>named units; zimr rule 13 &mdash; options struct, not a float array</td></tr>
+  <tr><td>angles in radians</td><td><code>_rad</code> suffix</td><td>zimr's radians sweep; non-negotiable</td></tr>
+</table>
+
+<h3>Three ideas that are more natural in zimr than in MuJoCo</h3>
+
+<ol>
+  <li><strong>The control hook is a comptime function, not a callback pointer.</strong> MuJoCo's <code>mjcb_control</code> is a global function pointer &mdash; a mutable module global, which zimr bans outright. Passing the controller as a comptime parameter to <code>step</code> is faster <em>and</em> legal: it inlines, and there is no global.</li>
+  <li><strong>CPU/GPU duality is already a zimr pattern.</strong> MJX exists because batched rollouts on an accelerator are the whole game for modern robot learning. zimr has kompute and a comptime-shaped <code>Data</code> struct that maps directly onto a GPU buffer, and a house tradition of side-by-side CPU|GPU demos. A batched rollout demo is a natural flagship, not a stretch.</li>
+  <li><strong>Determinism is testable headlessly.</strong> This whole subsystem is pure CPU maths with no device dependency &mdash; the rarest thing in zimr. Every algorithm here can be pinned by a host test, and the strongest tests are the physical invariants: energy conservation under RK4 with no damping, momentum conservation for a free body, and <em>forward-then-inverse dynamics round-tripping to the original force</em>. That last one is a complete self-check of M, c and J at once, and MuJoCo ships it as a diagnostic (stage 25) precisely because it is so sharp.</li>
+</ol>
+
+<h2>13. The build plan for robot.zig</h2>
+
+<p>Ordered so that every phase ends somewhere demonstrable, and each one is verifiable on the host before the next begins.</p>
+
+<table>
+  <tr><th>#</th><th>Phase</th><th>Ends when</th></tr>
+  <tr><td>0</td><td>Spatial algebra: 6D motion/force vectors, 10-param inertia, the comptime <code>Model</code> and generated <code>Data</code></td><td><code>nq</code>/<code>nv</code> and the ancestor chains are comptime constants; a bad model is a compile error</td></tr>
+  <tr><td>1</td><td>Forward kinematics + COM frames</td><td>a 3-link arm's tip lands where a hand-computed transform says it should</td></tr>
+  <tr><td>2</td><td>CRB mass matrix + L<sup>T</sup>DL factor/solve</td><td><code>M</code> matches a dense reference; <code>M&middot;M<sup>-1</sup>x = x</code></td></tr>
+  <tr><td>3</td><td>RNE bias forces + semi-implicit Euler + RK4</td><td>a double pendulum swings, and conserves energy under RK4 to a tight bound</td></tr>
+  <tr><td>4</td><td>Jacobians (body, site, joint)</td><td>finite-difference agreement to 1e-5 &mdash; the cheapest strong test in the whole project</td></tr>
+  <tr><td>5</td><td>Actuators: transmission, affine gain/bias, activation dynamics</td><td>a position servo holds a load against gravity with the expected steady-state error</td></tr>
+  <tr><td>6</td><td>Soft constraints: joint limits + equality, impedance/<code>aref</code>, the convex solve</td><td>a joint stops at its limit with the softness the model asked for</td></tr>
+  <tr><td>7</td><td>Contacts via the zimrphysics seam</td><td>the arm pushes a zimrphysics box across a table</td></tr>
+  <tr><td>8</td><td>Tendons (fixed first, spatial after)</td><td>a differential drive from two joints and two tendon actuators</td></tr>
+  <tr><td>9</td><td>Sensors + inverse dynamics + the fwd/inv round-trip check</td><td>stage 25's diagnostic passes on every example model</td></tr>
+  <tr><td>10</td><td><code>implicitfast</code> integrator</td><td>a heavily damped model stays stable at a timestep that explodes under Euler</td></tr>
+</table>
+
+<p>Phases 0&ndash;4 are the irreducible core and are worth having even if nothing after them is ever built: they are what turns zimr from "a game physics engine" into "a thing that can simulate a robot arm correctly".</p>
+
+<h3>What is deliberately not in robot.zig</h3>
+<ul>
+  <li><strong>Collision detection</strong> &mdash; zimrphysics owns it. This is the point.</li>
+  <li><strong>XML / MJCF / URDF parsing</strong> &mdash; the model is Zig. A loader can come later, as a generator that emits Zig source.</li>
+  <li><strong>Deformables (flex), SDF collision, plugins, muscles</strong> &mdash; large, specialized, and not on the path to a working robot.</li>
+  <li><strong>Rendering</strong> &mdash; zimr already draws; the robot is just poses.</li>
+</ul>
+
+<h2>14. The one risk worth naming up front</h2>
+
+<p>The soft constraint solver (phase 6) is the part that looks small in the equations and is not. MuJoCo's <code>engine_core_constraint.c</code> is 3,500 lines, it has four solver algorithms, two friction cone types, and the <code>Â</code> diagonal approximation that makes <code>solref</code> behave sanely across mass scales. Everything before it is textbook and well-conditioned; this is the part with the taste in it.</p>
+
+<p>The mitigation is ordering, and it is already in the plan: phases 0&ndash;5 produce a genuinely useful articulated-body simulator <em>with no constraint solver at all</em> &mdash; forward and inverse dynamics, Jacobians, actuators, integrators. A robot arm moving under torque control needs none of phase 6. Start the solver with a single algorithm (projected Gauss-Seidel over a pyramidal cone), get joint limits working, and only reach for the elliptic cone and the Newton solver if something demands it.</p>
+
+<p class="foot">
+Sources: MuJoCo <code>doc/computation/index.rst</code> (the authoritative algorithm description), <code>src/engine/engine_core_smooth.c</code>, <code>engine_core_constraint.c</code>, <code>engine_forward.c</code>, <code>include/mujoco/mjtype.h</code>, <code>mjmodel.h</code>, <code>mjdata.h</code>, and the <code>model/car</code> and <code>model/humanoid</code> examples. Read alongside <code>src/zimrphysics.zig</code>'s CharacterVirtual header for the house conventions on porting an upstream engine and recording the divergences.
+</p>
+
+</div>
+</body>
+</html>

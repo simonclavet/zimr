@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>robot_sidebyside — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>robot_sidebyside</h1>
+<figure class="code src-file" data-path="examples/robot_sidebyside/robot_sidebyside.zig" data-lines="483"><figcaption><span>examples/robot_sidebyside/robot_sidebyside.zig</span><span>483 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! robot_sidebyside - the same double pendulum, simulated two ways.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! * THIS IS THE ARGUMENT FOR THE WHOLE PORT, ON ONE SCREEN.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! LEFT: zimrphysics. Two rigid bodies, each carrying a full pose in world space, held</span>
+<span class="tok-comment">//! together by revolute constraints that a solver enforces every step.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! RIGHT: robot.zig. Two numbers. The joints are not enforced - they are the coordinates,</span>
+<span class="tok-comment">//! so there is nothing to violate.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Both start from the same state, with the same masses, at the same timestep. The readout</span>
+<span class="tok-comment">//! measures how far each engine's joints have come apart: the distance between the two</span>
+<span class="tok-comment">//! points that a joint says must coincide. On the right it is **exactly zero, forever**,</span>
+<span class="tok-comment">//! and no amount of speed or stiffness changes that. On the left it is a small number that</span>
+<span class="tok-comment">//! wanders, and grows when you make the problem harder.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- BE FAIR TO THE LEFT --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! zimrphysics is not losing. It is doing something different, and doing it well: for a</span>
+<span class="tok-comment">//! thousand loose crates, maximal coordinates are the right model, they parallelise, and a</span>
+<span class="tok-comment">//! millimetre of joint error is invisible. What this demo shows is a SPECIFIC TRADE, not a</span>
+<span class="tok-comment">//! verdict - and the trade only matters when error accumulates down a chain, which is</span>
+<span class="tok-comment">//! exactly what a robot arm is. A millimetre at the shoulder is centimetres at the hand.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> zp = z.zimrphysics;
+<span class="tok-kw">const</span> rbt = z.robot;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> vec2 = zm.vec2;
+<span class="tok-kw">const</span> rotate = zm.rotate;
+<span class="tok-kw">const</span> length3 = zm.length3;
+<span class="tok-kw">const</span> float = zm.float;
+
+<span class="tok-comment">// ---- One set of numbers, used to build BOTH models ----</span>
+<span class="tok-comment">// Shared deliberately: if the two engines were given even slightly different masses or</span>
+<span class="tok-comment">// lengths the comparison would be meaningless, and the difference would be invisible.</span>
+<span class="tok-kw">const</span> upper_half: f32 = <span class="tok-num">0.22</span>;
+<span class="tok-kw">const</span> lower_half: f32 = <span class="tok-num">0.18</span>;
+<span class="tok-kw">const</span> link_radius: f32 = <span class="tok-num">0.045</span>;
+<span class="tok-kw">const</span> density: f32 = <span class="tok-num">1000.0</span>;
+<span class="tok-kw">const</span> timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">240.0</span>;
+<span class="tok-comment">/// Both start here, well away from vertical so the motion is vigorous.</span>
+<span class="tok-kw">const</span> start_shoulder: f32 = <span class="tok-num">2.3</span>;
+<span class="tok-kw">const</span> start_elbow: f32 = -<span class="tok-num">1.5</span>;
+
+<span class="tok-kw">const</span> Pendulum = rbt.<span class="tok-fn">Spec</span>(.{
+    .bodies = &amp;.{
+        .{
+            .name = <span class="tok-str">"upper"</span>,
+            .joints = &amp;.{.{ .name = <span class="tok-str">"shoulder"</span>, .kind = .hinge, .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>), .armature = <span class="tok-num">0</span> }},
+            .geoms = &amp;.{.{
+                .shape = .{ .capsule = .{ .half_height = upper_half, .radius = link_radius } },
+                .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -upper_half, <span class="tok-num">0</span>),
+                .density = density,
+            }},
+        },
+        .{
+            .name = <span class="tok-str">"lower"</span>,
+            .parent = <span class="tok-str">"upper"</span>,
+            .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * upper_half, <span class="tok-num">0</span>),
+            .joints = &amp;.{.{ .name = <span class="tok-str">"elbow"</span>, .kind = .hinge, .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>), .armature = <span class="tok-num">0</span> }},
+            .geoms = &amp;.{.{
+                .shape = .{ .capsule = .{ .half_height = lower_half, .radius = link_radius } },
+                .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -lower_half, <span class="tok-num">0</span>),
+                .density = density,
+            }},
+        },
+    },
+    .options = .{ .timestep = timestep },
+});
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">31</span>, .g = <span class="tok-num">20</span>, .b = <span class="tok-num">14</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> panel: Color = .{ .r = <span class="tok-num">51</span>, .g = <span class="tok-num">34</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> maximal: Color = .{ .r = <span class="tok-num">211</span>, .g = <span class="tok-num">95</span>, .b = <span class="tok-num">51</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> generalized: Color = .{ .r = <span class="tok-num">79</span>, .g = <span class="tok-num">179</span>, .b = <span class="tok-num">165</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> text_col: Color = .{ .r = <span class="tok-num">240</span>, .g = <span class="tok-num">230</span>, .b = <span class="tok-num">210</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> dim_col: Color = .{ .r = <span class="tok-num">168</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">132</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> alarm: Color = .{ .r = <span class="tok-num">232</span>, .g = <span class="tok-num">120</span>, .b = <span class="tok-num">92</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    font: z.Font,
+
+    <span class="tok-comment">// ---- right: generalized coordinates ----</span>
+    model: rbt.Model,
+    data: rbt.Data,
+
+    <span class="tok-comment">// ---- left: maximal coordinates ----</span>
+    world: zp.World,
+    upper: zp.BodyHandle,
+    lower: zp.BodyHandle,
+
+    accumulator: f32,
+    elapsed: f32,
+    <span class="tok-comment">/// Worst joint-anchor error seen on each side since the last reset. The WORST rather</span>
+    <span class="tok-comment">/// than the current, because the instantaneous value flickers and the honest question</span>
+    <span class="tok-comment">/// is how bad it ever gets.</span>
+    worst_maximal: f32,
+    worst_generalized: f32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">reset</span>(self: *State) !void {
+        self.data.<span class="tok-fn">reset</span>(&amp;self.model);
+        self.data.<span class="tok-fn">setJointPos</span>(&amp;self.model, Pendulum.Joint.shoulder, start_shoulder);
+        self.data.<span class="tok-fn">setJointPos</span>(&amp;self.model, Pendulum.Joint.elbow, start_elbow);
+        rbt.<span class="tok-fn">forward</span>(&amp;self.model, &amp;self.data);
+
+        <span class="tok-comment">// Place the maximal bodies at exactly where the generalized model says its links</span>
+        <span class="tok-comment">// are. Deriving the left side's initial pose FROM the right side is the only way to</span>
+        <span class="tok-comment">// be sure both start from the same configuration rather than from two independent</span>
+        <span class="tok-comment">// transcriptions of the same intent.</span>
+        <span class="tok-kw">try</span> self.<span class="tok-fn">placeBody</span>(self.upper, <span class="tok-num">1</span>);
+        <span class="tok-kw">try</span> self.<span class="tok-fn">placeBody</span>(self.lower, <span class="tok-num">2</span>);
+
+        self.accumulator = <span class="tok-num">0</span>;
+        self.elapsed = <span class="tok-num">0</span>;
+        self.worst_maximal = <span class="tok-num">0</span>;
+        self.worst_generalized = <span class="tok-num">0</span>;
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">placeBody</span>(self: *State, handle: zp.BodyHandle, link: u32) !void {
+        <span class="tok-kw">const</span> idx: zp.BodyIndex = handle.<span class="tok-fn">index</span>();
+        <span class="tok-comment">// The robot's body origin is the link's top; the physics body's shape is centred on</span>
+        <span class="tok-comment">// its own origin, so offset by half a link down the link's own axis.</span>
+        <span class="tok-kw">const</span> half: f32 = <span class="tok-kw">if</span> (link == <span class="tok-num">1</span>) upper_half <span class="tok-kw">else</span> lower_half;
+        <span class="tok-kw">const</span> centre: Vec = self.data.body_xpos[link] +
+            <span class="tok-fn">rotate</span>(self.data.body_xrot[link], <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -half, <span class="tok-num">0</span>));
+        <span class="tok-kw">try</span> self.world.<span class="tok-fn">setTransform</span>(self.gpa, idx, centre, self.data.body_xrot[link]);
+        <span class="tok-kw">try</span> self.world.<span class="tok-fn">setLinearVelocity</span>(self.gpa, handle, zm.vec_zero);
+        <span class="tok-kw">try</span> self.world.<span class="tok-fn">setAngularVelocity</span>(self.gpa, handle, zm.vec_zero);
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{
+        .gpa = gpa,
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>),
+        .model = <span class="tok-kw">try</span> Pendulum.<span class="tok-fn">build</span>(gpa),
+        .data = undefined,
+        .world = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(gpa, <span class="tok-num">16</span>),
+        .upper = undefined,
+        .lower = undefined,
+        .accumulator = <span class="tok-num">0</span>,
+        .elapsed = <span class="tok-num">0</span>,
+        .worst_maximal = <span class="tok-num">0</span>,
+        .worst_generalized = <span class="tok-num">0</span>,
+    };
+    s.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;s.model);
+    s.world.gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">9.81</span>, <span class="tok-num">0</span>);
+
+    <span class="tok-kw">const</span> upper_shape: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{
+        .capsule = .{ .half_height = upper_half, .radius = link_radius },
+    });
+    <span class="tok-kw">const</span> lower_shape: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{
+        .capsule = .{ .half_height = lower_half, .radius = link_radius },
+    });
+    s.upper = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{
+        .shape = upper_shape,
+        .position = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -upper_half, <span class="tok-num">0</span>),
+        .motion_type = .dynamic,
+        .density = density,
+        <span class="tok-comment">// The links must not collide with each other - they overlap at the joint by</span>
+        <span class="tok-comment">// construction, and a contact there would be an artefact of the discretisation</span>
+        <span class="tok-comment">// rather than physics. A shared group is how zimrphysics says "same assembly".</span>
+        .group_id = <span class="tok-num">1</span>,
+    });
+    s.lower = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{
+        .shape = lower_shape,
+        .position = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * upper_half - lower_half, <span class="tok-num">0</span>),
+        .motion_type = .dynamic,
+        .density = density,
+        .group_id = <span class="tok-num">1</span>,
+    });
+
+    <span class="tok-comment">// An immovable anchor for the shoulder. zimrphysics has no implicit world body, so the</span>
+    <span class="tok-comment">// pivot has to be a real static body - which is itself a small illustration of the</span>
+    <span class="tok-comment">// difference: on the generalized side the world is body 0 and needs no representation.</span>
+    <span class="tok-kw">const</span> anchor_shape: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{ .sphere = .{ .radius = <span class="tok-num">0.01</span> } });
+    <span class="tok-kw">const</span> anchor: zp.BodyHandle = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{
+        .shape = anchor_shape,
+        .position = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>),
+        .motion_type = .static,
+        .group_id = <span class="tok-num">1</span>,
+    });
+
+    <span class="tok-comment">// The two revolute joints, at exactly the anchors the generalized model uses.</span>
+    <span class="tok-kw">try</span> zp.<span class="tok-fn">createRevoluteJoint</span>(&amp;s.world, anchor, s.upper, .{
+        .anchor = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>),
+        .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+    });
+    <span class="tok-kw">try</span> zp.<span class="tok-fn">createRevoluteJoint</span>(&amp;s.world, s.upper, s.lower, .{
+        .anchor = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * upper_half, <span class="tok-num">0</span>),
+        .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+    });
+
+    <span class="tok-kw">try</span> s.<span class="tok-fn">reset</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.world.<span class="tok-fn">deinit</span>(gpa);
+    s.data.<span class="tok-fn">deinit</span>();
+    s.model.<span class="tok-fn">deinit</span>();
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+}
+
+<span class="tok-comment">/// The same measurement on the generalized side.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Reads the elbow twice - once as the parent's far end, once as the child's origin - and</span>
+<span class="tok-comment">/// returns the distance between them, exactly as the maximal version does. The answer is</span>
+<span class="tok-comment">/// structurally zero, because `kinematics` computes the child's origin FROM the parent's</span>
+<span class="tok-comment">/// pose, so the two expressions are the same number by construction.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Computed rather than printed as a constant. A hardcoded zero would be a claim; this is a</span>
+<span class="tok-comment">/// measurement that happens to be zero, and if a future change to `kinematics` ever broke</span>
+<span class="tok-comment">/// the property, this readout would say so.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">generalizedJointError</span>(s: *<span class="tok-kw">const</span> State) f32 {
+    <span class="tok-kw">const</span> from_parent: Vec = s.data.body_xpos[<span class="tok-num">1</span>] +
+        <span class="tok-fn">rotate</span>(s.data.body_xrot[<span class="tok-num">1</span>], <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * upper_half, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> from_child: Vec = s.data.body_xpos[<span class="tok-num">2</span>];
+    <span class="tok-kw">return</span> <span class="tok-fn">length3</span>(from_parent - from_child);
+}
+
+<span class="tok-comment">/// How far apart the two points a joint says must coincide have actually drifted.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// For the maximal side this is a real measurement: each body carries an independent pose,</span>
+<span class="tok-comment">/// and the constraint holds them together only to the solver's tolerance. For the</span>
+<span class="tok-comment">/// generalized side it is a formality - the shared point is computed once from the parent</span>
+<span class="tok-comment">/// and inherited by the child, so it cannot differ from itself. Measuring both the same way</span>
+<span class="tok-comment">/// is the point: the number on the right is zero because of what it IS, not because it was</span>
+<span class="tok-comment">/// specially handled.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">maximalJointError</span>(s: *<span class="tok-kw">const</span> State) f32 {
+    <span class="tok-kw">const</span> upper: *<span class="tok-kw">const</span> zp.Body = &amp;s.world.bodies.data[s.upper.<span class="tok-fn">index</span>()];
+    <span class="tok-kw">const</span> lower: *<span class="tok-kw">const</span> zp.Body = &amp;s.world.bodies.data[s.lower.<span class="tok-fn">index</span>()];
+    <span class="tok-comment">// The elbow, as each body believes it to be.</span>
+    <span class="tok-kw">const</span> from_upper: Vec = upper.com_pos + <span class="tok-fn">rotate</span>(upper.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -upper_half, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> from_lower: Vec = lower.com_pos + <span class="tok-fn">rotate</span>(lower.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, lower_half, <span class="tok-num">0</span>));
+    <span class="tok-kw">return</span> <span class="tok-fn">length3</span>(from_upper - from_lower);
+}
+
+<span class="tok-comment">/// How much to scale text and spacing for this viewport.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * NOT A COSMETIC KNOB. A standalone build renders into a canvas at DEVICE resolution: a</span>
+<span class="tok-comment">/// phone whose CSS width is 400 gives a canvas around 1080 pixels wide, so a font asked for</span>
+<span class="tok-comment">/// at 13 "pixels" arrives about four CSS pixels tall and is genuinely unreadable. The in-app</span>
+<span class="tok-comment">/// viewer hides this by rendering smaller; open the same file in a browser full-screen and</span>
+<span class="tok-comment">/// the labels vanish.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Scaling against the viewport's SMALLER dimension is resolution-independent - it makes a</span>
+<span class="tok-comment">/// glyph a fixed fraction of the screen rather than a fixed count of pixels - and gives sane</span>
+<span class="tok-comment">/// results on a desktop window and a phone alike, without needing the device pixel ratio,</span>
+<span class="tok-comment">/// which is not exposed here.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">uiScale</span>(w: f32, h: f32) f32 {
+    <span class="tok-kw">return</span> <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, <span class="tok-builtin">@min</span>(w, h) / <span class="tok-num">450.0</span>);
+}
+
+<span class="tok-comment">/// Where each panel sits and how big it is.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Side by side when the window is wide, STACKED when it is tall. A phone in portrait is</span>
+<span class="tok-comment">/// roughly 1:2, and forcing two panels across it leaves each one narrower than the pendulum</span>
+<span class="tok-comment">/// is long - so the arms overrun the divider and the two readouts collide. Choosing the</span>
+<span class="tok-comment">/// axis from the aspect ratio costs one branch and is the difference between a demo that</span>
+<span class="tok-comment">/// reads on the device it is looked at on and one that does not.</span>
+<span class="tok-kw">const</span> Layout = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// Panel centres in pixels, and the metres-to-pixels scale they share.</span>
+    origin: [<span class="tok-num">2</span>]Vec2,
+    scale: f32,
+    <span class="tok-comment">/// Where each panel's readout line goes.</span>
+    label: [<span class="tok-num">2</span>]Vec2,
+    stacked: bool,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">fit</span>(w: f32, h: f32) Layout {
+        <span class="tok-kw">const</span> ui: f32 = <span class="tok-fn">uiScale</span>(w, h);
+        <span class="tok-kw">const</span> top: f32 = <span class="tok-num">112</span> * ui; <span class="tok-comment">// headroom for the title block</span>
+        <span class="tok-kw">const</span> bottom: f32 = <span class="tok-num">80</span> * ui; <span class="tok-comment">// the reset button and clock</span>
+        <span class="tok-kw">const</span> usable_h: f32 = <span class="tok-builtin">@max</span>(h - top - bottom, <span class="tok-num">120</span>);
+        <span class="tok-kw">const</span> stacked: bool = h &gt; w * <span class="tok-num">1.15</span>;
+        <span class="tok-comment">// The pendulum reaches `reach` metres from its pivot, and hangs DOWNWARD, so what</span>
+        <span class="tok-comment">// must fit is the half-width sideways and the full reach below.</span>
+        <span class="tok-kw">const</span> reach: f32 = <span class="tok-num">2.0</span> * (upper_half + lower_half);
+        <span class="tok-kw">if</span> (stacked) {
+            <span class="tok-kw">const</span> cell: f32 = usable_h * <span class="tok-num">0.5</span>;
+            <span class="tok-kw">const</span> scale: f32 = <span class="tok-builtin">@min</span>(w * <span class="tok-num">0.42</span>, cell * <span class="tok-num">0.40</span>) / reach;
+            <span class="tok-kw">return</span> .{
+                .origin = .{
+                    <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.5</span>, top + cell * <span class="tok-num">0.32</span>),
+                    <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.5</span>, top + cell + cell * <span class="tok-num">0.32</span>),
+                },
+                .scale = scale,
+                .label = .{
+                    <span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, top + cell * <span class="tok-num">0.94</span>),
+                    <span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, top + cell + cell * <span class="tok-num">0.94</span>),
+                },
+                .stacked = true,
+            };
+        }
+        <span class="tok-kw">const</span> scale: f32 = <span class="tok-builtin">@min</span>(w * <span class="tok-num">0.20</span>, usable_h * <span class="tok-num">0.34</span>) / reach;
+        <span class="tok-kw">return</span> .{
+            .origin = .{ <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.27</span>, top + usable_h * <span class="tok-num">0.30</span>), <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.73</span>, top + usable_h * <span class="tok-num">0.30</span>) },
+            .scale = scale,
+            .label = .{ <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.04</span>, top - <span class="tok-num">14</span> * ui), <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.52</span>, top - <span class="tok-num">14</span> * ui) },
+            .stacked = false,
+        };
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">toScreen</span>(self: Layout, side: usize, p: Vec2) Vec2 {
+        <span class="tok-kw">const</span> o: Vec2 = self.origin[side];
+        <span class="tok-kw">return</span> <span class="tok-fn">vec2</span>(o[<span class="tok-num">0</span>] + p[<span class="tok-num">0</span>] * self.scale, o[<span class="tok-num">1</span>] - p[<span class="tok-num">1</span>] * self.scale);
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-fn">float</span>(f.window.screen_width);
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-fn">float</span>(f.window.screen_height);
+
+    s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+    <span class="tok-kw">while</span> (s.accumulator &gt;= timestep) : (s.accumulator -= timestep) {
+        zp.<span class="tok-fn">step</span>(&amp;s.world, timestep) <span class="tok-kw">catch</span> |err| {
+            zm.<span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"zimrphysics step failed: {t}"</span>, .{err});
+        };
+        rbt.<span class="tok-fn">step</span>(&amp;s.model, &amp;s.data);
+        s.elapsed += timestep;
+        s.worst_maximal = <span class="tok-builtin">@max</span>(s.worst_maximal, <span class="tok-fn">maximalJointError</span>(s));
+        s.worst_generalized = <span class="tok-builtin">@max</span>(s.worst_generalized, <span class="tok-fn">generalizedJointError</span>(s));
+    }
+    rbt.<span class="tok-fn">forward</span>(&amp;s.model, &amp;s.data);
+
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-kw">const</span> ui: f32 = <span class="tok-fn">uiScale</span>(w, h);
+    <span class="tok-kw">const</span> layout: Layout = .<span class="tok-fn">fit</span>(w, h);
+    <span class="tok-comment">// The divider runs across the split, whichever way it goes.</span>
+    <span class="tok-kw">if</span> (layout.stacked) {
+        <span class="tok-kw">const</span> mid: f32 = (layout.origin[<span class="tok-num">0</span>][<span class="tok-num">1</span>] + layout.origin[<span class="tok-num">1</span>][<span class="tok-num">1</span>]) * <span class="tok-num">0.5</span> + <span class="tok-num">20</span>;
+        gl.<span class="tok-fn">line</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">20</span>, mid), <span class="tok-fn">vec2</span>(w - <span class="tok-num">20</span>, mid), .{ .color = panel, .thickness = <span class="tok-num">2</span> * ui });
+    } <span class="tok-kw">else</span> {
+        gl.<span class="tok-fn">line</span>(<span class="tok-fn">vec2</span>(w * <span class="tok-num">0.5</span>, <span class="tok-num">104</span> * ui), <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.5</span>, h - <span class="tok-num">62</span> * ui), .{ .color = panel, .thickness = <span class="tok-num">2</span> * ui });
+    }
+
+    <span class="tok-comment">// ---- left: maximal ----</span>
+    {
+        <span class="tok-kw">const</span> upper: *<span class="tok-kw">const</span> zp.Body = &amp;s.world.bodies.data[s.upper.<span class="tok-fn">index</span>()];
+        <span class="tok-kw">const</span> lower: *<span class="tok-kw">const</span> zp.Body = &amp;s.world.bodies.data[s.lower.<span class="tok-fn">index</span>()];
+        <span class="tok-kw">const</span> pivot: Vec = upper.com_pos + <span class="tok-fn">rotate</span>(upper.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, upper_half, <span class="tok-num">0</span>));
+        <span class="tok-kw">const</span> elbow: Vec = upper.com_pos + <span class="tok-fn">rotate</span>(upper.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -upper_half, <span class="tok-num">0</span>));
+        <span class="tok-kw">const</span> elbow_b: Vec = lower.com_pos + <span class="tok-fn">rotate</span>(lower.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, lower_half, <span class="tok-num">0</span>));
+        <span class="tok-kw">const</span> tip: Vec = lower.com_pos + <span class="tok-fn">rotate</span>(lower.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -lower_half, <span class="tok-num">0</span>));
+        <span class="tok-comment">// Drawn as TWO separate links from each body's own pose, deliberately. Where they</span>
+        <span class="tok-comment">// fail to meet is the joint error, visible as a kink at the elbow - the readout's</span>
+        <span class="tok-comment">// number, made geometric.</span>
+        gl.<span class="tok-fn">line</span>(
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">0</span>, <span class="tok-fn">vec2</span>(pivot[<span class="tok-num">0</span>], pivot[<span class="tok-num">1</span>])),
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">0</span>, <span class="tok-fn">vec2</span>(elbow[<span class="tok-num">0</span>], elbow[<span class="tok-num">1</span>])),
+            .{ .color = maximal, .thickness = <span class="tok-num">9</span> * ui },
+        );
+        gl.<span class="tok-fn">line</span>(
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">0</span>, <span class="tok-fn">vec2</span>(elbow_b[<span class="tok-num">0</span>], elbow_b[<span class="tok-num">1</span>])),
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">0</span>, <span class="tok-fn">vec2</span>(tip[<span class="tok-num">0</span>], tip[<span class="tok-num">1</span>])),
+            .{ .color = maximal, .thickness = <span class="tok-num">9</span> * ui },
+        );
+        gl.<span class="tok-fn">circle</span>(layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">0</span>, <span class="tok-fn">vec2</span>(tip[<span class="tok-num">0</span>], tip[<span class="tok-num">1</span>])), <span class="tok-num">6</span> * ui, .{ .color = maximal });
+        gl.<span class="tok-fn">circle</span>(layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">0</span>, <span class="tok-fn">vec2</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>)), <span class="tok-num">6</span> * ui, .{ .color = dim_col });
+    }
+
+    <span class="tok-comment">// ---- right: generalized ----</span>
+    {
+        <span class="tok-kw">const</span> elbow: Vec = s.data.body_xpos[<span class="tok-num">2</span>];
+        <span class="tok-kw">const</span> tip: Vec = s.data.body_xpos[<span class="tok-num">2</span>] + <span class="tok-fn">rotate</span>(s.data.body_xrot[<span class="tok-num">2</span>], <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * lower_half, <span class="tok-num">0</span>));
+        gl.<span class="tok-fn">line</span>(
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">1</span>, <span class="tok-fn">vec2</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>)),
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">1</span>, <span class="tok-fn">vec2</span>(elbow[<span class="tok-num">0</span>], elbow[<span class="tok-num">1</span>])),
+            .{ .color = generalized, .thickness = <span class="tok-num">9</span> * ui },
+        );
+        gl.<span class="tok-fn">line</span>(
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">1</span>, <span class="tok-fn">vec2</span>(elbow[<span class="tok-num">0</span>], elbow[<span class="tok-num">1</span>])),
+            layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">1</span>, <span class="tok-fn">vec2</span>(tip[<span class="tok-num">0</span>], tip[<span class="tok-num">1</span>])),
+            .{ .color = generalized, .thickness = <span class="tok-num">9</span> * ui },
+        );
+        gl.<span class="tok-fn">circle</span>(layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">1</span>, <span class="tok-fn">vec2</span>(tip[<span class="tok-num">0</span>], tip[<span class="tok-num">1</span>])), <span class="tok-num">6</span> * ui, .{ .color = generalized });
+        gl.<span class="tok-fn">circle</span>(layout.<span class="tok-fn">toScreen</span>(<span class="tok-num">1</span>, <span class="tok-fn">vec2</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>)), <span class="tok-num">6</span> * ui, .{ .color = dim_col });
+    }
+
+    <span class="tok-comment">// ---- the readout, which is the actual content ----</span>
+    gl.<span class="tok-fn">text</span>(
+        <span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">30</span> * ui),
+        <span class="tok-str">"the same pendulum, twice"</span>,
+        .{ .size = <span class="tok-num">20</span> * ui, .color = text_col, .font = &amp;s.font },
+    );
+    gl.<span class="tok-fn">text</span>(
+        <span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">56</span> * ui),
+        <span class="tok-str">"compare the JOINT ERROR, not the pose"</span>,
+        .{ .size = <span class="tok-num">13</span> * ui, .color = text_col, .font = &amp;s.font },
+    );
+    <span class="tok-comment">// * Said outright, because without it the demo looks like it is failing. A double</span>
+    <span class="tok-comment">// pendulum is CHAOTIC: any difference between two simulations - and there will always be</span>
+    <span class="tok-comment">// one, since the two engines discretise differently - is amplified exponentially, so</span>
+    <span class="tok-comment">// within seconds the arms are in visibly different poses. That is correct rather than a</span>
+    <span class="tok-comment">// discrepancy to fix. The claim this demo makes is about how far each engine's own</span>
+    <span class="tok-comment">// joints have come apart, which is a property of the METHOD and not of the trajectory.</span>
+    gl.<span class="tok-fn">text</span>(
+        <span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">80</span> * ui),
+        <span class="tok-str">"they drift apart - chaos amplifies any difference. expected."</span>,
+        .{ .size = <span class="tok-num">11</span> * ui, .color = dim_col, .font = &amp;s.font },
+    );
+
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">128</span>]u8 = undefined;
+    <span class="tok-kw">const</span> maximal_now: f32 = <span class="tok-fn">maximalJointError</span>(s);
+    <span class="tok-kw">const</span> left_line: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(
+        &amp;buf,
+        <span class="tok-str">"ENFORCED by a solver: error {d:.6} m  (worst {d:.6})"</span>,
+        .{ maximal_now, s.worst_maximal },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    <span class="tok-kw">const</span> left_col: Color = <span class="tok-kw">if</span> (s.worst_maximal &gt; <span class="tok-num">1.0e-4</span>) alarm <span class="tok-kw">else</span> maximal;
+    gl.<span class="tok-fn">text</span>(layout.label[<span class="tok-num">0</span>], left_line, .{ .size = <span class="tok-num">12</span> * ui, .color = left_col, .font = &amp;s.font });
+
+    <span class="tok-kw">var</span> buf2: [<span class="tok-num">128</span>]u8 = undefined;
+    <span class="tok-comment">// Not a stored number: recomputed the same way as the left, so the zero is earned.</span>
+    <span class="tok-kw">const</span> right_line: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(
+        &amp;buf2,
+        <span class="tok-str">"ARE the coordinates: error {d:.6} m  (worst {d:.6})"</span>,
+        .{ <span class="tok-fn">generalizedJointError</span>(s), s.worst_generalized },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    gl.<span class="tok-fn">text</span>(layout.label[<span class="tok-num">1</span>], right_line, .{ .size = <span class="tok-num">12</span> * ui, .color = generalized, .font = &amp;s.font });
+
+    <span class="tok-kw">var</span> buf3: [<span class="tok-num">96</span>]u8 = undefined;
+    <span class="tok-kw">const</span> clock: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;buf3, <span class="tok-str">"t = {d:.1} s"</span>, .{s.elapsed}) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    gl.<span class="tok-fn">text</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, h - <span class="tok-num">64</span> * ui), clock, .{ .size = <span class="tok-num">12</span> * ui, .color = dim_col, .font = &amp;s.font });
+
+    <span class="tok-kw">const</span> reset_box: z.Rectangle = .{
+        .x = <span class="tok-num">16</span> * ui,
+        .y = h - <span class="tok-num">52</span> * ui,
+        .width = <span class="tok-num">180</span> * ui,
+        .height = <span class="tok-num">42</span> * ui,
+    };
+    gl.<span class="tok-fn">rect</span>(reset_box, .{ .color = panel });
+    gl.<span class="tok-fn">text</span>(
+        <span class="tok-fn">vec2</span>(reset_box.x + <span class="tok-num">14</span> * ui, reset_box.y + <span class="tok-num">28</span> * ui),
+        <span class="tok-str">"re-throw both"</span>,
+        .{ .size = <span class="tok-num">14</span> * ui, .color = text_col, .font = &amp;s.font },
+    );
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left)) {
+        <span class="tok-kw">const</span> p: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+        <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt;= reset_box.x <span class="tok-kw">and</span> p[<span class="tok-num">0</span>] &lt;= reset_box.x + reset_box.width <span class="tok-kw">and</span>
+            p[<span class="tok-num">1</span>] &gt;= reset_box.y <span class="tok-kw">and</span> p[<span class="tok-num">1</span>] &lt;= reset_box.y + reset_box.height)
+        {
+            s.<span class="tok-fn">reset</span>() <span class="tok-kw">catch</span> |err| {
+                zm.<span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"reset failed: {t}"</span>, .{err});
+            };
+        }
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - maximal | generalized"</span>,
+            .width = <span class="tok-num">900</span>,
+            .height = <span class="tok-num">620</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>friction_slope — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>friction_slope</h1>
+<figure class="code src-file" data-path="examples/friction_slope/friction_slope.zig" data-lines="404"><figcaption><span>examples/friction_slope/friction_slope.zig</span><span>404 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! friction_slope - does the engine's friction match Coulomb's law?</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- *** A DEMO WITH A CLOSED-FORM ANSWER --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A body resting on a slope holds when **tan(theta) &lt; mu** and slides beyond. That is not a</span>
+<span class="tok-comment">//! judgement call or a tuning target; it is a line on the chart, and the engine either lands on</span>
+<span class="tok-comment">//! it or does not. The predicted threshold is drawn as a marker on the angle slider, so the</span>
+<span class="tok-comment">//! question "is the friction right?" is answered by looking at where the sliding starts.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** WHY THIS EXISTS --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `examples/quadruped` slides about a metre in twenty seconds while standing perfectly still,</span>
+<span class="tok-comment">//! with the measured tangential demand at only **0.20 of the friction cone** - the feet creep</span>
+<span class="tok-comment">//! with four fifths of the grip unused. That says the sliding is not Coulomb slip. But it does</span>
+<span class="tok-comment">//! not say whether the Coulomb LIMIT is right, and those are different faults with different</span>
+<span class="tok-comment">//! fixes:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * **the limit is wrong** -&gt; the robot would slip at angles well below `atan(mu)`;</span>
+<span class="tok-comment">//!   * **the limit is right and the solver creeps** -&gt; it holds to the predicted angle, but drifts</span>
+<span class="tok-comment">//!     slowly at every angle below it.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! * THE SLOPE SEPARATES THEM, and nothing else measured so far does.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> ctl = z.robot_control;
+<span class="tok-kw">const</span> zp = z.zimrphysics;
+<span class="tok-kw">const</span> rphys = z.robot_physics;
+<span class="tok-kw">const</span> mjcf = z.mjcf;
+<span class="tok-kw">const</span> rmj = z.robot_mjcf;
+<span class="tok-kw">const</span> ui = z.ui;
+<span class="tok-kw">const</span> profiler = z.profiler;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> length3 = zm.length3;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> atanRad = zm.atanRad;
+
+<span class="tok-kw">const</span> sim_dt: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">250.0</span>;
+
+<span class="tok-kw">const</span> background: Color = .{ .r = <span class="tok-num">16</span>, .g = <span class="tok-num">18</span>, .b = <span class="tok-num">26</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> slope_colour: Color = .{ .r = <span class="tok-num">58</span>, .g = <span class="tok-num">66</span>, .b = <span class="tok-num">84</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> robot_colour: Color = .{ .r = <span class="tok-num">150</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">190</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> hold_colour: Color = .{ .r = <span class="tok-num">108</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">168</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> slip_colour: Color = .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">106</span>, .b = <span class="tok-num">154</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    doc: z.codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: rmj.Imported,
+    data: rbt.Data,
+    act: ctl.Actuation,
+    home: []f32,
+    world: zp.World,
+    bridge: rphys.Bridge,
+    ground: zp.BodyHandle,
+
+    <span class="tok-comment">/// Slope angle in radians, and the friction the contacts are given.</span>
+    slope: f32,
+    friction: f32,
+    <span class="tok-comment">/// What the slope and friction were when the run started, so a change restarts cleanly.</span>
+    last_slope: f32,
+    last_friction: f32,
+
+    start_pos: Vec,
+    slid: f32,
+    elapsed: f32,
+    <span class="tok-comment">/// Peak |tangential| / (mu * normal) seen since the reset - the cone occupancy.</span>
+    cone_worst: f32,
+
+    running: bool,
+    cam: z.OrbitCamera,
+    font: z.Font,
+    ui_host: z.UiHost,
+    cube: z.Mesh,
+    sphere: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.doc = <span class="tok-kw">try</span> z.codecs.xml.<span class="tok-fn">parse</span>(gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"go1.xml"</span>), null);
+    s.robot = <span class="tok-kw">try</span> mjcf.<span class="tok-fn">readRobot</span>(gpa, &amp;s.doc);
+    s.imported = <span class="tok-kw">try</span> rmj.<span class="tok-fn">build</span>(gpa, &amp;s.robot, .{
+        .max_contacts = <span class="tok-num">64</span>,
+        .timestep = sim_dt,
+        .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>),
+    });
+    s.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;s.imported.model);
+    s.act = <span class="tok-kw">try</span> ctl.Actuation.<span class="tok-fn">init</span>(gpa, &amp;s.imported.model);
+
+    s.world = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(gpa, <span class="tok-num">256</span>);
+    s.world.gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>);
+    <span class="tok-kw">const</span> shape: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{
+        .box = .{ .half_extent = <span class="tok-fn">vec</span>(<span class="tok-num">8</span>, <span class="tok-num">8</span>, <span class="tok-num">0.5</span>), .convex_radius = <span class="tok-num">0.01</span> },
+    });
+    s.ground = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{
+        .shape = shape,
+        .position = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">0.5</span>),
+        .motion_type = .static,
+    });
+    s.bridge = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(gpa, &amp;s.world, &amp;s.imported.model, &amp;s.data, <span class="tok-num">256</span>);
+    s.bridge.<span class="tok-fn">listen</span>(&amp;s.world);
+
+    s.home = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.imported.model.nq);
+    s.slope = <span class="tok-num">0.0</span>;
+    s.friction = <span class="tok-num">0.6</span>;
+    s.last_slope = -<span class="tok-num">1</span>;
+    s.last_friction = -<span class="tok-num">1</span>;
+    s.start_pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    s.slid = <span class="tok-num">0</span>;
+    s.elapsed = <span class="tok-num">0</span>;
+    s.cone_worst = <span class="tok-num">0</span>;
+    s.running = true;
+
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.3</span>, <span class="tok-num">0</span>), <span class="tok-num">3.4</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.sphere = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">12</span>, <span class="tok-num">10</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+    <span class="tok-fn">restart</span>(s);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.sphere);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cube);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    gpa.<span class="tok-fn">free</span>(s.home);
+    s.bridge.<span class="tok-fn">deinit</span>(&amp;s.world);
+    s.world.<span class="tok-fn">deinit</span>(gpa);
+    s.act.<span class="tok-fn">deinit</span>();
+    s.data.<span class="tok-fn">deinit</span>();
+    s.imported.<span class="tok-fn">deinit</span>();
+    s.robot.<span class="tok-fn">deinit</span>();
+    s.doc.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">restart</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *rbt.Model = &amp;s.imported.model;
+
+    <span class="tok-comment">// -- * THE SLOPE IS THE GROUND ROTATED, NOT GRAVITY TILTED --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Tilting gravity would give the same free-body diagram and a much easier contact problem:</span>
+    <span class="tok-comment">// the normal would stay aligned with the box's face. Rotating the GROUND is the honest</span>
+    <span class="tok-comment">// version, because it exercises the same oblique contact normals a real slope produces.</span>
+    <span class="tok-kw">var</span> body: *zp.Body = &amp;s.world.bodies.data[s.ground.<span class="tok-fn">index</span>()];
+    body.rot = zm.<span class="tok-fn">quatFromAxisAngle</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>), s.slope);
+    body.com_pos = zm.<span class="tok-fn">rotate</span>(body.rot, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">0.5</span>));
+
+    <span class="tok-comment">// * FRICTION ON THE GROUND BODY. Contact friction combines the two bodies' values, so the</span>
+    <span class="tok-comment">// slider has to move one of them and the robot's feet keep theirs - which is what a real</span>
+    <span class="tok-comment">// surface change looks like.</span>
+    body.friction = s.friction;
+
+    <span class="tok-kw">for</span> (s.robot.keyframes) |key| {
+        <span class="tok-kw">if</span> (std.mem.<span class="tok-fn">eql</span>(u8, key.name, <span class="tok-str">"home"</span>)) {
+            <span class="tok-kw">if</span> (!rmj.<span class="tok-fn">applyKeyframe</span>(m, &amp;s.data, key)) {
+                std.log.<span class="tok-fn">err</span>(<span class="tok-str">"friction_slope: home keyframe refused"</span>, .{});
+            }
+        }
+    }
+    <span class="tok-comment">// Sit the robot ON the slope: rotate its base to match and lift it clear.</span>
+    <span class="tok-kw">const</span> tilt: zm.Quat = zm.<span class="tok-fn">quatFromAxisAngle</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>), s.slope);
+    s.data.pos[<span class="tok-num">3</span>] = tilt[<span class="tok-num">0</span>];
+    s.data.pos[<span class="tok-num">4</span>] = tilt[<span class="tok-num">1</span>];
+    s.data.pos[<span class="tok-num">5</span>] = tilt[<span class="tok-num">2</span>];
+    s.data.pos[<span class="tok-num">6</span>] = tilt[<span class="tok-num">3</span>];
+    s.data.pos[<span class="tok-num">2</span>] = <span class="tok-num">0.30</span> + <span class="tok-num">0.25</span> * <span class="tok-builtin">@sin</span>(<span class="tok-builtin">@abs</span>(s.slope));
+    <span class="tok-builtin">@memset</span>(s.data.vel, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.data.applied_force, <span class="tok-num">0</span>);
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+    <span class="tok-builtin">@memcpy</span>(s.home, s.data.pos[<span class="tok-num">0</span>..m.nq]);
+    s.bridge.<span class="tok-fn">teleported</span>();
+
+    s.start_pos = s.data.body_xpos[<span class="tok-num">1</span>];
+    s.slid = <span class="tok-num">0</span>;
+    s.elapsed = <span class="tok-num">0</span>;
+    s.cone_worst = <span class="tok-num">0</span>;
+    s.last_slope = s.slope;
+    s.last_friction = s.friction;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s, f.window.<span class="tok-fn">widthf</span>(), f.window.<span class="tok-fn">heightf</span>());
+
+    <span class="tok-kw">const</span> was_frozen: bool = profiler.<span class="tok-fn">isFrozen</span>();
+    profiler.<span class="tok-fn">freeze</span>();
+    <span class="tok-kw">defer</span> <span class="tok-kw">if</span> (!was_frozen) profiler.<span class="tok-fn">unfreeze</span>();
+
+    <span class="tok-kw">if</span> (s.slope != s.last_slope <span class="tok-kw">or</span> s.friction != s.last_friction) {
+        <span class="tok-fn">restart</span>(s);
+    }
+
+    <span class="tok-kw">if</span> (s.running) {
+        <span class="tok-kw">const</span> m: *rbt.Model = &amp;s.imported.model;
+        <span class="tok-kw">var</span> step: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (step &lt; <span class="tok-num">4</span>) : (step += <span class="tok-num">1</span>) {
+            (ctl.PoseHold{
+                .target = s.home,
+                .kp = <span class="tok-num">100</span>,
+                .kv = <span class="tok-num">6</span>,
+                .max_torque = <span class="tok-num">35</span>,
+            }).<span class="tok-fn">apply</span>(m, &amp;s.data, s.act);
+            rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+            <span class="tok-comment">// These two can only fail by running out of memory: the frame callback that contains them</span>
+            <span class="tok-comment">// returns `void` by the engine's design, so there is nothing to propagate to. Swallowing</span>
+            <span class="tok-comment">// leaves the world un-stepped for one frame, which is the least-bad outcome available here -</span>
+            <span class="tok-comment">// and is why the rule wants it said out loud rather than written silently.</span>
+            <span class="tok-comment">// lint:off catch-suppression: OOM only, void callback - see above</span>
+            s.bridge.<span class="tok-fn">sync</span>(&amp;s.world, m, &amp;s.data) <span class="tok-kw">catch</span> {};
+            <span class="tok-comment">// lint:off catch-suppression: OOM only, void callback - see above</span>
+            zp.<span class="tok-fn">step</span>(&amp;s.world, sim_dt) <span class="tok-kw">catch</span> {};
+            s.bridge.<span class="tok-fn">harvest</span>(&amp;s.data);
+            rbt.<span class="tok-fn">step</span>(m, &amp;s.data);
+            s.elapsed += sim_dt;
+
+            <span class="tok-comment">// ** CONE OCCUPANCY, the number that separates "the limit is wrong" from "the solver</span>
+            <span class="tok-comment">// creeps". A body sliding at 0.2 of its cone is not being held back by friction.</span>
+            <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.data.contact_count) |c| {
+                <span class="tok-kw">const</span> base: usize = c * rbt.rows_per_contact;
+                <span class="tok-kw">var</span> normal: f32 = <span class="tok-num">0</span>;
+                <span class="tok-kw">for</span> (<span class="tok-num">0</span>..rbt.rows_per_contact) |r| {
+                    normal += s.data.constraint_force[base + r];
+                }
+                <span class="tok-kw">if</span> (normal &lt; <span class="tok-num">1.0</span>) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> t1: f32 = s.data.constraint_force[base] - s.data.constraint_force[base + <span class="tok-num">1</span>];
+                <span class="tok-kw">const</span> t2: f32 = s.data.constraint_force[base + <span class="tok-num">2</span>] - s.data.constraint_force[base + <span class="tok-num">3</span>];
+                <span class="tok-kw">const</span> tang: f32 = <span class="tok-builtin">@sqrt</span>(t1 * t1 + t2 * t2);
+                <span class="tok-kw">const</span> mu: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">0.01</span>, s.data.contacts[c].friction[<span class="tok-num">0</span>]);
+                s.cone_worst = <span class="tok-builtin">@max</span>(s.cone_worst, tang / (mu * normal));
+            }
+        }
+        rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+        s.slid = <span class="tok-fn">length3</span>(s.data.body_xpos[<span class="tok-num">1</span>] - s.start_pos);
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, background);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{ .min_distance = <span class="tok-num">1.6</span>, .max_distance = <span class="tok-num">12.0</span> });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    <span class="tok-fn">drawScene</span>(s, gl);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(s: *State, gl: *z.WgpuGl) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+
+    <span class="tok-comment">// The slope, drawn from the same rotation the solver is using.</span>
+    <span class="tok-kw">const</span> body: *<span class="tok-kw">const</span> zp.Body = &amp;s.world.bodies.data[s.ground.<span class="tok-fn">index</span>()];
+    <span class="tok-kw">const</span> centre: Vec = zm.<span class="tok-fn">zUpToYUpPoint</span>(body.com_pos);
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+        <span class="tok-comment">// -- *** THE RENDER AXIS IS DERIVED, NOT GUESSED --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// The solver tilts the ground about **Y in its Z-up frame**:</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">//     x' =  x*cos theta + z*sin theta</span>
+        <span class="tok-comment">//     z' = -x*sin theta + z*cos theta</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// The render swizzle is `(x,y,z)_zup -&gt; (x,z,y)_yup`, so substituting:</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">//     x_r' =  x_r*cos theta + y_r*sin theta</span>
+        <span class="tok-comment">//     y_r' = -x_r*sin theta + y_r*cos theta</span>
+        <span class="tok-comment">//     z_r' =  z_r</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// * THAT IS A ROTATION IN THE RENDER x-y PLANE - **about render Z**, not X. I guessed X</span>
+        <span class="tok-comment">// and the ground drew tilted the wrong way while the robot, whose base quaternion is set</span>
+        <span class="tok-comment">// in solver space, banked correctly. **The robot was right and the floor was wrong**,</span>
+        <span class="tok-comment">// which reads as the robot leaning the wrong way.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// ** AND THE SIGN FOLLOWS THE SAME WAY: `rotationZ(phi)` gives `x' = x*cos phi - y*sin phi`, so</span>
+        <span class="tok-comment">// matching the substitution above needs `phi = -theta`. A frame conversion is two lines of</span>
+        <span class="tok-comment">// algebra; guessing it is two turns of looking at pictures.</span>
+        <span class="tok-fn">mulMat</span>(zm.<span class="tok-fn">rotationZ</span>(-s.slope), <span class="tok-fn">scaling</span>(<span class="tok-num">16</span>, <span class="tok-num">1</span>, <span class="tok-num">16</span>)),
+        <span class="tok-fn">translation</span>(centre[<span class="tok-num">0</span>], centre[<span class="tok-num">1</span>], centre[<span class="tok-num">2</span>]),
+    );
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, slope_colour);
+
+    <span class="tok-kw">for</span> (<span class="tok-num">1</span>..m.nbody) |b| {
+        <span class="tok-kw">const</span> at: Vec = zm.<span class="tok-fn">zUpToYUpPoint</span>(s.data.body_xpos[b]);
+        <span class="tok-kw">const</span> parent: u32 = m.body_parent[b];
+        <span class="tok-kw">if</span> (parent != rbt.world_body) {
+            z.<span class="tok-fn">drawLine3D</span>(gl, zm.<span class="tok-fn">zUpToYUpPoint</span>(s.data.body_xpos[parent]), at, robot_colour);
+        }
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(at[<span class="tok-num">0</span>], at[<span class="tok-num">1</span>], at[<span class="tok-num">2</span>]), <span class="tok-fn">scaling</span>(<span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>));
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, robot_colour);
+    }
+
+    <span class="tok-comment">// * WHERE IT STARTED, so the slide is visible rather than only reported.</span>
+    <span class="tok-kw">const</span> from: Vec = zm.<span class="tok-fn">zUpToYUpPoint</span>(s.start_pos);
+    <span class="tok-kw">const</span> now: Vec = zm.<span class="tok-fn">zUpToYUpPoint</span>(s.data.body_xpos[<span class="tok-num">1</span>]);
+    <span class="tok-kw">const</span> holding: bool = s.slid &lt; <span class="tok-num">0.05</span>;
+    z.<span class="tok-fn">drawLine3D</span>(gl, from, now, <span class="tok-kw">if</span> (holding) hold_colour <span class="tok-kw">else</span> slip_colour);
+    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(<span class="tok-fn">translation</span>(from[<span class="tok-num">0</span>], from[<span class="tok-num">1</span>], from[<span class="tok-num">2</span>]), <span class="tok-fn">scaling</span>(<span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>));
+    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, <span class="tok-kw">if</span> (holding) hold_colour <span class="tok-kw">else</span> slip_colour);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-builtin">@min</span>(<span class="tok-num">380.0</span>, viewport_w - <span class="tok-num">16</span>);
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-num">0</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"does friction obey Coulomb?"</span>, .{ .flags = .{ .always_auto_resize = true } })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        <span class="tok-kw">var</span> degrees: f32 = s.slope * <span class="tok-num">180.0</span> / pi;
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">slider</span>(<span class="tok-str">"slope deg"</span>, &amp;degrees, .{ .min = <span class="tok-num">0</span>, .max = <span class="tok-num">45</span>, .fmt = <span class="tok-str">"{d:.1}"</span> })) {
+            s.slope = degrees * pi / <span class="tok-num">180.0</span>;
+        }
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"friction mu"</span>, &amp;s.friction, .{ .min = <span class="tok-num">0.05</span>, .max = <span class="tok-num">1.5</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+
+        <span class="tok-comment">// -- *** THE PREDICTION, STATED BEFORE THE RESULT --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// Coulomb says a resting body holds while tan(theta) &lt; mu. That threshold is arithmetic, not</span>
+        <span class="tok-comment">// opinion, so the demo can mark it and let the engine be judged against it.</span>
+        <span class="tok-kw">const</span> threshold: f32 = <span class="tok-fn">atanRad</span>(s.friction) * <span class="tok-num">180.0</span> / pi;
+        u.<span class="tok-fn">separator</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"Coulomb says: holds below {d:.1} deg"</span>, .{threshold});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  tan(slope) {d:.3}  vs  mu {d:.2}"</span>, .{ <span class="tok-builtin">@tan</span>(s.slope), s.friction });
+        <span class="tok-kw">if</span> (degrees &lt; threshold - <span class="tok-num">1.0</span>) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  -&gt; should HOLD"</span>, .{});
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (degrees &gt; threshold + <span class="tok-num">1.0</span>) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  -&gt; should SLIDE"</span>, .{});
+        } <span class="tok-kw">else</span> {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  -&gt; right at the threshold"</span>, .{});
+        }
+
+        u.<span class="tok-fn">separator</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"after {d:.1} s:  slid {d:.4} m"</span>, .{ s.elapsed, s.slid });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"  peak cone occupancy {d:.2}"</span>, .{s.cone_worst});
+        <span class="tok-comment">// ** THE DIAGNOSIS THE DEMO EXISTS TO MAKE. Sliding while the cone is far from full means</span>
+        <span class="tok-comment">// friction is not what is failing - the solver is letting contacts drift inside their</span>
+        <span class="tok-comment">// own limit. Sliding WITH a full cone is ordinary Coulomb slip and entirely correct.</span>
+        <span class="tok-kw">if</span> (s.slid &gt; <span class="tok-num">0.05</span> <span class="tok-kw">and</span> s.cone_worst &lt; <span class="tok-num">0.8</span> <span class="tok-kw">and</span> degrees &lt; threshold - <span class="tok-num">1.0</span>) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  SLIDING BELOW THE THRESHOLD, cone not full:"</span>, .{});
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  the limit is fine, the solver is creeping."</span>, .{});
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"restart"</span>, .{})) {
+            <span class="tok-fn">restart</span>(s);
+        }
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"run"</span>, &amp;s.running);
+    }
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, viewport_h - <span class="tok-num">72</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ viewport_w - <span class="tok-num">16</span>, <span class="tok-num">64</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"slope_help"</span>, .{ .flags = .{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_background = true,
+        .no_inputs = true,
+        .no_scrollbar = true,
+    } })) |h| {
+        <span class="tok-kw">defer</span> h.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"green marker = where it started.  line = how far it moved."</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"raise the slope past the predicted angle: it should let go there,"</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"and hold below it. anything else is the engine, not the robot."</span>, .{});
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - does friction obey Coulomb?"</span>,
+            .width = <span class="tok-num">900</span>,
+            .height = <span class="tok-num">620</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

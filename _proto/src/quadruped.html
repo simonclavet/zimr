@@ -1,0 +1,2257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>quadruped — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>quadruped</h1>
+<figure class="code src-file" data-path="examples/quadruped/quadruped.zig" data-lines="1977"><figcaption><span>examples/quadruped/quadruped.zig</span><span>1977 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! quadruped - a real Unitree Go1, imported from MuJoCo Menagerie, standing on its own legs.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * WHAT THIS DEMONSTRATES --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Everything Phase B and Phase C turn 11 built, in one scene you can push over:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * an MJCF model read straight from Menagerie - 104 uses of `&lt;default&gt;`, 70 geoms,</span>
+<span class="tok-comment">//!     12 actuators, and a `home` keyframe - with forward kinematics that matches MuJoCo's</span>
+<span class="tok-comment">//!     own to 1e-4 on every body;</span>
+<span class="tok-comment">//!   * that robot HOLDING ITS POSE against gravity, with contacts from `zimrphysics` and</span>
+<span class="tok-comment">//!     dynamics from the articulated solver;</span>
+<span class="tok-comment">//!   * the two controller rules that took three attempts to get right, live on sliders.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- ** THE THING TO TRY --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Drag **kp** down and watch the legs fold. Drag it up and the robot springs. Press **shove**</span>
+<span class="tok-comment">//! and see it recover - or not. The gains are the manufacturer's own by default (`kp = 100`,</span>
+<span class="tok-comment">//! from `&lt;position kp="100" forcerange="-35.55 35.55"&gt;` in `go1.xml`).</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> length3 = zm.length3;
+<span class="tok-kw">const</span> sinTurns = zm.sinTurns;
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> zp = z.zimrphysics;
+<span class="tok-kw">const</span> mjcf = z.mjcf;
+<span class="tok-kw">const</span> rmj = z.robot_mjcf;
+<span class="tok-kw">const</span> bridge_mod = z.robot_physics;
+<span class="tok-kw">const</span> ctl = z.robot_control;
+<span class="tok-kw">const</span> Color = zm.Color;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> normalize3 = zm.normalize3;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> ui = z.ui;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> float64 = zm.float64;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> quatToMat = zm.quatToMat;
+<span class="tok-kw">const</span> identity = zm.identity;
+
+<span class="tok-comment">/// The Go1 runs at 500 Hz in Menagerie, and its contacts want it.</span>
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// -- *** A THREE-BONE ARM, SPLICED INTO THE MJCF AT LOAD TIME --</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Injected into the trunk body and its motors appended to the actuator block, then imported</span>
+<span class="tok-comment">// normally. So the arm is a **parameter of this demo** rather than a second checked-in robot:</span>
+<span class="tok-comment">// its reach, mass and mount can change without anyone maintaining a fork of the Go1.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// * THE MASS IS THE POINT. Measured on the assembled model, a 1.94 kg gripper swinging through</span>
+<span class="tok-comment">// its range moves the whole-body centre of mass **0.144 m fore-aft**, against a foot base of</span>
+<span class="tok-comment">// about 0.36 m - forty percent of the support polygon, moving fast. That is a large load</span>
+<span class="tok-comment">// transfer between legs, and load transfer is what turns "hold the feet still" from a</span>
+<span class="tok-comment">// kinematics problem into a force problem.</span>
+<span class="tok-kw">const</span> arm_bodies =
+    <span class="tok-str">\\      &lt;body name="arm_base" pos="0.02 0 0.06"&gt;</span>
+    <span class="tok-str">\\        &lt;joint name="arm_yaw" type="hinge" axis="0 0 1" range="-3.0 3.0" damping="1.2" armature="0.02"/&gt;</span>
+    <span class="tok-str">\\        &lt;geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.035" density="700" rgba="0.85 0.62 0.30 1"/&gt;</span>
+    <span class="tok-str">\\        &lt;body name="arm_upper" pos="0 0 0.10"&gt;</span>
+    <span class="tok-str">\\          &lt;joint name="arm_shoulder" type="hinge" axis="0 1 0" range="-2.4 2.4" damping="1.2" armature="0.02"/&gt;</span>
+    <span class="tok-str">\\          &lt;geom type="capsule" fromto="0 0 0 0 0 0.28" size="0.030" density="700" rgba="0.85 0.62 0.30 1"/&gt;</span>
+    <span class="tok-str">\\          &lt;body name="arm_fore" pos="0 0 0.28"&gt;</span>
+    <span class="tok-str">\\            &lt;joint name="arm_elbow" type="hinge" axis="0 1 0" range="-2.6 2.6" damping="1.0" armature="0.015"/&gt;</span>
+    <span class="tok-str">\\            &lt;geom type="capsule" fromto="0 0 0 0 0 0.24" size="0.026" density="700" rgba="0.85 0.62 0.30 1"/&gt;</span>
+    <span class="tok-str">\\            &lt;body name="arm_wrist" pos="0 0 0.24"&gt;</span>
+    <span class="tok-str">\\              &lt;joint name="arm_wrist" type="hinge" axis="0 1 0" range="-2.2 2.2" damping="0.8" armature="0.01"/&gt;</span>
+    <span class="tok-str">\\              &lt;geom type="capsule" fromto="0 0 0 0 0 0.10" size="0.022" density="700" rgba="0.85 0.62 0.30 1"/&gt;</span>
+    <span class="tok-str">\\              &lt;body name="gripper" pos="0 0 0.10"&gt;</span>
+    <span class="tok-str">\\                &lt;geom name="gripper_g" type="sphere" size="0.075" density="1100" rgba="0.35 0.80 0.60 1"/&gt;</span>
+    <span class="tok-str">\\              &lt;/body&gt;</span>
+    <span class="tok-str">\\            &lt;/body&gt;</span>
+    <span class="tok-str">\\          &lt;/body&gt;</span>
+    <span class="tok-str">\\        &lt;/body&gt;</span>
+    <span class="tok-str">\\      &lt;/body&gt;</span>
+    <span class="tok-str">\\</span>
+;
+
+<span class="tok-kw">const</span> arm_motors =
+    <span class="tok-str">\\    &lt;motor name="m_arm_yaw" joint="arm_yaw" ctrlrange="-40 40" gear="1"/&gt;</span>
+    <span class="tok-str">\\    &lt;motor name="m_arm_shoulder" joint="arm_shoulder" ctrlrange="-60 60" gear="1"/&gt;</span>
+    <span class="tok-str">\\    &lt;motor name="m_arm_elbow" joint="arm_elbow" ctrlrange="-45 45" gear="1"/&gt;</span>
+    <span class="tok-str">\\    &lt;motor name="m_arm_wrist" joint="arm_wrist" ctrlrange="-25 25" gear="1"/&gt;</span>
+    <span class="tok-str">\\</span>
+;
+
+<span class="tok-comment">/// Splice the arm into the Go1's MJCF text. Caller owns the result.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">mjcfWithArm</span>(gpa: Allocator) ![]u8 {
+    <span class="tok-kw">const</span> base: []<span class="tok-kw">const</span> u8 = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"go1.xml"</span>);
+    <span class="tok-kw">var</span> out: std.<span class="tok-fn">ArrayList</span>(u8) = .empty;
+    <span class="tok-kw">errdefer</span> out.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-comment">// -- *** THE ARM GOES AFTER THE LEGS, AND THE POSITION IS THE WHOLE BUG --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Inserted BEFORE `FR_hip`, the arm's four joints come first in qpos order and **every leg</span>
+    <span class="tok-comment">// index shifts by four.** Leg angles then land in arm joints, the legs stay at qpos0 -</span>
+    <span class="tok-comment">// straight - and the robot topples the instant it is reset.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THAT LOOKED EXACTLY LIKE "the arm is too heavy", and survived a rest-pose sweep AND a</span>
+    <span class="tok-comment">// mass sweep down to a quarter of a kilo before the real cause showed itself: **it still</span>
+    <span class="tok-comment">// fell with a 0.25 kg arm**, which no amount of mass explains. After the legs, every mass</span>
+    <span class="tok-comment">// from 0.25 kg to 2.06 kg stands.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// ** AS THE LAST CHILD OF THE TRUNK all existing indices are preserved - the keyframe, the</span>
+    <span class="tok-comment">// actuator order, and every piece of code that assumes where a leg lives - and padding the</span>
+    <span class="tok-comment">// keyframe at the END becomes correct rather than accidentally right.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Anchored on text rather than a line number so it survives the fixture being reformatted.</span>
+    <span class="tok-kw">const</span> tail: []<span class="tok-kw">const</span> u8 = <span class="tok-str">"    &lt;/body&gt;\n  &lt;/worldbody&gt;"</span>;
+    <span class="tok-kw">const</span> leg_at: usize = std.mem.<span class="tok-fn">indexOf</span>(u8, base, tail) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoTrunkEnd;
+    <span class="tok-kw">try</span> out.<span class="tok-fn">appendSlice</span>(gpa, base[<span class="tok-num">0</span>..leg_at]);
+    <span class="tok-kw">try</span> out.<span class="tok-fn">appendSlice</span>(gpa, arm_bodies);
+    <span class="tok-kw">const</span> tag: []<span class="tok-kw">const</span> u8 = <span class="tok-str">"  &lt;actuator&gt;\n"</span>;
+    <span class="tok-kw">const</span> act_at: usize = std.mem.<span class="tok-fn">indexOf</span>(u8, base[leg_at..], tag) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoActuators;
+    <span class="tok-kw">const</span> cut: usize = leg_at + act_at + tag.len;
+    <span class="tok-kw">try</span> out.<span class="tok-fn">appendSlice</span>(gpa, base[leg_at..cut]);
+    <span class="tok-kw">try</span> out.<span class="tok-fn">appendSlice</span>(gpa, arm_motors);
+    <span class="tok-kw">try</span> out.<span class="tok-fn">appendSlice</span>(gpa, base[cut..]);
+
+    <span class="tok-comment">// -- *** AND THE KEYFRAME MUST GROW WITH THE MODEL --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// `home` carries 19 numbers because the Go1 has nq 19. Adding four arm joints makes it 23,</span>
+    <span class="tok-comment">// and `applyKeyframe` then REFUSES - correctly, because a keyframe of the wrong length is</span>
+    <span class="tok-comment">// not a pose. **Both call sites discarded the result with `_ =`**, so the refusal was</span>
+    <span class="tok-comment">// silent: the robot simply never got its standing pose, and the arm never reached the</span>
+    <span class="tok-comment">// configuration the demo assumed it was in.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THIS IS THE EXACT BUG `examples/humanoid` DOCUMENTS - "the keyframe was 28 numbers, the</span>
+    <span class="tok-comment">// model 70 once the projectiles joined the tree, and `applyKeyframe` refused. The label</span>
+    <span class="tok-comment">// still said holding: squat." Written down there, repeated here, because the splice changed</span>
+    <span class="tok-comment">// `nq` and nothing connected the two facts.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// *** THE ARM RESTS HALF BENT, not folded and not straight. An arm at a joint limit cannot</span>
+    <span class="tok-comment">// counter-animate in both directions, and the gimbal needs it to. Measured with these</span>
+    <span class="tok-comment">// angles, the robot stands at every routine amplitude tested and the gripper holds its point</span>
+    <span class="tok-comment">// to within 29 mm at the largest.</span>
+    <span class="tok-comment">// * THESE FOUR NUMBERS ARE `arm_rest`, and they have to stay in step with it - the keyframe</span>
+    <span class="tok-comment">// is text spliced into XML, so the compiler cannot check that for us. If the rest pose</span>
+    <span class="tok-comment">// changes, this string changes with it, or a reset silently restores a different arm.</span>
+    <span class="tok-kw">const</span> arm_key: []<span class="tok-kw">const</span> u8 = <span class="tok-str">" 0 1.1 -1.6 0.5"</span>;
+    <span class="tok-comment">// -- *** ANCHORED ON THE `qpos` ATTRIBUTE, NOT ON ITS LAST FEW NUMBERS --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// The splice used to find `-1.8 0 0.9 -1.8"` with `lastIndexOf`. **The home key's `ctrl`</span>
+    <span class="tok-comment">// ends in exactly the same text and comes after `qpos`**, so it was `ctrl` that grew and</span>
+    <span class="tok-comment">// `qpos` stayed at 19. `applyKeyframe` accepts 19 - it is a joint boundary, the whole robot</span>
+    <span class="tok-comment">// minus its arm - so nothing refused it, `home` came out four short, and `control` indexed</span>
+    <span class="tok-comment">// past it on the first arm joint: an out-of-bounds trap in the launcher.</span>
+    <span class="tok-kw">const</span> owned: []u8 = <span class="tok-kw">try</span> out.<span class="tok-fn">toOwnedSlice</span>(gpa);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(owned);
+    <span class="tok-kw">const</span> key_at: usize = std.mem.<span class="tok-fn">indexOf</span>(u8, owned, <span class="tok-str">"&lt;key "</span>) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoKeyframe;
+    <span class="tok-kw">const</span> qpos_attr: []<span class="tok-kw">const</span> u8 = <span class="tok-str">"qpos=\""</span>;
+    <span class="tok-kw">const</span> qpos_at: usize = key_at + qpos_attr.len +
+        (std.mem.<span class="tok-fn">indexOf</span>(u8, owned[key_at..], qpos_attr) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoKeyframe);
+    <span class="tok-kw">const</span> qpos_end: usize = qpos_at +
+        (std.mem.<span class="tok-fn">indexOfScalar</span>(u8, owned[qpos_at..], <span class="tok-str">'"'</span>) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoKeyframe);
+    <span class="tok-kw">var</span> padded: std.<span class="tok-fn">ArrayList</span>(u8) = .empty;
+    <span class="tok-kw">errdefer</span> padded.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">try</span> padded.<span class="tok-fn">appendSlice</span>(gpa, owned[<span class="tok-num">0</span>..qpos_end]);
+    <span class="tok-kw">try</span> padded.<span class="tok-fn">appendSlice</span>(gpa, arm_key);
+    <span class="tok-kw">try</span> padded.<span class="tok-fn">appendSlice</span>(gpa, owned[qpos_end..]);
+    <span class="tok-kw">return</span> padded.<span class="tok-fn">toOwnedSlice</span>(gpa);
+}
+
+<span class="tok-kw">const</span> timestep: f32 = <span class="tok-num">1.0</span> / <span class="tok-num">500.0</span>;
+
+<span class="tok-comment">/// How many projectiles the scene carries.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** A FIXED POOL, RECYCLED, RATHER THAN SPAWNED ON DEMAND --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// A ball has to be a body in the ROBOT'S OWN TREE to hit it properly (section 4k) - that is the</span>
+<span class="tok-comment">/// whole point of the unified tree, and it is what makes the impact push back on the legs</span>
+<span class="tok-comment">/// with the right mass. But a tree is built once: adding a body means rebuilding the model,</span>
+<span class="tok-comment">/// which throws away the robot's state mid-flight.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// So the balls exist from the start, parked below the floor where nothing can reach them,</span>
+<span class="tok-comment">/// and a throw teleports one into place with a velocity. Recycling the oldest means the</span>
+<span class="tok-comment">/// scene never grows and a rapid-fire user cannot exhaust it.</span>
+<span class="tok-kw">const</span> ball_count: usize = <span class="tok-num">6</span>;
+<span class="tok-kw">const</span> ball_radius: f32 = <span class="tok-num">0.045</span>;
+
+<span class="tok-kw">const</span> ball_names = [_][]<span class="tok-kw">const</span> u8{ <span class="tok-str">"ball0"</span>, <span class="tok-str">"ball1"</span>, <span class="tok-str">"ball2"</span>, <span class="tok-str">"ball3"</span>, <span class="tok-str">"ball4"</span>, <span class="tok-str">"ball5"</span> };
+<span class="tok-kw">const</span> ball_col: Color = .{ .r = <span class="tok-num">220</span>, .g = <span class="tok-num">110</span>, .b = <span class="tok-num">70</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// Where an unthrown ball waits: far below the floor, spread out so two never overlap.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THEY ARE STILL SIMULATED DOWN THERE, and that is fine - nothing is near them, so they</span>
+<span class="tok-comment">/// contribute no contacts and cost only their six DOFs in the mass matrix. Parking beats</span>
+<span class="tok-comment">/// deleting because a tree cannot gain a body without being rebuilt, and rebuilding mid-throw</span>
+<span class="tok-comment">/// would discard the robot's state.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">parkedBall</span>(i: usize) Vec {
+    <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(-<span class="tok-num">3.0</span> - <span class="tok-fn">float</span>(i) * <span class="tok-num">0.3</span>, <span class="tok-num">0</span>, -<span class="tok-num">2.0</span>);
+}
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">18</span>, .g = <span class="tok-num">14</span>, .b = <span class="tok-num">16</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> trunk_col: Color = .{ .r = <span class="tok-num">130</span>, .g = <span class="tok-num">128</span>, .b = <span class="tok-num">132</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> link_col: Color = .{ .r = <span class="tok-num">90</span>, .g = <span class="tok-num">205</span>, .b = <span class="tok-num">190</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> contact_col: Color = .{ .r = <span class="tok-num">240</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    <span class="tok-comment">/// The spliced MJCF text. **Owned here, not freed after parsing**: the XML reader is</span>
+    <span class="tok-comment">/// zero-copy, so `doc`, `robot` and every body name in `imported` are slices into it.</span>
+    xml_text: []u8,
+    doc: z.codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: rmj.Imported,
+    data: rbt.Data,
+    world: zp.World,
+    bridge: bridge_mod.Bridge,
+    cam: z.OrbitCamera,
+    ui_host: z.UiHost,
+    <span class="tok-comment">/// One IK mask per leg - see `ctl.limbActuation`.</span>
+    legs: [<span class="tok-num">4</span>]ctl.Actuation,
+    <span class="tok-comment">/// The calf body of each leg, and where its foot is pinned in the world.</span>
+    foot_body: [<span class="tok-num">4</span>]u32,
+    planted: [<span class="tok-num">4</span>]Vec,
+    <span class="tok-comment">/// Each foot's stance position expressed in the TORSO's frame - what the gait cycle is</span>
+    <span class="tok-comment">/// measured from. See `solveGait`.</span>
+    foot_rest: [<span class="tok-num">4</span>]Vec,
+    foot_offset: [<span class="tok-num">4</span>]Vec,
+    ik_scratch: []Vec,
+    <span class="tok-comment">/// Commanded torso pose, relative to where the robot started.</span>
+    body_roll: f32,
+    body_pitch: f32,
+    body_yaw: f32,
+    body_height: f32,
+    posing: bool,
+    pose_error: f32,
+    <span class="tok-comment">/// Gait state. Phase runs 0..1 and the four offsets are what make a gait a gait.</span>
+    gait_on: bool,
+    gait_phase: f32,
+    <span class="tok-comment">/// -- *** THE ARM SWINGS WITH THE GAIT, OPEN-LOOP --</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Three FEEDBACK balance laws made this robot worse, and the baseline explains why: it</span>
+    <span class="tok-comment">/// already walks with a steady, harmless -0.012 rad of pitch, so a reactive controller has</span>
+    <span class="tok-comment">/// nothing to react to and can only inject noise. An integrator on that never-zero error</span>
+    <span class="tok-comment">/// additionally wound the arm to its stop, where 2 kg at maximum lever arm is dead weight.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// ** THE DISTURBANCE IS PERIODIC AND KNOWN. A trot's wobble is locked to the gait clock, so</span>
+    <span class="tok-comment">/// it can be cancelled by swinging the arm at the same frequency with the right phase.</span>
+    <span class="tok-comment">/// Measured over 10 s at hz 2.0 / stride 0.16 / duty 0.60:</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">///     amp 0.0             0.567 m   pitch steady at -0.012</span>
+    <span class="tok-comment">///     amp 0.3  phase 0.50 **FELL** at 4.36 s</span>
+    <span class="tok-comment">///     amp 0.3  phase 0.75 **0.843 m**   pitch flattens to 0.000</span>
+    <span class="tok-comment">///     amp 0.6  phase 0.75   FELL</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// **1.49x further, and the pitch bias goes to zero.** * PHASE IS THE PARAMETER: the same</span>
+    <span class="tok-comment">/// amplitude a quarter-cycle away falls over. A sweep over amplitude alone would have</span>
+    <span class="tok-comment">/// concluded the arm does not help, at every amplitude, and been wrong.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// *** AND A BOUNDED SINUSOID CANNOT WIND UP - no gate, no anti-windup, no pull-home. Those</span>
+    <span class="tok-comment">/// were three patches for a symptom of the wrong law.</span>
+    arm_swing_amp: f32,
+    arm_swing_phase: f32,
+    <span class="tok-comment">/// How far the shoulder sweeps around its rest during the routine, and how slowly.</span>
+    arm_lift_amp: f32,
+    arm_lift_rate: f32,
+    gait_hz: f32,
+    gait_stride: f32,
+    gait_lift: f32,
+    gait_duty: f32,
+    gait_offset: [<span class="tok-num">4</span>]f32,
+    pose_scratch: []f32,
+    rest_height: f32,
+    rest_rot: zm.Quat,
+    <span class="tok-comment">/// The full qpos the sliders are relative to.</span>
+    stance: []f32,
+    <span class="tok-comment">/// Last solved command, so the solve only runs when something changed.</span>
+    last_cmd: [<span class="tok-num">4</span>]f32,
+    <span class="tok-comment">/// -- *** THE LOOP THE PIPELINE WAS MISSING --</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// The commanded attitude is turned into leg angles by IK and handed to a PD. Those angles</span>
+    <span class="tok-comment">/// would give the commanded roll IF the joints tracked perfectly - under the trunk's weight</span>
+    <span class="tok-comment">/// they do not, and **nothing here ever looked at the torso's real orientation.**</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Measured on the shipped version: every command undershot by a nearly constant</span>
+    <span class="tok-comment">/// 0.030-0.048 rad. Ask for 0.15 rad of roll and you got 0.10. **The sliders lied.**</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// This trim is the missing feedback: the difference between what the torso is actually</span>
+    <span class="tok-comment">/// doing and what was asked, integrated, and folded back into the command before the legs</span>
+    <span class="tok-comment">/// are re-solved. Measured after: within 3%.</span>
+    trim_roll: f32,
+    trim_pitch: f32,
+    <span class="tok-comment">/// Frames since the trim last updated. * IT MUST BE SLOW: `solveBodyPose`'s own comment</span>
+    <span class="tok-comment">/// records that re-solving every frame destabilises the robot, so the correction runs on a</span>
+    <span class="tok-comment">/// cadence and lets the PD settle in between.</span>
+    trim_countdown: u32,
+    <span class="tok-comment">/// What the torso is actually doing, for the readout - so the fix is visible rather than</span>
+    <span class="tok-comment">/// asserted.</span>
+    seen_roll: f32,
+    seen_pitch: f32,
+    <span class="tok-comment">/// -- *** A ROUTINE: PITCH AND YAW ROTATING TOGETHER, ROLL OSCILLATING SEPARATELY --</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Pitch and yaw driven in quadrature trace a CONE - the nose sweeps a circle - while roll</span>
+    <span class="tok-comment">/// rocks at its own frequency. Because the two rates are **incommensurate**, the combined</span>
+    <span class="tok-comment">/// attitude never exactly repeats, so nothing downstream can quietly learn the pattern</span>
+    <span class="tok-comment">/// instead of tracking it.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// * AND IT IS THE CASE WHERE A PLANNER SHOULD EARN ITS PLACE. The trim loop that fixed the</span>
+    <span class="tok-comment">/// static error is an INTEGRATOR: it converges to a constant target and lags a moving one,</span>
+    <span class="tok-comment">/// exactly like the PD on the tracking arm. A moving attitude command is where preview -</span>
+    <span class="tok-comment">/// the advantage that survived every ablation - has something to do.</span>
+    routine: bool,
+    routine_clock: f32,
+    cone_rate: f32,
+    roll_rate: f32,
+    cone_amount: f32,
+    roll_amount: f32,
+    <span class="tok-comment">/// * THE BODY ALSO BOBS, at a third incommensurate rate. Three frequencies with no common</span>
+    <span class="tok-comment">/// multiple means the pose never repeats, so the arm cannot be secretly tracking a cycle it</span>
+    <span class="tok-comment">/// has memorised - it has to counter the motion it is actually given.</span>
+    bob_rate: f32,
+    bob_amount: f32,
+    <span class="tok-comment">/// Mean and worst attitude error while the routine runs, so the lag is a number.</span>
+    routine_error_sum: f64,
+    routine_error_count: u32,
+    routine_worst: f32,
+    <span class="tok-comment">/// -- *** SLIP AND FRICTION DEMAND, MEASURED LIVE --</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// The feet slide and there was no way to see by how much, or to know why. Slip is how far</span>
+    <span class="tok-comment">/// the feet have travelled from where they were planted; the cone ratio is tangential force</span>
+    <span class="tok-comment">/// over what friction can actually supply, so **above 1.0 is a foot being asked for force</span>
+    <span class="tok-comment">/// the ground does not have.**</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Measured over the routine: about 1 m of slip in 12 s, cone exceeded at 1.83x. **A</span>
+    <span class="tok-comment">/// position controller has no representation of that limit - not a weak one, none** - which</span>
+    <span class="tok-comment">/// is why this readout exists, and why it is the number a planner would have to beat.</span>
+    <span class="tok-comment">/// -- *** THE ARM, AND WHY IT IS DRIVEN SEPARATELY --</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// The arm reaches for a moving target with its own IK and its own PD, and the torso</span>
+    <span class="tok-comment">/// pipeline is left exactly as it was. **That separation is the experiment**: neither</span>
+    <span class="tok-comment">/// controller knows about the other, so whatever the arm does to the legs' contact forces</span>
+    <span class="tok-comment">/// arrives as a disturbance nobody planned for - which is the situation a force-allocating</span>
+    <span class="tok-comment">/// planner would be able to handle and a pair of independent servos cannot.</span>
+    arm_on: bool,
+    arm_clock: f32,
+    arm_rate: f32,
+    arm_reach: f32,
+    <span class="tok-comment">/// -- *** THE GRIPPER HOLDS A POINT IN THE WORLD WHILE THE BODY MOVES UNDER IT --</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// A gimbal. The torso weaves through its cone, rocks, and bobs; the arm counter-animates so</span>
+    <span class="tok-comment">/// the gripper stays put. **The arm is not doing anything of its own** - every joint motion</span>
+    <span class="tok-comment">/// exists purely to cancel the base's.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// * AND IT IS THE IDEAL SHAPE FOR A PLANNER. The torso routine is SCRIPTED, so where the</span>
+    <span class="tok-comment">/// base will be a fraction of a second from now is known exactly - which makes the arm's</span>
+    <span class="tok-comment">/// required trajectory knowable in advance. That is preview, the one advantage that survived</span>
+    <span class="tok-comment">/// every ablation in this project.</span>
+    hold_point: Vec,
+    <span class="tok-comment">/// Where the held point sits relative to the FOOT AVERAGE, in the ground plane.</span>
+    hold_offset: [<span class="tok-num">2</span>]f32,
+    hold_height: f32,
+    <span class="tok-comment">/// How far the gripper actually drifts from the point it is holding. The score.</span>
+    hold_error: f32,
+    hold_worst: f32,
+    arm_act: ctl.Actuation,
+    gripper: u32,
+    arm_target: []f32,
+    arm_error: f32,
+    foot_slip: f32,
+    cone_worst: f32,
+    cone_over: u32,
+    font: z.Font,
+    <span class="tok-comment">/// The pose being held - the full `qpos` (balls included) as the `home` keyframe posed it.</span>
+    home: []f32,
+    <span class="tok-comment">/// Which DOFs have a motor. See `control`.</span>
+    actuated: []bool,
+    <span class="tok-comment">/// Servo gains, live.</span>
+    kp: f32,
+    kv: f32,
+    <span class="tok-comment">/// Which free body the next throw will use, cycling through `ball_count`.</span>
+    next_ball: usize,
+    <span class="tok-comment">/// Set by the panel, consumed by `update` once the camera is known.</span>
+    want_throw: bool,
+    <span class="tok-comment">/// Meshes for the three geom shapes the Go1 actually uses.</span>
+    cylinder: z.Mesh,
+    sphere: z.Mesh,
+    cube: z.Mesh,
+    transform: [<span class="tok-num">1</span>]Mat,
+    accumulator: f32,
+    physics_on: bool,
+    peak_force: f32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    <span class="tok-comment">// * KEPT FOR THE STATE'S LIFETIME, freed in `deinit`. It used to be freed on the way out of</span>
+    <span class="tok-comment">// this function, which left every name the importer borrowed dangling - `bodyIndex("trunk")`</span>
+    <span class="tok-comment">// compared against freed memory every frame and only worked by falling back to body 1.</span>
+    s.xml_text = <span class="tok-kw">try</span> <span class="tok-fn">mjcfWithArm</span>(gpa);
+    s.doc = <span class="tok-kw">try</span> z.codecs.xml.<span class="tok-fn">parse</span>(gpa, s.xml_text, null);
+    s.robot = <span class="tok-kw">try</span> mjcf.<span class="tok-fn">readRobot</span>(gpa, &amp;s.doc);
+    <span class="tok-comment">// * THE PROJECTILES JOIN THE ROBOT'S TREE, which is what makes them able to hit it.</span>
+    <span class="tok-comment">// A ball in zimrphysics alone would be resolved by a different solver treating the robot</span>
+    <span class="tok-comment">// as immovable - the exact approximation section 4k removed. In the tree, an impact is one</span>
+    <span class="tok-comment">// constraint between two inertias and the legs feel the real mass.</span>
+    <span class="tok-kw">var</span> balls: [ball_count]z.robot_scene.FreeBody = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..ball_count) |i| {
+        balls[i] = .{
+            .name = ball_names[i],
+            .pos = <span class="tok-fn">parkedBall</span>(i),
+            .geoms = &amp;.{.{ .shape = .{ .sphere = .{ .radius = ball_radius } }, .mass = <span class="tok-num">0.6</span> }},
+        };
+    }
+    s.imported = <span class="tok-kw">try</span> rmj.<span class="tok-fn">buildScene</span>(gpa, &amp;s.robot, &amp;balls, .{
+        .max_contacts = <span class="tok-num">128</span>,
+        .timestep = timestep,
+        <span class="tok-comment">// Z-up, to match the model's own frame.</span>
+        .gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>),
+    });
+    s.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;s.imported.model);
+
+    s.world = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(gpa, <span class="tok-num">128</span>);
+    s.world.gravity = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">9.81</span>);
+    <span class="tok-kw">const</span> ground: zp.ShapeId = <span class="tok-kw">try</span> s.world.shapes.<span class="tok-fn">add</span>(gpa, .{
+        .box = .{ .half_extent = <span class="tok-fn">vec</span>(<span class="tok-num">5</span>, <span class="tok-num">5</span>, <span class="tok-num">0.5</span>), .convex_radius = <span class="tok-num">0.01</span> },
+    });
+    _ = <span class="tok-kw">try</span> s.world.<span class="tok-fn">createBody</span>(.{
+        .shape = ground,
+        .position = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">0.5</span>),
+        .motion_type = .static,
+    });
+
+    <span class="tok-comment">// * THE RESULT IS CHECKED. Discarding it is how the pose silently stopped being applied the</span>
+    <span class="tok-comment">// moment the arm changed `nq` - the humanoid's comment says exactly this and it happened</span>
+    <span class="tok-comment">// again anyway.</span>
+    <span class="tok-kw">if</span> (!rmj.<span class="tok-fn">applyKeyframe</span>(&amp;s.imported.model, &amp;s.data, s.robot.keyframes[<span class="tok-num">0</span>])) {
+        std.log.<span class="tok-fn">err</span>(<span class="tok-str">"quadruped: home keyframe refused — {d} numbers for nq {d}"</span>, .{
+            s.robot.keyframes[<span class="tok-num">0</span>].qpos.len, s.imported.model.nq,
+        });
+    }
+    rbt.<span class="tok-fn">forward</span>(&amp;s.imported.model, &amp;s.data);
+    s.bridge = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(gpa, &amp;s.world, &amp;s.imported.model, &amp;s.data, <span class="tok-num">128</span>);
+    s.bridge.<span class="tok-fn">listen</span>(&amp;s.world);
+
+    <span class="tok-comment">// -- *** A STIFFER CONTACT, WHICH CUTS THE FOOT CREEP 5.2x FOR FREE --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// The feet slide about a metre in twenty seconds while standing perfectly still, with the</span>
+    <span class="tok-comment">// friction demand at only 0.20 of the cone - creep, not slip, so more friction would raise a</span>
+    <span class="tok-comment">// limit that is never reached.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Measured over 20 static seconds, slide and cost together:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     as shipped (0.9/0.95, width 1e-3)   0.8097 m   301,988 ns/step</span>
+    <span class="tok-comment">//     tolerance 1e-8 and 1e-10            0.8097 m   (identical - not the lever)</span>
+    <span class="tok-comment">//     stiff + narrow (0.99, width 1e-4)   0.1545 m   301,854 ns/step</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// ** THE COST IS A WASH - 301,854 against 301,988, inside the noise. No extra iterations, no</span>
+    <span class="tok-comment">// new state: the same arithmetic with a different constant. **A stiffer constraint leaves</span>
+    <span class="tok-comment">// less residual velocity per step, and it is that residual which integrates into creep.**</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * AND THE CONE OCCUPANCY STAYS AT 0.24, well inside its limit - the creep did not stop by</span>
+    <span class="tok-comment">// trading itself for friction saturation, which was the failure mode worth guarding against.</span>
+    <span class="tok-comment">// The robot is still held by grip it would really have.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// This is MuJoCo's `impratio` idea reached from the other end: it stiffens friction relative</span>
+    <span class="tok-comment">// to normal, and on a PYRAMID basis - where no row is purely frictional - stiffening the</span>
+    <span class="tok-comment">// whole contact is the version actually available.</span>
+    s.bridge.flesh.thickness_m = <span class="tok-num">0.0001</span>;
+    s.bridge.flesh.soft_min = <span class="tok-num">0.99</span>;
+
+    <span class="tok-comment">// * THE FULL `qpos`, NOT THE KEYFRAME. `home` is indexed by the model's qpos addresses, and</span>
+    <span class="tok-comment">// a keyframe covers only the robot's prefix - the balls come after it. Sized from the</span>
+    <span class="tok-comment">// keyframe, a short one let `control` index past the end, and `resetEverything`'s</span>
+    <span class="tok-comment">// `@memcpy(s.home, s.data.pos)` trapped on the length mismatch (23 against 65).</span>
+    s.home = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(f32, s.data.pos);
+
+    <span class="tok-comment">// * WHICH DOFs HAVE A MOTOR, decided once. The trunk's free joint does not, and</span>
+    <span class="tok-comment">// forgetting that makes the robot FLY - gravity compensation on an unactuated DOF cancels</span>
+    <span class="tok-comment">// the machine's own weight. Third time this rule has come up; computing it here instead</span>
+    <span class="tok-comment">// of testing `jnt_type` inline is how it stops coming up.</span>
+    s.actuated = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(bool, s.imported.model.nv);
+    <span class="tok-builtin">@memset</span>(s.actuated, false);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.imported.model.njnt) |j| {
+        <span class="tok-kw">if</span> (s.imported.model.jnt_type[j] == .hinge) {
+            s.actuated[s.imported.model.jnt_dof_adr[j]] = true;
+        }
+    }
+
+    <span class="tok-comment">// * THE GENERATED CYLINDER SPANS z in [0, height], NOT [-h/2, +h/2]. Its parametric</span>
+    <span class="tok-comment">// surface is `(r*sin theta, r*cos theta, height*u)` with `u in [0,1]`, so a unit cylinder sits</span>
+    <span class="tok-comment">// entirely ABOVE the origin. Scaling it to a capsule's length therefore offsets every</span>
+    <span class="tok-comment">// limb by half its own length - legs that float away from their joints. Generating it</span>
+    <span class="tok-comment">// pre-centred is one number here and saves a translate in every draw.</span>
+    s.cylinder = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCylinder</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">16</span>, <span class="tok-num">2</span>);
+    s.sphere = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshSphere</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">10</span>, <span class="tok-num">8</span>);
+    s.cube = <span class="tok-kw">try</span> z.<span class="tok-fn">genMeshCube</span>(gpa, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>);
+    s.transform = .{<span class="tok-fn">identity</span>()};
+    s.cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.25</span>, <span class="tok-num">0</span>), <span class="tok-num">1.4</span>);
+    s.font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, s.font);
+
+    <span class="tok-comment">// -- * ONE IK MASK AND ONE PINNED FOOT PER LEG --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// The foot is the sphere geom at the end of each calf. Its planted position is captured</span>
+    <span class="tok-comment">// from the STANDING pose, so "hold the feet still" means where the robot actually put</span>
+    <span class="tok-comment">// them rather than where the model nominally says they go.</span>
+    <span class="tok-kw">const</span> leg_tips = [<span class="tok-num">4</span>][]<span class="tok-kw">const</span> u8{ <span class="tok-str">"FR_calf"</span>, <span class="tok-str">"FL_calf"</span>, <span class="tok-str">"RR_calf"</span>, <span class="tok-str">"RL_calf"</span> };
+    <span class="tok-kw">for</span> (leg_tips, <span class="tok-num">0</span>..) |name, i| {
+        <span class="tok-kw">const</span> body: u32 = s.imported.<span class="tok-fn">bodyIndex</span>(name).?;
+        s.foot_body[i] = body;
+        s.legs[i] = <span class="tok-kw">try</span> ctl.<span class="tok-fn">limbActuation</span>(gpa, &amp;s.imported.model, body);
+        <span class="tok-kw">var</span> offset: Vec = zm.vec_zero;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.imported.model.ngeom) |g| {
+            <span class="tok-kw">if</span> (s.imported.model.geom_body[g] != body) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">switch</span> (s.imported.model.geom_shape[g]) {
+                <span class="tok-comment">// The foot is the sphere at the end of the calf; its offset in the body's</span>
+                <span class="tok-comment">// frame is what makes the planted point the FOOT rather than the calf's origin.</span>
+                .sphere =&gt; offset = s.imported.model.geom_pos[g],
+                <span class="tok-kw">else</span> =&gt; {},
+            }
+        }
+        s.foot_offset[i] = offset;
+    }
+
+    <span class="tok-comment">// -- * THE ARM'S OWN ACTUATION MASK AND TARGET BUFFER --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// `limbActuation` walks the chain from the gripper to the root, so the mask covers exactly</span>
+    <span class="tok-comment">// the four arm joints and nothing else - the legs stay under the torso controller, which is</span>
+    <span class="tok-comment">// what keeps the two problems separate and the experiment honest.</span>
+    <span class="tok-comment">// * ONCE, OUTSIDE THE LEG LOOP. It used to sit inside the per-leg geom loop, so both were</span>
+    <span class="tok-comment">// allocated once per calf geom and only the last pair was ever freed.</span>
+    s.gripper = s.imported.<span class="tok-fn">bodyIndex</span>(<span class="tok-str">"gripper"</span>) <span class="tok-kw">orelse</span> <span class="tok-num">0</span>;
+    s.arm_act = <span class="tok-kw">try</span> ctl.<span class="tok-fn">limbActuation</span>(gpa, &amp;s.imported.model, s.gripper);
+    s.arm_target = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(f32, s.data.pos);
+    s.ik_scratch = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, ctl.Ik.<span class="tok-fn">scratchSize</span>(&amp;s.imported.model));
+    s.body_roll = <span class="tok-num">0</span>;
+    s.body_pitch = <span class="tok-num">0</span>;
+    s.body_yaw = <span class="tok-num">0</span>;
+    s.body_height = <span class="tok-num">0</span>;
+    s.posing = false;
+    s.pose_error = <span class="tok-num">0</span>;
+    s.gait_on = false;
+    s.arm_swing_amp = <span class="tok-num">0.0</span>;
+    s.arm_lift_amp = <span class="tok-num">0.7</span>;
+    s.arm_lift_rate = <span class="tok-num">0.11</span>;
+    s.arm_swing_phase = <span class="tok-num">0.75</span>;
+    s.gait_phase = <span class="tok-num">0</span>;
+    <span class="tok-comment">// -- * SWEPT AGAINST DISTANCE TRAVELLED, NOT CHOSEN --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// With the stance direction corrected, 10 s of trot on stiffened contacts:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     hz 1.4  stride 0.10  duty 0.65   -0.21 m   (too short a stride to propel)</span>
+    <span class="tok-comment">//     hz 1.4  stride 0.16  duty 0.65   +1.04 m</span>
+    <span class="tok-comment">//     hz 2.0  stride 0.16  duty 0.60   **+1.43 m**   &lt;- best</span>
+    <span class="tok-comment">//     hz 2.4  stride 0.20  duty 0.55   +0.17 m   (too fast: less time in stance)</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THE STRIDE MATTERS MORE THAN THE RATE. 0.06 m - the old default - is small enough that</span>
+    <span class="tok-comment">// the feet barely displace the body at all, which is part of why the gait read as "very</span>
+    <span class="tok-comment">// slow" independently of its direction.</span>
+    <span class="tok-comment">// WIP AND THE SWEEP ABOVE WAS RUN ON A **BARE GO1**. This robot carries a 1.94 kg arm high on</span>
+    <span class="tok-comment">// the trunk, which the probe never had - so those distances describe a different machine.</span>
+    <span class="tok-comment">// Taking the best row from it and raising the stride 2.7x (0.06 -&gt; 0.16) tipped the real</span>
+    <span class="tok-comment">// demo over backwards immediately.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// *** THREE PARAMETERS CHANGED AT ONCE, FROM A MEASUREMENT OF SOMETHING ELSE. Each part of</span>
+    <span class="tok-comment">// that is a mistake on its own: a sweep on the wrong model, and no isolation between the</span>
+    <span class="tok-comment">// sign fix (which is certainly right) and the tuning (which was not tested here).</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Backed off to a stride only slightly above the original, with the CORRECTED direction -</span>
+    <span class="tok-comment">// so the sign fix is kept and the untested tuning is not. **The sliders are live; sweep them</span>
+    <span class="tok-comment">// on this robot rather than trusting numbers from the other one.**</span>
+    <span class="tok-comment">// *** MEASURED FORWARD **WITH THE ARM**, which the earlier sweep was not. Trot, 10 s:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     hz 2.0  stride 0.16  duty 0.60   **+0.567 m**  stands (z 0.298)</span>
+    <span class="tok-comment">//     hz 1.6  stride 0.08  duty 0.75     -0.931 m    stands, backward</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THE SECOND ROW IS WHAT THIS WAS BACKED OFF TO LAST TURN, on the strength of a probe</span>
+    <span class="tok-comment">// whose edit had failed - so its output was a STALE binary's. **The two settings were</span>
+    <span class="tok-comment">// exactly the wrong way round**, and the stale-binary trap cost a real conclusion.</span>
+    s.gait_hz = <span class="tok-num">1.4</span>;
+    <span class="tok-comment">// *** 0.20, MEASURED - 3.2x FURTHER THAN 0.14 AND STILL SOLID. Crawl, 10 s:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     hz 1.4  stride 0.14   0.207 m   z 0.302</span>
+    <span class="tok-comment">//     hz 1.4  stride 0.20  **0.655 m**  z 0.307   &lt;- this</span>
+    <span class="tok-comment">//     hz 1.4  stride 0.26  FELL at 2.96 s</span>
+    <span class="tok-comment">//     hz 2.0  stride 0.20   0.134 m   (faster is WORSE)</span>
+    <span class="tok-comment">//     hz 2.5  stride 0.20  FELL at 1.87 s</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * STRIDE IS THE LEVER AND RATE IS NOT. Raising `hz` shortens the time each foot has to</span>
+    <span class="tok-comment">// settle before the next one lifts, and on a crawl that is the whole margin - 2.0 costs</span>
+    <span class="tok-comment">// two thirds of the distance and 2.5 falls over. **Longer steps, not faster ones.**</span>
+    s.gait_stride = <span class="tok-num">0.20</span>;
+    <span class="tok-comment">// *** 0.08, AND IT NEARLY TRIPLES THE DISTANCE. Foot lift decides whether a swinging foot</span>
+    <span class="tok-comment">// CLEARS or catches, and a catch on a top-heavy robot is a trip. Measured at amp 0.3 /</span>
+    <span class="tok-comment">// phase 0.75 / hz 2.0 / stride 0.16 / duty 0.60:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     lift 0.03   0.379 m</span>
+    <span class="tok-comment">//     lift 0.05   0.843 m</span>
+    <span class="tok-comment">//     lift 0.08   **0.957 m**</span>
+    <span class="tok-comment">//     lift 0.12   FELL</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// ** AND AT 0.08 THE ARM SWING BECOMES NECESSARY RATHER THAN MERELY HELPFUL: with</span>
+    <span class="tok-comment">// `arm_swing_amp` at zero the robot **falls at 6.22 s**. That is the demonstrated failure</span>
+    <span class="tok-comment">// the arm was missing - for the first time it fixes something instead of not hurting.</span>
+    s.gait_lift = <span class="tok-num">0.06</span>;
+    <span class="tok-comment">// -- ** DUTY IS THE WHOLE DIFFERENCE BETWEEN STANDING UP AND FALLING OVER --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Duty is the fraction of the cycle a foot spends ON THE GROUND. Measured on the Go1,</span>
+    <span class="tok-comment">// trotting at 1.6 Hz, over ten seconds:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     duty 0.50  -&gt;  sags to 0.11 m, on its belly</span>
+    <span class="tok-comment">//     duty 0.70  -&gt;  falls at 2.5 s</span>
+    <span class="tok-comment">//     duty 0.85  -&gt;  z 0.346, minimum 0.332 - no sag at all</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// At 0.5 a trot has only two feet down at any instant and the Go1 cannot hold itself up</span>
+    <span class="tok-comment">// on a diagonal pair for that long. 0.85 keeps three or four down almost always, which is</span>
+    <span class="tok-comment">// a cautious gait and a standing one.</span>
+    <span class="tok-comment">// * 0.60, measured with the arm present rather than reasoned about without it.</span>
+    s.gait_duty = <span class="tok-num">0.80</span>;
+    <span class="tok-comment">// Trot: diagonal pairs together. Leg order is FR, FL, RR, RL.</span>
+    <span class="tok-comment">// *** THE CRAWL IS THE DEFAULT because it is the one that never falls. The trot travels 4.6x</span>
+    <span class="tok-comment">// further (0.957 m against 0.207) and is one button away - but it is fragile, needs the arm's</span>
+    <span class="tok-comment">// counter-swing, and topples if the attitude trim is left on. **"Move and do not fall" is the</span>
+    <span class="tok-comment">// goal, and three feet down is how a robot does that.**</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THE PHASING AND THE TIMINGS MUST MATCH. Crawl offsets at trot rate and duty fall over;</span>
+    <span class="tok-comment">// that mismatch is exactly what earned this pattern a "(falls)" label it did not deserve.</span>
+    s.gait_offset = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.25</span>, <span class="tok-num">0.75</span> };
+    s.pose_scratch = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.imported.model.nq);
+    s.rest_height = s.data.pos[s.imported.model.jnt_qpos_adr[<span class="tok-num">0</span>] + <span class="tok-num">2</span>];
+    s.rest_rot = zm.quat_identity;
+    s.stance = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, s.imported.model.nq);
+    s.last_cmd = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+    s.trim_roll = <span class="tok-num">0</span>;
+    s.trim_pitch = <span class="tok-num">0</span>;
+    s.trim_countdown = <span class="tok-num">0</span>;
+    s.seen_roll = <span class="tok-num">0</span>;
+    s.seen_pitch = <span class="tok-num">0</span>;
+    <span class="tok-comment">// *** ON BY DEFAULT. The demo's whole argument is a robot weaving while a gripper hangs</span>
+    <span class="tok-comment">// motionless in space, and that required two clicks to see. A demo that idles until clicked</span>
+    <span class="tok-comment">// gets seen once - and its smoke test verifies an idle scene, which is how three bugs hid</span>
+    <span class="tok-comment">// in `examples/catch`.</span>
+    s.routine = true;
+    s.routine_clock = <span class="tok-num">0</span>;
+    <span class="tok-comment">// * INCOMMENSURATE ON PURPOSE - 0.55 and 0.31 have no small common multiple, so the pattern</span>
+    <span class="tok-comment">// drifts forever instead of closing into a short loop.</span>
+    <span class="tok-comment">// * FOUR INCOMMENSURATE RATES, AND THE GAIT'S 1.4 IS DELIBERATELY NOT AMONG THEM. A torso</span>
+    <span class="tok-comment">// motion locked to the footfall reads as a limp; one that drifts against it reads as</span>
+    <span class="tok-comment">// dancing, and never repeats.</span>
+    s.cone_rate = <span class="tok-num">0.31</span>;
+    s.roll_rate = <span class="tok-num">0.23</span>;
+    <span class="tok-comment">// * MEASURED TO STAND. cone/roll/bob of 0.22/0.20/0.035 also stands but drifts 29 mm; this</span>
+    <span class="tok-comment">// middle setting holds the gripper to 20 mm and still weaves visibly.</span>
+    <span class="tok-comment">// *** THE MEASURED EDGE: 0.14 rad of roll and pitch (8 degrees), 3.5 cm of bob, and a big</span>
+    <span class="tok-comment">// slow arm sweep - the largest amplitudes that still WALK. 0.18 falls at 6.42 s.</span>
+    s.cone_amount = <span class="tok-num">0.14</span>;
+    s.roll_amount = <span class="tok-num">0.14</span>;
+    s.bob_rate = <span class="tok-num">0.17</span>;
+    s.bob_amount = <span class="tok-num">0.035</span>;
+    s.routine_error_sum = <span class="tok-num">0</span>;
+    s.routine_error_count = <span class="tok-num">0</span>;
+    s.routine_worst = <span class="tok-num">0</span>;
+    s.arm_on = true;
+    s.arm_clock = <span class="tok-num">0</span>;
+    s.arm_rate = <span class="tok-num">0.35</span>;
+    s.arm_reach = <span class="tok-num">0.34</span>;
+    s.hold_point = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    s.hold_offset = .{ <span class="tok-num">0.22</span>, <span class="tok-num">0</span> };
+    s.hold_height = <span class="tok-num">0.62</span>;
+    s.hold_error = <span class="tok-num">0</span>;
+    s.hold_worst = <span class="tok-num">0</span>;
+    s.arm_error = <span class="tok-num">0</span>;
+    s.foot_slip = <span class="tok-num">0</span>;
+    s.cone_worst = <span class="tok-num">0</span>;
+    s.cone_over = <span class="tok-num">0</span>;
+    s.kp = <span class="tok-num">100.0</span>;
+    <span class="tok-comment">// -- *** SIX, NOT TWO. THE DAMPING RATIO WAS OFF AND THE FEET PAID FOR IT --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// `kv = 2` against `kp = 100` is badly underdamped: the ratio-preserving value is about 6.</span>
+    <span class="tok-comment">// An underdamped leg oscillates about its target, and an oscillating foot alternately grips</span>
+    <span class="tok-comment">// and breaks away - which is a better account of "the feet slide" than stiffness alone.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Measured over the 12 s routine, total foot slip and friction-cone violations:</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">//     kp 100, kv  2    slip 1.079 m   2452 ticks over the cone   &lt;- was</span>
+    <span class="tok-comment">//     kp 100, kv  6    slip 0.945 m   2217 ticks               &lt;- now</span>
+    <span class="tok-comment">//     kp 100, kv 12    slip 21.75 m   7206 ticks   (overdamped, far worse)</span>
+    <span class="tok-comment">//     kp 200, kv  8    slip 2.813 m   7838 ticks</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * AND BOTH DIRECTIONS ARE WORSE, which is what makes this a minimum rather than a guess.</span>
+    <span class="tok-comment">// Stiffer slides more; much softer slides more; only the damping ratio was actually wrong.</span>
+    s.kv = <span class="tok-num">6.0</span>;
+    s.next_ball = <span class="tok-num">0</span>;
+    s.want_throw = false;
+    s.accumulator = <span class="tok-num">0</span>;
+    s.physics_on = true;
+    s.peak_force = <span class="tok-num">0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    gpa.<span class="tok-fn">free</span>(s.arm_target);
+    s.arm_act.<span class="tok-fn">deinit</span>();
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cylinder);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.sphere);
+    z.<span class="tok-fn">unloadMesh</span>(gpa, s.cube);
+    gpa.<span class="tok-fn">free</span>(s.stance);
+    gpa.<span class="tok-fn">free</span>(s.pose_scratch);
+    gpa.<span class="tok-fn">free</span>(s.ik_scratch);
+    <span class="tok-kw">for</span> (&amp;s.legs) |*leg| {
+        leg.<span class="tok-fn">deinit</span>();
+    }
+    s.ui_host.<span class="tok-fn">deinit</span>();
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    gpa.<span class="tok-fn">free</span>(s.actuated);
+    gpa.<span class="tok-fn">free</span>(s.home);
+    s.bridge.<span class="tok-fn">deinit</span>(&amp;s.world);
+    s.world.<span class="tok-fn">deinit</span>(gpa);
+    s.data.<span class="tok-fn">deinit</span>();
+    s.imported.<span class="tok-fn">deinit</span>();
+    s.robot.<span class="tok-fn">deinit</span>();
+    s.doc.<span class="tok-fn">deinit</span>();
+    gpa.<span class="tok-fn">free</span>(s.xml_text);
+}
+
+<span class="tok-comment">/// Hold the home pose.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** PLAIN PD, NOT COMPUTED TORQUE, and the reason is the floating base --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `tau = M*a*` is the right controller for an arm bolted to a table, and it is what `robot_3d`</span>
+<span class="tok-comment">/// uses. It cannot work here. The mass matrix spans the trunk's six unactuated DOFs, so</span>
+<span class="tok-comment">/// solving it produces accelerations the trunk has no motor to make; zeroing those rows</span>
+<span class="tok-comment">/// afterwards leaves the legs supplying a difference nobody asked for. **Measured: the robot</span>
+<span class="tok-comment">/// folded to 0.08 m against a 0.27 m home** - which looks exactly like a gains problem and is</span>
+<span class="tok-comment">/// not one.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// What the Go1's own file describes is simpler and correct: a position servo per joint,</span>
+<span class="tok-comment">/// clamped to that joint's force rating.</span>
+<span class="tok-comment">/// Move the torso to the commanded pose while every foot stays where it stands.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** THE STANDARD QUADRUPED TRICK, AND WHY IT WORKS --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// A torso has no motors. It cannot be commanded anywhere. But it is standing on four legs</span>
+<span class="tok-comment">/// whose feet are on the ground, so **moving the body is the same problem as moving four</span>
+<span class="tok-comment">/// hips while four feet hold still** - and that IS a joint-space problem, three joints at a</span>
+<span class="tok-comment">/// time.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// So: write the wanted torso pose straight into the free joint, then ask each leg on its own</span>
+<span class="tok-comment">/// to put its foot back where it was. The result is a full `qpos` the PD controller can hold,</span>
+<span class="tok-comment">/// and the legs physically push the body into place because the feet have friction.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- * THE SOLVE RUNS ON A COPY --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `Ik.solve` writes joint angles into `data` - it IS the answer. Doing that to the live state</span>
+<span class="tok-comment">/// would teleport the robot every frame: no dynamics, no contact, no falling over when the</span>
+<span class="tok-comment">/// pose is impossible. The result becomes a TARGET instead, so the robot travels there under</span>
+<span class="tok-comment">/// its own torque limits and can fail to arrive.</span>
+<span class="tok-comment">/// Capture where the feet are standing and how high the torso is, as the reference the</span>
+<span class="tok-comment">/// sliders are relative to.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// ** THIS HAPPENS WHEN POSING IS SWITCHED ON, NOT AT STARTUP, and the difference is the</span>
+<span class="tok-comment">/// whole thing working or not. At startup the robot is at its `home` keyframe and has not</span>
+<span class="tok-comment">/// touched the ground yet; it then settles and **rises from 0.270 to 0.332** as the legs take</span>
+<span class="tok-comment">/// its weight. Feet captured before that are 6 cm below where the robot actually stands, so</span>
+<span class="tok-comment">/// the first solve asks every leg to stretch down to a floor that is no longer there - and</span>
+<span class="tok-comment">/// the robot folds flat, which reads as the pose controller being broken.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Capturing on activation also makes the sliders mean the obvious thing: zero is wherever</span>
+<span class="tok-comment">/// the robot was when you ticked the box.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">captureStance</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |i| {
+        <span class="tok-kw">const</span> body: u32 = s.foot_body[i];
+        s.planted[i] = s.data.body_xpos[body] + zm.<span class="tok-fn">rotate</span>(s.data.body_xrot[body], s.foot_offset[i]);
+        <span class="tok-comment">// * AND THE SAME POINT IN THE TORSO'S FRAME, which is what a gait cycles around.</span>
+        s.foot_rest[i] = zm.<span class="tok-fn">rotate</span>(
+            zm.<span class="tok-fn">conjugate</span>(s.data.body_xrot[<span class="tok-num">1</span>]),
+            s.planted[i] - s.data.body_xpos[<span class="tok-num">1</span>],
+        );
+    }
+    s.rest_height = s.data.pos[m.jnt_qpos_adr[<span class="tok-num">0</span>] + <span class="tok-num">2</span>];
+    s.rest_rot = s.data.body_xrot[<span class="tok-num">1</span>];
+    <span class="tok-builtin">@memcpy</span>(s.stance, s.data.pos);
+    s.last_cmd = .{ <span class="tok-num">1e9</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> }; <span class="tok-comment">// force one solve</span>
+    <span class="tok-comment">// * THE TRIM RESETS WITH THE STANCE. It is an integrator, and an integrator carried across</span>
+    <span class="tok-comment">// a teleport is the same class of stale state as a warm start nobody cleared.</span>
+    s.trim_roll = <span class="tok-num">0</span>;
+    s.trim_pitch = <span class="tok-num">0</span>;
+    s.trim_countdown = <span class="tok-num">0</span>;
+    s.body_roll = <span class="tok-num">0</span>;
+    s.body_pitch = <span class="tok-num">0</span>;
+    s.body_yaw = <span class="tok-num">0</span>;
+    s.body_height = <span class="tok-num">0</span>;
+}
+
+<span class="tok-comment">/// Where a foot should be at a given point in its cycle, in the stance frame.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** A GAIT IS A FOOT TRAJECTORY AND FOUR PHASE OFFSETS --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Each leg runs the same cycle and they differ only in WHERE IN IT they are:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///   * **stance** (`phase &lt; duty`) - the foot is on the ground and travels straight backwards</span>
+<span class="tok-comment">///     under the body. This is what actually moves the robot: the body goes forward because</span>
+<span class="tok-comment">///     the planted foot goes back.</span>
+<span class="tok-comment">///   * **swing** (`phase &gt;= duty`) - the foot lifts and arcs forward to where stance will</span>
+<span class="tok-comment">///     start again.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * AND THE FAMOUS GAITS ARE THE SAME FUNCTION WITH DIFFERENT OFFSETS. Trot moves diagonal</span>
+<span class="tok-comment">/// pairs together (0, 0.5, 0.5, 0); pace moves the legs on each side together (0, 0.5, 0,</span>
+<span class="tok-comment">/// 0.5); bound moves front and back pairs (0, 0, 0.5, 0.5); walk spreads them evenly at</span>
+<span class="tok-comment">/// quarters. **Four numbers, not four algorithms** - which is worth seeing rather than being</span>
+<span class="tok-comment">/// told.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">footOffsetInCycle</span>(phase: f32, stride: f32, lift: f32, duty: f32) Vec {
+    <span class="tok-kw">const</span> wrapped: f32 = phase - <span class="tok-builtin">@floor</span>(phase);
+    <span class="tok-kw">if</span> (wrapped &lt; duty) {
+        <span class="tok-comment">// -- *** STANCE: THE FOOT TRAVELS BACKWARD RELATIVE TO THE BODY --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// `t` runs 0 to 1, so `0.5 - t` runs +stride/2 to -stride/2: the planted foot moves</span>
+        <span class="tok-comment">// backward under the body, and the body is carried forward. That is what walking is.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// ** THIS WAS `stride * (t - 0.5)` - the opposite - while the comment above it claimed</span>
+        <span class="tok-comment">// this behaviour. **A comment describing the intent while the code did the reverse**,</span>
+        <span class="tok-comment">// which is the third time in this project that a comment and its code disagreed and the</span>
+        <span class="tok-comment">// comment turned out to be the correct statement of what was wanted.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// Measured over 10 s, trot, with the stiffened contacts:</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">//     as written    hz 2.4  stride 0.20   **-5.25 m** (backward)</span>
+        <span class="tok-comment">//     as written    hz 2.0  stride 0.16   -3.85 m</span>
+        <span class="tok-comment">//     corrected     hz 2.0  stride 0.16   **+1.43 m** (forward)</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// * AND THE OLD NOTE RECORDED ONLY "about half a metre backwards", which is why this</span>
+        <span class="tok-comment">// read as slipping rather than as a sign error. **The contact stiffening from the creep</span>
+        <span class="tok-comment">// work is what made the feet grip**; once they gripped, a weak ambiguous drift became</span>
+        <span class="tok-comment">// unmistakable propulsion in the wrong direction.</span>
+        <span class="tok-kw">const</span> t: f32 = wrapped / duty;
+        <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(stride * (<span class="tok-num">0.5</span> - t), <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    }
+    <span class="tok-comment">// Swing: forward again, lifting in an arc that starts and ends at ground level.</span>
+    <span class="tok-kw">const</span> t: f32 = (wrapped - duty) / (<span class="tok-num">1.0</span> - duty);
+    <span class="tok-comment">// A HALF turn across the swing: zero at lift-off, zero at touch-down, peak in the</span>
+    <span class="tok-comment">// middle. `t` is already the fraction of the swing, so the `* pi` was only ever</span>
+    <span class="tok-comment">// there to reach `@sin`.</span>
+    <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(stride * (t - <span class="tok-num">0.5</span>), <span class="tok-num">0</span>, lift * <span class="tok-fn">sinTurns</span>(t * <span class="tok-num">0.5</span>));
+}
+
+<span class="tok-comment">/// Drive a gait by moving each foot's IK target around its cycle.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- *** WHAT THIS IS, AND WHAT IT IS NOT --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// This is an OPEN-LOOP gait: the feet trace a fixed cycle and the robot stays upright. It is</span>
+<span class="tok-comment">/// the simplest thing that deserves the name, and it demonstrates the stack - per-leg IK,</span>
+<span class="tok-comment">/// contact, a torque-limited controller - end to end.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// **It does not propel the robot properly.** Measured over ten seconds it drifts about half a</span>
+<span class="tok-comment">/// metre BACKWARDS whichever way the stance direction is set, which means the feet are slipping</span>
+<span class="tok-comment">/// through stance rather than gripping and pushing. The reason is structural rather than a</span>
+<span class="tok-comment">/// tuning miss: **the torso is commanded at its captured stance pose every frame**, so the legs</span>
+<span class="tok-comment">/// are always solving to put the body back where it started. The gait modulates the feet while</span>
+<span class="tok-comment">/// the body command quietly fights any forward motion they produce.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Making it walk properly means commanding the body FORWARD as well - a velocity to track</span>
+<span class="tok-comment">/// rather than a pose to hold - and then the foot placement has to respond to where the body</span>
+<span class="tok-comment">/// actually got to. That is a controller with feedback, which is what MPC and a learned policy</span>
+<span class="tok-comment">/// both are, and is the right place to solve it rather than here.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THIS IS `solveBodyPose` WITH TARGETS THAT MOVE. The body-pose controller already holds</span>
+<span class="tok-comment">/// four feet at commanded world positions through per-leg IK; a gait commands different</span>
+<span class="tok-comment">/// positions each frame. That the two share everything is not a coincidence - standing is a</span>
+<span class="tok-comment">/// gait whose feet happen not to go anywhere.</span>
+<span class="tok-comment">/// Put the whole scene back exactly as it started.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- *** WHAT "EVERYTHING" TURNED OUT TO MEAN --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Three attempts at this button failed, each because something ELSE remembered where things</span>
+<span class="tok-comment">/// had got to. Written out, because the list is longer than it looks and every omission</span>
+<span class="tok-comment">/// produced a different confusing symptom:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///   * **`home`** - what the PD controller tracks. Teleporting `data.pos` alone puts the robot</span>
+<span class="tok-comment">///     at the keyframe for exactly one frame before the controller drags it back, which reads</span>
+<span class="tok-comment">///     as the button doing nothing.</span>
+<span class="tok-comment">///   * **Velocities** - a robot reset mid-fall keeps its downward speed and falls again from</span>
+<span class="tok-comment">///     the new position, which looks like the reset placing it badly.</span>
+<span class="tok-comment">///   * **The PROJECTILES.** This was the one that actually exploded. Thrown balls are free</span>
+<span class="tok-comment">///     bodies in the same tree and stay where they landed; put the robot back at the origin</span>
+<span class="tok-comment">///     and it materialises INSIDE whichever ball came to rest there. Deep overlap, enormous</span>
+<span class="tok-comment">///     restoring force, robot across the map.</span>
+<span class="tok-comment">///   * **The gait and pose modes** - left running, the next frame immediately commands a</span>
+<span class="tok-comment">///     walking pose and the keyframe is never seen.</span>
+<span class="tok-comment">///   * **The captured stance** - what the sliders and the gait are relative to.</span>
+<span class="tok-comment">///   * **The warm start and the accumulator** - the solver's carried forces, and any physics</span>
+<span class="tok-comment">///     substeps the frame still owed.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * AND THE ROBOT GOES BACK TO THE ORIGIN. An earlier version kept its position and heading,</span>
+<span class="tok-comment">/// on the theory that "reset" means "stand up here". It does not: it means put it back.</span>
+<span class="tok-comment">/// Put the arm back to its half-bent rest, in `s.data.pos` and in the commanded `s.home`.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * HALF BENT IS A CHOICE WITH A REASON: it leaves 2.4 rad of travel each way, so the arm can</span>
+<span class="tok-comment">/// swing in either direction. Folded or extended, it can only help one way - and the gait's</span>
+<span class="tok-comment">/// counter-swing needs both halves of the cycle.</span>
+<span class="tok-comment">/// The arm's rest pose, root to tip: yaw, shoulder, elbow, wrist.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- ** HALF BENT IS A CHOICE WITH A REASON --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// It leaves roughly 2.4 rad of travel each way, so the shoulder can sweep in both directions</span>
+<span class="tok-comment">/// without approaching a stop. **An arm at its limit is dead weight at maximum lever arm** -</span>
+<span class="tok-comment">/// the failure that saturated every balance attempt in this example's history - and both the</span>
+<span class="tok-comment">/// gait's counter-swing and the routine's slow lift need room on either side.</span>
+<span class="tok-kw">const</span> arm_rest = [_]f32{ <span class="tok-num">0.0</span>, <span class="tok-num">1.1</span>, -<span class="tok-num">1.6</span>, <span class="tok-num">0.5</span> };
+<span class="tok-comment">/// The shoulder's rest angle, which the gait and routine sweep around.</span>
+<span class="tok-kw">const</span> arm_rest_shoulder: f32 = arm_rest[<span class="tok-num">1</span>];
+
+<span class="tok-comment">/// The `qpos` index of the arm's `n`th joint, counting root to tip, or null if there is none.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- *** IDENTIFIED BY ACTUATION MASK, NEVER BY NAME --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// An earlier version matched `s.robot.joints[j].name` using the MODEL's joint index `j`.</span>
+<span class="tok-comment">/// **Those are two different orderings** - `robot.joints` is MJCF parse order, `j` is the</span>
+<span class="tok-comment">/// importer's - so the comparison silently matched nothing, the arm kept its old pose, and a</span>
+<span class="tok-comment">/// control signal went into whatever joint sat at that index. It compiled, linted and passed</span>
+<span class="tok-comment">/// every gate.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * `limbActuation` FROM THE GRIPPER ALREADY MARKS EXACTLY THE ARM'S DOFS, and the gimbal's IK</span>
+<span class="tok-comment">/// uses it - so it is verified by a feature that visibly works. **When the lookup you want does</span>
+<span class="tok-comment">/// not exist, reach for a structure already proven by something else.**</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">armJointQ</span>(s: *<span class="tok-kw">const</span> State, n: usize) ?u32 {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">var</span> seen: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.njnt) |j| {
+        <span class="tok-kw">if</span> (m.jnt_type[j] != .hinge) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> v: u32 = m.jnt_dof_adr[j];
+        <span class="tok-kw">if</span> (v &gt;= m.nv <span class="tok-kw">or</span> !s.arm_act.powered[v]) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">if</span> (seen == n) {
+            <span class="tok-kw">return</span> m.jnt_qpos_adr[j];
+        }
+        seen += <span class="tok-num">1</span>;
+    }
+    <span class="tok-kw">return</span> null;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">armShoulderQ</span>(s: *<span class="tok-kw">const</span> State) ?u32 {
+    <span class="tok-kw">return</span> <span class="tok-fn">armJointQ</span>(s, <span class="tok-num">1</span>);
+}
+
+<span class="tok-comment">/// Put the arm back to its rest pose, in both the simulated state and the commanded one.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">setArmRest</span>(s: *State) void {
+    <span class="tok-kw">for</span> (arm_rest, <span class="tok-num">0</span>..) |angle, n| {
+        <span class="tok-kw">const</span> q: u32 = <span class="tok-fn">armJointQ</span>(s, n) <span class="tok-kw">orelse</span> <span class="tok-kw">continue</span>;
+        s.data.pos[q] = angle;
+        s.home[q] = angle;
+    }
+    s.data.stage = .stale;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">resetEverything</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+
+    <span class="tok-comment">// The robot: its home keyframe, at the origin, exactly as built.</span>
+    <span class="tok-kw">if</span> (!rmj.<span class="tok-fn">applyKeyframe</span>(m, &amp;s.data, s.robot.keyframes[<span class="tok-num">0</span>])) {
+        std.log.<span class="tok-fn">err</span>(<span class="tok-str">"quadruped: home keyframe refused on reset"</span>, .{});
+    }
+
+    <span class="tok-comment">// * THE BALLS, BACK ON THEIR SHELF. `applyKeyframe` deliberately writes only the robot's</span>
+    <span class="tok-comment">// slice - a ball in flight has no business being teleported by a pose button - so the free</span>
+    <span class="tok-comment">// bodies are put back here, one free joint at a time.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..ball_count) |i| {
+        <span class="tok-kw">const</span> body: u32 = s.imported.<span class="tok-fn">bodyIndex</span>(ball_names[i]) <span class="tok-kw">orelse</span> <span class="tok-kw">continue</span>;
+        <span class="tok-kw">const</span> j: u32 = m.body_jnt_adr[body];
+        <span class="tok-kw">const</span> q: u32 = m.jnt_qpos_adr[j];
+        <span class="tok-kw">const</span> parked: Vec = <span class="tok-fn">parkedBall</span>(i);
+        s.data.pos[q + <span class="tok-num">0</span>] = parked[<span class="tok-num">0</span>];
+        s.data.pos[q + <span class="tok-num">1</span>] = parked[<span class="tok-num">1</span>];
+        s.data.pos[q + <span class="tok-num">2</span>] = parked[<span class="tok-num">2</span>];
+        s.data.pos[q + <span class="tok-num">3</span>] = <span class="tok-num">0</span>;
+        s.data.pos[q + <span class="tok-num">4</span>] = <span class="tok-num">0</span>;
+        s.data.pos[q + <span class="tok-num">5</span>] = <span class="tok-num">0</span>;
+        s.data.pos[q + <span class="tok-num">6</span>] = <span class="tok-num">1</span>;
+    }
+    s.next_ball = <span class="tok-num">0</span>;
+    s.want_throw = false;
+
+    <span class="tok-comment">// Nothing is moving, nothing is touching, and the solver remembers nothing.</span>
+    <span class="tok-builtin">@memset</span>(s.data.vel, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.data.acc, <span class="tok-num">0</span>);
+    <span class="tok-builtin">@memset</span>(s.data.applied_force, <span class="tok-num">0</span>);
+    s.data.<span class="tok-fn">clearContacts</span>();
+    s.data.<span class="tok-fn">forgetWarmStart</span>();
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+
+    <span class="tok-comment">// What the controller tracks, and the modes that would immediately overwrite it.</span>
+    <span class="tok-builtin">@memcpy</span>(s.home, s.data.pos);
+    s.gait_on = false;
+    s.posing = false;
+    s.gait_phase = <span class="tok-num">0</span>;
+
+    <span class="tok-comment">// -- *** AND THE ARM, WHICH "EVERYTHING" HAS TO INCLUDE --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// The padded keyframe carries the half-bent pose, but the GIMBAL will re-solve the arm on</span>
+    <span class="tok-comment">// the very next frame if it is left on - so the reset has to clear the mode as well as the</span>
+    <span class="tok-comment">// angles, or the arm snaps straight back to wherever it was holding.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * AND `hold_point` IS A CAPTURED WORLD POSITION. Left alone it survives the reset and the</span>
+    <span class="tok-comment">// arm reaches for a point relative to feet that have moved - the same stale-anchor problem</span>
+    <span class="tok-comment">// that made the gimbal drift, arriving through the reset path instead.</span>
+    s.arm_on = false;
+    s.hold_point = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    s.hold_error = <span class="tok-num">0</span>;
+    s.hold_worst = <span class="tok-num">0</span>;
+    s.routine = false;
+    s.routine_clock = <span class="tok-num">0</span>;
+    s.routine_error_sum = <span class="tok-num">0</span>;
+    s.routine_error_count = <span class="tok-num">0</span>;
+    s.routine_worst = <span class="tok-num">0</span>;
+    s.trim_roll = <span class="tok-num">0</span>;
+    s.trim_pitch = <span class="tok-num">0</span>;
+    s.trim_countdown = <span class="tok-num">0</span>;
+    s.body_roll = <span class="tok-num">0</span>;
+    s.body_pitch = <span class="tok-num">0</span>;
+    s.body_yaw = <span class="tok-num">0</span>;
+    s.body_height = <span class="tok-num">0</span>;
+    s.foot_slip = <span class="tok-num">0</span>;
+    s.cone_worst = <span class="tok-num">0</span>;
+    s.cone_over = <span class="tok-num">0</span>;
+    <span class="tok-fn">setArmRest</span>(s);
+
+    <span class="tok-comment">// * AND THE OWED SUBSTEPS. The accumulator can be holding most of a frame's worth of</span>
+    <span class="tok-comment">// physics; left alone, the reset is immediately followed by a burst of steps that runs the</span>
+    <span class="tok-comment">// scene forward before anyone sees it.</span>
+    s.accumulator = <span class="tok-num">0</span>;
+    s.peak_force = <span class="tok-num">0</span>;
+
+    <span class="tok-comment">// * AND THE BRIDGE IS TOLD THIS WAS A TELEPORT. It cannot tell by looking - a proxy that</span>
+    <span class="tok-comment">// was there and is now here looks the same whether it travelled or was moved - and a swept</span>
+    <span class="tok-comment">// contact across the gap finds the floor and fires the robot away. See `Bridge.teleported`.</span>
+    s.bridge.<span class="tok-fn">teleported</span>();
+
+    <span class="tok-fn">captureStance</span>(s);
+}
+
+<span class="tok-comment">/// Solve every hinge for a commanded torso pose and a set of foot goals, and write the answer</span>
+<span class="tok-comment">/// into `s.home`.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// -- *** THE ONE SHAPE BOTH SOLVERS HAD --</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `solveGait` and `solveBodyPose` were written independently and converged on exactly the same</span>
+<span class="tok-comment">/// six steps: save `data.pos`, seed a pose, plant the torso, IK four legs, harvest the hinges</span>
+<span class="tok-comment">/// into `home`, restore. **They differed only in the seed and the foot goals** - everything else</span>
+<span class="tok-comment">/// was duplicated, including two subtle invariants that are easy to get wrong in one copy and</span>
+<span class="tok-comment">/// not the other.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THE FIRST INVARIANT: `data.pos` IS SCRATCH HERE, NOT STATE. Both solvers use the live pose</span>
+<span class="tok-comment">/// array as an IK workspace and must put it back - a solve that leaks into the simulated state</span>
+<span class="tok-comment">/// teleports the robot. The save/restore is the reason this is a function rather than inline</span>
+<span class="tok-comment">/// code in two places.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// ** THE SECOND: SEED FROM A COMMAND, NEVER FROM THE MEASURED ROBOT. `solveBodyPose`'s own</span>
+<span class="tok-comment">/// comment records why - seeding from where the robot actually got to closes a feedback loop</span>
+<span class="tok-comment">/// through the IK, and the pose walks away from itself. Both callers pass a command.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">solveLegsInto</span>(
+    s: *State,
+    seed: []<span class="tok-kw">const</span> f32,
+    ground: Vec,
+    attitude: zm.Quat,
+    height: f32,
+    goals: [<span class="tok-num">4</span>]Vec,
+) f32 {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> saved: []f32 = s.pose_scratch;
+    <span class="tok-builtin">@memcpy</span>(saved, s.data.pos);
+
+    <span class="tok-comment">// -- *** ONLY THE HINGES COME FROM THE SEED; THE ROOT'S GROUND POSITION IS A PARAMETER --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// A full `@memcpy` of the seed was a refactor regression that cost a working gait. The gait</span>
+    <span class="tok-comment">// computes its foot goals from the LIVE torso position, then seeds from `home` - whose root</span>
+    <span class="tok-comment">// x/y is wherever the command was last written, which is stale. **The legs then solve for a</span>
+    <span class="tok-comment">// body that is not where the goals assume it is**, and the robot dances in place and falls.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THE TWO CALLERS GENUINELY DIFFER HERE, which is why this is an argument rather than a</span>
+    <span class="tok-comment">// convention: the gait wants the LIVE ground position (the body is moving and the goals</span>
+    <span class="tok-comment">// follow it), and posing wants the STANCE one (the body returns to where it was captured).</span>
+    <span class="tok-comment">// Collapsing that difference is exactly what broke it.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.njnt) |j| {
+        <span class="tok-kw">if</span> (m.jnt_type[j] != .hinge) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> q: u32 = m.jnt_qpos_adr[j];
+        s.data.pos[q] = seed[q];
+    }
+    <span class="tok-kw">const</span> root: u32 = m.jnt_qpos_adr[<span class="tok-num">0</span>];
+    s.data.pos[root + <span class="tok-num">0</span>] = ground[<span class="tok-num">0</span>];
+    s.data.pos[root + <span class="tok-num">1</span>] = ground[<span class="tok-num">1</span>];
+    s.data.pos[root + <span class="tok-num">2</span>] = height;
+    s.data.pos[root + <span class="tok-num">3</span>] = attitude[<span class="tok-num">0</span>];
+    s.data.pos[root + <span class="tok-num">4</span>] = attitude[<span class="tok-num">1</span>];
+    s.data.pos[root + <span class="tok-num">5</span>] = attitude[<span class="tok-num">2</span>];
+    s.data.pos[root + <span class="tok-num">6</span>] = attitude[<span class="tok-num">3</span>];
+    s.data.stage = .stale;
+
+    <span class="tok-kw">var</span> worst: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |i| {
+        <span class="tok-kw">const</span> result: ctl.Ik.Result = (ctl.Ik{ .max_iterations = <span class="tok-num">12</span>, .max_step = <span class="tok-num">0.5</span> }).<span class="tok-fn">solve</span>(
+            m,
+            &amp;s.data,
+            s.legs[i],
+            .{ .body = s.foot_body[i], .offset = s.foot_offset[i], .goal = goals[i] },
+            s.ik_scratch,
+        );
+        worst = <span class="tok-builtin">@max</span>(worst, result.error_distance);
+    }
+    <span class="tok-kw">return</span> worst;
+}
+
+<span class="tok-comment">/// Copy every hinge from the scratch pose into `s.home`, then restore the simulated state.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * SPLIT FROM `solveLegsInto` BECAUSE THE GAIT WRITES THE ARM IN BETWEEN - the shoulder's</span>
+<span class="tok-comment">/// swing has to land after the legs are solved and before the pose is harvested, which is the</span>
+<span class="tok-comment">/// ordering bug that once made the arm's motion silently disappear.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">harvestPose</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.njnt) |j| {
+        <span class="tok-kw">if</span> (m.jnt_type[j] != .hinge) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> q: u32 = m.jnt_qpos_adr[j];
+        s.home[q] = s.data.pos[q];
+    }
+    <span class="tok-builtin">@memcpy</span>(s.data.pos, s.pose_scratch);
+    s.data.stage = .stale;
+    rbt.<span class="tok-fn">forward</span>(m, &amp;s.data);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">solveGait</span>(s: *State, dt: f32) void {
+    s.gait_phase += dt * s.gait_hz;
+    s.gait_phase -= <span class="tok-builtin">@floor</span>(s.gait_phase);
+
+    <span class="tok-comment">// -- *** FOOT TARGETS ARE BODY-RELATIVE, NOT WORLD-FIXED --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// A gait's cycle is relative to the HIP. During stance the foot travels backwards relative</span>
+    <span class="tok-comment">// to the body by one stride while the body advances by one - so the foot stays put in the</span>
+    <span class="tok-comment">// world without anyone pinning it there. **Pinning it in world coordinates fights that**:</span>
+    <span class="tok-comment">// the first version did, and the robot walked 1.1 m and arrived on its belly, legs stretched</span>
+    <span class="tok-comment">// out behind toward targets that never moved.</span>
+    <span class="tok-kw">const</span> torso_pos: Vec = s.data.body_xpos[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> torso_rot: zm.Quat = s.data.body_xrot[<span class="tok-num">1</span>];
+    <span class="tok-kw">var</span> goals: [<span class="tok-num">4</span>]Vec = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |i| {
+        <span class="tok-kw">const</span> cycle: Vec = <span class="tok-fn">footOffsetInCycle</span>(
+            s.gait_phase + s.gait_offset[i],
+            s.gait_stride,
+            s.gait_lift,
+            s.gait_duty,
+        );
+        goals[i] = torso_pos + zm.<span class="tok-fn">rotate</span>(torso_rot, s.foot_rest[i] + cycle);
+    }
+
+    <span class="tok-comment">// * THE COMMANDED ATTITUDE RIDES THE GAIT. Feedforward only: the legs solve for the pose the</span>
+    <span class="tok-comment">// sliders ask for, and nothing measures the result and corrects it. That distinction is why</span>
+    <span class="tok-comment">// walking and posing can combine - the attitude TRIM, which does measure and correct, topples</span>
+    <span class="tok-comment">// the robot in under two seconds because a walking robot's pitch is not an error to remove.</span>
+    <span class="tok-kw">const</span> posed: zm.Quat = <span class="tok-fn">commandedAttitude</span>(s);
+    <span class="tok-comment">// * THE LIVE GROUND POSITION: the body is travelling and the foot goals were built around</span>
+    <span class="tok-comment">// where it actually is.</span>
+    s.pose_error = <span class="tok-fn">solveLegsInto</span>(s, s.home, torso_pos, posed, s.rest_height + s.body_height, goals);
+
+    <span class="tok-comment">// ** THE ARM IS WRITTEN BETWEEN THE SOLVE AND THE HARVEST, which is the only correct place:</span>
+    <span class="tok-comment">// after the legs have used the scratch pose, before it is copied into `home`.</span>
+    <span class="tok-kw">if</span> (<span class="tok-fn">armShoulderQ</span>(s)) |q| {
+        <span class="tok-kw">var</span> shoulder: f32 = arm_rest_shoulder;
+        <span class="tok-comment">// The trot's counter-swing, locked to the gait clock. Zero for a crawl, which has no</span>
+        <span class="tok-comment">// wobble to cancel and is measurably worse with one.</span>
+        <span class="tok-kw">if</span> (s.arm_swing_amp != <span class="tok-num">0</span>) {
+            shoulder += s.arm_swing_amp * <span class="tok-fn">sinTurns</span>(s.gait_phase + s.arm_swing_phase);
+        }
+        <span class="tok-comment">// * AND THE SLOW RISE AND FALL, on its own incommensurate clock. It sweeps around the</span>
+        <span class="tok-comment">// half-bent rest so the shoulder never nears a stop - which is what turned the arm into</span>
+        <span class="tok-comment">// dead weight at maximum lever arm in every earlier balance attempt.</span>
+        <span class="tok-kw">if</span> (s.routine <span class="tok-kw">and</span> s.arm_lift_amp != <span class="tok-num">0</span>) {
+            shoulder += s.arm_lift_amp * <span class="tok-fn">sinTurns</span>(s.routine_clock * s.arm_lift_rate);
+        }
+        s.data.pos[q] = shoulder;
+    }
+    <span class="tok-fn">harvestPose</span>(s);
+}
+
+<span class="tok-comment">/// The torso attitude the sliders and the routine are asking for.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">commandedAttitude</span>(s: *<span class="tok-kw">const</span> State) zm.Quat {
+    <span class="tok-kw">return</span> zm.<span class="tok-fn">qmul</span>(
+        zm.<span class="tok-fn">qmul</span>(
+            zm.<span class="tok-fn">quatFromAxisAngle</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>), s.body_yaw),
+            zm.<span class="tok-fn">quatFromAxisAngle</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>), s.body_pitch + s.trim_pitch),
+        ),
+        zm.<span class="tok-fn">qmul</span>(zm.<span class="tok-fn">quatFromAxisAngle</span>(<span class="tok-fn">vec</span>(<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), s.body_roll + s.trim_roll), s.rest_rot),
+    );
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">solveBodyPose</span>(s: *State) void {
+    <span class="tok-comment">// * THE FEET STAY WHERE THEY WERE PLANTED, in world coordinates - the opposite of the gait,</span>
+    <span class="tok-comment">// and correct for the opposite reason: a posing robot's body moves while its feet do not.</span>
+    <span class="tok-comment">// * THE STANCE GROUND POSITION: a posing robot returns to where it was captured, and its</span>
+    <span class="tok-comment">// planted feet are in world coordinates around that point.</span>
+    <span class="tok-kw">const</span> root: u32 = s.imported.model.jnt_qpos_adr[<span class="tok-num">0</span>];
+    s.pose_error = <span class="tok-fn">solveLegsInto</span>(
+        s,
+        s.stance,
+        <span class="tok-fn">vec</span>(s.stance[root], s.stance[root + <span class="tok-num">1</span>], <span class="tok-num">0</span>),
+        <span class="tok-fn">commandedAttitude</span>(s),
+        s.rest_height + s.body_height,
+        s.planted,
+    );
+    <span class="tok-fn">harvestPose</span>(s);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">control</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-builtin">@memset</span>(s.data.applied_force, <span class="tok-num">0</span>);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.njnt) |j| {
+        <span class="tok-kw">if</span> (m.jnt_type[j] != .hinge) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> q: u32 = m.jnt_qpos_adr[j];
+        <span class="tok-kw">const</span> v: u32 = m.jnt_dof_adr[j];
+        <span class="tok-kw">const</span> wanted: f32 = s.kp * (s.home[q] - s.data.pos[q]) - s.kv * s.data.vel[v];
+        <span class="tok-comment">// * The clamp is the motor's rating, and it is what makes the kp slider mean</span>
+        <span class="tok-comment">// something: without it, any gain eventually wins and the robot is infinitely strong.</span>
+        s.data.applied_force[v] = <span class="tok-fn">clamp</span>(wanted, -<span class="tok-num">35.55</span>, <span class="tok-num">35.55</span>) + s.data.bias_force[v];
+    }
+}
+
+<span class="tok-comment">/// Throw a ball at the robot, from wherever the camera is looking from.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * AIMED FROM THE CAMERA, so "throw" means what it looks like it means: the ball leaves the</span>
+<span class="tok-comment">/// viewer's position and travels toward the robot's centre. A fixed launch direction would be</span>
+<span class="tok-comment">/// unusable the moment the view is orbited, which on a phone is immediately.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">throwBall</span>(s: *State, cam: Camera3D) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> body: u32 = s.imported.<span class="tok-fn">bodyIndex</span>(ball_names[s.next_ball]) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+    s.next_ball = (s.next_ball + <span class="tok-num">1</span>) % ball_count;
+
+    <span class="tok-comment">// -- ** FROM THE EYE, ALONG THE VIEW - not at a fixed point --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// This aimed at `(0, 0, 0.25)` regardless of where the camera was pointing, so every throw</span>
+    <span class="tok-comment">// curved back toward the robot however you had orbited. That is a fine turret and a poor</span>
+    <span class="tok-comment">// projectile: you cannot miss with it, and missing is most of what makes throwing things</span>
+    <span class="tok-comment">// at a robot informative.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// * THE CAMERA IS Y-UP AND THE SIMULATION IS Z-UP. The demo draws through</span>
+    <span class="tok-comment">// `rotationX(-90 deg)`, which sends sim `(x, y, z)` to display `(x, z, -y)`; going back is</span>
+    <span class="tok-comment">// therefore display `(X, Y, Z)` to sim `(X, -Z, Y)`. Both the eye and the direction need</span>
+    <span class="tok-comment">// it - converting only the position gives a ball that starts in the right place and flies</span>
+    <span class="tok-comment">// somewhere else entirely.</span>
+    <span class="tok-kw">const</span> toSim = <span class="tok-kw">struct</span> {
+        <span class="tok-kw">fn</span> <span class="tok-fn">go</span>(v: Vec) Vec {
+            <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(v[<span class="tok-num">0</span>], -v[<span class="tok-num">2</span>], v[<span class="tok-num">1</span>]);
+        }
+    }.go;
+    <span class="tok-kw">const</span> eye: Vec = <span class="tok-fn">toSim</span>(cam.position);
+    <span class="tok-kw">const</span> aim: Vec = <span class="tok-fn">normalize3</span>(<span class="tok-fn">toSim</span>(cam.target) - eye);
+
+    <span class="tok-comment">// * NUDGED FORWARD BY THE BALL'S OWN RADIUS, and no more. Starting exactly at the eye puts</span>
+    <span class="tok-comment">// the ball on the near plane where it is clipped, so the throw looks like it produced</span>
+    <span class="tok-comment">// nothing until the ball is already halfway to the robot.</span>
+    <span class="tok-kw">const</span> from: Vec = eye + aim * <span class="tok-fn">splat</span>(ball_radius);
+
+    <span class="tok-kw">const</span> j: u32 = m.body_jnt_adr[body];
+    <span class="tok-kw">const</span> q: u32 = m.jnt_qpos_adr[j];
+    <span class="tok-kw">const</span> v: u32 = m.jnt_dof_adr[j];
+    s.data.pos[q + <span class="tok-num">0</span>] = from[<span class="tok-num">0</span>];
+    s.data.pos[q + <span class="tok-num">1</span>] = from[<span class="tok-num">1</span>];
+    s.data.pos[q + <span class="tok-num">2</span>] = from[<span class="tok-num">2</span>];
+    s.data.pos[q + <span class="tok-num">3</span>] = <span class="tok-num">0</span>;
+    s.data.pos[q + <span class="tok-num">4</span>] = <span class="tok-num">0</span>;
+    s.data.pos[q + <span class="tok-num">5</span>] = <span class="tok-num">0</span>;
+    s.data.pos[q + <span class="tok-num">6</span>] = <span class="tok-num">1</span>;
+    <span class="tok-builtin">@memset</span>(s.data.vel[v..][<span class="tok-num">0</span>..<span class="tok-num">6</span>], <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> speed: f32 = <span class="tok-num">4.5</span>;
+    s.data.vel[v + <span class="tok-num">0</span>] = aim[<span class="tok-num">0</span>] * speed;
+    s.data.vel[v + <span class="tok-num">1</span>] = aim[<span class="tok-num">1</span>] * speed;
+    s.data.vel[v + <span class="tok-num">2</span>] = aim[<span class="tok-num">2</span>] * speed;
+    s.data.stage = .stale;
+    <span class="tok-comment">// * The warm start describes contacts that no longer exist for this body - see</span>
+    <span class="tok-comment">// `Data.forgetWarmStart`. Cheap, and the alternative is an impulse from a different scene.</span>
+    s.data.<span class="tok-fn">forgetWarmStart</span>();
+}
+
+<span class="tok-comment">/// Shove the trunk sideways, to see whether the legs catch it.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">shove</span>(s: *State) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.njnt) |j| {
+        <span class="tok-kw">if</span> (m.jnt_type[j] == .free) {
+            <span class="tok-comment">// The free joint's velocity DOFs are linear first, then angular.</span>
+            <span class="tok-kw">const</span> v: u32 = m.jnt_dof_adr[j];
+            s.data.vel[v + <span class="tok-num">0</span>] += <span class="tok-num">1.2</span>;
+            s.data.vel[v + <span class="tok-num">1</span>] += <span class="tok-num">0.4</span>;
+            s.data.stage = .stale;
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+
+    <span class="tok-comment">// * ONCE PER FRAME, NOT PER SUBSTEP. It answers "what should the legs be doing", which</span>
+    <span class="tok-comment">// only changes when a slider moves. Solving it inside the fixed-timestep loop recomputes</span>
+    <span class="tok-comment">// the same answer for every substep and the cost multiplies - a lesson the KUKA demo paid</span>
+    <span class="tok-comment">// for in frame rate.</span>
+    <span class="tok-kw">if</span> (s.posing) {
+        <span class="tok-comment">// * ONLY WHEN A SLIDER MOVED. The answer is a function of the command alone, so</span>
+        <span class="tok-comment">// recomputing it every frame cannot improve it and - as the comment in `solveBodyPose`</span>
+        <span class="tok-comment">// records - actively destabilises the robot.</span>
+        <span class="tok-kw">if</span> (s.routine) {
+            <span class="tok-comment">// * TWO INDEPENDENT RATES. Pitch and yaw in quadrature sweep the nose round a cone;</span>
+            <span class="tok-comment">// roll rocks at a different frequency entirely.</span>
+            s.routine_clock += f.time.delta_time;
+            <span class="tok-kw">const</span> cone: f32 = s.routine_clock * s.cone_rate * <span class="tok-num">2.0</span> * pi;
+            <span class="tok-kw">const</span> rock: f32 = s.routine_clock * s.roll_rate * <span class="tok-num">2.0</span> * pi;
+            s.body_pitch = s.cone_amount * <span class="tok-builtin">@cos</span>(cone);
+            s.body_yaw = s.cone_amount * <span class="tok-builtin">@sin</span>(cone);
+            s.body_roll = s.roll_amount * <span class="tok-builtin">@sin</span>(rock);
+            <span class="tok-kw">const</span> bob: f32 = s.routine_clock * s.bob_rate * <span class="tok-num">2.0</span> * pi;
+            s.body_height = s.bob_amount * <span class="tok-builtin">@sin</span>(bob);
+        }
+        <span class="tok-kw">const</span> cmd: [<span class="tok-num">4</span>]f32 = .{ s.body_roll, s.body_pitch, s.body_yaw, s.body_height };
+        <span class="tok-kw">var</span> resolve: bool = !std.mem.<span class="tok-fn">eql</span>(f32, &amp;cmd, &amp;s.last_cmd);
+
+        <span class="tok-comment">// -- *** CLOSE THE LOOP ON THE TORSO, NOT JUST ON THE JOINTS --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// Read what the torso is ACTUALLY doing relative to its own rest attitude, and integrate</span>
+        <span class="tok-comment">// the shortfall into a trim. Comparing against world level instead would fold in whatever</span>
+        <span class="tok-comment">// tilt the settled stance already had, which is not the slider's fault and not its job.</span>
+        <span class="tok-kw">const</span> seen: Vec = zm.<span class="tok-fn">quatToEulerXYZ</span>(
+            zm.<span class="tok-fn">qmul</span>(s.data.body_xrot[<span class="tok-num">1</span>], zm.<span class="tok-fn">conjugate</span>(s.rest_rot)),
+        );
+        s.seen_roll = seen[<span class="tok-num">0</span>];
+        s.seen_pitch = seen[<span class="tok-num">1</span>];
+        <span class="tok-comment">// -- *** THE ATTITUDE TRIM IS OFF WHILE WALKING --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// The trim integrates measured pitch error and folds it into the commanded attitude. On</span>
+        <span class="tok-comment">// a STANDING robot that is exactly right - it took the sliders from 16-32% short to</span>
+        <span class="tok-comment">// under 3%. **On a walking one it fights the gait**, because a trot pitches by design</span>
+        <span class="tok-comment">// every step and the integrator treats that as an error to remove.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// Measured, trot 10 s with the arm:</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">//     trim off   **0.957 m**, standing, pitch flat at -0.026</span>
+        <span class="tok-comment">//     trim on      0.123 m, **FELL at 1.80 s**, pitch +0.229 in the first second</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// * THAT IS SIMON'S OSCILLATION AND FALL, REPRODUCED AND ISOLATED. The probe walked</span>
+        <span class="tok-comment">// forward for many turns while the demo toppled, and this loop is the entire difference</span>
+        <span class="tok-comment">// between them - the fourth bug in this file caused by two controllers writing one</span>
+        <span class="tok-comment">// array, and the one that had gone longest unfound.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// ** AN INTEGRATOR NEEDS A SETPOINT THAT IS ACTUALLY REACHABLE AND STEADY. Level is both</span>
+        <span class="tok-comment">// while standing; neither while walking.</span>
+        <span class="tok-kw">if</span> (s.gait_on) {
+            s.trim_roll = <span class="tok-num">0</span>;
+            s.trim_pitch = <span class="tok-num">0</span>;
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.trim_countdown &gt; <span class="tok-num">0</span>) {
+            s.trim_countdown -= <span class="tok-num">1</span>;
+        } <span class="tok-kw">else</span> {
+            <span class="tok-kw">const</span> roll_gap: f32 = s.body_roll - seen[<span class="tok-num">0</span>];
+            <span class="tok-kw">const</span> pitch_gap: f32 = s.body_pitch - seen[<span class="tok-num">1</span>];
+            <span class="tok-comment">// * A GAIN WELL UNDER 1, because this integrator sits on top of a PD that is itself</span>
+            <span class="tok-comment">// still settling. Correcting the whole gap at once fights the transient it is</span>
+            <span class="tok-comment">// measuring and rings.</span>
+            <span class="tok-kw">if</span> (<span class="tok-builtin">@abs</span>(roll_gap) &gt; <span class="tok-num">0.002</span> <span class="tok-kw">or</span> <span class="tok-builtin">@abs</span>(pitch_gap) &gt; <span class="tok-num">0.002</span>) {
+                s.trim_roll = <span class="tok-fn">clamp</span>(s.trim_roll + <span class="tok-num">0.5</span> * roll_gap, -<span class="tok-num">0.4</span>, <span class="tok-num">0.4</span>);
+                s.trim_pitch = <span class="tok-fn">clamp</span>(s.trim_pitch + <span class="tok-num">0.5</span> * pitch_gap, -<span class="tok-num">0.4</span>, <span class="tok-num">0.4</span>);
+                resolve = true;
+            }
+            <span class="tok-comment">// *** FOUR, NOT TWELVE, AND BOTH ENDS ARE MEASURED. On the moving routine the</span>
+            <span class="tok-comment">// trim's mean lag is 0.0182 rad at a cadence of 12 and **0.0098 at 4** - a free</span>
+            <span class="tok-comment">// 1.9x. At a cadence of 1 the robot FALLS OVER (3.03 rad), which is</span>
+            <span class="tok-comment">// `solveBodyPose`'s warning about re-solving every frame, confirmed rather than</span>
+            <span class="tok-comment">// taken on trust. Four is measured to be inside that wall, not guessed to be.</span>
+            s.trim_countdown = <span class="tok-num">4</span>;
+        }
+
+        <span class="tok-comment">// -- *** THE ARM REACHES FOR A MOVING TARGET --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// A circle in front of the robot, in the trunk's own frame - so as the torso rolls and</span>
+
+        <span class="tok-comment">// -- ** SLIP AND FRICTION DEMAND, MEASURED LIVE --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// `rows_per_contact` is a PYRAMID BASIS: the four rows sum to the normal load, and the</span>
+        <span class="tok-comment">// tangential content is what the opposing pairs disagree about. The coefficient comes</span>
+        <span class="tok-comment">// from the contact itself rather than a number typed here, so the ratio means what it</span>
+        <span class="tok-comment">// says - and **above 1.0 is a foot being asked for force the ground does not have.**</span>
+        {
+            <span class="tok-kw">var</span> slip: f32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |i| {
+                <span class="tok-kw">const</span> at: Vec = s.data.body_xpos[s.foot_body[i]] +
+                    zm.<span class="tok-fn">rotate</span>(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+                slip += <span class="tok-fn">length3</span>(at - s.planted[i]);
+            }
+            s.foot_slip = slip;
+            <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.data.contact_count) |c| {
+                <span class="tok-kw">const</span> base: usize = c * rbt.rows_per_contact;
+                <span class="tok-kw">var</span> normal: f32 = <span class="tok-num">0</span>;
+                <span class="tok-kw">for</span> (<span class="tok-num">0</span>..rbt.rows_per_contact) |r| {
+                    normal += s.data.constraint_force[base + r];
+                }
+                <span class="tok-kw">if</span> (normal &lt; <span class="tok-num">1.0</span>) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> t1: f32 = s.data.constraint_force[base] - s.data.constraint_force[base + <span class="tok-num">1</span>];
+                <span class="tok-kw">const</span> t2: f32 = s.data.constraint_force[base + <span class="tok-num">2</span>] - s.data.constraint_force[base + <span class="tok-num">3</span>];
+                <span class="tok-kw">const</span> tang: f32 = <span class="tok-builtin">@sqrt</span>(t1 * t1 + t2 * t2);
+                <span class="tok-kw">const</span> mu: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">0.01</span>, s.data.contacts[c].friction[<span class="tok-num">0</span>]);
+                <span class="tok-kw">const</span> ratio: f32 = tang / (mu * normal);
+                s.cone_worst = <span class="tok-builtin">@max</span>(s.cone_worst, ratio);
+                <span class="tok-kw">if</span> (ratio &gt; <span class="tok-num">0.98</span>) {
+                    s.cone_over += <span class="tok-num">1</span>;
+                }
+            }
+        }
+
+        <span class="tok-comment">// ** THE LAG, SCORED. A routine that only looks impressive proves nothing; the number is</span>
+        <span class="tok-comment">// what says whether the controller is keeping up with it.</span>
+        <span class="tok-kw">if</span> (s.routine <span class="tok-kw">and</span> s.routine_clock &gt; <span class="tok-num">1.5</span>) {
+            <span class="tok-kw">const</span> gap: f32 = <span class="tok-builtin">@sqrt</span>(
+                (s.body_roll - seen[<span class="tok-num">0</span>]) * (s.body_roll - seen[<span class="tok-num">0</span>]) +
+                    (s.body_pitch - seen[<span class="tok-num">1</span>]) * (s.body_pitch - seen[<span class="tok-num">1</span>]),
+            );
+            s.routine_error_sum += gap;
+            s.routine_error_count += <span class="tok-num">1</span>;
+            s.routine_worst = <span class="tok-builtin">@max</span>(s.routine_worst, gap);
+        }
+
+        <span class="tok-kw">if</span> (resolve) {
+            s.last_cmd = cmd;
+            <span class="tok-fn">solveBodyPose</span>(s);
+        }
+
+        <span class="tok-comment">// -- *** THE ARM COUNTERS *AFTER* THE TORSO SOLVE, NOT BEFORE --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// `solveBodyPose` copies EVERY hinge joint from `stance`, arm included - so running the</span>
+        <span class="tok-comment">// arm's IK before it meant the counter-animation was overwritten the instant the torso</span>
+        <span class="tok-comment">// re-solved. **The arm was solving correctly and its answer was being thrown away**,</span>
+        <span class="tok-comment">// which looks exactly like an arm that never counters at all.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// * ORDER IS PART OF A CONTROLLER'S DEFINITION. Two solves writing the same array is a</span>
+        <span class="tok-comment">// sequencing bug, not a control one, and no amount of tuning either would have shown it.</span>
+        <span class="tok-comment">// pitches, the world-space target moves with it and the arm must chase a point that is</span>
+        <span class="tok-comment">// itself being thrown around. That coupling is the whole point: the arm's mass swings,</span>
+        <span class="tok-comment">// the legs feel it, and neither controller is told about the other.</span>
+        <span class="tok-kw">if</span> (s.arm_on) {
+            s.arm_clock += f.time.delta_time;
+            <span class="tok-comment">// -- *** A FIXED POINT IN THE WORLD, NOT A CIRCLE IN THE BODY'S FRAME --</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// Captured once, above where the robot is standing, and then held. Because the goal</span>
+            <span class="tok-comment">// does not move, every joint motion the arm makes exists purely to CANCEL the base's</span>
+            <span class="tok-comment">// - which is what makes the gimbal effect legible: the body weaves and the gripper</span>
+            <span class="tok-comment">// does not.</span>
+            <span class="tok-comment">// -- *** THE HELD POINT IS RELATIVE TO THE FEET, NOT TO THE WORLD --</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// Pinned in absolute world coordinates it is a target the robot slowly walks away</span>
+            <span class="tok-comment">// from: the feet slide, and over 30 s the gripper's mean error grew from 20 mm to</span>
+            <span class="tok-comment">// 61 mm chasing a point that had not moved while the robot had.</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// * THE FEET ARE WHERE THE ROBOT ACTUALLY IS. Anchoring to their average means the</span>
+            <span class="tok-comment">// point travels with any drift the legs accumulate, so the arm counters the TORSO's</span>
+            <span class="tok-comment">// motion - which is the thing it is for - instead of also fighting the base's slow</span>
+            <span class="tok-comment">// walk. Simon's correction, and the same principle as anchoring the torso reference</span>
+            <span class="tok-comment">// to current feet rather than to a stored stance.</span>
+            <span class="tok-kw">var</span> foot_mean: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+            <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |i| {
+                foot_mean += s.data.body_xpos[s.foot_body[i]] +
+                    zm.<span class="tok-fn">rotate</span>(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+            }
+            foot_mean /= <span class="tok-fn">splat</span>(<span class="tok-num">4.0</span>);
+            <span class="tok-kw">const</span> goal: Vec = <span class="tok-fn">vec</span>(
+                foot_mean[<span class="tok-num">0</span>] + s.hold_offset[<span class="tok-num">0</span>],
+                foot_mean[<span class="tok-num">1</span>] + s.hold_offset[<span class="tok-num">1</span>],
+                foot_mean[<span class="tok-num">2</span>] + s.hold_height,
+            );
+            s.hold_point = goal;
+
+            <span class="tok-comment">// * IK FROM THE ARM'S CURRENT POSE, restored afterwards - the solve must not leave</span>
+            <span class="tok-comment">// the simulated state anywhere, only produce a target for the servo.</span>
+            <span class="tok-kw">const</span> keep_arm: []f32 = s.arm_target;
+            <span class="tok-builtin">@memcpy</span>(keep_arm, s.data.pos[<span class="tok-num">0</span>..s.imported.model.nq]);
+            _ = (ctl.Ik{ .max_iterations = <span class="tok-num">8</span>, .max_step = <span class="tok-num">0.3</span> }).<span class="tok-fn">solve</span>(
+                &amp;s.imported.model,
+                &amp;s.data,
+                s.arm_act,
+                .{ .body = s.gripper, .offset = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), .goal = goal },
+                s.ik_scratch,
+            );
+            <span class="tok-comment">// Copy only the ARM joints into `home`; the legs belong to the torso controller.</span>
+            <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.imported.model.njnt) |j| {
+                <span class="tok-kw">const</span> v: u32 = s.imported.model.jnt_dof_adr[j];
+                <span class="tok-kw">if</span> (v &gt;= s.imported.model.nv <span class="tok-kw">or</span> !s.arm_act.powered[v]) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> q: u32 = s.imported.model.jnt_qpos_adr[j];
+                s.home[q] = s.data.pos[q];
+            }
+            <span class="tok-builtin">@memcpy</span>(s.data.pos[<span class="tok-num">0</span>..s.imported.model.nq], keep_arm);
+            s.data.stage = .stale;
+            rbt.<span class="tok-fn">forward</span>(&amp;s.imported.model, &amp;s.data);
+            <span class="tok-comment">// * THE DRIFT IS THE SCORE. A gimbal that visibly wobbles is a gimbal that failed,</span>
+            <span class="tok-comment">// and the number says by how much - which is the quantity a planner with preview</span>
+            <span class="tok-comment">// would have to beat.</span>
+            s.arm_error = <span class="tok-fn">length3</span>(s.data.body_xpos[s.gripper] - goal);
+            s.hold_error = s.arm_error;
+            <span class="tok-kw">if</span> (s.routine_clock &gt; <span class="tok-num">1.5</span>) {
+                s.hold_worst = <span class="tok-builtin">@max</span>(s.hold_worst, s.arm_error);
+            }
+        }
+    }
+    <span class="tok-comment">// * A GAIT RE-SOLVES EVERY FRAME, unlike a static pose, because its targets move by</span>
+    <span class="tok-comment">// construction. The feedback loop `solveBodyPose` warns about is avoided the same way -</span>
+    <span class="tok-comment">// seeding from the last command rather than from the measured robot.</span>
+    <span class="tok-kw">if</span> (s.gait_on) {
+        <span class="tok-fn">solveGait</span>(s, <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.05</span>));
+    }
+
+    s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+    <span class="tok-kw">while</span> (s.accumulator &gt;= timestep) : (s.accumulator -= timestep) {
+        <span class="tok-comment">// Kinematics, then collision, then solve - all at one `q`. See `robot_physics.sync`</span>
+        <span class="tok-comment">// for why the order is not negotiable.</span>
+        rbt.<span class="tok-fn">forward</span>(&amp;s.imported.model, &amp;s.data);
+        <span class="tok-kw">if</span> (s.physics_on) {
+            s.bridge.<span class="tok-fn">sync</span>(&amp;s.world, &amp;s.imported.model, &amp;s.data) <span class="tok-kw">catch</span> |err| {
+                zm.<span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"proxy sync failed: {t}"</span>, .{err});
+            };
+            zp.<span class="tok-fn">step</span>(&amp;s.world, timestep) <span class="tok-kw">catch</span> |err| {
+                zm.<span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"world step failed: {t}"</span>, .{err});
+            };
+            s.bridge.<span class="tok-fn">harvest</span>(&amp;s.data);
+        }
+        <span class="tok-fn">control</span>(s);
+        rbt.<span class="tok-fn">step</span>(&amp;s.imported.model, &amp;s.data);
+    }
+    rbt.<span class="tok-fn">forward</span>(&amp;s.imported.model, &amp;s.data);
+
+    <span class="tok-kw">var</span> force: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.data.constraint_count) |row| {
+        force += s.data.constraint_force[row];
+    }
+    s.peak_force = <span class="tok-builtin">@max</span>(s.peak_force * <span class="tok-num">0.995</span>, force);
+
+    <span class="tok-comment">// -- ** THE UI IS BUILT EARLY AND RENDERED LAST, AND BOTH HALVES MATTER --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// **Built early**, because the camera has to know whether the mouse belongs to a slider -</span>
+    <span class="tok-comment">// otherwise dragging `kp` orbits the view at the same time.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// **Rendered last**, because `clearViewport` wipes whatever has been drawn. Keeping</span>
+    <span class="tok-comment">// `begin`/`render` inside the panel function put the deferred `render` at the END OF THAT</span>
+    <span class="tok-comment">// FUNCTION - before the clear - so the panel was drawn and then erased, every frame. The</span>
+    <span class="tok-comment">// demo showed a robot and no controls at all, and looked like a build problem.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// `robot_3d` had it right by accident: its `begin` and its clear live in the same</span>
+    <span class="tok-comment">// function, so the defer naturally lands after the 3D pass. Making that structural rather</span>
+    <span class="tok-comment">// than incidental is the point of passing `u` in.</span>
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    <span class="tok-kw">const</span> captured: bool = <span class="tok-fn">drawPanel</span>(u, s);
+
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, captured, .{
+        .min_distance = <span class="tok-num">0.6</span>,
+        .max_distance = <span class="tok-num">4.0</span>,
+    });
+    <span class="tok-comment">// * THE THROW HAPPENS HERE, not in the panel, because it needs the camera - and the</span>
+    <span class="tok-comment">// camera is not known until after the panel has said whether the mouse belongs to it.</span>
+    <span class="tok-kw">if</span> (s.want_throw) {
+        s.want_throw = false;
+        <span class="tok-fn">throwBall</span>(s, cam);
+    }
+
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(gl, <span class="tok-num">16</span>, <span class="tok-num">0.25</span>);
+    <span class="tok-fn">drawRobot</span>(s, gl);
+    z.<span class="tok-fn">endMode3D</span>(gl);
+}
+
+<span class="tok-comment">/// Draw every collision geom the importer kept.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// * THESE ARE THE COLLISION SHAPES, not the visual meshes - the Go1's 13 `&lt;mesh&gt;` geoms are</span>
+<span class="tok-comment">/// skipped by the converter because their vertices live in an `&lt;asset&gt;` block that is not read</span>
+<span class="tok-comment">/// yet. Which turns out to be the better picture for a physics demo: what you see IS what the</span>
+<span class="tok-comment">/// solver sees, so a leg that looks like it is touching the ground is touching the ground.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawRobot</span>(s: *State, gl: *z.WgpuGl) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> to_y_up: Mat = zm.<span class="tok-fn">zUpToYUp</span>();
+
+    <span class="tok-comment">// -- *** THE HELD POINT, AND A LINE TO IT --</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// "The gripper is not moving" is only legible against something that visibly is not moving</span>
+    <span class="tok-comment">// either. The marker sits at the world point the arm is holding and the line measures the</span>
+    <span class="tok-comment">// failure - so the gimbal's success is the SHORTNESS of that line while the body weaves.</span>
+    <span class="tok-kw">if</span> (s.arm_on <span class="tok-kw">and</span> s.hold_point[<span class="tok-num">2</span>] != <span class="tok-num">0</span>) {
+        <span class="tok-kw">const</span> at: Vec = zm.<span class="tok-fn">zUpToYUpPoint</span>(s.hold_point);
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+            <span class="tok-fn">translation</span>(at[<span class="tok-num">0</span>], at[<span class="tok-num">1</span>], at[<span class="tok-num">2</span>]),
+            <span class="tok-fn">scaling</span>(<span class="tok-num">0.045</span>, <span class="tok-num">0.045</span>, <span class="tok-num">0.045</span>),
+        );
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, .{ .r = <span class="tok-num">237</span>, .g = <span class="tok-num">184</span>, .b = <span class="tok-num">89</span>, .a = <span class="tok-num">255</span> });
+        <span class="tok-kw">const</span> tip: Vec = zm.<span class="tok-fn">zUpToYUpPoint</span>(s.data.body_xpos[s.gripper]);
+        z.<span class="tok-fn">drawLine3D</span>(gl, tip, at, .{ .r = <span class="tok-num">226</span>, .g = <span class="tok-num">106</span>, .b = <span class="tok-num">154</span>, .a = <span class="tok-num">255</span> });
+        <span class="tok-comment">// * AND A CROSSHAIR, so the point reads as a fixed place in the world rather than as a</span>
+        <span class="tok-comment">// small object that might itself be drifting.</span>
+        <span class="tok-kw">inline</span> <span class="tok-kw">for</span> ([_]Vec{ <span class="tok-fn">vec</span>(<span class="tok-num">0.12</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.12</span>, <span class="tok-num">0</span>), <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0.12</span>) }) |axis| {
+            z.<span class="tok-fn">drawLine3D</span>(gl, at - axis, at + axis, .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">100</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> });
+        }
+    }
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.ngeom) |g| {
+        <span class="tok-kw">const</span> body: u32 = m.geom_body[g];
+        <span class="tok-comment">// * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine</span>
+        <span class="tok-comment">// stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -</span>
+        <span class="tok-comment">// it never needs the product except when something is drawn or collided, so it does</span>
+        <span class="tok-comment">// not keep one.</span>
+        <span class="tok-kw">const</span> body_rot: zm.Quat = s.data.body_xrot[body];
+        <span class="tok-kw">const</span> world_pos: Vec = s.data.body_xpos[body] + zm.<span class="tok-fn">rotate</span>(body_rot, m.geom_pos[g]);
+        <span class="tok-kw">const</span> world_rot: Mat = <span class="tok-fn">quatToMat</span>(zm.<span class="tok-fn">qmul</span>(body_rot, m.geom_rot[g]));
+        <span class="tok-kw">const</span> place: Mat = <span class="tok-fn">mulMat</span>(<span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(world_pos[<span class="tok-num">0</span>], world_pos[<span class="tok-num">1</span>], world_pos[<span class="tok-num">2</span>])), world_rot);
+        <span class="tok-comment">// Feet are the interesting part, so they get a brighter colour.</span>
+        <span class="tok-kw">const</span> tint: Color = <span class="tok-kw">if</span> (body == <span class="tok-num">0</span>) trunk_col <span class="tok-kw">else</span> link_col;
+        <span class="tok-kw">switch</span> (m.geom_shape[g]) {
+            .sphere =&gt; |sph| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">scaling</span>(sph.radius, sph.radius, sph.radius));
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, tint);
+            },
+            .capsule =&gt; |cap| {
+                <span class="tok-comment">// -- ** THE MESH ALREADY RUNS ALONG Y. MEASURED, NOT DERIVED. --</span>
+                <span class="tok-comment">//</span>
+                <span class="tok-comment">//     genMeshCylinder(r=1, h=1) extent:</span>
+                <span class="tok-comment">//       x: [-1.000, 1.000]   y: [0.000, 1.000]   z: [-1.000, 1.000]</span>
+                <span class="tok-comment">//</span>
+                <span class="tok-comment">// `cylinderUv` returns the axis in its third slot, which reads as Z - but</span>
+                <span class="tok-comment">// `parametricMesh` REMAPS as it writes (`verts.y = p[2]`), so the finished</span>
+                <span class="tok-comment">// mesh extends along zimr's **Y**, spanning [0, h] rather than [-h/2, +h/2].</span>
+                <span class="tok-comment">//</span>
+                <span class="tok-comment">// That is the same axis `GeomShape.capsule` uses, so no rotation is needed at</span>
+                <span class="tok-comment">// all. A previous version read `cylinderUv` and concluded Z, then rotated by</span>
+                <span class="tok-comment">// -90 deg to "correct" it; the non-uniform scale then landed across the shape and</span>
+                <span class="tok-comment">// flattened every limb into a wide curved ribbon. **Reading the generator was</span>
+                <span class="tok-comment">// not enough - the answer was two functions away, and printing the mesh's</span>
+                <span class="tok-comment">// bounds took one command.**</span>
+                <span class="tok-comment">//</span>
+                <span class="tok-comment">// Only the [0, h] span needs correcting, with a half-length shift along Y.</span>
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                    <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -cap.half_height, <span class="tok-num">0</span>)),
+                    <span class="tok-fn">scaling</span>(cap.radius, <span class="tok-num">2.0</span> * cap.half_height, cap.radius),
+                );
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, tint);
+                <span class="tok-kw">inline</span> <span class="tok-kw">for</span> ([_]f32{ -<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span> }) |end| {
+                    s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                        <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, end * cap.half_height, <span class="tok-num">0</span>)),
+                        <span class="tok-fn">scaling</span>(cap.radius, cap.radius, cap.radius),
+                    );
+                    z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, tint);
+                }
+            },
+            .cylinder =&gt; |cyl| {
+                <span class="tok-comment">// Same axis and the same [0, h] span as the capsule above.</span>
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+                    <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">translation</span>(<span class="tok-num">0</span>, -cyl.half_height, <span class="tok-num">0</span>)),
+                    <span class="tok-fn">scaling</span>(cyl.radius, <span class="tok-num">2.0</span> * cyl.half_height, cyl.radius),
+                );
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cylinder, &amp;s.transform, tint);
+            },
+            .box =&gt; |box| {
+                s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(place, <span class="tok-fn">scaling</span>(
+                    <span class="tok-num">2.0</span> * box.half_extent[<span class="tok-num">0</span>],
+                    <span class="tok-num">2.0</span> * box.half_extent[<span class="tok-num">1</span>],
+                    <span class="tok-num">2.0</span> * box.half_extent[<span class="tok-num">2</span>],
+                ));
+                z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.cube, &amp;s.transform, tint);
+            },
+            <span class="tok-kw">else</span> =&gt; {},
+        }
+    }
+
+    <span class="tok-comment">// The projectiles, drawn from the tree like everything else.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..ball_count) |i| {
+        <span class="tok-kw">const</span> body: u32 = s.imported.<span class="tok-fn">bodyIndex</span>(ball_names[i]) <span class="tok-kw">orelse</span> <span class="tok-kw">continue</span>;
+        <span class="tok-kw">const</span> p: Vec = s.data.body_xpos[body];
+        s.transform[<span class="tok-num">0</span>] = <span class="tok-fn">mulMat</span>(
+            <span class="tok-fn">mulMat</span>(to_y_up, <span class="tok-fn">translation</span>(p[<span class="tok-num">0</span>], p[<span class="tok-num">1</span>], p[<span class="tok-num">2</span>])),
+            <span class="tok-fn">scaling</span>(ball_radius, ball_radius, ball_radius),
+        );
+        z.<span class="tok-fn">drawMeshInstanced</span>(gl, &amp;s.sphere, &amp;s.transform, ball_col);
+    }
+
+    <span class="tok-comment">// Contact points, so "is it actually standing" is answerable by looking.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..s.data.contact_count) |c| {
+        <span class="tok-kw">const</span> p: Vec = s.data.contacts[c].position;
+        <span class="tok-comment">// Z-up to Y-up is a coordinate swap, and writing it as one is clearer here than</span>
+        <span class="tok-comment">// pushing a point through a matrix: (x, y, z) becomes (x, z, -y).</span>
+        <span class="tok-kw">const</span> at: Vec = <span class="tok-fn">vec</span>(p[<span class="tok-num">0</span>], p[<span class="tok-num">2</span>], -p[<span class="tok-num">1</span>]);
+        z.<span class="tok-fn">drawSphere</span>(gl, at, .{ .radius = <span class="tok-num">0.012</span>, .color = contact_col });
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(u: ui.Ui, s: *State) bool {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;s.imported.model;
+    <span class="tok-kw">const</span> captured: bool = u.<span class="tok-fn">wantCaptureMouse</span>();
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Unitree Go1, imported from Menagerie MJCF"</span>, .{
+        .initial_pos = .{ <span class="tok-num">12</span>, <span class="tok-num">12</span> },
+        .initial_size = .{ <span class="tok-num">360</span>, <span class="tok-num">300</span> },
+    })) |window| {
+        <span class="tok-kw">defer</span> window.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"{d} bodies   {d} DOF   {d} collision geoms"</span>, .{ m.nbody - <span class="tok-num">1</span>, m.nv, m.ngeom });
+        <span class="tok-kw">const</span> trunk: u32 = s.imported.<span class="tok-fn">bodyIndex</span>(<span class="tok-str">"trunk"</span>) <span class="tok-kw">orelse</span> <span class="tok-num">1</span>;
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"trunk height {d:.4} m   (home 0.2700)"</span>, .{s.data.body_xpos[trunk][<span class="tok-num">2</span>]});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"contacts {d}   rows {d}   iters {d}   load {d:.0} N"</span>, .{
+            s.data.contact_count,
+            s.data.constraint_count,
+            s.data.solver_iterations,
+            s.peak_force,
+        });
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// * THE TWO NUMBERS WORTH PLAYING WITH. `kp = 100` is the Go1's own, from</span>
+        <span class="tok-comment">// `&lt;position kp="100"&gt;` in its MJCF. Drag it down and the legs fold under the robot's</span>
+        <span class="tok-comment">// weight; drag it up and it goes rigid and starts to buzz against its force limit.</span>
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"kp"</span>, &amp;s.kp, .{ .min = <span class="tok-num">5.0</span>, .max = <span class="tok-num">400.0</span>, .fmt = <span class="tok-str">"{d:.0}"</span> });
+        <span class="tok-comment">// * THE DAMPING IS ON A SLIDER TOO. It was the parameter that mattered most for slip and</span>
+        <span class="tok-comment">// there was no way to touch it - a control whose best value is 3x its default deserves</span>
+        <span class="tok-comment">// to be reachable.</span>
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"kv"</span>, &amp;s.kv, .{ .min = <span class="tok-num">0.5</span>, .max = <span class="tok-num">16.0</span>, .fmt = <span class="tok-str">"{d:.1}"</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"kv"</span>, &amp;s.kv, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">20.0</span>, .fmt = <span class="tok-str">"{d:.1}"</span> });
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"physics"</span>, &amp;s.physics_on);
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-comment">// -- ** MOVE THE BODY WITH THE FEET PLANTED --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// A torso has no motors, so it cannot be commanded anywhere directly. But it stands on</span>
+        <span class="tok-comment">// four legs whose feet are on the ground, and moving the body is then the same problem</span>
+        <span class="tok-comment">// as moving four hips while four feet hold still - three joints at a time, which IS</span>
+        <span class="tok-comment">// solvable.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// Each leg gets its own IK mask, so the four solves are independent. Given the whole</span>
+        <span class="tok-comment">// robot, one leg's solver would cheerfully bend the other three to help, and four of</span>
+        <span class="tok-comment">// those fight each other into a standstill.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// `foot error` is what to watch: it stays near zero while the pose is reachable and</span>
+        <span class="tok-comment">// climbs the moment a slider asks for more than the legs have.</span>
+        <span class="tok-comment">// * THE STANCE IS CAPTURED ON THE RISING EDGE, so the sliders are relative to wherever</span>
+        <span class="tok-comment">// the robot is standing right now rather than to a startup pose it has since left.</span>
+        <span class="tok-kw">const</span> was_posing: bool = s.posing;
+        <span class="tok-comment">// -- ** A GAIT IS FOUR PHASE OFFSETS --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// Trot, pace, bound and walk run the SAME foot trajectory and differ only in where in</span>
+        <span class="tok-comment">// the cycle each leg sits. The buttons below write four numbers; nothing else changes.</span>
+        <span class="tok-kw">const</span> was_walking: bool = s.gait_on;
+        <span class="tok-comment">// -- ** TURNING WALK ON PUTS THE ARM WHERE THE GAIT NEEDS IT --</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// The gait's counter-swing is measured around a HALF-BENT arm; started from wherever the</span>
+        <span class="tok-comment">// gimbal happened to leave it, the swing is offset and the phase that was measured to</span>
+        <span class="tok-comment">// work is not the phase the robot gets. **A mode that depends on a pose should establish</span>
+        <span class="tok-comment">// that pose**, rather than inheriting whatever the last mode left behind.</span>
+        <span class="tok-comment">//</span>
+        <span class="tok-comment">// * AND THE GIMBAL IS TURNED OFF, because the two want the arm for opposite reasons: the</span>
+        <span class="tok-comment">// gimbal holds the gripper still, the gait swings it. They cannot both have it.</span>
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"walk"</span>, &amp;s.gait_on)) {
+            <span class="tok-kw">if</span> (s.gait_on) {
+                s.arm_on = false;
+                s.gait_phase = <span class="tok-num">0</span>;
+                <span class="tok-fn">setArmRest</span>(s);
+            }
+        }
+        <span class="tok-kw">if</span> (s.gait_on <span class="tok-kw">and</span> !was_walking) {
+            <span class="tok-fn">captureStance</span>(s);
+            s.posing = false;
+        }
+        <span class="tok-kw">if</span> (s.gait_on) {
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"rate Hz"</span>, &amp;s.gait_hz, .{ .min = <span class="tok-num">0.4</span>, .max = <span class="tok-num">3.5</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"stride"</span>, &amp;s.gait_stride, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.22</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"foot lift"</span>, &amp;s.gait_lift, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.12</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"duty"</span>, &amp;s.gait_duty, .{ .min = <span class="tok-num">0.3</span>, .max = <span class="tok-num">0.9</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            <span class="tok-comment">// ** THE ARM'S COUNTER-SWING. **Phase is the parameter that matters**: the same</span>
+            <span class="tok-comment">// amplitude a quarter-cycle away falls the robot over, while 0.75 walks it 1.49x</span>
+            <span class="tok-comment">// further than a still arm and flattens the pitch bias to zero.</span>
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"arm swing"</span>, &amp;s.arm_swing_amp, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.8</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"arm phase"</span>, &amp;s.arm_swing_phase, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">1.0</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"   phase {d:.2}   foot error {d:.4} m"</span>, .{ s.gait_phase, s.pose_error });
+            <span class="tok-comment">// * THE OTHER PATTERNS SET THEIR SETTINGS TOO, for the same reason: a pattern</span>
+            <span class="tok-comment">// measured at another pattern's rate and duty is not the pattern being offered.</span>
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"trot (2 feet down, fast)"</span>, .{})) {
+                s.gait_offset = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.0</span> };
+                s.gait_hz = <span class="tok-num">2.0</span>;
+                s.gait_stride = <span class="tok-num">0.16</span>;
+                s.gait_duty = <span class="tok-num">0.60</span>;
+                s.gait_lift = <span class="tok-num">0.08</span>;
+                s.arm_swing_amp = <span class="tok-num">0.3</span>;
+                s.gait_phase = <span class="tok-num">0</span>;
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"pace"</span>, .{})) {
+                s.gait_offset = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.5</span> };
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"bound"</span>, .{})) {
+                s.gait_offset = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.5</span> };
+            }
+            <span class="tok-comment">// * THE 4-BEAT WALK IS OFFERED AND MARKED, because it FALLS at these settings -</span>
+            <span class="tok-comment">// measured, z 0.134 with a minimum of -0.216, where trot and pace hold 0.346. Four</span>
+            <span class="tok-comment">// evenly spread phases means a foot is always mid-swing, and the Go1 cannot carry</span>
+            <span class="tok-comment">// that on three legs at this stride. Left in because watching a gait fail is more</span>
+            <span class="tok-comment">// informative than not offering it, and hidden failures are worse than labelled</span>
+            <span class="tok-comment">// ones.</span>
+            <span class="tok-comment">// -- *** THE CRAWL, AND IT DOES NOT FALL - IT WAS MEASURED AT THE WRONG SETTINGS --</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// This button was labelled "(falls)" on a measurement taken at TROT parameters:</span>
+            <span class="tok-comment">// hz 2.0, duty 0.60. At those, four evenly spread phases do fall. **At its own</span>
+            <span class="tok-comment">// settings it is the most robust gait here.** Measured, 10 s:</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">//     crawl  hz 1.0  stride 0.14  duty 0.80   0.194 m   z 0.303   pitch 0.010 flat</span>
+            <span class="tok-comment">//     crawl  hz 1.4  stride 0.14  duty 0.80   0.207 m   z 0.302   flat</span>
+            <span class="tok-comment">//     crawl  hz 1.0  stride 0.14  duty 0.85   0.201 m   z 0.303   flat</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// **Every crawl configuration stands.** Duty 0.80 with quarter-spread phases leaves</span>
+            <span class="tok-comment">// THREE FEET DOWN at all times, so the centre of mass only has to stay inside a</span>
+            <span class="tok-comment">// triangle that always exists - statically stable by construction, which is the</span>
+            <span class="tok-comment">// right property for a robot carrying 2 kg high on its back.</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// ** AND IT NEEDS NO ARM SWING AT ALL. Adding one makes it worse (0.127 against</span>
+            <span class="tok-comment">// 0.194): the swing exists to cancel a trot's wobble, and a crawl does not have one.</span>
+            <span class="tok-comment">//</span>
+            <span class="tok-comment">// * A GAIT PATTERN IS NOT A PARAMETER ON ITS OWN. Changing the offsets without</span>
+            <span class="tok-comment">// changing rate and duty measures the new pattern at the old gait's settings, which</span>
+            <span class="tok-comment">// is how this one earned a "(falls)" label it did not deserve.</span>
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"crawl (3 feet down)"</span>, .{})) {
+                s.gait_offset = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.25</span>, <span class="tok-num">0.75</span> };
+                s.gait_hz = <span class="tok-num">1.4</span>;
+                s.gait_stride = <span class="tok-num">0.20</span>;
+                s.gait_duty = <span class="tok-num">0.80</span>;
+                s.gait_lift = <span class="tok-num">0.06</span>;
+                s.arm_swing_amp = <span class="tok-num">0.0</span>;
+                s.gait_phase = <span class="tok-num">0</span>;
+            }
+        }
+        u.<span class="tok-fn">separator</span>();
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"pose the torso"</span>, &amp;s.posing);
+        <span class="tok-kw">if</span> (s.posing <span class="tok-kw">and</span> !was_posing) {
+            <span class="tok-fn">captureStance</span>(s);
+        }
+        <span class="tok-kw">if</span> (s.posing) {
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"roll"</span>, &amp;s.body_roll, .{ .min = -<span class="tok-num">0.5</span>, .max = <span class="tok-num">0.5</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"pitch"</span>, &amp;s.body_pitch, .{ .min = -<span class="tok-num">0.5</span>, .max = <span class="tok-num">0.5</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            <span class="tok-comment">// ** ASKED VERSUS ACHIEVED, ON SCREEN. The whole bug was that nobody could see the</span>
+            <span class="tok-comment">// difference: the sliders said 0.15 and the robot did 0.10, and nothing reported it.</span>
+            <span class="tok-comment">// A commanded value with no measured counterpart is a claim, not a readout.</span>
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  asked {d:&gt;6.3} {d:&gt;6.3}"</span>, .{ s.body_roll, s.body_pitch });
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  actual{d:&gt;6.3} {d:&gt;6.3}   trim {d:&gt;5.3} {d:&gt;5.3}"</span>, .{
+                s.seen_roll, s.seen_pitch, s.trim_roll, s.trim_pitch,
+            });
+            u.<span class="tok-fn">separator</span>();
+
+            <span class="tok-comment">// -- * THE ROUTINE, AND ITS SCORE --</span>
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"routine: cone + independent roll"</span>, &amp;s.routine)) {
+                s.routine_clock = <span class="tok-num">0</span>;
+                s.routine_error_sum = <span class="tok-num">0</span>;
+                s.routine_error_count = <span class="tok-num">0</span>;
+                s.routine_worst = <span class="tok-num">0</span>;
+            }
+            <span class="tok-kw">if</span> (s.routine) {
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"cone rate"</span>, &amp;s.cone_rate, .{ .min = <span class="tok-num">0.1</span>, .max = <span class="tok-num">1.2</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"roll rate"</span>, &amp;s.roll_rate, .{ .min = <span class="tok-num">0.1</span>, .max = <span class="tok-num">1.2</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"cone size"</span>, &amp;s.cone_amount, .{ .min = <span class="tok-num">0.05</span>, .max = <span class="tok-num">0.35</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"roll size"</span>, &amp;s.roll_amount, .{ .min = <span class="tok-num">0.05</span>, .max = <span class="tok-num">0.35</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"bob rate"</span>, &amp;s.bob_rate, .{ .min = <span class="tok-num">0.05</span>, .max = <span class="tok-num">0.8</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"bob size"</span>, &amp;s.bob_amount, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.07</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+                <span class="tok-comment">// * THE ARM'S SLOW SWEEP. Measured to cost nothing while walking - 0.696 m with</span>
+                <span class="tok-comment">// the arm alone against 0.655 for the bare crawl.</span>
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"arm lift"</span>, &amp;s.arm_lift_amp, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">1.2</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"arm lift rate"</span>, &amp;s.arm_lift_rate, .{ .min = <span class="tok-num">0.03</span>, .max = <span class="tok-num">0.4</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                <span class="tok-kw">const</span> mean: f32 = <span class="tok-kw">if</span> (s.routine_error_count == <span class="tok-num">0</span>)
+                    <span class="tok-num">0</span>
+                <span class="tok-kw">else</span>
+                    <span class="tok-builtin">@floatCast</span>(s.routine_error_sum / <span class="tok-fn">float64</span>(s.routine_error_count));
+                <span class="tok-comment">// ** THE NUMBER THAT MATTERS. A routine that only looks impressive proves</span>
+                <span class="tok-comment">// nothing; this says whether the controller is keeping up with it, and it is</span>
+                <span class="tok-comment">// the quantity a planner would have to beat.</span>
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"  lag: mean {d:&gt;5.3} rad   worst {d:&gt;5.3}"</span>, .{ mean, s.routine_worst });
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"  rates are incommensurate — it never repeats"</span>, .{});
+            }
+            <span class="tok-comment">// *** SLIP AND CONE, ALWAYS ON. This is the quantity the whole "why do the feet</span>
+            <span class="tok-comment">// slide" question turns on, and there was no way to see it. Above 1.0 the ground is</span>
+            <span class="tok-comment">// being asked for force it does not have - which a position controller cannot even</span>
+            <span class="tok-comment">// represent, let alone respect.</span>
+            u.<span class="tok-fn">separator</span>();
+            <span class="tok-comment">// -- * THE ARM --</span>
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"gripper holds a fixed point (gimbal)"</span>, &amp;s.arm_on)) {
+                s.arm_clock = <span class="tok-num">0</span>;
+            }
+            <span class="tok-kw">if</span> (s.arm_on) {
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"hold height"</span>, &amp;s.hold_height, .{ .min = <span class="tok-num">0.45</span>, .max = <span class="tok-num">0.80</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"hold forward"</span>, &amp;s.hold_offset[<span class="tok-num">0</span>], .{ .min = -<span class="tok-num">0.1</span>, .max = <span class="tok-num">0.45</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+                <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"clear worst"</span>, .{})) {
+                    s.hold_worst = <span class="tok-num">0</span>;
+                }
+                <span class="tok-comment">// ** THE GIMBAL'S SCORE. The body is weaving through three incommensurate</span>
+                <span class="tok-comment">// frequencies; this is how far the gripper fails to ignore it.</span>
+                <span class="tok-comment">// ** THE HEADLINE NUMBER. The body is weaving through three incommensurate</span>
+                <span class="tok-comment">// frequencies; this is how completely the gripper ignores it.</span>
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"  gripper drift {d:&gt;6.4} m   worst {d:&gt;6.4}"</span>, .{ s.hold_error, s.hold_worst });
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"  (yellow crosshair = the point it holds)"</span>, .{});
+                <span class="tok-comment">// ** HONEST ABOUT THE SLOW DRIFT. Verified over 30 s: the robot stays UP, but the</span>
+                <span class="tok-comment">// gripper's mean error grows from 20 mm to 61 mm because the feet slide - the robot</span>
+                <span class="tok-comment">// slowly walks away from a point that is fixed in the world. That is the same foot</span>
+                <span class="tok-comment">// slip the readout above reports, arriving as a second symptom.</span>
+                <span class="tok-kw">if</span> (s.hold_worst &gt; <span class="tok-num">0.09</span>) {
+                    u.<span class="tok-fn">text</span>(<span class="tok-str">"  drift growing — the feet are sliding."</span>, .{});
+                    u.<span class="tok-fn">text</span>(<span class="tok-str">"  re-place the point, or watch the cone number."</span>, .{});
+                }
+            }
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"  foot slip {d:&gt;6.3} m   cone {d:&gt;4.2}x  over {d}"</span>, .{
+                s.foot_slip, s.cone_worst, s.cone_over,
+            });
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"clear slip"</span>, .{})) {
+                <span class="tok-kw">for</span> (<span class="tok-num">0</span>..<span class="tok-num">4</span>) |i| {
+                    s.planted[i] = s.data.body_xpos[s.foot_body[i]] +
+                        zm.<span class="tok-fn">rotate</span>(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+                }
+                s.cone_worst = <span class="tok-num">0</span>;
+                s.cone_over = <span class="tok-num">0</span>;
+            }
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"yaw"</span>, &amp;s.body_yaw, .{ .min = -<span class="tok-num">0.6</span>, .max = <span class="tok-num">0.6</span>, .fmt = <span class="tok-str">"{d:.2}"</span> });
+            <span class="tok-comment">// * THE UP RANGE IS SMALLER THAN THE DOWN RANGE, and that is physical rather than</span>
+            <span class="tok-comment">// arbitrary. The Go1 settles at 0.332 with thigh and calf each 0.213 m, so the legs</span>
+            <span class="tok-comment">// are already well extended; asking for another 4 cm straightens them toward the</span>
+            <span class="tok-comment">// singular configuration where a leg can no longer push vertically at all, and the</span>
+            <span class="tok-comment">// robot folds. Crouching has no such limit - measured stable to -0.08.</span>
+            _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"height"</span>, &amp;s.body_height, .{ .min = -<span class="tok-num">0.08</span>, .max = <span class="tok-num">0.02</span>, .fmt = <span class="tok-str">"{d:.3}"</span> });
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"   foot error {d:.4} m"</span>, .{s.pose_error});
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"level"</span>, .{})) {
+                s.body_roll = <span class="tok-num">0</span>;
+                s.body_pitch = <span class="tok-num">0</span>;
+                s.body_yaw = <span class="tok-num">0</span>;
+                s.body_height = <span class="tok-num">0</span>;
+            }
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"shove"</span>, .{})) {
+            <span class="tok-fn">shove</span>(s);
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"throw ball"</span>, .{})) {
+            s.want_throw = true;
+        }
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"reset everything"</span>, .{})) {
+            <span class="tok-fn">resetEverything</span>(s);
+        }
+    }
+    <span class="tok-kw">return</span> captured;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - Unitree Go1 from MJCF"</span>,
+            .width = <span class="tok-num">820</span>,
+            .height = <span class="tok-num">680</span>,
+            .scale_mode = .responsive,
+            <span class="tok-comment">// 3D needs a depth buffer or nearer geometry does not occlude farther.</span>
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

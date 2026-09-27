@@ -1,0 +1,734 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ui_log_viewer — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>ui_log_viewer</h1>
+<figure class="code src-file" data-path="examples/ui_log_viewer/ui_log_viewer.zig" data-lines="454"><figcaption><span>examples/ui_log_viewer/ui_log_viewer.zig</span><span>454 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/ui_log_viewer.zig - Phase A1 + Phase 1.1 of the imgui-parity arc.</span>
+<span class="tok-comment">// Phone-readable from the start: canvas uses `.scale = .responsive` so</span>
+<span class="tok-comment">// it tracks the browser viewport, font_size is bumped to 16 (vs the</span>
+<span class="tok-comment">// 10-px bitmap default), and frame_padding is 10x8 so buttons hit the</span>
+<span class="tok-comment">// ~44-px touch-target sweet spot.  Window sized 380x840 to fit a phone</span>
+<span class="tok-comment">// portrait viewport; desktop users see it as a floating panel.</span>
+<span class="tok-comment">// Phase A1 features (already shipping):</span>
+<span class="tok-comment">//   - `setScrollHereY(1.0)` - auto-scroll-to-bottom when new</span>
+<span class="tok-comment">//     log lines arrive.</span>
+<span class="tok-comment">//   - `getScrollY` / `getScrollMaxY` - read scroll state.</span>
+<span class="tok-comment">//   - `setScrollY(0)` - jump-to-top button.</span>
+<span class="tok-comment">//   - `setClipboardText` - copy the entire log buffer to system</span>
+<span class="tok-comment">//     clipboard.</span>
+<span class="tok-comment">// Phase 1.1 features (added in step 1.1):</span>
+<span class="tok-comment">//   - `separatorText("Controls" / "Log" / "Status")` - section the panel</span>
+<span class="tok-comment">//     into named bands instead of plain rules.</span>
+<span class="tok-comment">//   - `value("lines", n)` / `value("cap", N)` / etc.</span>
+<span class="tok-comment">//     one-liner read-only HUD entries, comptime-dispatched on type.</span>
+<span class="tok-comment">//   - `textLinkOpenURL("[?]", url)` - clickable link on each ERROR</span>
+<span class="tok-comment">//     line that opens imgui's source on github (placeholder for "log</span>
+<span class="tok-comment">//     line takes you to docs about that error").  Hover tooltips show</span>
+<span class="tok-comment">//     the URL; right-click -&gt; "Copy link" works on desktop (phone</span>
+<span class="tok-comment">//     long-press support arrives with step 2.2).</span>
+<span class="tok-comment">//   - `invisibleButton("help-toggle", .{ 0, 36 })` - a 36-px hidden</span>
+<span class="tok-comment">//     hit zone at the bottom of the window that toggles a help text on</span>
+<span class="tok-comment">//     tap, with a textDisabled hint above pointing at it.</span>
+<span class="tok-comment">// Background: this is the canonical use case the scroll API was</span>
+<span class="tok-comment">// designed for.  Without `setScrollHereY` a log viewer either</span>
+<span class="tok-comment">// renders forever-growing content (window auto-resizes off-screen)</span>
+<span class="tok-comment">// or pins to a fixed top (stale data scrolls off).  The "stick to</span>
+<span class="tok-comment">// bottom unless the user is actively scrolling up" pattern below</span>
+<span class="tok-comment">// is the imgui demo's exact recipe.</span>
+<span class="tok-comment">// Controls:</span>
+<span class="tok-comment">//   - SPACE: emit 1 new log line (so you can watch auto-scroll).</span>
+<span class="tok-comment">//   - C: copy entire log to clipboard.</span>
+<span class="tok-comment">//   - T: jump to top.</span>
+<span class="tok-comment">//   - B: jump to bottom.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> ui = z.ui_real;
+
+<span class="tok-kw">const</span> log_cap: usize = <span class="tok-num">5000</span>;
+<span class="tok-kw">const</span> line_max: usize = <span class="tok-num">96</span>;
+
+<span class="tok-kw">const</span> LogLine = <span class="tok-kw">struct</span> {
+    buf: [line_max]u8 = undefined,
+    len: usize = <span class="tok-num">0</span>,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">text</span>(self: *<span class="tok-kw">const</span> LogLine) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> self.buf[<span class="tok-num">0</span>..self.len];
+    }
+};
+
+<span class="tok-kw">const</span> Severity = <span class="tok-kw">enum</span> {
+    info,
+    warn,
+    err,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">label</span>(self: Severity) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .info =&gt; <span class="tok-str">"INFO "</span>,
+            .warn =&gt; <span class="tok-str">"WARN "</span>,
+            .err =&gt; <span class="tok-str">"ERROR"</span>,
+        };
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">color</span>(self: Severity) Color {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .info =&gt; .{ .r = <span class="tok-num">156</span>, .g = <span class="tok-num">163</span>, .b = <span class="tok-num">175</span>, .a = <span class="tok-num">255</span> },
+            .warn =&gt; .{ .r = <span class="tok-num">251</span>, .g = <span class="tok-num">191</span>, .b = <span class="tok-num">36</span>, .a = <span class="tok-num">255</span> },
+            .err =&gt; .{ .r = <span class="tok-num">248</span>, .g = <span class="tok-num">113</span>, .b = <span class="tok-num">113</span>, .a = <span class="tok-num">255</span> },
+        };
+    }
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    ui_host: z.UiHost,
+    font: z.Font,
+
+    lines: [log_cap]LogLine = std.mem.<span class="tok-fn">zeroes</span>([log_cap]LogLine),
+    severities: [log_cap]Severity = <span class="tok-builtin">@splat</span>(.info),
+    line_count: usize = <span class="tok-num">0</span>,
+
+    auto_scroll: bool = true,
+    paused: bool = false,
+    next_seq: u32 = <span class="tok-num">0</span>,
+    rng: std.Random.DefaultPrng,
+
+    <span class="tok-comment">// Scratch buffer for "copy all to clipboard."  Sized for the</span>
+    <span class="tok-comment">// worst case (every log line joined with newlines); written</span>
+    <span class="tok-comment">// fresh on each copy, only the live prefix is meaningful.</span>
+    <span class="tok-comment">// Lives on State (not module-global) per style rule 9.</span>
+    clipboard_scratch: [log_cap * (line_max + <span class="tok-num">1</span>)]u8 = undefined,
+
+    <span class="tok-comment">// Per-frame pending action set by buttons / keys, applied after</span>
+    <span class="tok-comment">// the log scroll region renders (so the cursor query inside</span>
+    <span class="tok-comment">// `setScrollHereY` is meaningful).</span>
+    pending_jump: <span class="tok-kw">enum</span> { none, top, bottom } = .none,
+    pending_copy: bool = false,
+
+    <span class="tok-comment">// Substring filter - phase 1.2 demo.  Persistent across frames so</span>
+    <span class="tok-comment">// the user's typed query survives the auto-emission redraw.</span>
+    <span class="tok-comment">// Empty by default -&gt; passFilter says "yes" to everything.</span>
+    filter: ui.TextFilter = .{},
+    <span class="tok-comment">// Count of lines that pass the filter this frame.  Recomputed</span>
+    <span class="tok-comment">// inside the line-rendering loop; surfaced in the Status section</span>
+    <span class="tok-comment">// so the user can see filtering is actually working.</span>
+    visible_count: usize = <span class="tok-num">0</span>,
+
+    <span class="tok-comment">// Phase 1.1 demo state: the help block at the bottom of the panel</span>
+    <span class="tok-comment">// is hidden by default and toggled by tapping the 28-px-tall</span>
+    <span class="tok-comment">// invisible button below the HUD strip.</span>
+    show_help: bool = false,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">appendLine</span>(s: *State) void {
+    <span class="tok-kw">if</span> (s.line_count == log_cap) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> r: std.Random = s.rng.<span class="tok-fn">random</span>();
+    s.next_seq += <span class="tok-num">1</span>;
+
+    <span class="tok-comment">// Three severity buckets, weighted 70/20/10.</span>
+    <span class="tok-kw">const</span> roll = r.<span class="tok-fn">intRangeAtMost</span>(u8, <span class="tok-num">0</span>, <span class="tok-num">99</span>);
+    <span class="tok-kw">const</span> sev: Severity = <span class="tok-kw">if</span> (roll &lt; <span class="tok-num">70</span>) .info <span class="tok-kw">else</span> <span class="tok-kw">if</span> (roll &lt; <span class="tok-num">90</span>) .warn <span class="tok-kw">else</span> .err;
+
+    <span class="tok-kw">const</span> subsystems: [<span class="tok-num">10</span>][]<span class="tok-kw">const</span> u8 = .{
+        <span class="tok-str">"net"</span>,
+        <span class="tok-str">"auth"</span>,
+        <span class="tok-str">"db"</span>,
+        <span class="tok-str">"cache"</span>,
+        <span class="tok-str">"ws"</span>,
+        <span class="tok-str">"ipc"</span>,
+        <span class="tok-str">"render"</span>,
+        <span class="tok-str">"physics"</span>,
+        <span class="tok-str">"scheduler"</span>,
+        <span class="tok-str">"fs"</span>,
+    };
+    <span class="tok-kw">const</span> sub: []<span class="tok-kw">const</span> u8 = subsystems[r.<span class="tok-fn">intRangeLessThan</span>(usize, <span class="tok-num">0</span>, subsystems.len)];
+
+    <span class="tok-kw">const</span> info_msgs: [<span class="tok-num">5</span>][]<span class="tok-kw">const</span> u8 = .{
+        <span class="tok-str">"connection established"</span>,
+        <span class="tok-str">"tick budget held"</span>,
+        <span class="tok-str">"warm cache hit"</span>,
+        <span class="tok-str">"frame submitted"</span>,
+        <span class="tok-str">"session refreshed"</span>,
+    };
+    <span class="tok-kw">const</span> warn_msgs: [<span class="tok-num">5</span>][]<span class="tok-kw">const</span> u8 = .{
+        <span class="tok-str">"retry budget halved"</span>,
+        <span class="tok-str">"queue depth high"</span>,
+        <span class="tok-str">"slow query (&gt;500ms)"</span>,
+        <span class="tok-str">"GC pressure rising"</span>,
+        <span class="tok-str">"drift exceeds threshold"</span>,
+    };
+    <span class="tok-kw">const</span> err_msgs: [<span class="tok-num">5</span>][]<span class="tok-kw">const</span> u8 = .{
+        <span class="tok-str">"handshake failed"</span>,
+        <span class="tok-str">"deadline missed"</span>,
+        <span class="tok-str">"lost peer ack"</span>,
+        <span class="tok-str">"cascade rollback"</span>,
+        <span class="tok-str">"schema mismatch"</span>,
+    };
+    <span class="tok-kw">const</span> msg: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">switch</span> (sev) {
+        .info =&gt; info_msgs[r.<span class="tok-fn">intRangeLessThan</span>(usize, <span class="tok-num">0</span>, info_msgs.len)],
+        .warn =&gt; warn_msgs[r.<span class="tok-fn">intRangeLessThan</span>(usize, <span class="tok-num">0</span>, warn_msgs.len)],
+        .err =&gt; err_msgs[r.<span class="tok-fn">intRangeLessThan</span>(usize, <span class="tok-num">0</span>, err_msgs.len)],
+    };
+
+    <span class="tok-kw">const</span> slot: *LogLine = &amp;s.lines[s.line_count];
+    <span class="tok-kw">const</span> w: []u8 = <span class="tok-fn">bufPrint</span>(
+        &amp;slot.buf,
+        <span class="tok-str">"[{d:0&gt;5}] {s} {s}: {s}"</span>,
+        .{ s.next_seq, sev.<span class="tok-fn">label</span>(), sub, msg },
+    ) <span class="tok-kw">catch</span> slot.buf[<span class="tok-num">0</span>..<span class="tok-num">0</span>];
+    slot.len = w.len;
+    s.severities[s.line_count] = sev;
+    s.line_count += <span class="tok-num">1</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>), <span class="tok-num">22</span>);
+    s.* = .{
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .font = font,
+        .rng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0xa17a</span>),
+    };
+
+    <span class="tok-comment">// Phone readability: load the bundled TTF (Atkinson Hyperlegible Mono),</span>
+    <span class="tok-comment">// bind it as the UI's active font, bump font_size to 16, and grow</span>
+    <span class="tok-comment">// frame_padding so buttons read as real touch targets.</span>
+    <span class="tok-comment">// **Both halves of the wiring matter.**  Setting `style.font_size = 16`</span>
+    <span class="tok-comment">// without `style.font = &amp;loaded_ttf` leaves the UI rendering against</span>
+    <span class="tok-comment">// the size-10 bitmap fallback (`style.font = null`) at scale 1.6x</span>
+    <span class="tok-comment">// which the bitmap path doesn't handle, so widgets render blank.</span>
+    <span class="tok-comment">// `loadFontFromTtfBytes` populates the cache; we have to point Style at it.</span>
+
+    <span class="tok-comment">// Seed with 80 lines so the viewer opens populated.</span>
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; <span class="tok-num">80</span>) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-fn">appendLine</span>(s);
+    }
+}
+
+<span class="tok-comment">/// Join every log line with '\n' into the State's scratch buffer</span>
+<span class="tok-comment">/// and push to the clipboard.  Worst-case buffer size is</span>
+<span class="tok-comment">/// `log_cap * (line_max + 1)` bytes; lines that would overflow</span>
+<span class="tok-comment">/// are dropped (caller sees a truncated copy rather than a</span>
+<span class="tok-comment">/// crash).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">copyAll</span>(u: ui.Ui, s: *State) void {
+    <span class="tok-kw">const</span> buf: []u8 = &amp;s.clipboard_scratch;
+    <span class="tok-kw">var</span> off: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; s.line_count) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> line: []<span class="tok-kw">const</span> u8 = s.lines[i].<span class="tok-fn">text</span>();
+        <span class="tok-kw">const</span> needed: usize = line.len + <span class="tok-num">1</span>;
+        <span class="tok-kw">if</span> (off + needed &gt; buf.len) {
+            <span class="tok-kw">break</span>;
+        }
+        <span class="tok-builtin">@memcpy</span>(buf[off .. off + line.len], line);
+        off += line.len;
+        buf[off] = <span class="tok-str">'\n'</span>;
+        off += <span class="tok-num">1</span>;
+    }
+    u.<span class="tok-fn">setClipboardText</span>(buf[<span class="tok-num">0</span>..off]);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+
+    <span class="tok-comment">// Background log emission - at ~10 lines/sec while not paused.</span>
+    <span class="tok-kw">if</span> (!s.paused) {
+        <span class="tok-kw">const</span> r: std.Random = s.rng.<span class="tok-fn">random</span>();
+        <span class="tok-kw">if</span> (r.<span class="tok-fn">intRangeAtMost</span>(u8, <span class="tok-num">0</span>, <span class="tok-num">5</span>) == <span class="tok-num">0</span>) {
+            <span class="tok-fn">appendLine</span>(s);
+        }
+    }
+
+    <span class="tok-comment">// Keyboard shortcuts.</span>
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .space)) {
+        <span class="tok-fn">appendLine</span>(s);
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .c)) {
+        s.pending_copy = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .t)) {
+        s.pending_jump = .top;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .b)) {
+        s.pending_jump = .bottom;
+    }
+
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Log viewer"</span>, .{
+        .initial_pos = .{ <span class="tok-num">8</span>, <span class="tok-num">8</span> },
+        .initial_size = .{ <span class="tok-num">380</span>, <span class="tok-num">840</span> },
+    })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"zimr log viewer - Phase 1.1 demo."</span>, .{});
+        u.<span class="tok-fn">textDisabled</span>(<span class="tok-str">"Tap Add to grow the log; auto-scroll pins newest to the bottom."</span>, .{});
+
+        <span class="tok-comment">// ---- Controls section ------------------------------------------</span>
+        u.<span class="tok-fn">separatorText</span>(<span class="tok-str">"Controls"</span>);
+
+        <span class="tok-comment">// 2-column grid so every control fits in a 380-wide window with</span>
+        <span class="tok-comment">// frame_padding (10, 8).tried 3 rows of mixed-width</span>
+        <span class="tok-comment">// buttons; that still pushed the right column past the edge</span>
+        <span class="tok-comment">//.  Two columns</span>
+        <span class="tok-comment">// are predictable - same width slot every row.</span>
+        <span class="tok-comment">// Row 1: auto-scroll  |  paused</span>
+        <span class="tok-comment">// Row 2: Add 1        |  Add 100   &lt;- Add 1 added</span>
+        <span class="tok-comment">//                                    (phones can't press SPACE)</span>
+        <span class="tok-comment">// Row 3: Clear        |  Copy</span>
+        <span class="tok-comment">// Row 4: Top          |  Bot</span>
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"auto-scroll"</span>, &amp;s.auto_scroll);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"paused"</span>, &amp;s.paused);
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Add 1"</span>, .{})) {
+            <span class="tok-fn">appendLine</span>(s);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Add 100"</span>, .{})) {
+            <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (i &lt; <span class="tok-num">100</span>) : (i += <span class="tok-num">1</span>) <span class="tok-fn">appendLine</span>(s);
+        }
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Clear"</span>, .{})) {
+            s.line_count = <span class="tok-num">0</span>;
+            s.next_seq = <span class="tok-num">0</span>;
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Copy"</span>, .{})) {
+            s.pending_copy = true;
+        }
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Top"</span>, .{})) {
+            s.pending_jump = .top;
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"Bot"</span>, .{})) {
+            s.pending_jump = .bottom;
+        }
+
+        <span class="tok-comment">// ---- Log section -----------------------------------------------</span>
+        u.<span class="tok-fn">separatorText</span>(<span class="tok-str">"Log"</span>);
+
+        <span class="tok-comment">// Filter input: type "error" to show only error lines, "-test"</span>
+        <span class="tok-comment">// to hide lines containing "test", "error,-test" for both.</span>
+        <span class="tok-comment">// Hint shown in the empty box surfaces the syntax.  Returned</span>
+        <span class="tok-comment">// bool (filter changed?) ignored - we re-evaluate every line</span>
+        <span class="tok-comment">// every frame anyway; passFilter is O(n*m) which dominates the</span>
+        <span class="tok-comment">// change-detection cost.</span>
+        _ = s.filter.<span class="tok-fn">draw</span>(u, <span class="tok-str">"Filter"</span>, <span class="tok-str">"inc,-exc (e.g. error,-test)"</span>);
+
+        <span class="tok-comment">// Apply jump-to-top / jump-to-bottom BEFORE submitting lines so</span>
+        <span class="tok-comment">// the setScrollY takes effect this frame.  Targets the OUTER</span>
+        <span class="tok-comment">// window's scroll - zimr's `beginChild` doesn't have its own</span>
+        <span class="tok-comment">// scroll state today (filed as Phase 1.6 in the plan), so the</span>
+        <span class="tok-comment">// canonical "fixed controls + scrollable log inside a child"</span>
+        <span class="tok-comment">// pattern from imgui's demo doesn't work yet.  Workaround: scroll</span>
+        <span class="tok-comment">// the whole window; controls scroll off the top as the user</span>
+        <span class="tok-comment">// pulls down to see older lines.  Less ideal UX, but fully</span>
+        <span class="tok-comment">// functional and avoids depending on a feature that isn't</span>
+        <span class="tok-comment">// shipped yet.</span>
+        <span class="tok-kw">switch</span> (s.pending_jump) {
+            .none =&gt; {},
+            .top =&gt; u.<span class="tok-fn">setScrollY</span>(<span class="tok-num">0</span>),
+            .bottom =&gt; u.<span class="tok-fn">setScrollY</span>(u.<span class="tok-fn">getScrollMaxY</span>()),
+        }
+        s.pending_jump = .none;
+
+        <span class="tok-comment">// Reset per-frame visible counter; populate in the loop so the</span>
+        <span class="tok-comment">// Status section can show it.  This is a render-loop output,</span>
+        <span class="tok-comment">// not real state - recomputed every frame from filter state.</span>
+        s.visible_count = <span class="tok-num">0</span>;
+
+        <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (i &lt; s.line_count) : (i += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> line: []<span class="tok-kw">const</span> u8 = s.lines[i].<span class="tok-fn">text</span>();
+            <span class="tok-comment">// Filter check FIRST - skip the textColored entirely if</span>
+            <span class="tok-comment">// the line doesn't pass.  Cheaper than rendering then</span>
+            <span class="tok-comment">// hiding, and (more importantly) the filtered-out rows</span>
+            <span class="tok-comment">// don't consume layout height, so the visible result is</span>
+            <span class="tok-comment">// a properly-condensed list.</span>
+            <span class="tok-kw">if</span> (!s.filter.<span class="tok-fn">passFilter</span>(line)) {
+                <span class="tok-kw">continue</span>;
+            }
+            s.visible_count += <span class="tok-num">1</span>;
+
+            u.<span class="tok-fn">textColored</span>(s.severities[i].<span class="tok-fn">color</span>(), <span class="tok-str">"{s}"</span>, .{line});
+            <span class="tok-comment">// Error rows get a clickable "[?]" link that opens</span>
+            <span class="tok-comment">// imgui's source on github.  Per-row `pushIdInt(i)` /</span>
+            <span class="tok-comment">// `popId()` disambiguates the widget IDs - every row's</span>
+            <span class="tok-comment">// link has the same label so without the int seed</span>
+            <span class="tok-comment">// they'd collide on the ID stack and only the first</span>
+            <span class="tok-comment">// would respond to clicks.</span>
+            <span class="tok-kw">if</span> (s.severities[i] == .err) {
+                u.<span class="tok-fn">sameLine</span>(.{});
+                u.<span class="tok-fn">pushIdInt</span>(<span class="tok-builtin">@intCast</span>(i)); <span class="tok-comment">// Zig 0.16 cleanup: was `@as(i64, @intCast(i))`</span>
+                _ = u.<span class="tok-fn">textLinkOpenURL</span>(<span class="tok-str">"[?]"</span>, <span class="tok-str">"https://github.com/ocornut/imgui/blob/master/imgui.h"</span>);
+                u.<span class="tok-fn">popId</span>();
+            }
+        }
+
+        <span class="tok-comment">// Auto-scroll-to-bottom: only when enabled AND we're already</span>
+        <span class="tok-comment">// near the bottom (avoids fighting the user when they scroll up</span>
+        <span class="tok-comment">// to inspect older lines).  Reuse the canonical imgui recipe,</span>
+        <span class="tok-comment">// operating on the OUTER window's scroll (not a child's).</span>
+        <span class="tok-kw">if</span> (s.auto_scroll <span class="tok-kw">and</span> u.<span class="tok-fn">getScrollY</span>() &gt;= u.<span class="tok-fn">getScrollMaxY</span>() - <span class="tok-num">1.0</span>) {
+            u.<span class="tok-fn">setScrollHereY</span>(<span class="tok-num">1.0</span>);
+        }
+
+        <span class="tok-comment">// ---- Status section --------------------------------------------</span>
+        u.<span class="tok-fn">separatorText</span>(<span class="tok-str">"Status"</span>);
+
+        <span class="tok-comment">// HUD strip - `value` calls demonstrating the comptime type</span>
+        <span class="tok-comment">// dispatch (usize, comptime_int, u32 all flow through the</span>
+        <span class="tok-comment">// same one-arg-anytype signature).  On a narrow phone window</span>
+        <span class="tok-comment">// these wrap to multiple rows automatically.</span>
+        u.<span class="tok-fn">value</span>(<span class="tok-str">"lines"</span>, s.line_count);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        u.<span class="tok-fn">value</span>(<span class="tok-str">"cap"</span>, log_cap);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        u.<span class="tok-fn">value</span>(<span class="tok-str">"seq"</span>, s.next_seq);
+        <span class="tok-comment">// Filter row - only shown when the filter is doing something,</span>
+        <span class="tok-comment">// so users without a filter typed don't see noise.  When</span>
+        <span class="tok-comment">// active, `shown` reads the visible-this-frame count, making</span>
+        <span class="tok-comment">// the filter's effect visible without scrolling.</span>
+        <span class="tok-kw">if</span> (s.filter.<span class="tok-fn">isActive</span>()) {
+            u.<span class="tok-fn">value</span>(<span class="tok-str">"shown"</span>, s.visible_count);
+            u.<span class="tok-fn">sameLine</span>(.{});
+            u.<span class="tok-fn">textDisabled</span>(<span class="tok-str">"(filter active)"</span>, .{});
+        }
+        <span class="tok-kw">const</span> auto_label: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.auto_scroll) <span class="tok-str">"(auto-scroll: on)"</span> <span class="tok-kw">else</span> <span class="tok-str">"(auto-scroll: off)"</span>;
+        u.<span class="tok-fn">textDisabled</span>(<span class="tok-str">"{s}"</span>, .{auto_label});
+
+        <span class="tok-comment">// ---- Help band (invisibleButton demo) --------------------------</span>
+        <span class="tok-comment">// 36-px-tall hidden hit zone (bigger than before for phone</span>
+        <span class="tok-comment">// thumbs) with a textDisabled hint above pointing at it.  Tap</span>
+        <span class="tok-comment">// -&gt; toggles `show_help`.  Demonstrates invisibleButton without</span>
+        <span class="tok-comment">// needing a "draw your own visuals on top via cursor-rewind"</span>
+        <span class="tok-comment">// trick (setCursorScreenPos lands in step 4.2; this version</span>
+        <span class="tok-comment">// just stacks hint + zone vertically).</span>
+        <span class="tok-kw">const</span> help_hint: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.show_help) <span class="tok-str">"(tap below to hide help ↓)"</span> <span class="tok-kw">else</span> <span class="tok-str">"(tap below for help ↓)"</span>;
+        u.<span class="tok-fn">textDisabled</span>(<span class="tok-str">"{s}"</span>, .{help_hint});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">invisibleButton</span>(<span class="tok-str">"help-toggle"</span>, .{ <span class="tok-num">0</span>, <span class="tok-num">36</span> })) {
+            s.show_help = !s.show_help;
+        }
+        <span class="tok-kw">if</span> (s.show_help) {
+            u.<span class="tok-fn">textWrapped</span>(
+                <span class="tok-str">"Phase 1.1 demo: separatorText sections this panel into Controls / Log / Status "</span> ++
+                    <span class="tok-str">"(replacing what used to be plain separator rules).  value() shows counts on "</span> ++
+                    <span class="tok-str">"the HUD strip above - one fn handles bool / int / float / enum / string via "</span> ++
+                    <span class="tok-str">"Zig's comptime type dispatch (no overloads).  textLinkOpenURL on each ERROR "</span> ++
+                    <span class="tok-str">"row ([?] markers) opens imgui's source on github in a new tab - try one.  "</span> ++
+                    <span class="tok-str">"You just tapped an invisibleButton (36-px hidden hit zone above this "</span> ++
+                    <span class="tok-str">"paragraph) to reveal this text.  Tap it again to hide."</span>,
+                .{},
+            );
+        }
+    }
+
+    <span class="tok-comment">// Apply pending clipboard copy outside the window scope (it</span>
+    <span class="tok-comment">// doesn't depend on `current_window`).</span>
+    <span class="tok-kw">if</span> (s.pending_copy) {
+        <span class="tok-fn">copyAll</span>(u, s);
+        s.pending_copy = false;
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - log viewer"</span>,
+            .width = <span class="tok-num">400</span>,
+            .height = <span class="tok-num">880</span>,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

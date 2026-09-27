@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>easings_testbed — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>easings_testbed</h1>
+<figure class="code src-file" data-path="examples/easings_testbed/easings_testbed.zig" data-lines="332"><figcaption><span>examples/easings_testbed/easings_testbed.zig</span><span>332 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/easings_testbed.zig - interactive testbed for trying</span>
+<span class="tok-comment">// every easing curve on a 2D ball trajectory.</span>
+<span class="tok-comment">// Port of raylib's `examples/shapes/shapes_easings_testbed.c` (*3,</span>
+<span class="tok-comment">// ~247 LOC).  Pick an easing for X, pick another for Y, hit ENTER,</span>
+<span class="tok-comment">// watch a ball traverse the screen with the chosen curves.</span>
+<span class="tok-comment">// raylib's original used a typedef'd function table with the</span>
+<span class="tok-comment">// 4-arg `Ease(t, b, c, d)` signature.  We do the same idea with</span>
+<span class="tok-comment">// Zig's first-class function pointers + the [0,1]-form curves</span>
+<span class="tok-comment">// from `src/easings.zig`, which means the lerp lives at the</span>
+<span class="tok-comment">// call site instead of inside every easing fn.</span>
+<span class="tok-comment">// raylib also exposes four `Linear*` aliases (None, In, Out, InOut)</span>
+<span class="tok-comment">// that are all the identity function.  We collapse them to one</span>
+<span class="tok-comment">// `Linear`; the testbed simply has one fewer entry.</span>
+<span class="tok-comment">// Controls:</span>
+<span class="tok-comment">//   &lt;-  -&gt;    cycle the X-axis easing (wraps; "None" is the last entry)</span>
+<span class="tok-comment">//   ^  v    cycle the Y-axis easing (wraps)</span>
+<span class="tok-comment">//   ENTER   play/pause the ball's motion</span>
+<span class="tok-comment">//   SPACE   restart from frame 0 (also fires automatically when</span>
+<span class="tok-comment">//           you change a setting)</span>
+<span class="tok-comment">//   T       toggle bounded-time mode (default ON; OFF lets t keep</span>
+<span class="tok-comment">//           growing past the duration so you can watch what the</span>
+<span class="tok-comment">//           curve does extrapolating into the future)</span>
+<span class="tok-comment">//   Q  W    decrease / increase the duration by 20 frames</span>
+<span class="tok-comment">//   A  S    decrease / increase the duration by 2 frames (fine)</span>
+<span class="tok-comment">// The ball traverses from (100, 100) to (700, 400) over `d` frames.</span>
+<span class="tok-comment">// HUD shows the current easing names + (t, d) values.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> float = zm.float;
+
+<span class="tok-kw">const</span> screen_w: i32 = <span class="tok-num">800</span>;
+<span class="tok-kw">const</span> screen_h: i32 = <span class="tok-num">450</span>;
+<span class="tok-kw">const</span> font_size: i32 = <span class="tok-num">20</span>;
+<span class="tok-kw">const</span> d_step: f32 = <span class="tok-num">20</span>;
+<span class="tok-kw">const</span> d_step_fine: f32 = <span class="tok-num">2</span>;
+<span class="tok-kw">const</span> d_min: f32 = <span class="tok-num">1</span>;
+<span class="tok-kw">const</span> d_max: f32 = <span class="tok-num">10000</span>;
+<span class="tok-kw">const</span> ball_radius: f32 = <span class="tok-num">16</span>;
+<span class="tok-kw">const</span> ball_start: Vec2 = .{ <span class="tok-num">100</span>, <span class="tok-num">100</span> };
+<span class="tok-kw">const</span> ball_end: Vec2 = .{ <span class="tok-num">700</span>, <span class="tok-num">400</span> };
+
+<span class="tok-kw">const</span> c = Color;
+
+<span class="tok-kw">const</span> EaseFn = *<span class="tok-kw">const</span> <span class="tok-kw">fn</span> (f32) f32;
+
+<span class="tok-kw">const</span> EaseEntry = <span class="tok-kw">struct</span> {
+    name: []<span class="tok-kw">const</span> u8,
+    func: EaseFn,
+};
+
+<span class="tok-comment">/// No-easing identity used for the "None" entry - the ball stays</span>
+<span class="tok-comment">/// at the start position on this axis.  Implemented as a static</span>
+<span class="tok-comment">/// fn so we can put a pointer to it in the table.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">noEase</span>(_: f32) f32 {
+    <span class="tok-kw">return</span> <span class="tok-num">0</span>;
+}
+
+<span class="tok-comment">// Function table.  Order matches raylib's source (modulo the</span>
+<span class="tok-comment">// collapsed Linear aliases).  Last entry is the "None" sentinel</span>
+<span class="tok-comment">// that pins the axis to its start value.</span>
+<span class="tok-kw">const</span> easings_table = [_]EaseEntry{
+    .{ .name = <span class="tok-str">"Linear"</span>, .func = z.easeLinear },
+    .{ .name = <span class="tok-str">"SineIn"</span>, .func = z.easeSineIn },
+    .{ .name = <span class="tok-str">"SineOut"</span>, .func = z.easeSineOut },
+    .{ .name = <span class="tok-str">"SineInOut"</span>, .func = z.easeSineInOut },
+    .{ .name = <span class="tok-str">"CircIn"</span>, .func = z.easeCircIn },
+    .{ .name = <span class="tok-str">"CircOut"</span>, .func = z.easeCircOut },
+    .{ .name = <span class="tok-str">"CircInOut"</span>, .func = z.easeCircInOut },
+    .{ .name = <span class="tok-str">"CubicIn"</span>, .func = z.easeCubicIn },
+    .{ .name = <span class="tok-str">"CubicOut"</span>, .func = z.easeCubicOut },
+    .{ .name = <span class="tok-str">"CubicInOut"</span>, .func = z.easeCubicInOut },
+    .{ .name = <span class="tok-str">"QuadIn"</span>, .func = z.easeQuadIn },
+    .{ .name = <span class="tok-str">"QuadOut"</span>, .func = z.easeQuadOut },
+    .{ .name = <span class="tok-str">"QuadInOut"</span>, .func = z.easeQuadInOut },
+    .{ .name = <span class="tok-str">"ExpoIn"</span>, .func = z.easeExpoIn },
+    .{ .name = <span class="tok-str">"ExpoOut"</span>, .func = z.easeExpoOut },
+    .{ .name = <span class="tok-str">"ExpoInOut"</span>, .func = z.easeExpoInOut },
+    .{ .name = <span class="tok-str">"BackIn"</span>, .func = z.easeBackIn },
+    .{ .name = <span class="tok-str">"BackOut"</span>, .func = z.easeBackOut },
+    .{ .name = <span class="tok-str">"BackInOut"</span>, .func = z.easeBackInOut },
+    .{ .name = <span class="tok-str">"BounceOut"</span>, .func = z.easeBounceOut },
+    .{ .name = <span class="tok-str">"BounceIn"</span>, .func = z.easeBounceIn },
+    .{ .name = <span class="tok-str">"BounceInOut"</span>, .func = z.easeBounceInOut },
+    .{ .name = <span class="tok-str">"ElasticIn"</span>, .func = z.easeElasticIn },
+    .{ .name = <span class="tok-str">"ElasticOut"</span>, .func = z.easeElasticOut },
+    .{ .name = <span class="tok-str">"ElasticInOut"</span>, .func = z.easeElasticInOut },
+    .{ .name = <span class="tok-str">"None"</span>, .func = noEase },
+};
+
+<span class="tok-kw">const</span> easing_none_idx: usize = easings_table.len - <span class="tok-num">1</span>;
+
+<span class="tok-comment">/// Names of every easing in `easings_table`, for the combo box. Built at</span>
+<span class="tok-comment">/// comptime so the panel and the table can never drift.</span>
+<span class="tok-kw">const</span> easing_names: [easings_table.len][]<span class="tok-kw">const</span> u8 = blk: {
+    <span class="tok-kw">var</span> names: [easings_table.len][]<span class="tok-kw">const</span> u8 = undefined;
+    <span class="tok-kw">for</span> (easings_table, <span class="tok-num">0</span>..) |e, i| {
+        names[i] = e.name;
+    }
+    <span class="tok-kw">break</span> :blk names;
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    ui_host: z.UiHost,
+    <span class="tok-comment">/// Owned shapes-texture state. id=1 -&gt; rlgl's internal 1x1 white pixel.</span>
+    <span class="tok-comment">/// Owned default-font cache. Populated by `loadFontFromTtfBytes` below.</span>
+    frame_count: usize = <span class="tok-num">0</span>,
+    <span class="tok-comment">/// Current animation time in frames (matches raylib's `t`).</span>
+    t: f32 = <span class="tok-num">0</span>,
+    <span class="tok-comment">/// Total animation duration in frames.</span>
+    duration: f32 = <span class="tok-num">300</span>,
+    <span class="tok-comment">/// True = animation halts at t == duration; False = t keeps</span>
+    <span class="tok-comment">/// growing forever.</span>
+    bounded_t: bool = true,
+    <span class="tok-comment">/// True = paused (waiting for ENTER).  Default true so the</span>
+    <span class="tok-comment">/// user sees the start state before motion begins.</span>
+    paused: bool = false,
+    <span class="tok-comment">/// Indices into `easings_table` for the X-axis and Y-axis curves.</span>
+    ease_x: usize = <span class="tok-num">0</span>, <span class="tok-comment">// Linear (was None - gives an immediately visible demo)</span>
+    ease_y: usize = <span class="tok-num">23</span>, <span class="tok-comment">// ElasticOut</span>
+    <span class="tok-comment">/// Current ball position (lerped per frame).</span>
+    ball: Vec2 = ball_start,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">28</span>);
+    s.* = .{ .font = font, .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font) };
+}
+
+<span class="tok-comment">/// Draw one line of bottom-of-screen help text in the testbed's</span>
+<span class="tok-comment">/// shared style (left-aligned at x=20, light grey, font_size).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawHelpLine</span>(
+    f: *z.Frame,
+    font: z.Font,
+    msg: []<span class="tok-kw">const</span> u8,
+    y: f32,
+) void {
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">20</span>, y }, msg, .{ .size = font_size, .color = c.darkgray, .font = &amp;font });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, state: *State) void {
+    state.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> dt: f32 = <span class="tok-builtin">@floatCast</span>(f.time.delta_time);
+    <span class="tok-kw">const</span> tick: f32 = dt * <span class="tok-num">60.0</span>;
+
+    <span class="tok-comment">// ---- Input - settings that trigger a restart</span>
+    <span class="tok-kw">var</span> triggered_restart: bool = false;
+
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .t)) {
+        state.bounded_t = !state.bounded_t;
+        triggered_restart = true;
+    }
+
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .right)) {
+        state.ease_x = (state.ease_x + <span class="tok-num">1</span>) % easings_table.len;
+        triggered_restart = true;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .left)) {
+        state.ease_x = <span class="tok-kw">if</span> (state.ease_x == <span class="tok-num">0</span>) easing_none_idx <span class="tok-kw">else</span> state.ease_x - <span class="tok-num">1</span>;
+        triggered_restart = true;
+    }
+
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .down)) {
+        state.ease_y = (state.ease_y + <span class="tok-num">1</span>) % easings_table.len;
+        triggered_restart = true;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .up)) {
+        state.ease_y = <span class="tok-kw">if</span> (state.ease_y == <span class="tok-num">0</span>) easing_none_idx <span class="tok-kw">else</span> state.ease_y - <span class="tok-num">1</span>;
+        triggered_restart = true;
+    }
+
+    <span class="tok-comment">// Duration controls: Q/W coarse (20 frames), A/S fine (2 frames).</span>
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .w) <span class="tok-kw">and</span> state.duration &lt; d_max - d_step) {
+        state.duration += d_step;
+        triggered_restart = true;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .q) <span class="tok-kw">and</span> state.duration &gt; d_min + d_step) {
+        state.duration -= d_step;
+        triggered_restart = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .s) <span class="tok-kw">and</span> state.duration &lt; d_max - d_step_fine) {
+        state.duration += d_step_fine;
+        triggered_restart = true;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .a) <span class="tok-kw">and</span> state.duration &gt; d_min + d_step_fine) {
+        state.duration -= d_step_fine;
+        triggered_restart = true;
+    }
+
+    <span class="tok-comment">// SPACE = restart; ENTER on already-finished bounded-mode also restarts.</span>
+    <span class="tok-kw">const</span> space_restart: bool = z.<span class="tok-fn">isKeyPressed</span>(f.input, .space);
+    <span class="tok-kw">const</span> enter_at_end: bool =
+        z.<span class="tok-fn">isKeyPressed</span>(f.input, .enter) <span class="tok-kw">and</span> state.bounded_t <span class="tok-kw">and</span> state.t &gt;= state.duration;
+
+    <span class="tok-kw">if</span> (triggered_restart <span class="tok-kw">or</span> space_restart <span class="tok-kw">or</span> enter_at_end) {
+        state.t = <span class="tok-num">0</span>;
+        state.ball = ball_start;
+        state.paused = true;
+    }
+
+    <span class="tok-comment">// ENTER toggles play/pause.</span>
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyPressed</span>(f.input, .enter) <span class="tok-kw">and</span> !enter_at_end) {
+        state.paused = !state.paused;
+    }
+
+    <span class="tok-comment">// ---- Update - advance the animation if running</span>
+    <span class="tok-kw">const</span> should_advance: bool = blk: {
+        <span class="tok-kw">if</span> (state.paused) {
+            <span class="tok-kw">break</span> :blk false;
+        }
+        <span class="tok-comment">// Bounded mode halts at t == duration; unbounded keeps growing.</span>
+        <span class="tok-kw">if</span> (state.bounded_t <span class="tok-kw">and</span> state.t &gt;= state.duration) {
+            <span class="tok-kw">break</span> :blk false;
+        }
+        <span class="tok-kw">break</span> :blk true;
+    };
+
+    <span class="tok-kw">if</span> (should_advance) {
+        <span class="tok-kw">const</span> t01: f32 = <span class="tok-fn">clamp</span>(state.t / state.duration, <span class="tok-num">0</span>, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> ease_x: EaseFn = easings_table[state.ease_x].func;
+        <span class="tok-kw">const</span> ease_y: EaseFn = easings_table[state.ease_y].func;
+        state.ball[<span class="tok-num">0</span>] = ball_start[<span class="tok-num">0</span>] + <span class="tok-fn">ease_x</span>(t01) * (ball_end[<span class="tok-num">0</span>] - ball_start[<span class="tok-num">0</span>]);
+        state.ball[<span class="tok-num">1</span>] = ball_start[<span class="tok-num">1</span>] + <span class="tok-fn">ease_y</span>(t01) * (ball_end[<span class="tok-num">1</span>] - ball_start[<span class="tok-num">1</span>]);
+        state.t += tick;
+    }
+
+    <span class="tok-comment">// ---- Render ----------------------------------------------------------</span>
+    z.<span class="tok-fn">clearViewport</span>(f, c.raywhite);
+
+    <span class="tok-comment">// Top-left info block.</span>
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">128</span>]u8 = undefined;
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">20</span>, font_size },
+        <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"Easing x: {s}"</span>, .{easings_table[state.ease_x].name}) <span class="tok-kw">catch</span> <span class="tok-str">"x"</span>,
+        .{ .size = font_size, .color = c.darkgray, .font = &amp;state.font },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">20</span>, font_size * <span class="tok-num">2</span> },
+        <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"Easing y: {s}"</span>, .{easings_table[state.ease_y].name}) <span class="tok-kw">catch</span> <span class="tok-str">"y"</span>,
+        .{ .size = font_size, .color = c.darkgray, .font = &amp;state.font },
+    );
+    <span class="tok-kw">const</span> bound_marker: u8 = <span class="tok-kw">if</span> (state.bounded_t) <span class="tok-str">'b'</span> <span class="tok-kw">else</span> <span class="tok-str">'u'</span>;
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">20</span>, font_size * <span class="tok-num">3</span> },
+        <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"t ({c}) = {d:.2}   d = {d:.2}"</span>, .{ bound_marker, state.t, state.duration }) <span class="tok-kw">catch</span> <span class="tok-str">"t"</span>,
+        .{ .size = font_size, .color = c.darkgray, .font = &amp;state.font },
+    );
+
+    <span class="tok-comment">// Bottom help text.  Stacked from the bottom so the most</span>
+    <span class="tok-comment">// useful line (LEFT/RIGHT) is closest to the action area.</span>
+    <span class="tok-kw">const</span> bottom_line_y: i32 = screen_h - font_size * <span class="tok-num">2</span>;
+    <span class="tok-fn">drawHelpLine</span>(
+        f,
+        state.font,
+        <span class="tok-str">"Use ENTER to play or pause movement, use SPACE to restart"</span>,
+        <span class="tok-fn">float</span>(bottom_line_y),
+    );
+    <span class="tok-fn">drawHelpLine</span>(
+        f,
+        state.font,
+        <span class="tok-str">"Use Q and W or A and S keys to change duration"</span>,
+        <span class="tok-fn">float</span>(bottom_line_y - font_size),
+    );
+    <span class="tok-fn">drawHelpLine</span>(
+        f,
+        state.font,
+        <span class="tok-str">"Use LEFT or RIGHT keys to choose easing for the x axis"</span>,
+        <span class="tok-fn">float</span>(bottom_line_y - font_size * <span class="tok-num">2</span>),
+    );
+    <span class="tok-fn">drawHelpLine</span>(
+        f,
+        state.font,
+        <span class="tok-str">"Use UP or DOWN keys to choose easing for the y axis"</span>,
+        <span class="tok-fn">float</span>(bottom_line_y - font_size * <span class="tok-num">3</span>),
+    );
+
+    f.gl.<span class="tok-fn">circle</span>(state.ball, ball_radius, .{ .color = c.maroon, .segments = <span class="tok-num">16</span> });
+
+    <span class="tok-comment">// Touch controls: the keyboard shortcuts (arrows/Q/W/A/S/ENTER/SPACE) still</span>
+    <span class="tok-comment">// work on desktop; this panel gives phones a way to drive the testbed.</span>
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = state.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Easings"</span>, .{ .initial_pos = .{ <span class="tok-num">14</span>, <span class="tok-num">14</span> }, .initial_size = .{ <span class="tok-num">250</span>, <span class="tok-num">230</span> } })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        <span class="tok-kw">var</span> ix: i32 = <span class="tok-builtin">@intCast</span>(state.ease_x);
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">combo</span>(<span class="tok-str">"X axis"</span>, &amp;ix, &amp;easing_names, .{})) {
+            state.ease_x = <span class="tok-builtin">@intCast</span>(ix);
+        }
+        <span class="tok-kw">var</span> iy: i32 = <span class="tok-builtin">@intCast</span>(state.ease_y);
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">combo</span>(<span class="tok-str">"Y axis"</span>, &amp;iy, &amp;easing_names, .{})) {
+            state.ease_y = <span class="tok-builtin">@intCast</span>(iy);
+        }
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"duration"</span>, &amp;state.duration, .{ .min = <span class="tok-num">30</span>, .max = <span class="tok-num">600</span>, .fmt = <span class="tok-str">"{d:.0}"</span> });
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-kw">if</span> (state.paused) <span class="tok-str">"play"</span> <span class="tok-kw">else</span> <span class="tok-str">"pause"</span>, .{})) {
+            state.paused = !state.paused;
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"restart"</span>, .{})) {
+            state.t = <span class="tok-num">0</span>;
+            state.ball = ball_start;
+        }
+    }
+    state.ui_host.<span class="tok-fn">render</span>(f);
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">/// User-owned framework integration point.  See `examples/basic.zig`</span>
+<span class="tok-comment">/// for the canonical comment block; this declaration is the</span>
+<span class="tok-comment">/// AppBridge pattern's required convention.</span>
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - easings testbed"</span>,
+            .width = screen_w,
+            .height = screen_h,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

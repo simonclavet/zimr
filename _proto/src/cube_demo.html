@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cube_demo — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>cube_demo</h1>
+<figure class="code src-file" data-path="examples/cube_demo/cube_demo.zig" data-lines="345"><figcaption><span>examples/cube_demo/cube_demo.zig</span><span>345 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/cube_demo/cube_demo.zig</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The unlit cube (section 4.A / section 4(a) of the architecture doc): a SINGLE-UBO</span>
+<span class="tok-comment">// 3D demo using the Resources(Schema) path.  WebGPU architecture is</span>
+<span class="tok-comment">// documented centrally in src/zimr.zig - read that first.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The first 3D-on-wgpu demo: a textured spinning cube, depth-tested,</span>
+<span class="tok-comment">// drawn through the WebGPU backend (not GL).  This is section 4.A of</span>
+<span class="tok-comment">// `src/notes/finishing_webgpu.md` - the linchpin that proves the</span>
+<span class="tok-comment">// 3D draw path renders end-to-end before lambert/PBR/the helmet.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// What's new vs the 2D wgpu_bringup:</span>
+<span class="tok-comment">//   - a DEPTH texture (depth24plus) created + threaded into the</span>
+<span class="tok-comment">//     render pass (2D never needed depth);</span>
+<span class="tok-comment">//   - a 3D vertex-buffer layout (interleaved position+uv) passed via</span>
+<span class="tok-comment">//     ShaderDesc.vertex_buffer_layouts (the override added this arc);</span>
+<span class="tok-comment">//   - an MVP matrix pushed to the VS UBO each frame</span>
+<span class="tok-comment">//     (perspective x view x model-rotation).</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Reuses the cube_split VS+FS shader pair (already typed +</span>
+<span class="tok-comment">// naga-valid): cube_split_vs_io declares `Ubo.mvp`, cube_split_fs</span>
+<span class="tok-comment">// samples texture0.  Same source the GL+CPU cube_split demo uses -</span>
+<span class="tok-comment">// here it runs through spv2wgsl -&gt; WGSL -&gt; wgpu.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Build:    zig build wgpu-cube-demo</span>
+<span class="tok-comment">// Serve:    bun run webtests/server.ts --web-dir=zig-out/wgpu-cube</span>
+<span class="tok-comment">// Browse:   http://localhost:8000/index.html</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// CANNOT be verified in the sandbox (no GPU); Simon verifies the</span>
+<span class="tok-comment">// spinning cube in the browser.  The build-side contract: compiles</span>
+<span class="tok-comment">// clean, the embedded WGSL is naga-valid, lint 0.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> rotationX = zm.rotationX;
+<span class="tok-kw">const</span> rotationY = zm.rotationY;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> si = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Cube geometry (reused from examples/cube_split.zig)</span>
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// 24 vertices (4 per face) so each face gets clean UVs; 36 indices.</span>
+<span class="tok-comment">// Interleaved position(vec3) + tex_coord(vec2) -&gt; ONE vertex buffer,</span>
+<span class="tok-comment">// stride 20 bytes (3*4 + 2*4).  CCW winding from outside.</span>
+
+<span class="tok-kw">const</span> CubeVertex = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    position: [<span class="tok-num">3</span>]f32,
+    tex_coord: [<span class="tok-num">2</span>]f32,
+};
+
+<span class="tok-kw">const</span> half_size: f32 = <span class="tok-num">0.7</span>;
+
+<span class="tok-kw">const</span> cube_vertices = [_]CubeVertex{
+    <span class="tok-comment">// +Z face (front)</span>
+    .{ .position = .{ -half_size, -half_size, half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, -half_size, half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, half_size, half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -half_size, half_size, half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    <span class="tok-comment">// -Z face (back)</span>
+    .{ .position = .{ half_size, -half_size, -half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -half_size, -half_size, -half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -half_size, half_size, -half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ half_size, half_size, -half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    <span class="tok-comment">// +X face (right)</span>
+    .{ .position = .{ half_size, -half_size, half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, -half_size, -half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, half_size, -half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ half_size, half_size, half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    <span class="tok-comment">// -X face (left)</span>
+    .{ .position = .{ -half_size, -half_size, -half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -half_size, -half_size, half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -half_size, half_size, half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -half_size, half_size, -half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    <span class="tok-comment">// +Y face (top)</span>
+    .{ .position = .{ -half_size, half_size, half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, half_size, half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, half_size, -half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -half_size, half_size, -half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    <span class="tok-comment">// -Y face (bottom)</span>
+    .{ .position = .{ -half_size, -half_size, -half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, -half_size, -half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ half_size, -half_size, half_size }, .tex_coord = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -half_size, -half_size, half_size }, .tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+};
+
+<span class="tok-kw">const</span> cube_indices = [_]u32{
+    <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">0</span>, <span class="tok-num">2</span>, <span class="tok-num">3</span>, <span class="tok-comment">// +Z</span>
+    <span class="tok-num">4</span>, <span class="tok-num">5</span>, <span class="tok-num">6</span>, <span class="tok-num">4</span>, <span class="tok-num">6</span>, <span class="tok-num">7</span>, <span class="tok-comment">// -Z</span>
+    <span class="tok-num">8</span>, <span class="tok-num">9</span>, <span class="tok-num">10</span>, <span class="tok-num">8</span>, <span class="tok-num">10</span>, <span class="tok-num">11</span>, <span class="tok-comment">// +X</span>
+    <span class="tok-num">12</span>, <span class="tok-num">13</span>, <span class="tok-num">14</span>, <span class="tok-num">12</span>, <span class="tok-num">14</span>, <span class="tok-num">15</span>, <span class="tok-comment">// -X</span>
+    <span class="tok-num">16</span>, <span class="tok-num">17</span>, <span class="tok-num">18</span>, <span class="tok-num">16</span>, <span class="tok-num">18</span>, <span class="tok-num">19</span>, <span class="tok-comment">// +Y</span>
+    <span class="tok-num">20</span>, <span class="tok-num">21</span>, <span class="tok-num">22</span>, <span class="tok-num">20</span>, <span class="tok-num">22</span>, <span class="tok-num">23</span>, <span class="tok-comment">// -Y</span>
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Combined cube schema (Ubo + Samplers -&gt; two bind groups)</span>
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// cube_split's VS UBO (mvp) lands at @group(0) and its FS texture0 at</span>
+<span class="tok-comment">// @group(1) (the shader was built so the sampler sits in group 1 -</span>
+<span class="tok-comment">// confirmed in its WGSL).  loadShader's single-schema path only wires</span>
+<span class="tok-comment">// ONE bind group, so it can't drive this two-group layout.  Instead we</span>
+<span class="tok-comment">// use `Resources(CubeSchema)` + an explicit pipeline, exactly like</span>
+<span class="tok-comment">// Renderer2D: the schema declares BOTH `Ubo` and `Samplers`, Resources</span>
+<span class="tok-comment">// builds a bind-group-layout per group (bg_layouts[0]=UBO,</span>
+<span class="tok-comment">// bg_layouts[1]=sampler), and we chain both into the pipeline layout.</span>
+<span class="tok-kw">const</span> CubeSchema = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// VS UBO - the MVP matrix (group 0, binding 0).  Same shape as</span>
+    <span class="tok-comment">/// cube_split_vs_io.Ubo (mat4 = [4]@Vector(4,f32)).</span>
+    <span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+        mvp: [<span class="tok-num">4</span>]Vec = .{
+            .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+            .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+            .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> },
+            .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> },
+        },
+    };
+    <span class="tok-comment">/// FS texture (group 1) - the cube's albedo map.</span>
+    <span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+        texture0: si.<span class="tok-fn">Sampler2D</span>(.albedo, .{}),
+    };
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Persistent state</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    resources: z.shader.<span class="tok-fn">Resources</span>(CubeSchema),
+    pipeline: z.wgpu.RenderPipelineHandle,
+    pipeline_layout: z.wgpu.PipelineLayoutHandle,
+    vs_module: z.wgpu.ShaderModuleHandle,
+    fs_module: z.wgpu.ShaderModuleHandle,
+    cube_texture: z.WgpuTexture,
+
+    vertex_buffer: z.wgpu.BufferHandle,
+    index_buffer: z.wgpu.BufferHandle,
+};
+
+<span class="tok-kw">const</span> cube_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"cube_split_vs.wgsl"</span>);
+<span class="tok-kw">const</span> cube_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"cube_split_fs.wgsl"</span>);
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Init</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(
+    gpa: Allocator,
+    f: *z.Frame,
+    s: *State,
+) !void {
+    <span class="tok-comment">// The frame already carries device/queue/surface/format + the frame-owned</span>
+    <span class="tok-comment">// depth target via its GpuFrame; build the cube pipeline from it.</span>
+    <span class="tok-kw">const</span> device: z.wgpu.DeviceHandle = f.gpu.device;
+    <span class="tok-kw">const</span> queue: z.wgpu.QueueHandle = f.gpu.queue;
+    <span class="tok-kw">const</span> fmt: z.wgpu.TextureFormat = f.gpu.backbuffer_format;
+    <span class="tok-comment">// The depth format lives on the GpuFrame, which now OWNS the depth texture</span>
+    <span class="tok-comment">// and auto-resizes it to the surface each frame. Just set the format; the</span>
+    <span class="tok-comment">// frame creates + matches the depth attachment (see GpuFrame.ensureDepth).</span>
+    f.gpu.depth_format = .depth24_plus;
+
+    <span class="tok-comment">// ---- Checkerboard texture (stand-in for a real albedo map) ----</span>
+    <span class="tok-kw">const</span> cube_texture: z.WgpuTexture = <span class="tok-kw">try</span> z.WgpuTexture.<span class="tok-fn">createCheckerboard</span>(
+        device,
+        queue,
+        gpa,
+        .{ <span class="tok-num">0xff</span>, <span class="tok-num">0xff</span>, <span class="tok-num">0xff</span>, <span class="tok-num">0xff</span> },
+        .{ <span class="tok-num">0x33</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0xcc</span>, <span class="tok-num">0xff</span> },
+        <span class="tok-num">64</span>,
+        <span class="tok-num">8</span>,
+    );
+
+    <span class="tok-comment">// ---- Cube vertex + index buffers ----</span>
+    <span class="tok-kw">const</span> vertex_buffer: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(cube_vertices)),
+        .usage = .{ .vertex = true, .copy_dst = true },
+        .label = <span class="tok-str">"cube_vbo"</span>,
+    });
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(queue, vertex_buffer, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;cube_vertices));
+
+    <span class="tok-kw">const</span> index_buffer: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(cube_indices)),
+        .usage = .{ .index = true, .copy_dst = true },
+        .label = <span class="tok-str">"cube_ibo"</span>,
+    });
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(queue, index_buffer, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;cube_indices));
+
+    <span class="tok-comment">// ---- 3D vertex-buffer layout: ONE interleaved buffer ----</span>
+    <span class="tok-comment">// slot 0, stride 20: position vec3 @0 (offset 0), tex_coord vec2 @1 (offset 12).</span>
+    <span class="tok-kw">const</span> cube_layout = z.gpu.VertexBufferLayout{
+        .array_stride = <span class="tok-builtin">@sizeOf</span>(CubeVertex),
+        .step_mode = .vertex,
+        .attributes = &amp;.{
+            .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+            .{ .format = .float32x2, .offset = <span class="tok-num">12</span>, .shader_location = <span class="tok-num">1</span> },
+        },
+    };
+
+    <span class="tok-comment">// ---- Resources: builds the UBO (group 0) + sampler (group 1) BGLs ----</span>
+    <span class="tok-comment">// Mirrors Renderer2D: the solver assigns group 0 to the Ubo and</span>
+    <span class="tok-comment">// group 1 to the Sampler2D, matching cube_split's WGSL layout.</span>
+    <span class="tok-kw">const</span> resources = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">Resources</span>(CubeSchema).<span class="tok-fn">init</span>(
+        gpa,
+        f.gpu,
+        .{
+            .initial_ubo = .{}, <span class="tok-comment">// identity; per-frame writeUbo replaces with MVP</span>
+            .texture0 = cube_texture,
+        },
+    );
+
+    <span class="tok-comment">// ---- Pipeline layout chains both bind-group layouts ----</span>
+    <span class="tok-kw">const</span> bgls: [<span class="tok-num">2</span>]z.wgpu.BindGroupLayoutHandle = .{
+        resources.bg_layouts[<span class="tok-num">0</span>],
+        resources.bg_layouts[<span class="tok-num">1</span>],
+    };
+    <span class="tok-kw">const</span> pipeline_layout: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(device, bgls[<span class="tok-num">0</span>..], <span class="tok-str">"cube_pl"</span>);
+
+    <span class="tok-comment">// ---- Shader modules ----</span>
+    <span class="tok-kw">const</span> vs_module: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, cube_vs_wgsl, <span class="tok-str">"cube_vs"</span>);
+    <span class="tok-kw">const</span> fs_module: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, cube_fs_wgsl, <span class="tok-str">"cube_fs"</span>);
+
+    <span class="tok-comment">// ---- Render pipeline: depth-tested, back-face culled, 3D layout ----</span>
+    <span class="tok-kw">const</span> state_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .alpha,
+        .less, <span class="tok-comment">// depth test (LESS)</span>
+        .back, <span class="tok-comment">// cull back faces (cube_split is CCW-from-outside)</span>
+        fmt,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> pipe_desc = z.gpu.RenderPipelineDescriptor{
+        .vertex_buffer_layouts = &amp;.{cube_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = state_combo,
+    };
+    <span class="tok-kw">const</span> pipe_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, pipe_desc);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(pipe_blob);
+    <span class="tok-kw">const</span> pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        pipeline_layout,
+        vs_module,
+        fs_module,
+        pipe_blob,
+        <span class="tok-str">"cube_pipe"</span>,
+    );
+    s.* = .{
+        .resources = resources,
+        .pipeline = pipeline,
+        .pipeline_layout = pipeline_layout,
+        .vs_module = vs_module,
+        .fs_module = fs_module,
+        .cube_texture = cube_texture,
+        .vertex_buffer = vertex_buffer,
+        .index_buffer = index_buffer,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> Backend: type = z.WgpuBackend;
+
+    <span class="tok-comment">// ---- MVP: perspective x view x model(rotate over time) ----</span>
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+    <span class="tok-kw">const</span> aspect: f32 = f.window.<span class="tok-fn">aspect</span>();
+
+    <span class="tok-kw">const</span> model: Mat = <span class="tok-fn">mulMat</span>(
+        <span class="tok-fn">rotationY</span>(t * <span class="tok-num">0.8</span>),
+        <span class="tok-fn">rotationX</span>(t * <span class="tok-num">0.5</span>),
+    );
+    <span class="tok-kw">const</span> view: Mat = <span class="tok-fn">lookAtRh</span>(
+        <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">3.0</span>), <span class="tok-comment">// eye, 3 units back</span>
+        <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-comment">// target = origin</span>
+        <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>), <span class="tok-comment">// up</span>
+    );
+    <span class="tok-kw">const</span> proj: Mat = <span class="tok-fn">perspectiveFovRh</span>(
+        <span class="tok-num">0.9</span>, <span class="tok-comment">// fovy radians (~52 deg)</span>
+        aspect,
+        <span class="tok-num">0.1</span>, <span class="tok-comment">// near</span>
+        <span class="tok-num">100.0</span>, <span class="tok-comment">// far</span>
+    );
+    <span class="tok-kw">const</span> mvp: Mat = <span class="tok-fn">mulMat</span>(proj, <span class="tok-fn">mulMat</span>(view, model));
+
+    <span class="tok-comment">// Push to the VS UBO (group 0, binding 0).  CubeSchema.Ubo.mvp is a</span>
+    <span class="tok-comment">// mat4 (=[4]@Vector(4,f32)); our zm.Mat is exactly that shape.</span>
+    s.resources.<span class="tok-fn">writeUbo</span>(.{ .mvp = mvp });
+
+    <span class="tok-comment">// ---- Frame ----</span>
+    <span class="tok-kw">const</span> fctx = Backend.<span class="tok-fn">beginFrame</span>(f.gpu);
+    <span class="tok-kw">var</span> ps = Backend.<span class="tok-fn">beginRenderPass</span>(fctx.encoder, .{
+        .color_view = fctx.surface_view,
+        .clear = .{ .r = <span class="tok-num">0.05</span>, .g = <span class="tok-num">0.06</span>, .b = <span class="tok-num">0.10</span>, .a = <span class="tok-num">1.0</span> },
+        .depth_view = fctx.depth_view,
+    });
+    ps.queue = f.gpu.queue;
+
+    <span class="tok-comment">// Bind the cube pipeline + both bind groups (UBO group 0 + texture group 1).</span>
+    Backend.<span class="tok-fn">setPipeline</span>(&amp;ps, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.pipeline });
+    s.resources.<span class="tok-fn">bind</span>(&amp;ps);
+
+    <span class="tok-comment">// Bind cube geometry + draw all 36 indices.</span>
+    z.render_pass.<span class="tok-fn">setVertexBuffer</span>(ps.pass, .{
+        .slot = <span class="tok-num">0</span>,
+        .buffer = s.vertex_buffer,
+        .offset = <span class="tok-num">0</span>,
+        .size = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(cube_vertices)),
+    });
+    z.render_pass.<span class="tok-fn">setIndexBuffer</span>(ps.pass, .{
+        .buffer = s.index_buffer,
+        .format = .uint32,
+        .offset = <span class="tok-num">0</span>,
+        .size = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(cube_indices)),
+    });
+    z.render_pass.<span class="tok-fn">drawIndexed</span>(ps.pass, .{
+        .index_count = cube_indices.len,
+        .instance_count = <span class="tok-num">1</span>,
+        .first_index = <span class="tok-num">0</span>,
+        .base_vertex = <span class="tok-num">0</span>,
+        .first_instance = <span class="tok-num">0</span>,
+    });
+
+    Backend.<span class="tok-fn">endRenderPass</span>(&amp;ps);
+    Backend.<span class="tok-fn">endFrame</span>(f.gpu);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{ .title = <span class="tok-str">"zimr - WebGPU - depth-tested cube"</span>, .width = <span class="tok-num">800</span>, .height = <span class="tok-num">600</span> },
+    }, State, initState, update);
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Frame</span>
+<span class="tok-comment">// ============================================================================</span>
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/cube_split_fs.zig" data-lines="33"><figcaption><span>examples/cube_split_fs.zig</span><span>33 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/cube_split_fs.zig - fragment shader for the cube_split demo.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Samples `texture0` at `frag_tex_coord` (interpolated barycentric-</span>
+<span class="tok-comment">//! ally from the three vertices of the current triangle), emits the</span>
+<span class="tok-comment">//! result as the fragment color.  Same source runs on GPU (via SPIR-V</span>
+<span class="tok-comment">//! -&gt; GLSL -&gt; WebGL) and CPU (via `raster_shader.rasterizeTriangles`</span>
+<span class="tok-comment">//! calling this `shaderMain` per pixel).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema (Inputs / Samplers / Outputs) lives in `cube_split_fs_io.zig`.</span>
+
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"cube_split_fs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"cube_split_fs_externs"</span>);
+
+<span class="tok-comment">// IoT(void) - no Ubo, texture binding is all we need.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> TextureRef = shader_externs.TextureRef;
+
+<span class="tok-comment">// Silence unused-import warnings - shader_io's types are accessed</span>
+<span class="tok-comment">// only indirectly through the externs IoT instantiation above.</span>
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    out.out_color = io_in.<span class="tok-fn">texture0</span>(io_in.frag_tex_coord);
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/cube_split_fs_io.zig" data-lines="32"><figcaption><span>examples/cube_split_fs_io.zig</span><span>32 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/cube_split_fs_io.zig - schema for the cube_split demo's</span>
+<span class="tok-comment">//! fragment shader.  Declares Inputs / Samplers / Outputs.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `Inputs.frag_tex_coord` MUST match `cube_split_vs_io.Outputs`</span>
+<span class="tok-comment">//! field-for-field (varying link).  No Ubo - texture binding is all</span>
+<span class="tok-comment">//! we need.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Varying inputs from the vertex shader.  Field order MUST match</span>
+<span class="tok-comment">/// `cube_split_vs_io.Outputs` (frag_tex_coord at location 0).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+
+<span class="tok-comment">/// Sampler.  Reserved name `texture0` -&gt; auto-bound to slot 0 by</span>
+<span class="tok-comment">/// `loadShader`'s schema scan.  On CPU the dispatcher populates</span>
+<span class="tok-comment">/// `io._texture0: TextureRef` from the user's `gpu.Texture`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+    texture0: shader.<span class="tok-fn">Sampler2D</span>(.albedo, .{}),
+};
+
+<span class="tok-comment">/// Stage output.  `out_color` matches the convention; the</span>
+<span class="tok-comment">/// raster_shader dispatcher's comptime introspection looks for the</span>
+<span class="tok-comment">/// first `Vec` field in Out, but a consistent name aids</span>
+<span class="tok-comment">/// grep.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    out_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/cube_split_vs.zig" data-lines="33"><figcaption><span>examples/cube_split_vs.zig</span><span>33 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/cube_split_vs.zig - vertex shader for the cube_split demo.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Standard vertex transform: project world-space position through</span>
+<span class="tok-comment">//! the MVP matrix; pass UV through to the fragment shader.  Same</span>
+<span class="tok-comment">//! source compiles for SPIR-V (-&gt; GLSL -&gt; GPU) AND wasm32 (-&gt; CPU</span>
+<span class="tok-comment">//! dispatch via `raster_shader.dispatchVertexShader`).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema (Attributes / Ubo / Outputs) lives in `cube_split_vs_io.zig`.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> mulMatPoint = zm.mulMatPoint;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"cube_split_vs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"cube_split_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_io.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    <span class="tok-comment">// Project the vertex position through MVP.  `mulMatPoint`</span>
+    <span class="tok-comment">// assumes w=1 (a point, not a direction) and returns a</span>
+    <span class="tok-comment">// homogeneous Vec4 ready for the perspective divide that the</span>
+    <span class="tok-comment">// rasterizer (GPU or CPU) performs downstream.</span>
+    out.position = <span class="tok-fn">mulMatPoint</span>(io_in.u.mvp, io_in.vertex_position);
+    <span class="tok-comment">// Pass the UV through unchanged - interpolation happens between</span>
+    <span class="tok-comment">// here and the FS via per-fragment barycentric weights.</span>
+    out.frag_tex_coord = io_in.vertex_tex_coord;
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/cube_split_vs_io.zig" data-lines="38"><figcaption><span>examples/cube_split_vs_io.zig</span><span>38 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/cube_split_vs_io.zig - schema for the cube_split demo's</span>
+<span class="tok-comment">//! vertex shader.  Declares Attributes / Ubo / Outputs consumed by</span>
+<span class="tok-comment">//! `cube_split_vs.zig` (shader body) and shared with the CPU host</span>
+<span class="tok-comment">//! `cube_split.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Outputs become varyings to the fragment shader; the matching</span>
+<span class="tok-comment">//! `cube_split_fs_io.Inputs` must agree field-for-field (drift</span>
+<span class="tok-comment">//! produces a GLSL link error, not silent corruption).</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Vertex attributes consumed by this VS.  Position is 3D world-space;</span>
+<span class="tok-comment">/// tex_coord is the 2D UV.  Location 0 / 1 match the GPU side's</span>
+<span class="tok-comment">/// vertex-buffer layout (interleaved P3 + UV2, no normals - flat</span>
+<span class="tok-comment">/// shading via UV-driven texture).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {
+    vertex_position: shader.<span class="tok-fn">Attr</span>(.vec3, <span class="tok-num">0</span>),
+    vertex_tex_coord: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">1</span>),
+};
+
+<span class="tok-comment">/// UBO carrying the model-view-projection matrix.  Single source of</span>
+<span class="tok-comment">/// truth for both GPU push (via `loaded.ub.push(ubo)`) and CPU</span>
+<span class="tok-comment">/// dispatch (via `base_io.u = ubo`).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// Model-view-projection matrix.  4 columns x 4 rows = 16 f32.</span>
+    <span class="tok-comment">/// Standard GLSL column-major layout - `mat[col][row]`.</span>
+    <span class="tok-comment">/// `zm.mulMatVec` consumes this directly.</span>
+    mvp: [<span class="tok-num">4</span>]<span class="tok-builtin">@Vector</span>(<span class="tok-num">4</span>, f32),
+};
+
+<span class="tok-comment">/// Varying outputs to the fragment shader.  Just the UV - the cube</span>
+<span class="tok-comment">/// is flat-shaded against the texture, no normals.  Must match</span>
+<span class="tok-comment">/// `cube_split_fs_io.Inputs` field-for-field.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+</code></pre></figure>
+</body>
+</html>

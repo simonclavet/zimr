@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>shaders_vertex_displacement — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>shaders_vertex_displacement</h1>
+<figure class="code src-file" data-path="examples/shaders_vertex_displacement/shaders_vertex_displacement.zig" data-lines="208"><figcaption><span>examples/shaders_vertex_displacement/shaders_vertex_displacement.zig</span><span>208 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! shaders_vertex_displacement - the GPU displacement-mapping showcase for</span>
+<span class="tok-comment">//! vertex texture fetch. A flat grid is pushed into a living, lit 3D surface by</span>
+<span class="tok-comment">//! sampling a Perlin heightfield IN THE VERTEX SHADER: three samples per vertex</span>
+<span class="tok-comment">//! (the height plus two neighbours), from which the surface normal is computed</span>
+<span class="tok-comment">//! in the vertex stage too. The heightfield is one static texture; scrolling the</span>
+<span class="tok-comment">//! vertex-stage lookup by time animates it into moving swells. Lit with a</span>
+<span class="tok-comment">//! height-graded colour + specular glint, depth-tested, orbited with the phone</span>
+<span class="tok-comment">//! camera.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! This replaces the earlier CPU fallback - its premise, "zimr's vertex stage</span>
+<span class="tok-comment">//! doesn't sample textures", no longer holds now that vertex texture fetch works.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> pointVec = zm.pointVec;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+
+<span class="tok-kw">const</span> vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"shaders_vertex_displacement_vs.wgsl"</span>);
+<span class="tok-kw">const</span> fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"shaders_vertex_displacement_fs.wgsl"</span>);
+<span class="tok-kw">const</span> vs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"shaders_vertex_displacement_vs_io.zig"</span>);
+<span class="tok-kw">const</span> fs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"shaders_vertex_displacement_fs_io.zig"</span>);
+<span class="tok-kw">const</span> atkinson = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> grid_n: usize = <span class="tok-num">96</span>; <span class="tok-comment">// cells per side</span>
+<span class="tok-kw">const</span> verts_side: usize = grid_n + <span class="tok-num">1</span>;
+<span class="tok-kw">const</span> vertex_count: usize = verts_side * verts_side;
+<span class="tok-kw">const</span> index_count: usize = grid_n * grid_n * <span class="tok-num">6</span>;
+<span class="tok-kw">const</span> plane_size: f32 = <span class="tok-num">12.0</span>;
+<span class="tok-kw">const</span> amplitude: f32 = <span class="tok-num">1.7</span>;
+<span class="tok-kw">const</span> frequency: f32 = <span class="tok-num">1.6</span>;
+<span class="tok-kw">const</span> texel: f32 = <span class="tok-num">1.5</span> / <span class="tok-fn">float</span>(grid_n);
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    cam: z.OrbitCamera,
+    shader: z.shader.<span class="tok-fn">LoadedShader</span>(vs_io),
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    tex: z.WgpuTexture,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">identity</span>() [<span class="tok-num">4</span>]Vec {
+    <span class="tok-kw">return</span> .{ .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> }, .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> }, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> }, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    <span class="tok-comment">// Examples run under `.managed` with leak checking on, so free every GPU</span>
+    <span class="tok-comment">// resource we created (buffers, the heightfield texture, and the shader's</span>
+    <span class="tok-comment">// pipeline + bind groups) plus the font. `.arena` is only for external apps</span>
+    <span class="tok-comment">// that opt out of leak checking.</span>
+    s.shader.<span class="tok-fn">deinit</span>();
+    s.tex.<span class="tok-fn">deinit</span>();
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.vbo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.ibo);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-comment">// Grid vertices: (worldX, worldZ, u, v). The height (Y) is added in the VS.</span>
+    <span class="tok-kw">const</span> verts: []f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, vertex_count * <span class="tok-num">4</span>);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(verts);
+    <span class="tok-kw">var</span> gz: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (gz &lt; verts_side) : (gz += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> gx: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (gx &lt; verts_side) : (gx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> u: f32 = <span class="tok-fn">float</span>(gx) / <span class="tok-fn">float</span>(grid_n);
+            <span class="tok-kw">const</span> v: f32 = <span class="tok-fn">float</span>(gz) / <span class="tok-fn">float</span>(grid_n);
+            <span class="tok-kw">const</span> i: usize = (gz * verts_side + gx) * <span class="tok-num">4</span>;
+            verts[i + <span class="tok-num">0</span>] = (u - <span class="tok-num">0.5</span>) * plane_size;
+            verts[i + <span class="tok-num">1</span>] = (v - <span class="tok-num">0.5</span>) * plane_size;
+            verts[i + <span class="tok-num">2</span>] = u;
+            verts[i + <span class="tok-num">3</span>] = v;
+        }
+    }
+
+    <span class="tok-comment">// Two triangles per cell.</span>
+    <span class="tok-kw">const</span> idx: []u16 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u16, index_count);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(idx);
+    <span class="tok-kw">var</span> n: usize = <span class="tok-num">0</span>;
+    gz = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (gz &lt; grid_n) : (gz += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> gx: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (gx &lt; grid_n) : (gx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> a: u16 = <span class="tok-builtin">@intCast</span>(gz * verts_side + gx);
+            <span class="tok-kw">const</span> b: u16 = <span class="tok-builtin">@intCast</span>(gz * verts_side + gx + <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> c: u16 = <span class="tok-builtin">@intCast</span>((gz + <span class="tok-num">1</span>) * verts_side + gx + <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> d: u16 = <span class="tok-builtin">@intCast</span>((gz + <span class="tok-num">1</span>) * verts_side + gx);
+            idx[n + <span class="tok-num">0</span>] = a;
+            idx[n + <span class="tok-num">1</span>] = b;
+            idx[n + <span class="tok-num">2</span>] = c;
+            idx[n + <span class="tok-num">3</span>] = a;
+            idx[n + <span class="tok-num">4</span>] = c;
+            idx[n + <span class="tok-num">5</span>] = d;
+            n += <span class="tok-num">6</span>;
+        }
+    }
+
+    <span class="tok-kw">const</span> vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(f.gpu.device, .{
+        .size = verts.len * <span class="tok-builtin">@sizeOf</span>(f32),
+        .usage = .{ .vertex = true, .copy_dst = true },
+        .label = <span class="tok-str">"vdisp_vbo"</span>,
+    });
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, vbo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(verts));
+
+    <span class="tok-kw">const</span> ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(f.gpu.device, .{
+        .size = idx.len * <span class="tok-builtin">@sizeOf</span>(u16),
+        .usage = .{ .index = true, .copy_dst = true },
+        .label = <span class="tok-str">"vdisp_ibo"</span>,
+    });
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, ibo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(idx));
+
+    <span class="tok-comment">// Perlin heightfield. MIRROR_REPEAT addressing (not clamp) so the vertex</span>
+    <span class="tok-comment">// shader can sample at uv*freq &gt; 1 - and once scrolling pushes the lookup</span>
+    <span class="tok-comment">// past 1 - and have the noise wrap instead of smearing the texture's edge</span>
+    <span class="tok-comment">// texels into flat / 1D-striped regions. Mirror (not plain repeat) keeps the</span>
+    <span class="tok-comment">// height continuous across the wrap since genImagePerlinNoise isn't tileable.</span>
+    <span class="tok-comment">// Linear filtering keeps the surface smooth. loadTextureFromImage would give</span>
+    <span class="tok-comment">// a clamp + nearest sampler, so build the texture directly.</span>
+    <span class="tok-kw">const</span> img: z.Image = <span class="tok-kw">try</span> z.<span class="tok-fn">genImagePerlinNoise</span>(gpa, <span class="tok-num">256</span>, <span class="tok-num">256</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">6.0</span>);
+    <span class="tok-kw">const</span> iw: u32 = <span class="tok-builtin">@intCast</span>(img.width);
+    <span class="tok-kw">const</span> ih: u32 = <span class="tok-builtin">@intCast</span>(img.height);
+    <span class="tok-kw">const</span> pixels: []<span class="tok-kw">const</span> u8 = <span class="tok-builtin">@as</span>([*]<span class="tok-kw">const</span> u8, <span class="tok-builtin">@ptrCast</span>(img.data.?))[<span class="tok-num">0</span> .. iw * ih * <span class="tok-num">4</span>];
+    <span class="tok-kw">const</span> tex: z.WgpuTexture = z.WgpuTexture.<span class="tok-fn">createFromPixels</span>(f.gpu.device, f.gpu.queue, .{
+        .width = iw,
+        .height = ih,
+        .pixels = pixels,
+        .mag_filter_linear = true,
+        .min_filter_linear = true,
+        .address_mode = .mirror_repeat,
+        .label = <span class="tok-str">"heightfield"</span>,
+    });
+    z.<span class="tok-fn">unloadImage</span>(gpa, img);
+
+    <span class="tok-kw">const</span> shader: z.shader.<span class="tok-fn">LoadedShader</span>(vs_io) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(vs_io, fs_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = vs_wgsl,
+        .fs_wgsl_source = fs_wgsl,
+        .vertex_buffer_layouts = &amp;.{z.shader.<span class="tok-fn">vertexLayout</span>(vs_io)},
+        .depth_state = .less_equal,
+        .initial_ubo = .{ .mvp = <span class="tok-fn">identity</span>(), .wave = .{ <span class="tok-num">0</span>, amplitude, frequency, texel }, .cam = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+        .textures = .{ .height = tex },
+        .label = <span class="tok-str">"shaders_vertex_displacement"</span>,
+    });
+
+    s.* = .{
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson, <span class="tok-num">22</span>),
+        .cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-num">19.0</span>),
+        .shader = shader,
+        .vbo = vbo,
+        .ibo = ibo,
+        .tex = tex,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> aspect: f32 = f.window.<span class="tok-fn">widthf</span>() / <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1.0</span>);
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, false, .{ .min_distance = <span class="tok-num">9.0</span>, .max_distance = <span class="tok-num">40.0</span> });
+    <span class="tok-kw">const</span> mvp: [<span class="tok-num">4</span>]Vec = cam.<span class="tok-fn">viewProj</span>(aspect, <span class="tok-num">0.1</span>, <span class="tok-num">120.0</span>);
+    <span class="tok-kw">const</span> slope: f32 = amplitude / (texel * plane_size);
+
+    s.shader.<span class="tok-fn">pushUbo</span>(f.gpu.queue, .{
+        .mvp = mvp,
+        .wave = .{ f.time.time, amplitude, frequency, texel },
+        .cam = .{ cam.position[<span class="tok-num">0</span>], cam.position[<span class="tok-num">1</span>], cam.position[<span class="tok-num">2</span>], slope },
+    });
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">6</span>, .g = <span class="tok-num">10</span>, .b = <span class="tok-num">18</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> ps: *z.PassState = f.gl.pass;
+    <span class="tok-comment">// Bracket the custom pipeline draw so the 2D immediate batch (the clear quad</span>
+    <span class="tok-comment">// plus the text below) always flushes under the 2D pipeline, never ours -</span>
+    <span class="tok-comment">// our vertex-visible sampler sits at the batch's reserved group 1. See the</span>
+    <span class="tok-comment">// guard in gpu_iface.flushBatch and the note on LoadedShader.bindForDraw.</span>
+    f.gl.<span class="tok-fn">flushBeforeMaterialSwap</span>();
+    s.shader.<span class="tok-fn">bindForDraw</span>(ps);
+    s.shader.<span class="tok-fn">setVertex</span>(ps, <span class="tok-num">0</span>, s.vbo, vertex_count * <span class="tok-num">4</span> * <span class="tok-builtin">@sizeOf</span>(f32));
+    s.shader.<span class="tok-fn">setIndex</span>(ps, s.ibo, .uint16, index_count * <span class="tok-builtin">@sizeOf</span>(u16));
+    s.shader.<span class="tok-fn">drawIndexed</span>(ps, <span class="tok-builtin">@intCast</span>(index_count), <span class="tok-num">1</span>);
+    f.gl.<span class="tok-fn">renderer</span>().<span class="tok-fn">bindForPass</span>(ps);
+
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">16</span>, <span class="tok-num">16</span> }, <span class="tok-str">"Vertex Displacement"</span>, .{ .size = <span class="tok-num">24</span>, .color = common.palette.ink, .font = &amp;s.font });
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">46</span> },
+        <span class="tok-str">"a Perlin heightfield sampled in the VERTEX SHADER; normals computed there too"</span>,
+        .{ .size = <span class="tok-num">14</span>, .color = common.palette.ink_dim, .font = &amp;s.font },
+    );
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"GPU vertex texture fetch - drag to orbit, pinch/wheel to zoom"</span>);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - shaders - vertex displacement (GPU heightfield)"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/shaders_vertex_displacement_fs.zig" data-lines="60"><figcaption><span>examples/shaders_vertex_displacement_fs.zig</span><span>60 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/shaders_vertex_displacement_fs.zig - lights the displaced surface:</span>
+<span class="tok-comment">//! Lambert diffuse over a height-graded colour (deep trough -&gt; mid water -&gt;</span>
+<span class="tok-comment">//! bright crest), plus a Blinn specular glint. The normal it shades with was</span>
+<span class="tok-comment">//! computed in the vertex shader from the heightfield samples.</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> dot = zm.dot;
+<span class="tok-kw">const</span> normalize = zm.normalize;
+<span class="tok-kw">const</span> smoothstep = zm.smoothstep;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"shaders_vertex_displacement_fs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"shaders_vertex_displacement_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-comment">/// Element-wise linear blend a + (b - a) * t (the DSL has no vector `mix`).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">mixVec3</span>(a: Vec3, b: Vec3, t: f32) Vec3 {
+    <span class="tok-kw">return</span> .{ a[<span class="tok-num">0</span>] + (b[<span class="tok-num">0</span>] - a[<span class="tok-num">0</span>]) * t, a[<span class="tok-num">1</span>] + (b[<span class="tok-num">1</span>] - a[<span class="tok-num">1</span>]) * t, a[<span class="tok-num">2</span>] + (b[<span class="tok-num">2</span>] - a[<span class="tok-num">2</span>]) * t };
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    <span class="tok-kw">const</span> nrm: Vec3 = <span class="tok-fn">normalize</span>(Vec3{ io_in.frag_normal[<span class="tok-num">0</span>], io_in.frag_normal[<span class="tok-num">1</span>], io_in.frag_normal[<span class="tok-num">2</span>] });
+    <span class="tok-kw">const</span> light_dir: Vec3 = <span class="tok-fn">normalize</span>(Vec3{ <span class="tok-num">0.45</span>, <span class="tok-num">0.80</span>, <span class="tok-num">0.40</span> });
+    <span class="tok-kw">const</span> n_dot_l: f32 = <span class="tok-builtin">@max</span>(<span class="tok-fn">dot</span>(nrm, light_dir), <span class="tok-num">0.0</span>);
+    <span class="tok-kw">const</span> ambient: f32 = <span class="tok-num">0.28</span>;
+    <span class="tok-kw">const</span> diffuse: f32 = ambient + (<span class="tok-num">1.0</span> - ambient) * n_dot_l;
+
+    <span class="tok-comment">// Height-banded colour: deep trough -&gt; mid water -&gt; bright crest.</span>
+    <span class="tok-kw">const</span> h: f32 = io_in.frag_world[<span class="tok-num">3</span>];
+    <span class="tok-kw">const</span> deep: Vec3 = .{ <span class="tok-num">0.03</span>, <span class="tok-num">0.10</span>, <span class="tok-num">0.32</span> };
+    <span class="tok-kw">const</span> midc: Vec3 = .{ <span class="tok-num">0.06</span>, <span class="tok-num">0.42</span>, <span class="tok-num">0.66</span> };
+    <span class="tok-kw">const</span> crest: Vec3 = .{ <span class="tok-num">0.82</span>, <span class="tok-num">0.94</span>, <span class="tok-num">1.00</span> };
+    <span class="tok-kw">const</span> c1: Vec3 = <span class="tok-fn">mixVec3</span>(deep, midc, <span class="tok-fn">smoothstep</span>(<span class="tok-num">0.25</span>, <span class="tok-num">0.55</span>, h));
+    <span class="tok-kw">const</span> base: Vec3 = <span class="tok-fn">mixVec3</span>(c1, crest, <span class="tok-fn">smoothstep</span>(<span class="tok-num">0.62</span>, <span class="tok-num">0.90</span>, h));
+
+    <span class="tok-comment">// Blinn specular glint. Exponent 32 via five squarings - the DSL has no pow().</span>
+    <span class="tok-kw">const</span> view: Vec3 = <span class="tok-fn">normalize</span>(Vec3{ io_in.frag_view[<span class="tok-num">0</span>], io_in.frag_view[<span class="tok-num">1</span>], io_in.frag_view[<span class="tok-num">2</span>] });
+    <span class="tok-kw">const</span> half: Vec3 = <span class="tok-fn">normalize</span>(Vec3{ light_dir[<span class="tok-num">0</span>] + view[<span class="tok-num">0</span>], light_dir[<span class="tok-num">1</span>] + view[<span class="tok-num">1</span>], light_dir[<span class="tok-num">2</span>] + view[<span class="tok-num">2</span>] });
+    <span class="tok-kw">var</span> spec: f32 = <span class="tok-builtin">@max</span>(<span class="tok-fn">dot</span>(nrm, half), <span class="tok-num">0.0</span>);
+    spec = spec * spec;
+    spec = spec * spec;
+    spec = spec * spec;
+    spec = spec * spec;
+    spec = spec * spec;
+    <span class="tok-kw">const</span> glint: f32 = spec * <span class="tok-num">0.55</span>;
+
+    out.final_color = .{
+        base[<span class="tok-num">0</span>] * diffuse + glint,
+        base[<span class="tok-num">1</span>] * diffuse + glint,
+        base[<span class="tok-num">2</span>] * diffuse + glint,
+        <span class="tok-num">1.0</span>,
+    };
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/shaders_vertex_displacement_fs_io.zig" data-lines="15"><figcaption><span>examples/shaders_vertex_displacement_fs_io.zig</span><span>15 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/shaders_vertex_displacement_fs_io.zig - fragment schema: consume the</span>
+<span class="tok-comment">//! VS varyings (surface normal, world position + height, view direction) and</span>
+<span class="tok-comment">//! light the surface.</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    frag_normal: Vec,
+    frag_world: Vec,
+    frag_view: Vec,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    final_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/shaders_vertex_displacement_vs.zig" data-lines="75"><figcaption><span>examples/shaders_vertex_displacement_vs.zig</span><span>75 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/shaders_vertex_displacement_vs.zig - the vertex shader that turns a</span>
+<span class="tok-comment">//! flat grid into a living surface by sampling a Perlin heightfield IN THE</span>
+<span class="tok-comment">//! VERTEX STAGE. `heightLevel` is the explicit-LOD accessor (-&gt;</span>
+<span class="tok-comment">//! textureSampleLevel), which needs no derivatives and is legal in the vertex</span>
+<span class="tok-comment">//! stage. Three heights per vertex (the vertex plus two neighbours) give the</span>
+<span class="tok-comment">//! world-space surface normal, so the surface is lit, not merely displaced.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The three fetches are factored into `heightAt`. That is allowed because</span>
+<span class="tok-comment">//! `heightLevel` is explicit-LOD (uniformity-exempt); the `sampler-in-helper`</span>
+<span class="tok-comment">//! lint only forbids implicit-LOD samples in helpers (a fragment-stage rule).</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> normalize = zm.normalize;
+<span class="tok-kw">const</span> mulMatPoint = zm.mulMatPoint;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"shaders_vertex_displacement_vs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"shaders_vertex_displacement_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_io.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-comment">/// Height at `uv`: two octaves of the heightfield, scrolled in different</span>
+<span class="tok-comment">/// directions by time `t` - scrolling a static texture is what animates the</span>
+<span class="tok-comment">/// swells. The `repeat` sampler tiles the noise, so `uv * freq` may exceed 1.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">heightAt</span>(io_in: Io, uv: Vec2, t: f32, freq: f32) f32 {
+    <span class="tok-kw">const</span> uv1: Vec2 = .{ uv[<span class="tok-num">0</span>] * freq + t * <span class="tok-num">0.030</span>, uv[<span class="tok-num">1</span>] * freq + t * <span class="tok-num">0.021</span> };
+    <span class="tok-kw">const</span> uv2: Vec2 = .{ uv[<span class="tok-num">0</span>] * freq * <span class="tok-num">2.03</span> - t * <span class="tok-num">0.017</span>, uv[<span class="tok-num">1</span>] * freq * <span class="tok-num">2.03</span> + t * <span class="tok-num">0.034</span> };
+    <span class="tok-kw">const</span> s1: Vec = io_in.<span class="tok-fn">heightLevel</span>(uv1, <span class="tok-num">0.0</span>);
+    <span class="tok-kw">const</span> s2: Vec = io_in.<span class="tok-fn">heightLevel</span>(uv2, <span class="tok-num">0.0</span>);
+    <span class="tok-kw">return</span> s1[<span class="tok-num">0</span>] * <span class="tok-num">0.65</span> + s2[<span class="tok-num">0</span>] * <span class="tok-num">0.35</span>;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    <span class="tok-kw">const</span> uv: Vec2 = io_in.vertex_uv;
+    <span class="tok-kw">const</span> t: f32 = io_in.u.wave[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> amp: f32 = io_in.u.wave[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> freq: f32 = io_in.u.wave[<span class="tok-num">2</span>];
+    <span class="tok-kw">const</span> texel: f32 = io_in.u.wave[<span class="tok-num">3</span>];
+    <span class="tok-kw">const</span> slope: f32 = io_in.u.cam[<span class="tok-num">3</span>];
+
+    <span class="tok-kw">const</span> h0: f32 = <span class="tok-fn">heightAt</span>(io_in, uv, t, freq);
+    <span class="tok-kw">const</span> hx: f32 = <span class="tok-fn">heightAt</span>(io_in, .{ uv[<span class="tok-num">0</span>] + texel, uv[<span class="tok-num">1</span>] }, t, freq);
+    <span class="tok-kw">const</span> hz: f32 = <span class="tok-fn">heightAt</span>(io_in, .{ uv[<span class="tok-num">0</span>], uv[<span class="tok-num">1</span>] + texel }, t, freq);
+
+    <span class="tok-kw">const</span> world_x: f32 = io_in.vertex_position[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> world_z: f32 = io_in.vertex_position[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> world_y: f32 = h0 * amp;
+    <span class="tok-kw">const</span> wp: Vec3 = .{ world_x, world_y, world_z };
+
+    <span class="tok-comment">// The surface is y = h(x,z); its normal is normalize(-dy/dx, 1, -dy/dz).</span>
+    <span class="tok-comment">// `slope` folds amplitude and the uv-&gt;world scale so the finite differences</span>
+    <span class="tok-comment">// read as true world slopes.</span>
+    <span class="tok-kw">const</span> dydx: f32 = (hx - h0) * slope;
+    <span class="tok-kw">const</span> dydz: f32 = (hz - h0) * slope;
+    <span class="tok-kw">const</span> nrm: Vec3 = <span class="tok-fn">normalize</span>(Vec3{ -dydx, <span class="tok-num">1.0</span>, -dydz });
+
+    <span class="tok-kw">const</span> view: Vec3 = <span class="tok-fn">normalize</span>(Vec3{
+        io_in.u.cam[<span class="tok-num">0</span>] - world_x,
+        io_in.u.cam[<span class="tok-num">1</span>] - world_y,
+        io_in.u.cam[<span class="tok-num">2</span>] - world_z,
+    });
+
+    out.position = <span class="tok-fn">mulMatPoint</span>(io_in.u.mvp, wp);
+    out.frag_normal = .{ nrm[<span class="tok-num">0</span>], nrm[<span class="tok-num">1</span>], nrm[<span class="tok-num">2</span>], <span class="tok-num">0.0</span> };
+    out.frag_world = .{ world_x, world_y, world_z, h0 };
+    out.frag_view = .{ view[<span class="tok-num">0</span>], view[<span class="tok-num">1</span>], view[<span class="tok-num">2</span>], <span class="tok-num">0.0</span> };
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/shaders_vertex_displacement_vs_io.zig" data-lines="32"><figcaption><span>examples/shaders_vertex_displacement_vs_io.zig</span><span>32 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/shaders_vertex_displacement_vs_io.zig - schema for the GPU vertex-</span>
+<span class="tok-comment">//! displacement showcase. A Perlin heightfield is sampled IN THE VERTEX STAGE</span>
+<span class="tok-comment">//! (a vertex-visible sampler) to push a flat grid into a lit, animated 3D</span>
+<span class="tok-comment">//! surface; the surface normal is computed from three vertex-stage samples per</span>
+<span class="tok-comment">//! vertex. This is what vertex texture fetch is FOR.</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {
+    vertex_position: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">0</span>), <span class="tok-comment">// world XZ in the ground plane</span>
+    vertex_uv: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">1</span>), <span class="tok-comment">// [0,1] lookup into the heightfield</span>
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    mvp: [<span class="tok-num">4</span>]Vec, <span class="tok-comment">// view*projection (model is identity - grid is world-space)</span>
+    wave: Vec, <span class="tok-comment">// x=time, y=amplitude, z=frequency, w=texel step for normals</span>
+    cam: Vec, <span class="tok-comment">// xyz=camera position (specular), w=slope scale for the gradient</span>
+};
+
+<span class="tok-comment">/// The heightfield, marked VERTEX-VISIBLE - the whole point of the demo. Read</span>
+<span class="tok-comment">/// only by the vertex shader (via the explicit-LOD `heightLevel` accessor),</span>
+<span class="tok-comment">/// never the fragment stage.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+    height: shader.<span class="tok-fn">Sampler2D</span>(.albedo, .{ .stages = .{ .vertex = true, .fragment = false } }),
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    frag_normal: Vec, <span class="tok-comment">// world-space surface normal (xyz)</span>
+    frag_world: Vec, <span class="tok-comment">// xyz=world position, w=height in [0,1] (for colouring)</span>
+    frag_view: Vec, <span class="tok-comment">// world-space view direction (xyz), for the specular glint</span>
+};
+</code></pre></figure>
+</body>
+</html>

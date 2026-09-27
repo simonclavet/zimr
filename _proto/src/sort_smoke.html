@@ -1,0 +1,1157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>sort_smoke — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>sort_smoke</h1>
+<figure class="code src-file" data-path="examples/sort_smoke/sort_smoke.zig" data-lines="490"><figcaption><span>examples/sort_smoke/sort_smoke.zig</span><span>490 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! sort_smoke - does the counting sort actually sort?</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `fluid_sort` renders a fluid that will not settle and whose particles lock into rows. Every</span>
+<span class="tok-comment">//! kernel READS correctly, so the argument has been going in circles. This example stops</span>
+<span class="tok-comment">//! arguing: it runs the same five kernels over 64 particles whose right answer can be worked</span>
+<span class="tok-comment">//! out by hand, and it CHECKS each stage.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It does it twice. kompute compiles one kernel source for two targets - plain Zig on `.cpu`,</span>
+<span class="tok-comment">//! SPIR-V-&gt;WGSL on `.gpu` - so:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * CPU passes, GPU fails  -&gt;  the toolchain (transpiler or driver) is wrong.</span>
+<span class="tok-comment">//!   * both fail the same way -&gt;  the ALGORITHM is wrong, and no transpiler fix will save it.</span>
+<span class="tok-comment">//!   * both pass              -&gt;  the sort is sound and the fluid bug is somewhere else.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! No other test in the tree can separate those three.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> sm = <span class="tok-builtin">@import</span>(<span class="tok-str">"sort_min.zig"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> Pipe = z.<span class="tok-fn">Compute</span>(sm);
+<span class="tok-comment">/// Each kernel's transpiled WGSL, embedded by the build. Mirrors `fluid_sort`.</span>
+<span class="tok-kw">const</span> kernel_wgsls: [sm.kernels.len]Pipe.KernelWgsl = blk: {
+    <span class="tok-kw">var</span> arr: [sm.kernels.len]Pipe.KernelWgsl = undefined;
+    <span class="tok-kw">for</span> (sm.kernels, <span class="tok-num">0</span>..) |name, i| {
+        arr[i] = .{ .name = name, .wgsl = <span class="tok-builtin">@embedFile</span>(name ++ <span class="tok-str">"_wgsl"</span>) };
+    }
+    <span class="tok-kw">break</span> :blk arr;
+};
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> Line = <span class="tok-kw">struct</span> {
+    text: [<span class="tok-num">96</span>]u8 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+    len: usize = <span class="tok-num">0</span>,
+    ok: bool = true,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    lines: [<span class="tok-num">24</span>]Line = <span class="tok-builtin">@splat</span>(.{}),
+    n_lines: usize = <span class="tok-num">0</span>,
+    all_ok: bool = true,
+
+    <span class="tok-comment">// The GPU half cannot be checked inside `init`: `readLatest` on the `.gpu` backend is</span>
+    <span class="tok-comment">// ASYNCHRONOUS - it starts a staging copy and returns null until the map completes, a</span>
+    <span class="tok-comment">// few frames later. (The first cut of this test called it immediately and got four</span>
+    <span class="tok-comment">// "NO READBACK" lines that said nothing about the kernels.) So keep the pipe, dispatch</span>
+    <span class="tok-comment">// once, and poll each frame until the data actually arrives.</span>
+    gpu: Pipe = undefined,
+    input: [sm.n_particles]Vec2 = <span class="tok-builtin">@splat</span>(.{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }),
+    truth: Truth = .{},
+    gpu_checked: bool = false,
+    frames: u32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">say</span>(s: *State, ok: bool, <span class="tok-kw">comptime</span> fmt: []<span class="tok-kw">const</span> u8, args: <span class="tok-kw">anytype</span>) void {
+    <span class="tok-kw">if</span> (s.n_lines &gt;= s.lines.len) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">var</span> l: Line = .{};
+    <span class="tok-kw">const</span> w: []u8 = <span class="tok-fn">bufPrint</span>(&amp;l.text, fmt, args) <span class="tok-kw">catch</span> l.text[<span class="tok-num">0</span>..<span class="tok-num">0</span>];
+    l.len = w.len;
+    l.ok = ok;
+    s.lines[s.n_lines] = l;
+    s.n_lines += <span class="tok-num">1</span>;
+    <span class="tok-kw">if</span> (!ok) {
+        s.all_ok = false;
+    }
+}
+
+<span class="tok-comment">/// A deterministic spread over the grid: a few particles land in every column, several rows</span>
+<span class="tok-comment">/// get very different populations, and one particle sits outside the domain so the clamp in</span>
+<span class="tok-comment">/// `cellOf` is exercised too.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">makeInput</span>(out: *[sm.n_particles]Vec2) void {
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = .<span class="tok-fn">init</span>(<span class="tok-num">0x50127</span>);
+    <span class="tok-kw">const</span> rng: std.Random = prng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">for</span> (out, <span class="tok-num">0</span>..) |*p, i| {
+        <span class="tok-kw">if</span> (i == <span class="tok-num">0</span>) {
+            p.* = .{ -<span class="tok-num">50.0</span>, -<span class="tok-num">50.0</span> }; <span class="tok-comment">// deliberately out of bounds -&gt; must clamp into cell 0</span>
+            <span class="tok-kw">continue</span>;
+        }
+        p.* = .{
+            rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">800.0</span>,
+            rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">400.0</span>,
+        };
+    }
+}
+
+<span class="tok-comment">/// The answer, worked out on the host with no kernels involved.</span>
+<span class="tok-kw">const</span> Truth = <span class="tok-kw">struct</span> {
+    counts: [sm.n_cells]u32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+    starts: [sm.n_cells + <span class="tok-num">1</span>]u32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">compute</span>(input: *<span class="tok-kw">const</span> [sm.n_particles]Vec2) Truth {
+        <span class="tok-kw">var</span> t: Truth = .{};
+        <span class="tok-kw">for</span> (input) |p| {
+            t.counts[<span class="tok-fn">cellOfHost</span>(p)] += <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">var</span> acc: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..sm.n_cells) |c| {
+            t.starts[c] = acc;
+            acc += t.counts[c];
+        }
+        t.starts[sm.n_cells] = acc;
+        <span class="tok-kw">return</span> t;
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">cellOfHost</span>(p: Vec2) u32 {
+    <span class="tok-kw">const</span> max_cx: f32 = <span class="tok-fn">float</span>(sm.n_cols - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> max_cy: f32 = <span class="tok-fn">float</span>(sm.n_rows - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> cx: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(<span class="tok-builtin">@floor</span>(p[<span class="tok-num">0</span>] / sm.cell_size), <span class="tok-num">0.0</span>, max_cx));
+    <span class="tok-kw">const</span> cy: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(<span class="tok-builtin">@floor</span>(p[<span class="tok-num">1</span>] / sm.cell_size), <span class="tok-num">0.0</span>, max_cy));
+    <span class="tok-kw">return</span> cx + cy * sm.n_cols;
+}
+
+<span class="tok-comment">/// Check every stage of an ALREADY-DISPATCHED pipe against ground truth. Returns false if</span>
+<span class="tok-comment">/// the backend has no data yet (the `.gpu` readback is async), so the caller can poll.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">checkStages</span>(
+    s: *State,
+    pipe: *Pipe,
+    label: []<span class="tok-kw">const</span> u8,
+    truth: *<span class="tok-kw">const</span> Truth,
+) bool {
+    <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.counts) == null) {
+        <span class="tok-kw">return</span> false; <span class="tok-comment">// readback not ready yet - try again next frame</span>
+    }
+
+    <span class="tok-comment">// ---- stage 1: countGrid must reproduce the histogram exactly.</span>
+    <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.counts)) |gc| {
+        <span class="tok-kw">var</span> bad: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> total: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (gc, <span class="tok-num">0</span>..) |v, c| {
+            total += v;
+            <span class="tok-kw">if</span> (c &lt; sm.n_cells <span class="tok-kw">and</span> v != truth.counts[c]) {
+                bad += <span class="tok-num">1</span>;
+            }
+        }
+        <span class="tok-fn">say</span>(s, bad == <span class="tok-num">0</span> <span class="tok-kw">and</span> total == sm.n_particles, <span class="tok-str">"{s} countGrid: {d}/{d} cells wrong, total {d} (want {d})"</span>, .{
+            label, bad, sm.n_cells, total, sm.n_particles,
+        });
+    } <span class="tok-kw">else</span> {
+        <span class="tok-fn">say</span>(s, false, <span class="tok-str">"{s} countGrid: NO READBACK"</span>, .{label});
+    }
+
+    <span class="tok-comment">// ---- stage 2: prefixSum must produce the exclusive scan, and ZERO the counts.</span>
+    <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.starts)) |cs| {
+        <span class="tok-kw">var</span> bad: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..sm.n_cells + <span class="tok-num">1</span>) |c| {
+            <span class="tok-kw">if</span> (c &lt; cs.len <span class="tok-kw">and</span> cs[c] != truth.starts[c]) {
+                bad += <span class="tok-num">1</span>;
+            }
+        }
+        <span class="tok-kw">const</span> total_ok: bool = cs.len &gt; sm.n_cells <span class="tok-kw">and</span> cs[sm.n_cells] == sm.n_particles;
+        <span class="tok-fn">say</span>(s, bad == <span class="tok-num">0</span> <span class="tok-kw">and</span> total_ok, <span class="tok-str">"{s} prefixSum: {d}/{d} starts wrong, total {d} (want {d})"</span>, .{
+            label,                                          bad,            sm.n_cells + <span class="tok-num">1</span>,
+            <span class="tok-kw">if</span> (cs.len &gt; sm.n_cells) cs[sm.n_cells] <span class="tok-kw">else</span> <span class="tok-num">0</span>, sm.n_particles,
+        });
+    } <span class="tok-kw">else</span> {
+        <span class="tok-fn">say</span>(s, false, <span class="tok-str">"{s} prefixSum: NO READBACK"</span>, .{label});
+    }
+
+    <span class="tok-comment">// ---- stage 4: after copyback, pos MUST be ordered by cell, and each cell's particles</span>
+    <span class="tok-comment">// must lie exactly within [starts[c], starts[c+1]) - the invariant every neighbour walk</span>
+    <span class="tok-comment">// in the fluid depends on.</span>
+    <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.pos)) |pos| {
+        <span class="tok-kw">var</span> last: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> unsorted: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> out_of_range: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (pos[<span class="tok-num">0</span>..<span class="tok-builtin">@min</span>(pos.len, sm.n_particles)], <span class="tok-num">0</span>..) |p, slot| {
+            <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOfHost</span>(p);
+            <span class="tok-kw">if</span> (cell &lt; last) {
+                unsorted += <span class="tok-num">1</span>;
+            }
+            last = cell;
+            <span class="tok-comment">// slot must fall inside its own cell's range</span>
+            <span class="tok-kw">if</span> (!(slot &gt;= truth.starts[cell] <span class="tok-kw">and</span> slot &lt; truth.starts[cell + <span class="tok-num">1</span>])) {
+                out_of_range += <span class="tok-num">1</span>;
+            }
+        }
+        <span class="tok-fn">say</span>(s, unsorted == <span class="tok-num">0</span> <span class="tok-kw">and</span> out_of_range == <span class="tok-num">0</span>, <span class="tok-str">"{s} copyback: {d} out of order, {d} outside their cell range"</span>, .{
+            label, unsorted, out_of_range,
+        });
+    } <span class="tok-kw">else</span> {
+        <span class="tok-fn">say</span>(s, false, <span class="tok-str">"{s} copyback: NO READBACK"</span>, .{label});
+    }
+
+    <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.pos)) |pos_all| {
+        <span class="tok-kw">const</span> pos: []<span class="tok-kw">const</span> Vec2 = pos_all[<span class="tok-num">0</span>..<span class="tok-builtin">@min</span>(pos_all.len, sm.n_particles)];
+        <span class="tok-comment">// ---- stage 6: THE DENSITY ARITHMETIC. The neighbour SET is proven; this is the</span>
+        <span class="tok-comment">// float math done over it. Nothing has tested this layer, and it is where rho -</span>
+        <span class="tok-comment">// the number the whole pressure solve turns on - is actually produced.</span>
+        <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.dens)) |dens| {
+            <span class="tok-kw">var</span> worst_rho: f32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">var</span> worst_near: f32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">var</span> bad: u32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |p, i| {
+                <span class="tok-kw">var</span> want_rho: f64 = <span class="tok-num">0</span>;
+                <span class="tok-kw">var</span> want_near: f64 = <span class="tok-num">0</span>;
+                <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |q, j| {
+                    <span class="tok-kw">if</span> (i == j) {
+                        <span class="tok-kw">continue</span>;
+                    }
+                    <span class="tok-kw">const</span> dx: f32 = q[<span class="tok-num">0</span>] - p[<span class="tok-num">0</span>];
+                    <span class="tok-kw">const</span> dy: f32 = q[<span class="tok-num">1</span>] - p[<span class="tok-num">1</span>];
+                    <span class="tok-kw">const</span> d2: f32 = dx * dx + dy * dy;
+                    <span class="tok-kw">if</span> (d2 &lt; sm.cell_size * sm.cell_size) {
+                        <span class="tok-kw">const</span> omq: f64 = <span class="tok-num">1.0</span> - <span class="tok-builtin">@as</span>(f64, <span class="tok-builtin">@sqrt</span>(d2)) / <span class="tok-builtin">@as</span>(f64, sm.cell_size);
+                        want_rho += omq * omq;
+                        want_near += omq * omq * omq;
+                    }
+                }
+                <span class="tok-kw">const</span> got: Vec2 = <span class="tok-kw">if</span> (i &lt; dens.len) dens[i] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                <span class="tok-kw">const</span> e_rho: f32 = <span class="tok-builtin">@abs</span>(got[<span class="tok-num">0</span>] - <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatCast</span>(want_rho)));
+                <span class="tok-kw">const</span> e_near: f32 = <span class="tok-builtin">@abs</span>(got[<span class="tok-num">1</span>] - <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatCast</span>(want_near)));
+                <span class="tok-kw">if</span> (e_rho &gt; worst_rho) {
+                    worst_rho = e_rho;
+                }
+                <span class="tok-kw">if</span> (e_near &gt; worst_near) {
+                    worst_near = e_near;
+                }
+                <span class="tok-kw">if</span> (e_rho &gt; <span class="tok-num">0.01</span> <span class="tok-kw">or</span> e_near &gt; <span class="tok-num">0.01</span>) {
+                    bad += <span class="tok-num">1</span>;
+                }
+            }
+            <span class="tok-fn">say</span>(s, bad == <span class="tok-num">0</span>, <span class="tok-str">"{s} DENSITY: {d}/{d} wrong (worst rho err {d:.4}, near err {d:.4})"</span>, .{
+                label, bad, sm.n_particles, worst_rho, worst_near,
+            });
+
+            <span class="tok-comment">// ---- stage 7: THE PRESSURE CORRECTION. The CPU-vs-GPU fluid split proves the</span>
+            <span class="tok-comment">// fault is in force / viscosity / the integrator. Density is exact, so `corr` is</span>
+            <span class="tok-comment">// the very next thing computed over the same proven neighbour set.</span>
+            <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.corr)) |corr| {
+                <span class="tok-kw">var</span> bad_c: u32 = <span class="tok-num">0</span>;
+                <span class="tok-kw">var</span> worst_c: f32 = <span class="tok-num">0</span>;
+                <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |p, i| {
+                    <span class="tok-kw">const</span> my_d: Vec2 = <span class="tok-kw">if</span> (i &lt; dens.len) dens[i] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                    <span class="tok-kw">const</span> my_press: f64 = <span class="tok-num">0.009</span> * (<span class="tok-builtin">@as</span>(f64, my_d[<span class="tok-num">0</span>]) - <span class="tok-num">15.39</span>);
+                    <span class="tok-kw">const</span> my_near: f64 = <span class="tok-num">0.028</span> * <span class="tok-builtin">@as</span>(f64, my_d[<span class="tok-num">1</span>]);
+                    <span class="tok-kw">var</span> wx: f64 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">var</span> wy: f64 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |q, j| {
+                        <span class="tok-kw">if</span> (i == j) {
+                            <span class="tok-kw">continue</span>;
+                        }
+                        <span class="tok-kw">const</span> rx: f32 = q[<span class="tok-num">0</span>] - p[<span class="tok-num">0</span>];
+                        <span class="tok-kw">const</span> ry: f32 = q[<span class="tok-num">1</span>] - p[<span class="tok-num">1</span>];
+                        <span class="tok-kw">const</span> d2: f32 = rx * rx + ry * ry;
+                        <span class="tok-kw">if</span> (d2 &gt;= sm.cell_size * sm.cell_size) {
+                            <span class="tok-kw">continue</span>;
+                        }
+                        <span class="tok-kw">const</span> dist: f64 = <span class="tok-builtin">@sqrt</span>(<span class="tok-builtin">@as</span>(f64, d2));
+                        <span class="tok-kw">var</span> dirx: f64 = <span class="tok-num">0</span>;
+                        <span class="tok-kw">var</span> diry: f64 = <span class="tok-num">0</span>;
+                        <span class="tok-kw">if</span> (dist &gt; <span class="tok-num">0.5</span>) {
+                            dirx = <span class="tok-builtin">@as</span>(f64, rx) / dist;
+                            diry = <span class="tok-builtin">@as</span>(f64, ry) / dist;
+                        } <span class="tok-kw">else</span> {
+                            <span class="tok-kw">const</span> seed: u32 = (<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)) +% <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(j))) *% <span class="tok-num">2654435761</span>;
+                            <span class="tok-kw">const</span> ang: f64 = <span class="tok-builtin">@as</span>(f64, <span class="tok-fn">float</span>(seed % <span class="tok-num">6283</span>)) * <span class="tok-num">0.001</span>;
+                            <span class="tok-kw">const</span> sgn: f64 = <span class="tok-kw">if</span> (i &lt; j) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>;
+                            dirx = <span class="tok-builtin">@cos</span>(ang) * sgn;
+                            diry = <span class="tok-builtin">@sin</span>(ang) * sgn;
+                        }
+                        <span class="tok-kw">const</span> jd: Vec2 = <span class="tok-kw">if</span> (j &lt; dens.len) dens[j] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                        <span class="tok-kw">const</span> j_press: f64 = <span class="tok-num">0.009</span> * (<span class="tok-builtin">@as</span>(f64, jd[<span class="tok-num">0</span>]) - <span class="tok-num">15.39</span>);
+                        <span class="tok-kw">const</span> j_near: f64 = <span class="tok-num">0.028</span> * <span class="tok-builtin">@as</span>(f64, jd[<span class="tok-num">1</span>]);
+                        <span class="tok-kw">const</span> omq: f64 = <span class="tok-num">1.0</span> - dist / <span class="tok-builtin">@as</span>(f64, sm.cell_size);
+                        <span class="tok-kw">const</span> disp: f64 = <span class="tok-num">0.5</span> * ((my_press + j_press) * omq + (my_near + j_near) * omq * omq);
+                        wx -= dirx * disp;
+                        wy -= diry * disp;
+                    }
+                    <span class="tok-kw">const</span> got: Vec2 = <span class="tok-kw">if</span> (i &lt; corr.len) corr[i] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                    <span class="tok-kw">const</span> e: f32 = <span class="tok-builtin">@abs</span>(got[<span class="tok-num">0</span>] - <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatCast</span>(wx))) + <span class="tok-builtin">@abs</span>(got[<span class="tok-num">1</span>] - <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatCast</span>(wy)));
+                    <span class="tok-kw">if</span> (e &gt; worst_c) {
+                        worst_c = e;
+                    }
+                    <span class="tok-kw">if</span> (e &gt; <span class="tok-num">0.01</span>) {
+                        bad_c += <span class="tok-num">1</span>;
+                    }
+                }
+                <span class="tok-fn">say</span>(s, bad_c == <span class="tok-num">0</span>, <span class="tok-str">"{s} FORCE: {d}/{d} wrong (worst |corr| err {d:.4})"</span>, .{
+                    label, bad_c, sm.n_particles, worst_c,
+                });
+
+                <span class="tok-comment">// ---- stage 8: VISCOSITY. Untested until now. Its inner loop carries a</span>
+                <span class="tok-comment">// `continue` gated on a COMPUTED FLOAT, three loops deep - data-dependent</span>
+                <span class="tok-comment">// control flow nothing else in the module has.</span>
+                <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.visc)) |visc| {
+                    <span class="tok-kw">var</span> bad_v: u32 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">var</span> worst_v: f32 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |p, i| {
+                        <span class="tok-kw">var</span> vx: f64 = <span class="tok-builtin">@as</span>(f64, p[<span class="tok-num">1</span>]) * <span class="tok-num">0.01</span> - <span class="tok-num">2.0</span>;
+                        <span class="tok-kw">var</span> vy: f64 = <span class="tok-num">1.0</span> - <span class="tok-builtin">@as</span>(f64, p[<span class="tok-num">0</span>]) * <span class="tok-num">0.008</span>;
+                        <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |q, j| {
+                            <span class="tok-kw">if</span> (i == j) {
+                                <span class="tok-kw">continue</span>;
+                            }
+                            <span class="tok-kw">const</span> sx: f64 = <span class="tok-builtin">@as</span>(f64, q[<span class="tok-num">0</span>]) - <span class="tok-builtin">@as</span>(f64, p[<span class="tok-num">0</span>]);
+                            <span class="tok-kw">const</span> sy: f64 = <span class="tok-builtin">@as</span>(f64, q[<span class="tok-num">1</span>]) - <span class="tok-builtin">@as</span>(f64, p[<span class="tok-num">1</span>]);
+                            <span class="tok-kw">const</span> dist: f64 = <span class="tok-builtin">@sqrt</span>(sx * sx + sy * sy);
+                            <span class="tok-kw">if</span> (dist &gt;= <span class="tok-builtin">@as</span>(f64, sm.cell_size) <span class="tok-kw">or</span> dist &lt;= <span class="tok-num">0.0001</span>) {
+                                <span class="tok-kw">continue</span>;
+                            }
+                            <span class="tok-kw">const</span> nx2: f64 = sx / dist;
+                            <span class="tok-kw">const</span> ny2: f64 = sy / dist;
+                            <span class="tok-kw">const</span> ox: f64 = <span class="tok-builtin">@as</span>(f64, q[<span class="tok-num">1</span>]) * <span class="tok-num">0.01</span> - <span class="tok-num">2.0</span>;
+                            <span class="tok-kw">const</span> oy: f64 = <span class="tok-num">1.0</span> - <span class="tok-builtin">@as</span>(f64, q[<span class="tok-num">0</span>]) * <span class="tok-num">0.008</span>;
+                            <span class="tok-kw">const</span> u: f64 = (vx - ox) * nx2 + (vy - oy) * ny2;
+                            <span class="tok-kw">if</span> (u &lt;= <span class="tok-num">0.0</span>) {
+                                <span class="tok-kw">continue</span>;
+                            }
+                            <span class="tok-kw">const</span> w: f64 = <span class="tok-num">1.0</span> - dist / <span class="tok-builtin">@as</span>(f64, sm.cell_size);
+                            <span class="tok-kw">const</span> imp_raw: f64 = <span class="tok-num">0.017</span> * w * u * u;
+                            <span class="tok-kw">const</span> imp: f64 = <span class="tok-kw">if</span> (imp_raw &lt; u) imp_raw <span class="tok-kw">else</span> u;
+                            vx -= nx2 * imp * <span class="tok-num">0.5</span>;
+                            vy -= ny2 * imp * <span class="tok-num">0.5</span>;
+                        }
+                        <span class="tok-kw">const</span> got: Vec2 = <span class="tok-kw">if</span> (i &lt; visc.len) visc[i] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                        <span class="tok-kw">const</span> wx: f32 = <span class="tok-builtin">@floatCast</span>(vx);
+                        <span class="tok-kw">const</span> wy: f32 = <span class="tok-builtin">@floatCast</span>(vy);
+                        <span class="tok-kw">const</span> e: f32 = <span class="tok-builtin">@abs</span>(got[<span class="tok-num">0</span>] - wx) + <span class="tok-builtin">@abs</span>(got[<span class="tok-num">1</span>] - wy);
+                        <span class="tok-kw">if</span> (e &gt; worst_v) {
+                            worst_v = e;
+                        }
+                        <span class="tok-kw">if</span> (e &gt; <span class="tok-num">0.01</span>) {
+                            bad_v += <span class="tok-num">1</span>;
+                        }
+                    }
+                    <span class="tok-fn">say</span>(s, bad_v == <span class="tok-num">0</span>, <span class="tok-str">"{s} VISCOSITY: {d}/{d} wrong (worst err {d:.4})"</span>, .{
+                        label, bad_v, sm.n_particles, worst_v,
+                    });
+                }
+
+                <span class="tok-comment">// ---- stage 9: APPLY. The last kernel the fluid runs that nothing has ever</span>
+                <span class="tok-comment">// verified. Branch-heavy: soft wall band, jittered hard clamp.</span>
+                <span class="tok-kw">if</span> (pipe.<span class="tok-fn">readLatest</span>(.applied)) |ap| {
+                    <span class="tok-kw">var</span> bad_a: u32 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">var</span> worst_a: f32 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">const</span> dom_w: f32 = <span class="tok-fn">float</span>(sm.n_cols) * sm.cell_size;
+                    <span class="tok-kw">const</span> dom_h: f32 = <span class="tok-fn">float</span>(sm.n_rows) * sm.cell_size;
+                    <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |p0, i| {
+                        <span class="tok-kw">const</span> cr: Vec2 = <span class="tok-kw">if</span> (i &lt; corr.len) corr[i] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                        <span class="tok-kw">var</span> q: Vec2 = p0 + cr;
+                        <span class="tok-kw">const</span> band: f32 = sm.cell_size;
+                        <span class="tok-kw">if</span> (q[<span class="tok-num">0</span>] &lt; band) {
+                            q[<span class="tok-num">0</span>] += (band - q[<span class="tok-num">0</span>]) * <span class="tok-num">0.25</span>;
+                        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (q[<span class="tok-num">0</span>] &gt; dom_w - band) {
+                            q[<span class="tok-num">0</span>] -= (q[<span class="tok-num">0</span>] - (dom_w - band)) * <span class="tok-num">0.25</span>;
+                        }
+                        <span class="tok-kw">if</span> (q[<span class="tok-num">1</span>] &lt; band) {
+                            q[<span class="tok-num">1</span>] += (band - q[<span class="tok-num">1</span>]) * <span class="tok-num">0.25</span>;
+                        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (q[<span class="tok-num">1</span>] &gt; dom_h - band) {
+                            q[<span class="tok-num">1</span>] -= (q[<span class="tok-num">1</span>] - (dom_h - band)) * <span class="tok-num">0.25</span>;
+                        }
+                        <span class="tok-kw">const</span> jx: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)) % <span class="tok-num">7</span>) * <span class="tok-num">0.4</span>;
+                        <span class="tok-kw">const</span> jy: f32 = <span class="tok-fn">float</span>((<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)) / <span class="tok-num">7</span>) % <span class="tok-num">7</span>) * <span class="tok-num">0.4</span>;
+                        <span class="tok-kw">const</span> lo_x: f32 = <span class="tok-num">1.5</span> + jx;
+                        <span class="tok-kw">const</span> hi_x: f32 = dom_w - <span class="tok-num">1.5</span> - jx;
+                        <span class="tok-kw">const</span> lo_y: f32 = <span class="tok-num">1.5</span> + jy;
+                        <span class="tok-kw">const</span> hi_y: f32 = dom_h - <span class="tok-num">1.5</span> - jy;
+                        <span class="tok-kw">if</span> (q[<span class="tok-num">0</span>] &lt; lo_x) {
+                            q[<span class="tok-num">0</span>] = lo_x;
+                        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (q[<span class="tok-num">0</span>] &gt; hi_x) {
+                            q[<span class="tok-num">0</span>] = hi_x;
+                        }
+                        <span class="tok-kw">if</span> (q[<span class="tok-num">1</span>] &lt; lo_y) {
+                            q[<span class="tok-num">1</span>] = lo_y;
+                        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (q[<span class="tok-num">1</span>] &gt; hi_y) {
+                            q[<span class="tok-num">1</span>] = hi_y;
+                        }
+                        <span class="tok-kw">const</span> got: Vec2 = <span class="tok-kw">if</span> (i &lt; ap.len) ap[i] <span class="tok-kw">else</span> Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+                        <span class="tok-kw">const</span> e: f32 = <span class="tok-builtin">@abs</span>(got[<span class="tok-num">0</span>] - q[<span class="tok-num">0</span>]) + <span class="tok-builtin">@abs</span>(got[<span class="tok-num">1</span>] - q[<span class="tok-num">1</span>]);
+                        <span class="tok-kw">if</span> (e &gt; worst_a) {
+                            worst_a = e;
+                        }
+                        <span class="tok-kw">if</span> (e &gt; <span class="tok-num">0.01</span>) {
+                            bad_a += <span class="tok-num">1</span>;
+                        }
+                    }
+                    <span class="tok-fn">say</span>(s, bad_a == <span class="tok-num">0</span>, <span class="tok-str">"{s} APPLY: {d}/{d} wrong (worst err {d:.4})"</span>, .{
+                        label, bad_a, sm.n_particles, worst_a,
+                    });
+                }
+            } <span class="tok-kw">else</span> {
+                <span class="tok-fn">say</span>(s, false, <span class="tok-str">"{s} force: NO READBACK"</span>, .{label});
+            }
+        } <span class="tok-kw">else</span> {
+            <span class="tok-fn">say</span>(s, false, <span class="tok-str">"{s} density: NO READBACK"</span>, .{label});
+        }
+    }
+    <span class="tok-kw">return</span> true;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>) };
+
+    <span class="tok-kw">var</span> input: [sm.n_particles]Vec2 = undefined;
+    <span class="tok-fn">makeInput</span>(&amp;input);
+    <span class="tok-kw">const</span> truth: Truth = Truth.<span class="tok-fn">compute</span>(&amp;input);
+
+    <span class="tok-fn">say</span>(s, true, <span class="tok-str">"counting sort: {d} particles, {d}x{d} grid"</span>, .{ sm.n_particles, sm.n_cols, sm.n_rows });
+
+    <span class="tok-comment">// ---- the SAME kernel source, on the CPU (plain Zig). Synchronous: check immediately.</span>
+    <span class="tok-kw">var</span> cpu: Pipe = Pipe.<span class="tok-fn">initCpu</span>();
+    <span class="tok-fn">dispatch</span>(&amp;cpu, &amp;input);
+    _ = <span class="tok-fn">checkStages</span>(s, &amp;cpu, <span class="tok-str">"CPU"</span>, &amp;truth);
+
+    <span class="tok-comment">// ---- and on the GPU (SPIR-V -&gt; WGSL). Dispatch now; check when the readback lands.</span>
+    s.gpu = <span class="tok-kw">try</span> Pipe.<span class="tok-fn">initGpu</span>(gpa, f.gpu.device, f.gpu.queue, &amp;kernel_wgsls);
+    s.input = input;
+    s.truth = truth;
+    <span class="tok-fn">dispatch</span>(&amp;s.gpu, &amp;input);
+}
+
+<span class="tok-comment">/// Upload + run the five kernels once. Separated from the checking so the GPU can be</span>
+<span class="tok-comment">/// dispatched in `init` and inspected later, once its async readback completes.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">dispatch</span>(pipe: *Pipe, input: *<span class="tok-kw">const</span> [sm.n_particles]Vec2) void {
+    pipe.element_count = sm.n_particles;
+    pipe.params = .{
+        .count = sm.n_particles,
+        .n_cols = sm.n_cols,
+        .n_rows = sm.n_rows,
+        .h = sm.cell_size,
+    };
+    pipe.<span class="tok-fn">upload</span>(.pos, input);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"clearGrid"</span>, sm.n_cells);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"countGrid"</span>, sm.n_particles);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"prefixSum"</span>, <span class="tok-num">1</span>);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"scatter"</span>, sm.n_particles);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"copyback"</span>, sm.n_particles);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"computeDensity"</span>, sm.n_particles);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"computeForce"</span>, sm.n_particles);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"computeVisc"</span>, sm.n_particles);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"applyMini"</span>, sm.n_particles);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// Poll the GPU's async readback. Once it lands, replace the "awaiting" line with the</span>
+    <span class="tok-comment">// real per-stage verdicts.</span>
+    <span class="tok-kw">if</span> (!s.gpu_checked) {
+        s.frames += <span class="tok-num">1</span>;
+        <span class="tok-kw">if</span> (<span class="tok-fn">checkStages</span>(s, &amp;s.gpu, <span class="tok-str">"GPU"</span>, &amp;s.truth)) {
+            s.gpu_checked = true;
+            <span class="tok-kw">if</span> (s.all_ok) {
+                <span class="tok-fn">say</span>(s, true, <span class="tok-str">"ALL STAGES PASS on BOTH backends"</span>, .{});
+            } <span class="tok-kw">else</span> {
+                <span class="tok-fn">say</span>(s, false, <span class="tok-str">"FAILURES ABOVE -- CPU vs GPU is the answer"</span>, .{});
+            }
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.frames &gt; <span class="tok-num">600</span>) {
+            s.gpu_checked = true;
+            <span class="tok-fn">say</span>(s, false, <span class="tok-str">"GPU: readback never completed ({d} frames)"</span>, .{s.frames});
+        }
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, z.colors.slate_900);
+    <span class="tok-kw">const</span> fsz: f32 = <span class="tok-fn">clamp</span>(f.window.<span class="tok-fn">widthf</span>() / <span class="tok-num">46.0</span>, <span class="tok-num">10.0</span>, <span class="tok-num">20.0</span>);
+    <span class="tok-kw">var</span> y: f32 = fsz;
+    <span class="tok-kw">for</span> (s.lines[<span class="tok-num">0</span>..s.n_lines]) |l| {
+        <span class="tok-kw">const</span> col: zm.Color = <span class="tok-kw">if</span> (l.ok) z.colors.green_400 <span class="tok-kw">else</span> z.colors.red_400;
+        f.gl.<span class="tok-fn">text</span>(.{ fsz * <span class="tok-num">0.5</span>, y }, l.text[<span class="tok-num">0</span>..l.len], .{ .size = fsz, .color = col, .font = &amp;s.font });
+        y += fsz * <span class="tok-num">1.6</span>;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    _ = gpa;
+    s.gpu.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - counting sort smoke"</span>,
+            .width = <span class="tok-num">900</span>,
+            .height = <span class="tok-num">520</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/sort_smoke/sort_min.zig" data-lines="386"><figcaption><span>examples/sort_smoke/sort_min.zig</span><span>386 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! The counting sort, stripped to nothing but the sort - no physics.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Same five kernels as `fluid_sort`, same shapes, same control flow. Small enough that the</span>
+<span class="tok-comment">//! correct answer can be written down by hand, so `sort_smoke` can check every stage against</span>
+<span class="tok-comment">//! ground truth on BOTH backends. kompute runs this exact source as plain Zig on `.cpu` and</span>
+<span class="tok-comment">//! as SPIR-V-&gt;WGSL on `.gpu`, so a disagreement between them convicts the toolchain and an</span>
+<span class="tok-comment">//! agreement convicts the algorithm. Nothing else in the tree can make that distinction.</span>
+<span class="tok-kw">const</span> k = <span class="tok-builtin">@import</span>(<span class="tok-str">"kompute"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = <span class="tok-num">4096</span>, .workgroup = <span class="tok-num">64</span> };
+
+<span class="tok-comment">/// A grid you can hold in your head: 8 x 4 cells of 100 units, over 800 x 400.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> n_particles: u32 = <span class="tok-num">64</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> cell_size: f32 = <span class="tok-num">100.0</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> n_cols: u32 = <span class="tok-num">8</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> n_rows: u32 = <span class="tok-num">4</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> n_cells: u32 = n_cols * n_rows; <span class="tok-comment">// 32</span>
+
+<span class="tok-comment">// A PLAIN struct with Vec2 fields, exactly as `sort_kernels` declares its buffers. (An</span>
+<span class="tok-comment">// `extern struct` would need `[N][2]f32`, and kompute's reshape to `[N]Vec2` is a pointer</span>
+<span class="tok-comment">// cast SPIR-V will not perform in the storage address space.)</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">struct</span> {
+    pos: [n_particles]Vec2,
+    pos2: [n_particles]Vec2,
+    <span class="tok-comment">/// Per-cell population. countGrid accumulates it; prefixSum zeroes it so scatter can</span>
+    <span class="tok-comment">/// reuse it as a per-cell cursor; scatter fills it back up to the counts.</span>
+    counts: [n_cells]u32,
+    <span class="tok-comment">/// The exclusive prefix sum of `counts`, plus a total in the last slot.</span>
+    starts: [n_cells + <span class="tok-num">1</span>]u32,
+    <span class="tok-comment">/// The velocity change `sort_kernels.viscosity` applies. UNTESTED KERNEL #1: it is one of</span>
+    <span class="tok-comment">/// only two the fluid still runs that nothing has verified, and its inner loop carries a</span>
+    <span class="tok-comment">/// `continue` gated on a COMPUTED FLOAT (`if (u &lt;= 0) continue`) - data-dependent control</span>
+    <span class="tok-comment">/// flow nested three loops deep, which nothing else in the module does.</span>
+    visc: [n_particles]Vec2,
+    <span class="tok-comment">/// The position `sort_kernels.applyAndFinalize` produces. UNTESTED KERNEL #2 - and the</span>
+    <span class="tok-comment">/// last one standing. Branch-heavy: a soft wall band, a hard clamp with per-particle</span>
+    <span class="tok-comment">/// jitter (`i % 7`), directional wall damping, and a speed cap.</span>
+    applied: [n_particles]Vec2,
+    <span class="tok-comment">/// (rho, rho_near) per particle - Clavet's double density, computed EXACTLY as</span>
+    <span class="tok-comment">/// `sort_kernels.density` does. The neighbour SET is already proven correct; this tests</span>
+    <span class="tok-comment">/// the ARITHMETIC over it, which nothing so far has.</span>
+    dens: [n_particles]Vec2,
+    <span class="tok-comment">/// The pressure correction `corr` from `sort_kernels.force`. Density is proven exact on</span>
+    <span class="tok-comment">/// the GPU; this is the NEXT computation over the same (proven) neighbour set, and the</span>
+    <span class="tok-comment">/// CPU-vs-GPU fluid split says the fault lives in here, `viscosity`, or the integrator.</span>
+    corr: [n_particles]Vec2,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    count: u32,
+    n_cols: u32,
+    n_rows: u32,
+    _pad: u32 = <span class="tok-num">0</span>,
+    h: f32,
+    _pad1: f32 = <span class="tok-num">0</span>,
+    _pad2: f32 = <span class="tok-num">0</span>,
+    _pad3: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> g = k.<span class="tok-fn">Globals</span>(<span class="tok-builtin">@This</span>());
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> kernels = [_][:<span class="tok-num">0</span>]<span class="tok-kw">const</span> u8{
+    <span class="tok-str">"clearGrid"</span>,
+    <span class="tok-str">"countGrid"</span>,
+    <span class="tok-str">"prefixSum"</span>,
+    <span class="tok-str">"scatter"</span>,
+    <span class="tok-str">"copyback"</span>,
+    <span class="tok-str">"computeDensity"</span>,
+    <span class="tok-str">"computeForce"</span>,
+    <span class="tok-str">"computeVisc"</span>,
+    <span class="tok-str">"applyMini"</span>,
+};
+
+<span class="tok-kw">const</span> b_pos = g.<span class="tok-fn">bind</span>(.pos);
+<span class="tok-kw">const</span> b_pos2 = g.<span class="tok-fn">bind</span>(.pos2);
+<span class="tok-kw">const</span> b_counts = g.<span class="tok-fn">bind</span>(.counts);
+<span class="tok-kw">const</span> b_starts = g.<span class="tok-fn">bind</span>(.starts);
+<span class="tok-kw">const</span> b_dens = g.<span class="tok-fn">bind</span>(.dens);
+<span class="tok-kw">const</span> b_corr = g.<span class="tok-fn">bind</span>(.corr);
+<span class="tok-kw">const</span> b_visc = g.<span class="tok-fn">bind</span>(.visc);
+<span class="tok-kw">const</span> b_applied = g.<span class="tok-fn">bind</span>(.applied);
+
+<span class="tok-comment">/// floor(pos / h), clamped into the grid. The ONE definition of a particle's cell -</span>
+<span class="tok-comment">/// countGrid, scatter and any neighbour walk must all agree with it exactly.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">cellOf</span>(p: Vec2, cols: u32, rows: u32, h: f32) u32 {
+    <span class="tok-kw">const</span> max_cx: f32 = <span class="tok-fn">float</span>(cols - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> max_cy: f32 = <span class="tok-fn">float</span>(rows - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> cx: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(<span class="tok-builtin">@floor</span>(p[<span class="tok-num">0</span>] / h), <span class="tok-num">0.0</span>, max_cx));
+    <span class="tok-kw">const</span> cy: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(<span class="tok-builtin">@floor</span>(p[<span class="tok-num">1</span>] / h), <span class="tok-num">0.0</span>, max_cy));
+    <span class="tok-kw">return</span> cx + cy * cols;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">clearGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.n_cols * c.params.n_rows) {
+        <span class="tok-kw">return</span>;
+    }
+    k.<span class="tok-fn">atomicStore</span>(b_counts, i, <span class="tok-num">0</span>);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">countGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOf</span>(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    _ = k.<span class="tok-fn">atomicAdd</span>(b_counts, cell, <span class="tok-num">1</span>);
+}
+
+<span class="tok-comment">/// ONE invocation walks every cell. The only serial loop in the whole engine, and the one</span>
+<span class="tok-comment">/// the spv2wgsl phi bug used to break.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">prefixSum</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id != <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> cells: u32 = c.params.n_cols * c.params.n_rows;
+    <span class="tok-kw">var</span> acc: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> cell: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (cell &lt; cells) : (cell += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> cnt: u32 = k.<span class="tok-fn">atomicLoad</span>(b_counts, cell);
+        b_starts[cell] = acc;
+        acc += cnt;
+        k.<span class="tok-fn">atomicStore</span>(b_counts, cell, <span class="tok-num">0</span>);
+    }
+    b_starts[cells] = acc;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">scatter</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> cell: u32 = <span class="tok-fn">cellOf</span>(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    <span class="tok-kw">const</span> slot: u32 = k.<span class="tok-fn">atomicAdd</span>(b_counts, cell, <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> dst: u32 = b_starts[cell] + slot;
+    b_pos2[dst] = b_pos[i];
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">copyback</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    b_pos[i] = b_pos2[i];
+}
+
+<span class="tok-comment">/// Clavet's double density, byte for byte as `sort_kernels.density` computes it:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///     rho      += (1 - d/h)^2</span>
+<span class="tok-comment">///     rho_near += (1 - d/h)^3</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The host computes the same sums by brute force in f64 and compares. If the neighbour set</span>
+<span class="tok-comment">/// is right (proven) but these numbers are wrong, the fault is in the FLOAT MATH of the</span>
+<span class="tok-comment">/// kernel - the one layer nothing has tested yet.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">computeDensity</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> my_pos: Vec2 = b_pos[i];
+    <span class="tok-kw">const</span> h: f32 = c.params.h;
+    <span class="tok-kw">var</span> rho: f32 = <span class="tok-num">0.0</span>;
+    <span class="tok-kw">var</span> rho_near: f32 = <span class="tok-num">0.0</span>;
+
+    <span class="tok-kw">const</span> ccx: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">0</span>] / h);
+    <span class="tok-kw">const</span> ccy: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">1</span>] / h);
+    <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> nx: i32 = ccx + dx;
+            <span class="tok-kw">const</span> ny: i32 = ccy + dy;
+            <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> unx: u32 = <span class="tok-builtin">@intCast</span>(nx);
+            <span class="tok-kw">const</span> uny: u32 = <span class="tok-builtin">@intCast</span>(ny);
+            <span class="tok-kw">if</span> (unx &gt;= c.params.n_cols <span class="tok-kw">or</span> uny &gt;= c.params.n_rows) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> cell: u32 = unx + uny * c.params.n_cols;
+            <span class="tok-kw">const</span> start: u32 = b_starts[cell];
+            <span class="tok-kw">const</span> end: u32 = b_starts[cell + <span class="tok-num">1</span>];
+            <span class="tok-kw">var</span> kk: u32 = start;
+            <span class="tok-kw">while</span> (kk &lt; end) : (kk += <span class="tok-num">1</span>) {
+                <span class="tok-kw">if</span> (kk == i) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> sep: Vec2 = b_pos[kk] - my_pos;
+                <span class="tok-kw">const</span> d2: f32 = sep[<span class="tok-num">0</span>] * sep[<span class="tok-num">0</span>] + sep[<span class="tok-num">1</span>] * sep[<span class="tok-num">1</span>];
+                <span class="tok-kw">if</span> (d2 &lt; h * h) {
+                    <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(d2);
+                    <span class="tok-kw">const</span> omq: f32 = <span class="tok-num">1.0</span> - dist / h;
+                    rho += omq * omq;
+                    rho_near += omq * omq * omq;
+                }
+            }
+        }
+    }
+    b_dens[i] = .{ rho, rho_near };
+}
+
+<span class="tok-comment">/// The pressure correction, byte for byte as `sort_kernels.force` computes it - including</span>
+<span class="tok-comment">/// the co-location fallback with its pseudo-random direction (`@cos`/`@sin` of a hashed</span>
+<span class="tok-comment">/// seed), which is the single most exotic thing any of these kernels does and therefore a</span>
+<span class="tok-comment">/// prime suspect for a transpiler bug.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">computeForce</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> my_pos: Vec2 = b_pos[i];
+    <span class="tok-kw">const</span> h: f32 = c.params.h;
+    <span class="tok-kw">const</span> k_far: f32 = <span class="tok-num">0.009</span>;
+    <span class="tok-kw">const</span> k_near: f32 = <span class="tok-num">0.028</span>;
+    <span class="tok-kw">const</span> r0: f32 = <span class="tok-num">15.39</span>;
+    <span class="tok-kw">const</span> my_d: Vec2 = b_dens[i];
+    <span class="tok-kw">const</span> my_press: f32 = k_far * (my_d[<span class="tok-num">0</span>] - r0);
+    <span class="tok-kw">const</span> my_near: f32 = k_near * my_d[<span class="tok-num">1</span>];
+    <span class="tok-kw">var</span> corr: Vec2 = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> };
+
+    <span class="tok-kw">const</span> ccx: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">0</span>] / h);
+    <span class="tok-kw">const</span> ccy: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">1</span>] / h);
+    <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> nx: i32 = ccx + dx;
+            <span class="tok-kw">const</span> ny: i32 = ccy + dy;
+            <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> unx: u32 = <span class="tok-builtin">@intCast</span>(nx);
+            <span class="tok-kw">const</span> uny: u32 = <span class="tok-builtin">@intCast</span>(ny);
+            <span class="tok-kw">if</span> (unx &gt;= c.params.n_cols <span class="tok-kw">or</span> uny &gt;= c.params.n_rows) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> cell: u32 = unx + uny * c.params.n_cols;
+            <span class="tok-kw">const</span> start: u32 = b_starts[cell];
+            <span class="tok-kw">const</span> end: u32 = b_starts[cell + <span class="tok-num">1</span>];
+            <span class="tok-kw">var</span> kk: u32 = start;
+            <span class="tok-kw">while</span> (kk &lt; end) : (kk += <span class="tok-num">1</span>) {
+                <span class="tok-kw">if</span> (kk == i) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> rel: Vec2 = b_pos[kk] - my_pos;
+                <span class="tok-kw">const</span> d2: f32 = rel[<span class="tok-num">0</span>] * rel[<span class="tok-num">0</span>] + rel[<span class="tok-num">1</span>] * rel[<span class="tok-num">1</span>];
+                <span class="tok-kw">if</span> (d2 &gt;= h * h) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(d2);
+                <span class="tok-kw">var</span> dir: Vec2 = undefined;
+                <span class="tok-kw">if</span> (dist &gt; <span class="tok-num">0.5</span>) {
+                    dir = rel * Vec2{ <span class="tok-num">1.0</span> / dist, <span class="tok-num">1.0</span> / dist };
+                } <span class="tok-kw">else</span> {
+                    <span class="tok-kw">const</span> seed: u32 = (i +% kk) *% <span class="tok-num">2654435761</span>;
+                    <span class="tok-kw">const</span> ang: f32 = <span class="tok-fn">float</span>(seed % <span class="tok-num">6283</span>) * <span class="tok-num">0.001</span>;
+                    <span class="tok-kw">const</span> sgn: f32 = <span class="tok-kw">if</span> (i &lt; kk) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>;
+                    dir = .{ <span class="tok-builtin">@cos</span>(ang) * sgn, <span class="tok-builtin">@sin</span>(ang) * sgn };
+                }
+                <span class="tok-kw">const</span> omq: f32 = <span class="tok-num">1.0</span> - dist / h;
+                <span class="tok-kw">const</span> jd: Vec2 = b_dens[kk];
+                <span class="tok-kw">const</span> j_press: f32 = k_far * (jd[<span class="tok-num">0</span>] - r0);
+                <span class="tok-kw">const</span> j_near: f32 = k_near * jd[<span class="tok-num">1</span>];
+                <span class="tok-kw">const</span> disp: f32 = <span class="tok-num">0.5</span> * ((my_press + j_press) * omq + (my_near + j_near) * omq * omq);
+                corr = corr - dir * Vec2{ disp, disp };
+            }
+        }
+    }
+    b_corr[i] = corr;
+}
+
+<span class="tok-comment">/// A velocity that is a pure function of position, so the host reproduces it exactly.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">fakeVel</span>(p: Vec2) Vec2 {
+    <span class="tok-kw">return</span> .{ p[<span class="tok-num">1</span>] * <span class="tok-num">0.01</span> - <span class="tok-num">2.0</span>, <span class="tok-num">1.0</span> - p[<span class="tok-num">0</span>] * <span class="tok-num">0.008</span> };
+}
+
+<span class="tok-comment">/// UNTESTED KERNEL #1 - `sort_kernels.viscosity`, byte for byte, over a synthetic velocity</span>
+<span class="tok-comment">/// field. Its inner loop hides a `continue` gated on a computed float, three loops deep.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">computeVisc</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> my_pos: Vec2 = b_pos[i];
+    <span class="tok-kw">const</span> h: f32 = c.params.h;
+    <span class="tok-kw">const</span> beta: f32 = <span class="tok-num">0.017</span>;
+    <span class="tok-kw">var</span> my_vel: Vec2 = <span class="tok-fn">fakeVel</span>(my_pos);
+
+    <span class="tok-kw">const</span> ccx: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">0</span>] / h);
+    <span class="tok-kw">const</span> ccy: i32 = <span class="tok-builtin">@floor</span>(my_pos[<span class="tok-num">1</span>] / h);
+    <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> nx: i32 = ccx + dx;
+            <span class="tok-kw">const</span> ny: i32 = ccy + dy;
+            <span class="tok-kw">if</span> (nx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> ny &lt; <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> unx: u32 = <span class="tok-builtin">@intCast</span>(nx);
+            <span class="tok-kw">const</span> uny: u32 = <span class="tok-builtin">@intCast</span>(ny);
+            <span class="tok-kw">if</span> (unx &gt;= c.params.n_cols <span class="tok-kw">or</span> uny &gt;= c.params.n_rows) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> cell: u32 = unx + uny * c.params.n_cols;
+            <span class="tok-kw">const</span> start: u32 = b_starts[cell];
+            <span class="tok-kw">const</span> end: u32 = b_starts[cell + <span class="tok-num">1</span>];
+            <span class="tok-kw">var</span> kk: u32 = start;
+            <span class="tok-kw">while</span> (kk &lt; end) : (kk += <span class="tok-num">1</span>) {
+                <span class="tok-kw">if</span> (kk == i) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> sep: Vec2 = b_pos[kk] - my_pos;
+                <span class="tok-kw">const</span> d2: f32 = sep[<span class="tok-num">0</span>] * sep[<span class="tok-num">0</span>] + sep[<span class="tok-num">1</span>] * sep[<span class="tok-num">1</span>];
+                <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(d2);
+                <span class="tok-kw">if</span> (dist &gt;= h <span class="tok-kw">or</span> dist &lt;= <span class="tok-num">0.0001</span>) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> n: Vec2 = sep * Vec2{ <span class="tok-num">1.0</span> / dist, <span class="tok-num">1.0</span> / dist };
+                <span class="tok-kw">const</span> other: Vec2 = <span class="tok-fn">fakeVel</span>(b_pos[kk]);
+                <span class="tok-kw">const</span> u: f32 = (my_vel[<span class="tok-num">0</span>] - other[<span class="tok-num">0</span>]) * n[<span class="tok-num">0</span>] + (my_vel[<span class="tok-num">1</span>] - other[<span class="tok-num">1</span>]) * n[<span class="tok-num">1</span>];
+                <span class="tok-kw">if</span> (u &lt;= <span class="tok-num">0.0</span>) {
+                    <span class="tok-kw">continue</span>;
+                }
+                <span class="tok-kw">const</span> w: f32 = <span class="tok-num">1.0</span> - dist / h;
+                <span class="tok-kw">const</span> imp_raw: f32 = beta * w * u * u;
+                <span class="tok-kw">const</span> imp: f32 = <span class="tok-kw">if</span> (imp_raw &lt; u) imp_raw <span class="tok-kw">else</span> u;
+                my_vel = my_vel - n * Vec2{ imp * <span class="tok-num">0.5</span>, imp * <span class="tok-num">0.5</span> };
+            }
+        }
+    }
+    b_visc[i] = my_vel;
+}
+
+<span class="tok-comment">/// UNTESTED KERNEL #2 - `sort_kernels.applyAndFinalize`'s POSITION path, byte for byte:</span>
+<span class="tok-comment">/// `pos + delta`, the soft wall band, the jittered hard clamp. `corr` stands in for delta</span>
+<span class="tok-comment">/// (computeForce already produced it) and `pos2` for prev (copyback made it equal to pos).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">applyMini</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">var</span> p: Vec2 = b_pos[i] + b_corr[i];
+    <span class="tok-kw">const</span> dom_w: f32 = <span class="tok-fn">float</span>(n_cols) * cell_size;
+    <span class="tok-kw">const</span> dom_h: f32 = <span class="tok-fn">float</span>(n_rows) * cell_size;
+    <span class="tok-kw">const</span> band: f32 = c.params.h;
+    <span class="tok-kw">const</span> push: f32 = <span class="tok-num">0.25</span>;
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; band) {
+        p[<span class="tok-num">0</span>] += (band - p[<span class="tok-num">0</span>]) * push;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt; dom_w - band) {
+        p[<span class="tok-num">0</span>] -= (p[<span class="tok-num">0</span>] - (dom_w - band)) * push;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &lt; band) {
+        p[<span class="tok-num">1</span>] += (band - p[<span class="tok-num">1</span>]) * push;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &gt; dom_h - band) {
+        p[<span class="tok-num">1</span>] -= (p[<span class="tok-num">1</span>] - (dom_h - band)) * push;
+    }
+    <span class="tok-kw">const</span> margin: f32 = <span class="tok-num">1.5</span>;
+    <span class="tok-kw">const</span> jx: f32 = <span class="tok-fn">float</span>(i % <span class="tok-num">7</span>) * <span class="tok-num">0.4</span>;
+    <span class="tok-kw">const</span> jy: f32 = <span class="tok-fn">float</span>((i / <span class="tok-num">7</span>) % <span class="tok-num">7</span>) * <span class="tok-num">0.4</span>;
+    <span class="tok-kw">const</span> lo_x: f32 = margin + jx;
+    <span class="tok-kw">const</span> hi_x: f32 = dom_w - margin - jx;
+    <span class="tok-kw">const</span> lo_y: f32 = margin + jy;
+    <span class="tok-kw">const</span> hi_y: f32 = dom_h - margin - jy;
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; lo_x) {
+        p[<span class="tok-num">0</span>] = lo_x;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt; hi_x) {
+        p[<span class="tok-num">0</span>] = hi_x;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &lt; lo_y) {
+        p[<span class="tok-num">1</span>] = lo_y;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &gt; hi_y) {
+        p[<span class="tok-num">1</span>] = hi_y;
+    }
+    b_applied[i] = p;
+}
+
+<span class="tok-kw">comptime</span> {
+    k.<span class="tok-fn">installKernels</span>(<span class="tok-builtin">@This</span>());
+}
+</code></pre></figure>
+</body>
+</html>

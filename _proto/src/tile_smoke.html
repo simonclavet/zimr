@@ -1,0 +1,793 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>tile_smoke — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>tile_smoke</h1>
+<figure class="code src-file" data-path="examples/tile_smoke/tile_smoke.zig" data-lines="230"><figcaption><span>examples/tile_smoke/tile_smoke.zig</span><span>230 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! tile_smoke - shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a).</span>
+<span class="tok-comment">//! Places particles, builds the uniform grid, then runs the per-cell tiled</span>
+<span class="tok-comment">//! gather and checks every particle's neighbour count against a brute-force</span>
+<span class="tok-comment">//! O(n_part^2) ground truth. Exact integer pass/fail. The CPU backend runs the same</span>
+<span class="tok-comment">//! at startup as an independent oracle. Once green, the fluid's density/force</span>
+<span class="tok-comment">//! passes can adopt the identical cooperative-load-barrier-tile-read shape.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> tg = <span class="tok-builtin">@import</span>(<span class="tok-str">"tile_gather.zig"</span>);
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+<span class="tok-kw">const</span> clear_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"tileClearGrid_wgsl"</span>);
+<span class="tok-kw">const</span> build_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"tileBuildGrid_wgsl"</span>);
+<span class="tok-kw">const</span> gather_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"gatherTiled_wgsl"</span>);
+
+<span class="tok-kw">const</span> n_part: u32 = tg.num_particles;
+
+<span class="tok-comment">/// dbg[c.id] == c.id+1 if thread c.id ran and its write landed (0 = never</span>
+<span class="tok-comment">/// written). Returns counts + sample values to read what c.id actually does.</span>
+<span class="tok-kw">const</span> Probe = <span class="tok-kw">struct</span> { correct: u32, nonzero: u32, s1000: u32, s5000: u32, maxidx: u32 };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    pipe: z.<span class="tok-fn">Compute</span>(tg),
+    truth: [n_part]u32,
+    cpu_ok: bool = false,
+    dispatched: bool = false,
+    have_result: bool = false,
+    miss: u32 = n_part,
+    probe: Probe = .{ .correct = <span class="tok-num">0</span>, .nonzero = <span class="tok-num">0</span>, .s1000 = <span class="tok-num">0</span>, .s5000 = <span class="tok-num">0</span>, .maxidx = <span class="tok-num">0</span> },
+    max_cell: u32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.pipe.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">genPositions</span>(pos: *[n_part][<span class="tok-num">2</span>]f32) void {
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0x7f1e</span>);
+    <span class="tok-kw">const</span> rnd: std.Random = prng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n_part) |i| {
+        pos[i] = .{ rnd.<span class="tok-fn">float</span>(f32) * tg.domain, rnd.<span class="tok-fn">float</span>(f32) * tg.domain };
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">bruteTruth</span>(pos: *<span class="tok-kw">const</span> [n_part][<span class="tok-num">2</span>]f32, truth: *[n_part]u32) void {
+    <span class="tok-kw">const</span> h2: f32 = tg.h_radius * tg.h_radius;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n_part) |i| {
+        <span class="tok-kw">var</span> n: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n_part) |j| {
+            <span class="tok-kw">if</span> (j == i) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> sx: f32 = pos[j][<span class="tok-num">0</span>] - pos[i][<span class="tok-num">0</span>];
+            <span class="tok-kw">const</span> sy: f32 = pos[j][<span class="tok-num">1</span>] - pos[i][<span class="tok-num">1</span>];
+            <span class="tok-kw">if</span> (sx * sx + sy * sy &lt; h2) {
+                n += <span class="tok-num">1</span>;
+            }
+        }
+        truth[i] = n;
+    }
+}
+
+<span class="tok-comment">/// Build the grid + run the tiled gather on whichever backend `pipe` is.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">runGather</span>(pipe: *z.<span class="tok-fn">Compute</span>(tg)) void {
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"tileClearGrid"</span>, tg.grid_cells);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"tileBuildGrid"</span>, n_part);
+    pipe.<span class="tok-fn">run</span>(<span class="tok-str">"gatherTiled"</span>, tg.grid_cells * tg.wg_size);
+    <span class="tok-comment">// readLatest(.dbg) slices to element_count, so set it to the full gather</span>
+    <span class="tok-comment">// width - all grid_cells*wg_size entries come back (out_count is shorter and</span>
+    <span class="tok-comment">// slices to its own len).</span>
+    pipe.element_count = tg.grid_cells * tg.wg_size;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">countMiss</span>(out: []<span class="tok-kw">const</span> u32, truth: *<span class="tok-kw">const</span> [n_part]u32) u32 {
+    <span class="tok-kw">var</span> m: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; n_part <span class="tok-kw">and</span> i &lt; out.len) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (out[i] != truth[i]) {
+            m += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">return</span> m;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">probeDbg</span>(dbg: []<span class="tok-kw">const</span> u32) Probe {
+    <span class="tok-kw">var</span> p: Probe = .{ .correct = <span class="tok-num">0</span>, .nonzero = <span class="tok-num">0</span>, .s1000 = <span class="tok-num">0</span>, .s5000 = <span class="tok-num">0</span>, .maxidx = <span class="tok-num">0</span> };
+    <span class="tok-kw">var</span> t: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (t &lt; dbg.len) : (t += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (dbg[t] == t + <span class="tok-num">1</span>) {
+            p.correct += <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">if</span> (dbg[t] != <span class="tok-num">0</span>) {
+            p.nonzero += <span class="tok-num">1</span>;
+            p.maxidx = t;
+        }
+    }
+    <span class="tok-kw">if</span> (dbg.len &gt; <span class="tok-num">1000</span>) {
+        p.s1000 = dbg[<span class="tok-num">1000</span>];
+    }
+    <span class="tok-kw">if</span> (dbg.len &gt; <span class="tok-num">5000</span>) {
+        p.s5000 = dbg[<span class="tok-num">5000</span>];
+    }
+    <span class="tok-kw">return</span> p;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>);
+
+    <span class="tok-kw">var</span> pos: [n_part][<span class="tok-num">2</span>]f32 = undefined;
+    <span class="tok-fn">genPositions</span>(&amp;pos);
+    <span class="tok-kw">var</span> truth: [n_part]u32 = undefined;
+    <span class="tok-fn">bruteTruth</span>(&amp;pos, &amp;truth);
+
+    <span class="tok-kw">const</span> params: tg.Params = .{ .count = n_part, .h = tg.h_radius, .cols = tg.n_cols, .rows = tg.n_rows };
+
+    <span class="tok-comment">// CPU-backend oracle.</span>
+    <span class="tok-kw">var</span> cpu: z.<span class="tok-fn">Compute</span>(tg) = z.<span class="tok-fn">Compute</span>(tg).<span class="tok-fn">initCpu</span>();
+    cpu.params = params;
+    cpu.<span class="tok-fn">upload</span>(.pos, pos[<span class="tok-num">0</span>..]);
+    <span class="tok-fn">runGather</span>(&amp;cpu);
+    <span class="tok-kw">const</span> co: []<span class="tok-kw">const</span> u32 = cpu.<span class="tok-fn">readLatest</span>(.out_count).?;
+    <span class="tok-kw">var</span> max_cell: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (cpu.<span class="tok-fn">readLatest</span>(.grid_counts).?) |gc| {
+        max_cell = <span class="tok-builtin">@max</span>(max_cell, gc);
+    }
+    <span class="tok-kw">const</span> cpu_ok: bool = <span class="tok-fn">countMiss</span>(co, &amp;truth) == <span class="tok-num">0</span>;
+
+    <span class="tok-comment">// GPU round-trip.</span>
+    <span class="tok-kw">var</span> pipe: z.<span class="tok-fn">Compute</span>(tg) = <span class="tok-kw">try</span> z.<span class="tok-fn">Compute</span>(tg).<span class="tok-fn">initGpu</span>(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        &amp;.{
+            .{ .name = <span class="tok-str">"tileClearGrid"</span>, .wgsl = clear_wgsl },
+            .{ .name = <span class="tok-str">"tileBuildGrid"</span>, .wgsl = build_wgsl },
+            .{ .name = <span class="tok-str">"gatherTiled"</span>, .wgsl = gather_wgsl },
+        },
+    );
+    pipe.params = params;
+    pipe.<span class="tok-fn">upload</span>(.pos, pos[<span class="tok-num">0</span>..]);
+
+    s.* = .{ .font = font, .pipe = pipe, .truth = truth, .cpu_ok = cpu_ok, .max_cell = max_cell };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">if</span> (!s.dispatched) {
+        s.dispatched = true;
+        <span class="tok-fn">runGather</span>(&amp;s.pipe);
+    }
+    <span class="tok-kw">if</span> (s.pipe.<span class="tok-fn">readLatest</span>(.out_count)) |out| {
+        s.miss = <span class="tok-fn">countMiss</span>(out, &amp;s.truth);
+        <span class="tok-kw">if</span> (s.pipe.<span class="tok-fn">readLatest</span>(.dbg)) |dbg| {
+            s.probe = <span class="tok-fn">probeDbg</span>(dbg);
+        }
+        s.have_result = true;
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, z.colors.slate_900);
+
+    <span class="tok-kw">var</span> bufw: [<span class="tok-num">160</span>]u8 = undefined;
+    <span class="tok-kw">const</span> total: u32 = tg.grid_cells * tg.wg_size;
+    <span class="tok-kw">const</span> probe_ok: bool = s.probe.correct == total;
+    <span class="tok-kw">const</span> wgid_msg: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (!s.have_result)
+        <span class="tok-str">"c.id probe: ..."</span>
+    <span class="tok-kw">else</span>
+        <span class="tok-fn">bufPrint</span>(
+            &amp;bufw,
+            <span class="tok-str">"c.id probe: {d}/{d} ok, nz={d}, max_t={d}, [1000]={d} [5000]={d}"</span>,
+            .{ s.probe.correct, total, s.probe.nonzero, s.probe.maxidx, s.probe.s1000, s.probe.s5000 },
+        ) <span class="tok-kw">catch</span> <span class="tok-str">"probe"</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">14</span>, <span class="tok-num">20</span> }, wgid_msg, .{ .size = <span class="tok-num">15</span>, .color = <span class="tok-kw">if</span> (!s.have_result)
+        z.colors.slate_300
+    <span class="tok-kw">else</span> <span class="tok-kw">if</span> (probe_ok)
+        z.colors.green_400
+    <span class="tok-kw">else</span>
+        z.colors.red_500, .font = &amp;s.font });
+
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">160</span>]u8 = undefined;
+    <span class="tok-kw">const</span> head: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (!s.have_result)
+        <span class="tok-str">"GPU tiled neighbour gather: ..."</span>
+    <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.miss == <span class="tok-num">0</span>)
+        <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"GPU tiled neighbour gather: PASS ({d} particles)"</span>, .{n_part}) <span class="tok-kw">catch</span> <span class="tok-str">"PASS"</span>
+    <span class="tok-kw">else</span>
+        <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"GPU tiled neighbour gather: FAIL ({d}/{d} wrong)"</span>, .{ s.miss, n_part }) <span class="tok-kw">catch</span> <span class="tok-str">"FAIL"</span>;
+    <span class="tok-kw">const</span> col: Color = <span class="tok-kw">if</span> (!s.have_result)
+        z.colors.slate_300
+    <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.miss == <span class="tok-num">0</span>)
+        z.colors.green_400
+    <span class="tok-kw">else</span>
+        z.colors.red_500;
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">14</span>, <span class="tok-num">50</span> }, head, .{ .size = <span class="tok-num">18</span>, .color = col, .font = &amp;s.font });
+
+    <span class="tok-kw">const</span> cpu_msg: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.cpu_ok) <span class="tok-str">"CPU oracle: PASS"</span> <span class="tok-kw">else</span> <span class="tok-str">"CPU oracle: FAIL"</span>;
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">14</span>, <span class="tok-num">80</span> },
+        cpu_msg,
+        .{ .size = <span class="tok-num">14</span>, .color = <span class="tok-kw">if</span> (s.cpu_ok) z.colors.green_400 <span class="tok-kw">else</span> z.colors.red_500, .font = &amp;s.font },
+    );
+
+    <span class="tok-kw">var</span> buf2: [<span class="tok-num">120</span>]u8 = undefined;
+    <span class="tok-kw">const</span> info: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(
+        &amp;buf2,
+        <span class="tok-str">"grid {d}x{d}, max/cell {d} (cap {d}), one workgroup per cell, dispatch {d} threads"</span>,
+        .{ tg.n_cols, tg.n_rows, s.max_cell, tg.max_per_cell, total },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">14</span>, <span class="tok-num">108</span> }, info, .{ .size = <span class="tok-num">13</span>, .color = z.colors.slate_300, .font = &amp;s.font });
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - tiling smoke"</span>,
+            .width = <span class="tok-num">760</span>,
+            .height = <span class="tok-num">420</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/tile_smoke/tile_gather.zig" data-lines="282"><figcaption><span>examples/tile_smoke/tile_gather.zig</span><span>282 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! tile_gather.zig - workgroup shared-memory NEIGHBOUR-TILING de-risk (Stage 2a).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Proves the mechanism the fluid's density/force passes will use: ONE WORKGROUP</span>
+<span class="tok-comment">//! PER CELL cooperatively loads its 3x3 cell neighbourhood into a workgroup-</span>
+<span class="tok-comment">//! shared tile, barriers ONCE, then each thread processes one center-cell</span>
+<span class="tok-comment">//! particle reading neighbours from the fast tile instead of from global memory.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The verifiable quantity is an INTEGER neighbour count (particles within h,</span>
+<span class="tok-comment">//! excluding self) per particle - exact pass/fail, no float epsilon. Because the</span>
+<span class="tok-comment">//! cell size equals h, every neighbour within h lies in the 3x3 block, so the</span>
+<span class="tok-comment">//! grid count equals a brute-force O(N^2) count (the host's ground truth).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! GPU path: workgroupId()=cell, localId()=slot; cooperative load -&gt; barrier -&gt;</span>
+<span class="tok-comment">//! gather from tile. The barrier is UNIFORM: the dispatch is exactly grid_cells</span>
+<span class="tok-comment">//! workgroups (no out-of-range workgroup), the load loop guards per-lane WORK</span>
+<span class="tok-comment">//! (`while (s &lt; cnt)`) not the barrier, so every lane reaches it (spv2wgsl's</span>
+<span class="tok-comment">//! checkBarrierUniformity enforces this at build time). CPU path: the identical</span>
+<span class="tok-comment">//! gather straight from global memory - the oracle (no tile, no barrier).</span>
+<span class="tok-kw">const</span> k = <span class="tok-builtin">@import</span>(<span class="tok-str">"kompute"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> expect = std.testing.expect;
+<span class="tok-kw">const</span> expectEqual = std.testing.expectEqual;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> num_particles: u32 = <span class="tok-num">1024</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> domain: f32 = <span class="tok-num">512.0</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> h_radius: f32 = <span class="tok-num">64.0</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> max_per_cell: u32 = <span class="tok-num">64</span>;
+<span class="tok-comment">// +2 boundary pad (same convention as the fluid grid).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> n_cols: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@ceil</span>(domain / h_radius) + <span class="tok-num">2</span>);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> n_rows: u32 = n_cols;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> grid_cells: u32 = n_cols * n_rows;
+
+<span class="tok-comment">// `.max` = the LARGEST dispatch across all kernels (gatherTiled runs</span>
+<span class="tok-comment">// grid_cells*wg_size threads), NOT num_particles - the run() cap assert uses it</span>
+<span class="tok-comment">// as a single bound for every kernel, so it must cover the biggest one.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = grid_cells * <span class="tok-num">64</span>, .workgroup = <span class="tok-num">64</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> wg_size: u32 = config.workgroup;
+<span class="tok-comment">/// Worst-case tile capacity: 9 cells, each up to max_per_cell.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> tile_cap: u32 = <span class="tok-num">9</span> * max_per_cell;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    pos: [num_particles][<span class="tok-num">2</span>]f32 <span class="tok-kw">align</span>(<span class="tok-num">8</span>), <span class="tok-comment">// [2]f32 + align(8): extern-safe, bind() reinterprets as @Vector(2,f32)</span>
+    grid_counts: [grid_cells]u32,
+    grid_data: [grid_cells * max_per_cell]u32,
+    out_count: [num_particles]u32,
+    <span class="tok-comment">/// Diagnostic: dbg[wgid*wg_size + lid] = wgid, written UNCONDITIONALLY by</span>
+    <span class="tok-comment">/// every thread (before any guard). The host checks dbg[t] == t/wg_size to</span>
+    <span class="tok-comment">/// verify workgroupId() is delivered correctly - the one primitive Stage 1</span>
+    <span class="tok-comment">/// never tested.</span>
+    dbg: [grid_cells * wg_size]u32,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    count: u32,
+    h: f32,
+    cols: u32,
+    rows: u32,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> g = k.<span class="tok-fn">Globals</span>(<span class="tok-builtin">@This</span>());
+<span class="tok-kw">const</span> b_pos = g.<span class="tok-fn">bind</span>(.pos);
+<span class="tok-kw">const</span> b_grid_counts = g.<span class="tok-fn">bind</span>(.grid_counts);
+<span class="tok-kw">const</span> b_grid_data = g.<span class="tok-fn">bind</span>(.grid_data);
+<span class="tok-kw">const</span> b_out_count = g.<span class="tok-fn">bind</span>(.out_count);
+<span class="tok-kw">const</span> b_dbg = g.<span class="tok-fn">bind</span>(.dbg);
+
+<span class="tok-comment">// Workgroup-shared tile (module level, like g.bind). Positions split into two</span>
+<span class="tok-comment">// scalar f32 arrays + a u32 index array (for self-skip).</span>
+<span class="tok-kw">const</span> tile_px = k.<span class="tok-fn">shared</span>(f32, tile_cap, <span class="tok-str">"tg_px"</span>);
+<span class="tok-kw">const</span> tile_py = k.<span class="tok-fn">shared</span>(f32, tile_cap, <span class="tok-str">"tg_py"</span>);
+<span class="tok-kw">const</span> tile_idx = k.<span class="tok-fn">shared</span>(u32, tile_cap, <span class="tok-str">"tg_idx"</span>);
+
+<span class="tok-comment">/// The 9 cell offsets of the 3x3 neighbourhood, unrolled at comptime so the</span>
+<span class="tok-comment">/// cooperative load is straight-line (NO runtime loop before the barrier).</span>
+<span class="tok-kw">const</span> neighbour_offsets = [<span class="tok-num">9</span>][<span class="tok-num">2</span>]i32{
+    .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span> }, .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span> }, .{ <span class="tok-num">1</span>, -<span class="tok-num">1</span> },
+    .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span> },  .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },  .{ <span class="tok-num">1</span>, <span class="tok-num">0</span> },
+    .{ -<span class="tok-num">1</span>, <span class="tok-num">1</span> },  .{ <span class="tok-num">0</span>, <span class="tok-num">1</span> },  .{ <span class="tok-num">1</span>, <span class="tok-num">1</span> },
+};
+
+<span class="tok-comment">/// Per CELL: zero this cell's count (tileClearGrid before tileBuildGrid).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">tileClearGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> cell: u32 = c.id;
+    <span class="tok-kw">if</span> (cell &gt;= c.params.cols * c.params.rows) {
+        <span class="tok-kw">return</span>;
+    }
+    k.<span class="tok-fn">atomicStore</span>(b_grid_counts, cell, <span class="tok-num">0</span>);
+}
+
+<span class="tok-comment">/// Per PARTICLE: atomic slot-claim into its cell (the O(N) parallel build).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">tileBuildGrid</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> pos: Vec2 = b_pos[i];
+    <span class="tok-kw">const</span> max_cx: f32 = <span class="tok-fn">float</span>(c.params.cols - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> max_cy: f32 = <span class="tok-fn">float</span>(c.params.rows - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> cx: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(<span class="tok-builtin">@floor</span>(pos[<span class="tok-num">0</span>] / c.params.h), <span class="tok-num">0.0</span>, max_cx));
+    <span class="tok-kw">const</span> cy: u32 = <span class="tok-builtin">@trunc</span>(<span class="tok-fn">clamp</span>(<span class="tok-builtin">@floor</span>(pos[<span class="tok-num">1</span>] / c.params.h), <span class="tok-num">0.0</span>, max_cy));
+    <span class="tok-kw">const</span> cell: u32 = cx + cy * c.params.cols;
+    <span class="tok-kw">const</span> slot: u32 = k.<span class="tok-fn">atomicAdd</span>(b_grid_counts, cell, <span class="tok-num">1</span>);
+    <span class="tok-kw">if</span> (slot &lt; max_per_cell) {
+        b_grid_data[cell * max_per_cell + slot] = i;
+    }
+}
+
+<span class="tok-comment">/// Count this cell's neighbour pairs via the shared tile (GPU) or straight from</span>
+<span class="tok-comment">/// global memory (CPU oracle). Dispatch is PER-CELL: count = grid_cells*wg_size.</span>
+<span class="tok-comment">/// Cooperatively load the 3x3 neighbourhood of `cell` into the shared tile and</span>
+<span class="tok-comment">/// return tile_len. `noinline` so spv2wgsl keeps it a SEPARATE WGSL function -</span>
+<span class="tok-comment">/// its `if (in_bounds)` branches then stay inside this function and do NOT</span>
+<span class="tok-comment">/// enclose the barrier that `gatherTiled` issues after the call (a barrier must</span>
+<span class="tok-comment">/// not sit inside cell-dependent control flow, which Tint treats as non-uniform</span>
+<span class="tok-comment">/// because `cell` derives from global_invocation_id). Straight-line load: the</span>
+<span class="tok-comment">/// 9-cell walk is unrolled and each lane loads exactly slot `lid` of each cell.</span>
+<span class="tok-kw">noinline</span> <span class="tok-kw">fn</span> <span class="tok-fn">loadNeighbourTile</span>(cell: u32, lid: u32, cols: u32, rows: u32) u32 {
+    <span class="tok-kw">const</span> cx: i32 = <span class="tok-builtin">@intCast</span>(cell % cols);
+    <span class="tok-kw">const</span> cy: i32 = <span class="tok-builtin">@intCast</span>(cell / cols);
+    <span class="tok-kw">var</span> off: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (neighbour_offsets) |d| {
+        <span class="tok-kw">const</span> nx: i32 = cx + d[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> ny: i32 = cy + d[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> in_bounds: bool = nx &gt;= <span class="tok-num">0</span> <span class="tok-kw">and</span> ny &gt;= <span class="tok-num">0</span> <span class="tok-kw">and</span>
+            nx &lt; <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(cols)) <span class="tok-kw">and</span> ny &lt; <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(rows));
+        <span class="tok-kw">if</span> (in_bounds) {
+            <span class="tok-kw">const</span> ncell: u32 = <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(nx)) + <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(ny)) * cols;
+            <span class="tok-kw">const</span> raw: u32 = k.<span class="tok-fn">atomicLoad</span>(b_grid_counts, ncell);
+            <span class="tok-kw">const</span> cnt: u32 = <span class="tok-kw">if</span> (raw &lt; max_per_cell) raw <span class="tok-kw">else</span> max_per_cell;
+            <span class="tok-kw">if</span> (lid &lt; cnt) {
+                <span class="tok-kw">const</span> dst: u32 = off + lid;
+                <span class="tok-kw">if</span> (dst &lt; tile_cap) {
+                    <span class="tok-kw">const</span> idx: u32 = b_grid_data[ncell * max_per_cell + lid];
+                    tile_idx[dst] = idx;
+                    tile_px[dst] = b_pos[idx][<span class="tok-num">0</span>];
+                    tile_py[dst] = b_pos[idx][<span class="tok-num">1</span>];
+                }
+            }
+            off += cnt;
+        }
+    }
+    <span class="tok-kw">return</span> <span class="tok-kw">if</span> (off &lt; tile_cap) off <span class="tok-kw">else</span> tile_cap;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">gatherTiled</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> gid: u32 = c.id;
+    <span class="tok-kw">if</span> (k.is_gpu) {
+        <span class="tok-kw">const</span> cell: u32 = gid / wg_size;
+        <span class="tok-kw">const</span> lid: u32 = gid % wg_size;
+        b_dbg[gid] = gid + <span class="tok-num">1</span>;
+        <span class="tok-comment">// Load (in a separate fn) -&gt; barrier at TOP LEVEL -&gt; process.</span>
+        <span class="tok-kw">const</span> tile_len: u32 = <span class="tok-fn">loadNeighbourTile</span>(cell, lid, c.params.cols, c.params.rows);
+        k.<span class="tok-fn">workgroupBarrier</span>();
+        <span class="tok-kw">const</span> center_raw: u32 = k.<span class="tok-fn">atomicLoad</span>(b_grid_counts, cell);
+        <span class="tok-kw">const</span> center_cnt: u32 = <span class="tok-kw">if</span> (center_raw &lt; max_per_cell) center_raw <span class="tok-kw">else</span> max_per_cell;
+        <span class="tok-kw">if</span> (lid &lt; center_cnt) {
+            <span class="tok-kw">const</span> i: u32 = b_grid_data[cell * max_per_cell + lid];
+            <span class="tok-kw">const</span> mx: f32 = b_pos[i][<span class="tok-num">0</span>];
+            <span class="tok-kw">const</span> my: f32 = b_pos[i][<span class="tok-num">1</span>];
+            <span class="tok-kw">var</span> nbrs: u32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">var</span> t: u32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (t &lt; tile_len) : (t += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> j: u32 = tile_idx[t];
+                <span class="tok-kw">if</span> (j != i) {
+                    <span class="tok-kw">const</span> sx: f32 = tile_px[t] - mx;
+                    <span class="tok-kw">const</span> sy: f32 = tile_py[t] - my;
+                    <span class="tok-kw">if</span> (sx * sx + sy * sy &lt; c.params.h * c.params.h) {
+                        nbrs += <span class="tok-num">1</span>;
+                    }
+                }
+            }
+            b_out_count[i] = nbrs;
+        }
+    } <span class="tok-kw">else</span> {
+        <span class="tok-comment">// CPU oracle: per-cell mapping, direct global gather (no tile/barrier).</span>
+        <span class="tok-kw">const</span> cell: u32 = c.id / wg_size;
+        <span class="tok-kw">const</span> lid: u32 = c.id % wg_size;
+        <span class="tok-kw">if</span> (c.id &lt; grid_cells * wg_size) {
+            b_dbg[c.id] = c.id + <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">if</span> (cell &gt;= c.params.cols * c.params.rows) {
+            <span class="tok-kw">return</span>;
+        }
+        <span class="tok-kw">const</span> center_raw: u32 = k.<span class="tok-fn">atomicLoad</span>(b_grid_counts, cell);
+        <span class="tok-kw">const</span> center_cnt: u32 = <span class="tok-kw">if</span> (center_raw &lt; max_per_cell) center_raw <span class="tok-kw">else</span> max_per_cell;
+        <span class="tok-kw">if</span> (lid &gt;= center_cnt) {
+            <span class="tok-kw">return</span>;
+        }
+        <span class="tok-kw">const</span> i: u32 = b_grid_data[cell * max_per_cell + lid];
+        <span class="tok-kw">const</span> mx: f32 = b_pos[i][<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> my: f32 = b_pos[i][<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> cx: i32 = <span class="tok-builtin">@intCast</span>(cell % c.params.cols);
+        <span class="tok-kw">const</span> cy: i32 = <span class="tok-builtin">@intCast</span>(cell / c.params.cols);
+        <span class="tok-kw">var</span> nbrs: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> dy: i32 = -<span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (dy &lt;= <span class="tok-num">1</span>) : (dy += <span class="tok-num">1</span>) {
+            <span class="tok-kw">var</span> dx: i32 = -<span class="tok-num">1</span>;
+            <span class="tok-kw">while</span> (dx &lt;= <span class="tok-num">1</span>) : (dx += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> nx: i32 = cx + dx;
+                <span class="tok-kw">const</span> ny: i32 = cy + dy;
+                <span class="tok-kw">const</span> in_bounds: bool = nx &gt;= <span class="tok-num">0</span> <span class="tok-kw">and</span> ny &gt;= <span class="tok-num">0</span> <span class="tok-kw">and</span>
+                    nx &lt; <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(c.params.cols)) <span class="tok-kw">and</span> ny &lt; <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(c.params.rows));
+                <span class="tok-kw">if</span> (in_bounds) {
+                    <span class="tok-kw">const</span> ncell: u32 = <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(nx)) + <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(ny)) * c.params.cols;
+                    <span class="tok-kw">const</span> raw: u32 = k.<span class="tok-fn">atomicLoad</span>(b_grid_counts, ncell);
+                    <span class="tok-kw">const</span> cnt: u32 = <span class="tok-kw">if</span> (raw &lt; max_per_cell) raw <span class="tok-kw">else</span> max_per_cell;
+                    <span class="tok-kw">var</span> s: u32 = <span class="tok-num">0</span>;
+                    <span class="tok-kw">while</span> (s &lt; cnt) : (s += <span class="tok-num">1</span>) {
+                        <span class="tok-kw">const</span> j: u32 = b_grid_data[ncell * max_per_cell + s];
+                        <span class="tok-kw">if</span> (j != i) {
+                            <span class="tok-kw">const</span> sx: f32 = b_pos[j][<span class="tok-num">0</span>] - mx;
+                            <span class="tok-kw">const</span> sy: f32 = b_pos[j][<span class="tok-num">1</span>] - my;
+                            <span class="tok-kw">if</span> (sx * sx + sy * sy &lt; c.params.h * c.params.h) {
+                                nbrs += <span class="tok-num">1</span>;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        b_out_count[i] = nbrs;
+    }
+}
+
+<span class="tok-kw">comptime</span> {
+    k.<span class="tok-fn">installKernel</span>(<span class="tok-builtin">@This</span>(), <span class="tok-str">"tileClearGrid"</span>);
+    k.<span class="tok-fn">installKernel</span>(<span class="tok-builtin">@This</span>(), <span class="tok-str">"tileBuildGrid"</span>);
+    k.<span class="tok-fn">installKernel</span>(<span class="tok-builtin">@This</span>(), <span class="tok-str">"gatherTiled"</span>);
+}
+
+<span class="tok-comment">// ---- CPU oracle test: grid gather == brute-force O(N^2) count -------------</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">bruteCount</span>(pos: []<span class="tok-kw">const</span> [<span class="tok-num">2</span>]f32, i: usize, h: f32) u32 {
+    <span class="tok-kw">var</span> n: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (pos, <span class="tok-num">0</span>..) |p, j| {
+        <span class="tok-kw">if</span> (j == i) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> sx: f32 = p[<span class="tok-num">0</span>] - pos[i][<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> sy: f32 = p[<span class="tok-num">1</span>] - pos[i][<span class="tok-num">1</span>];
+        <span class="tok-kw">if</span> (sx * sx + sy * sy &lt; h * h) {
+            n += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">return</span> n;
+}
+
+<span class="tok-kw">test</span> <span class="tok-str">"tile_gather: per-cell gather matches brute-force O(N^2)"</span> {
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0x7f1e</span>);
+    <span class="tok-kw">const</span> rnd: std.Random = prng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">const</span> N: u32 = num_particles;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..N) |i| {
+        g.B.pos[i] = .{ rnd.<span class="tok-fn">float</span>(f32) * domain, rnd.<span class="tok-fn">float</span>(f32) * domain };
+    }
+    g.P = .{ .count = N, .h = h_radius, .cols = n_cols, .rows = n_rows };
+    <span class="tok-comment">// Build the grid.</span>
+    <span class="tok-kw">var</span> cell: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (cell &lt; grid_cells) : (cell += <span class="tok-num">1</span>) {
+        <span class="tok-fn">tileClearGrid</span>(.{ .id = cell, .params = g.P });
+    }
+    <span class="tok-kw">var</span> p: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (p &lt; N) : (p += <span class="tok-num">1</span>) {
+        <span class="tok-fn">tileBuildGrid</span>(.{ .id = p, .params = g.P });
+    }
+    <span class="tok-comment">// No cell may overflow (else GPU/CPU drop different particles).</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..grid_cells) |ci| {
+        <span class="tok-kw">try</span> <span class="tok-fn">expect</span>(g.B.grid_counts[ci] &lt;= max_per_cell);
+    }
+    <span class="tok-comment">// Run the (CPU) gather over the per-cell dispatch.</span>
+    <span class="tok-kw">var</span> id: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (id &lt; grid_cells * wg_size) : (id += <span class="tok-num">1</span>) {
+        <span class="tok-fn">gatherTiled</span>(.{ .id = id, .params = g.P });
+    }
+    <span class="tok-comment">// Every particle's grid count must equal its brute-force count.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..N) |i| {
+        <span class="tok-kw">try</span> <span class="tok-fn">expectEqual</span>(<span class="tok-fn">bruteCount</span>(g.B.pos[<span class="tok-num">0</span>..N], i, h_radius), g.B.out_count[i]);
+    }
+}
+</code></pre></figure>
+</body>
+</html>

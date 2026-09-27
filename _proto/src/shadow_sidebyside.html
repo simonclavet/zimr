@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>shadow_sidebyside — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>shadow_sidebyside</h1>
+<figure class="code src-file" data-path="examples/shadow_sidebyside/shadow_sidebyside.zig" data-lines="338"><figcaption><span>examples/shadow_sidebyside/shadow_sidebyside.zig</span><span>338 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! shadow_sidebyside - the rayshadow_fs hard-shadow scene on THREE execution</span>
+<span class="tok-comment">//! targets, side by side from ONE Zig shader:</span>
+<span class="tok-comment">//!   - LEFT  : `rayshadow_fs.shaderMain` dispatched per pixel on the CPU (raster).</span>
+<span class="tok-comment">//!   - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen</span>
+<span class="tok-comment">//!             GPU pass.</span>
+<span class="tok-comment">//!   - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and</span>
+<span class="tok-comment">//!             baked into the binary as a const image - read-only, can't move.</span>
+<span class="tok-comment">//! A vertical splitter follows the mouse X. Two boxes cast HARD SHADOWS on a</span>
+<span class="tok-comment">//! platform via a shadow ray (not a shadow map - a shadow map needs a depth</span>
+<span class="tok-comment">//! texture the comptime/CPU targets can't produce; a shadow ray is a plain</span>
+<span class="tok-comment">//! second ray-scene intersection, so it runs identically on all three). The</span>
+<span class="tok-comment">//! camera orbits (live CPU + GPU); the comptime corner is frozen at build time.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Vec2i = zm.Vec2i;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> RayCamera = zm.RayCamera;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"rayshadow_fs.zig"</span>);
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"rayshadow_fs_io.zig"</span>);
+<span class="tok-kw">const</span> trivial_vs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_io.zig"</span>);
+
+<span class="tok-kw">const</span> fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"rayshadow_fs.wgsl"</span>);
+<span class="tok-kw">const</span> trivial_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"trivial_vs.wgsl"</span>);
+
+<span class="tok-kw">const</span> width: u32 = <span class="tok-num">800</span>;
+<span class="tok-kw">const</span> height: u32 = <span class="tok-num">450</span>;
+
+<span class="tok-comment">// CPU side res - a handful of ray-primitive tests per pixel, so 1/3 is fine.</span>
+<span class="tok-kw">const</span> sw_w: u32 = width / <span class="tok-num">3</span>;
+<span class="tok-kw">const</span> sw_h: u32 = height / <span class="tok-num">3</span>;
+<span class="tok-kw">const</span> cpu_pixel_budget: f32 = <span class="tok-fn">float</span>(sw_w * sw_h);
+
+<span class="tok-comment">// Comptime corner: the scene is deterministic (no sampling), so one pass.</span>
+<span class="tok-kw">const</span> corner_cols: usize = <span class="tok-num">56</span>;
+<span class="tok-kw">const</span> corner_rows: usize = <span class="tok-num">32</span>;
+<span class="tok-kw">const</span> corner_yaw: f32 = <span class="tok-num">0.7</span>;
+<span class="tok-kw">const</span> corner_pitch: f32 = <span class="tok-num">0.5</span>; <span class="tok-comment">// a 3/4 view looking down onto the shadows</span>
+
+<span class="tok-kw">const</span> cam_target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0</span>);
+<span class="tok-kw">const</span> cam_dist: f32 = <span class="tok-num">5.6</span>; <span class="tok-comment">// fixed orbit radius</span>
+
+<span class="tok-comment">/// Build the scene UBO. Orbit the camera around the (fixed) scene in spherical</span>
+<span class="tok-comment">/// coords - eye = target + (yaw, pitch, dist). The CPU dispatch, the GPU pass,</span>
+<span class="tok-comment">/// and the comptime bake all read this same camera basis.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">buildUbo</span>(
+    yaw: f32,
+    pitch: f32,
+    dist: f32,
+    res_w: f32,
+    res_h: f32,
+) shader_io.Ubo {
+    <span class="tok-kw">const</span> cp: f32 = <span class="tok-builtin">@cos</span>(pitch);
+    <span class="tok-kw">const</span> eye: Vec = <span class="tok-fn">vec</span>(
+        cam_target[<span class="tok-num">0</span>] + dist * cp * <span class="tok-builtin">@sin</span>(yaw),
+        cam_target[<span class="tok-num">1</span>] + dist * <span class="tok-builtin">@sin</span>(pitch),
+        cam_target[<span class="tok-num">2</span>] + dist * cp * <span class="tok-builtin">@cos</span>(yaw),
+    );
+    <span class="tok-kw">const</span> cam3d: Camera3D = .{ .position = eye, .target = cam_target, .fovy_deg = <span class="tok-num">45.0</span> };
+    <span class="tok-kw">const</span> cam: RayCamera = cam3d.<span class="tok-fn">rayBasis</span>(res_w, res_h);
+    <span class="tok-kw">return</span> .{
+        .cam_origin = cam.origin,
+        .px00 = cam.px00,
+        .pdu = cam.pdu,
+        .pdv = cam.pdv,
+        .resolution = .{ res_w, res_h },
+    };
+}
+
+<span class="tok-comment">// ---- Comptime corner: the SAME shaderMain, run by the Zig COMPILER ----------</span>
+<span class="tok-kw">const</span> corner_image: [corner_rows * corner_cols]Color = blk: {
+    <span class="tok-builtin">@setEvalBranchQuota</span>(<span class="tok-num">2_000_000_000</span>);
+    <span class="tok-kw">const</span> ubo: shader_io.Ubo = <span class="tok-fn">buildUbo</span>(
+        corner_yaw,
+        corner_pitch,
+        cam_dist,
+        <span class="tok-builtin">@floatFromInt</span>(width),
+        <span class="tok-builtin">@floatFromInt</span>(height),
+    );
+    <span class="tok-kw">var</span> img: [corner_rows * corner_cols]Color = undefined;
+    <span class="tok-kw">var</span> py: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (py &lt; corner_rows) : (py += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> px: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (px &lt; corner_cols) : (px += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> io: shader.Io = .{
+                .frag_tex_coord = .{
+                    (<span class="tok-fn">float</span>(px) + <span class="tok-num">0.5</span>) / <span class="tok-fn">float</span>(corner_cols),
+                    <span class="tok-comment">// frag.y=1 is screen-TOP (unified CPU/GPU convention).</span>
+                    <span class="tok-num">1.0</span> - (<span class="tok-fn">float</span>(py) + <span class="tok-num">0.5</span>) / <span class="tok-fn">float</span>(corner_rows),
+                },
+                .u = ubo,
+            };
+            <span class="tok-kw">const</span> c: Vec = shader.<span class="tok-fn">shaderMain</span>(io).out_color;
+            img[py * corner_cols + px] = Color.<span class="tok-fn">fromFloats</span>(c[<span class="tok-num">0</span>], c[<span class="tok-num">1</span>], c[<span class="tok-num">2</span>], <span class="tok-num">1.0</span>);
+        }
+    }
+    <span class="tok-kw">break</span> :blk img;
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpu_shader: z.shader.<span class="tok-fn">LoadedShader</span>(shader_io),
+    sw: z.raster.Context,
+    sw_fb: z.CpuFramebuffer,
+    font: z.Font,
+    gpa: Allocator,
+    cam_yaw: f32,
+    cam_pitch: f32,
+    cam_dist: f32,
+    dragging: bool,
+    prev_pinch_dist: f32,
+    <span class="tok-comment">/// Splitter as a width FRACTION (rotation-stable); follows the pointer.</span>
+    divider_frac: f32,
+    last_mouse: Vec2,
+    <span class="tok-comment">/// The comptime-baked corner, uploaded once at init.</span>
+    corner_fb: z.CpuFramebuffer,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.sw.<span class="tok-fn">deinit</span>(gpa);
+    s.gpu_shader.<span class="tok-fn">deinit</span>();
+    s.sw_fb.<span class="tok-fn">deinit</span>();
+    s.corner_fb.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> gpu_shader: z.shader.<span class="tok-fn">LoadedShader</span>(shader_io) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(trivial_vs_io, shader_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = trivial_vs_wgsl,
+        .fs_wgsl_source = fs_wgsl,
+        .label = <span class="tok-str">"rayshadow_sbs_gpu"</span>,
+    });
+    <span class="tok-kw">var</span> sw: z.raster.Context = <span class="tok-kw">try</span> z.raster.Context.<span class="tok-fn">init</span>(gpa, <span class="tok-builtin">@intCast</span>(sw_w), <span class="tok-builtin">@intCast</span>(sw_h));
+    <span class="tok-kw">const</span> sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+        f.gpu.device,
+        f.gpu.queue,
+        sw_w,
+        sw_h,
+        sw.<span class="tok-fn">colorBufferBytes</span>(),
+        <span class="tok-str">"rayshadow_sbs_sw"</span>,
+    );
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>), <span class="tok-num">22</span>);
+    s.* = .{
+        .gpu_shader = gpu_shader,
+        .sw = sw,
+        .sw_fb = sw_fb,
+        .font = font,
+        .gpa = gpa,
+        .cam_yaw = corner_yaw,
+        .cam_pitch = corner_pitch,
+        .cam_dist = cam_dist,
+        .dragging = false,
+        .prev_pinch_dist = <span class="tok-num">0</span>,
+        .divider_frac = <span class="tok-num">0.5</span>,
+        .last_mouse = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span> },
+        .corner_fb = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+            f.gpu.device,
+            f.gpu.queue,
+            corner_cols,
+            corner_rows,
+            std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;corner_image),
+            <span class="tok-str">"rayshadow_sbs_corner"</span>,
+        ),
+    };
+}
+
+<span class="tok-comment">/// Keep the CPU half at a CONSTANT pixel budget shaped to the live canvas</span>
+<span class="tok-comment">/// aspect: rotation never stretches the pixels and never changes the CPU cost.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureCpuTarget</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> aspect: f32 = vw / vh;
+    <span class="tok-kw">const</span> want_w: i32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@round</span>(<span class="tok-builtin">@sqrt</span>(cpu_pixel_budget * aspect)), <span class="tok-num">16</span>));
+    <span class="tok-kw">const</span> want_h: i32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@round</span>(<span class="tok-fn">float</span>(want_w) / aspect), <span class="tok-num">16</span>));
+    <span class="tok-kw">const</span> dims: Vec2i = s.sw.<span class="tok-fn">colorBufferDims</span>();
+    <span class="tok-kw">if</span> (dims[<span class="tok-num">0</span>] != want_w <span class="tok-kw">or</span> dims[<span class="tok-num">1</span>] != want_h) {
+        s.sw.<span class="tok-fn">resize</span>(s.gpa, want_w, want_h) <span class="tok-kw">catch</span> <span class="tok-kw">return</span>;
+        s.sw_fb.<span class="tok-fn">resize</span>(f.gl, <span class="tok-builtin">@intCast</span>(want_w), <span class="tok-builtin">@intCast</span>(want_h), s.sw.<span class="tok-fn">colorBufferBytes</span>(), <span class="tok-str">"sbs_sw"</span>);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">clampDist</span>(s: *State) void {
+    <span class="tok-kw">if</span> (s.cam_dist &lt; <span class="tok-num">3.0</span>) {
+        s.cam_dist = <span class="tok-num">3.0</span>;
+    }
+    <span class="tok-kw">if</span> (s.cam_dist &gt; <span class="tok-num">14.0</span>) {
+        s.cam_dist = <span class="tok-num">14.0</span>;
+    }
+}
+
+<span class="tok-comment">/// Drag orbits the camera; wheel/pinch dolly. The `dragging` latch skips the</span>
+<span class="tok-comment">/// FIRST drag frame, so a touch doesn't pop the camera from a stale delta.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> touch_count: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touch_count &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> t0: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> t1: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> dx: f32 = t1[<span class="tok-num">0</span>] - t0[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = t1[<span class="tok-num">1</span>] - t0[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> d: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (s.prev_pinch_dist &lt; <span class="tok-num">1.0</span> <span class="tok-kw">or</span> d &lt; <span class="tok-num">1.0</span>) {
+            s.prev_pinch_dist = d;
+        } <span class="tok-kw">else</span> {
+            s.cam_dist *= s.prev_pinch_dist / d;
+            s.prev_pinch_dist = d;
+            <span class="tok-fn">clampDist</span>(s);
+        }
+        s.dragging = false;
+        <span class="tok-kw">return</span>;
+    }
+    s.prev_pinch_dist = <span class="tok-num">0</span>;
+
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        s.cam_dist *= (<span class="tok-num">1.0</span> - wheel * <span class="tok-num">0.1</span>);
+        <span class="tok-fn">clampDist</span>(s);
+    }
+
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left)) {
+        <span class="tok-kw">const</span> d: Vec2 = z.<span class="tok-fn">getMouseDelta</span>(f.input);
+        <span class="tok-kw">if</span> (s.dragging) {
+            s.cam_yaw -= d[<span class="tok-num">0</span>] * <span class="tok-num">0.005</span>;
+            s.cam_pitch += d[<span class="tok-num">1</span>] * <span class="tok-num">0.005</span>;
+            <span class="tok-kw">if</span> (s.cam_pitch &gt; <span class="tok-num">1.4</span>) {
+                s.cam_pitch = <span class="tok-num">1.4</span>;
+            }
+            <span class="tok-kw">if</span> (s.cam_pitch &lt; <span class="tok-num">0.05</span>) {
+                s.cam_pitch = <span class="tok-num">0.05</span>;
+            }
+        }
+        s.dragging = true;
+    } <span class="tok-kw">else</span> {
+        s.dragging = false;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureCpuTarget</span>(f, s);
+    <span class="tok-kw">const</span> vw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> vh: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-fn">handleInput</span>(f, s);
+
+    <span class="tok-comment">// Splitter: a width FRACTION (rotation-stable) that follows the pointer,</span>
+    <span class="tok-comment">// with a guard ignoring the pre-input (0,0) report.</span>
+    <span class="tok-kw">const</span> m: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> is_first_zero: bool = s.last_mouse[<span class="tok-num">0</span>] &lt; <span class="tok-num">0</span> <span class="tok-kw">and</span> m[<span class="tok-num">0</span>] == <span class="tok-num">0</span> <span class="tok-kw">and</span> m[<span class="tok-num">1</span>] == <span class="tok-num">0</span>;
+    <span class="tok-kw">if</span> (!is_first_zero <span class="tok-kw">and</span> (m[<span class="tok-num">0</span>] != s.last_mouse[<span class="tok-num">0</span>] <span class="tok-kw">or</span> m[<span class="tok-num">1</span>] != s.last_mouse[<span class="tok-num">1</span>])) {
+        s.last_mouse = m;
+        s.divider_frac = <span class="tok-fn">clamp</span>(m[<span class="tok-num">0</span>] / vw, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+    }
+    <span class="tok-kw">const</span> divider_x: f32 = s.divider_frac * vw;
+
+    <span class="tok-comment">// Shared UBO - both live halves read it, so they render the same view.</span>
+    <span class="tok-kw">const</span> ubo: shader_io.Ubo = <span class="tok-fn">buildUbo</span>(s.cam_yaw, s.cam_pitch, s.cam_dist, vw, vh);
+
+    <span class="tok-comment">// ---- CPU side: dispatch the SAME shaderMain per pixel into raster ----</span>
+    s.sw.<span class="tok-fn">clearColor</span>(.{ .r = <span class="tok-num">8</span>, .g = <span class="tok-num">8</span>, .b = <span class="tok-num">14</span>, .a = <span class="tok-num">255</span> });
+    s.sw.<span class="tok-fn">clear</span>(.{ .color = true });
+    <span class="tok-kw">const</span> sw_dims: Vec2i = s.sw.<span class="tok-fn">colorBufferDims</span>();
+    <span class="tok-kw">const</span> base_io: shader.Io = .{ .frag_tex_coord = undefined, .u = ubo };
+    z.raster_shader.<span class="tok-fn">dispatchFragmentShader</span>(&amp;s.sw, shader, base_io, .{
+        .x = <span class="tok-num">0</span>,
+        .y = <span class="tok-num">0</span>,
+        .w = <span class="tok-builtin">@intCast</span>(sw_dims[<span class="tok-num">0</span>]),
+        .h = <span class="tok-builtin">@intCast</span>(sw_dims[<span class="tok-num">1</span>]),
+    });
+    s.sw_fb.<span class="tok-fn">update</span>(f.gpu.queue, s.sw.<span class="tok-fn">colorBufferBytes</span>());
+
+    <span class="tok-comment">// ---- GPU side: the SAME shaderMain as a full-res fullscreen pass ----</span>
+    s.gpu_shader.<span class="tok-fn">pushUbo</span>(f.gpu.queue, ubo);
+    z.<span class="tok-fn">bindFullscreenShader</span>(f.gl, shader_io, &amp;s.gpu_shader);
+    z.<span class="tok-fn">drawFullscreenTriangle</span>(f.gl);
+    f.gl.<span class="tok-fn">flushBeforeMaterialSwap</span>();
+
+    <span class="tok-comment">// ---- Composite: software (CPU) over the LEFT of the split ----</span>
+    z.<span class="tok-fn">beginScissorMode</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, divider_x, vh);
+    s.sw_fb.<span class="tok-fn">present</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, vw, vh);
+    z.<span class="tok-fn">endScissorMode</span>(f.gl);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = divider_x - <span class="tok-num">1.5</span>, .y = <span class="tok-num">0</span>, .width = <span class="tok-num">3</span>, .height = vh },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } },
+    );
+
+    <span class="tok-comment">// ---- Labels + the comptime corner inset (the third target) ----</span>
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"CPU rayshadow_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ vw - <span class="tok-num">188</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"GPU rayshadow_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+
+    <span class="tok-kw">const</span> inset_w: f32 = <span class="tok-fn">clamp</span>(<span class="tok-builtin">@min</span>(vw, vh) * <span class="tok-num">0.30</span>, <span class="tok-num">84</span>, <span class="tok-num">200</span>);
+    <span class="tok-kw">const</span> inset_h: f32 = inset_w * <span class="tok-fn">float</span>(corner_rows) / <span class="tok-fn">float</span>(corner_cols);
+    <span class="tok-kw">const</span> ix: f32 = vw - inset_w - <span class="tok-num">12</span>;
+    <span class="tok-kw">const</span> iy: f32 = vh - inset_h - <span class="tok-num">12</span>;
+    s.corner_fb.<span class="tok-fn">present</span>(f.gl, ix, iy, inset_w, inset_h);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = ix - <span class="tok-num">1</span>, .y = iy - <span class="tok-num">1</span>, .width = inset_w + <span class="tok-num">2</span>, .height = inset_h + <span class="tok-num">2</span> },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }, .outline = <span class="tok-num">1.0</span> },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ ix, iy - <span class="tok-num">22</span> },
+        <span class="tok-str">"comptime rayshadow_fs"</span>,
+        .{ .size = <span class="tok-num">16</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - ray shadows CPU|GPU|comptime"</span>,
+            .width = width,
+            .height = height,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/rayshadow_fs.zig" data-lines="169"><figcaption><span>examples/rayshadow_fs.zig</span><span>169 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/rayshadow_fs.zig - a ray-traced HARD-SHADOW fragment shader.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Per pixel: build the camera ray from the host-supplied basis, intersect a</span>
+<span class="tok-comment">//! bounded ground platform + two axis-aligned boxes, shade the nearest hit with</span>
+<span class="tok-comment">//! a fixed directional light, then cast a SHADOW RAY from the hit point toward</span>
+<span class="tok-comment">//! the light and darken to ambient if it strikes a box. Miss -&gt; gradient sky.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The shadow is a second ray-scene intersection, NOT a shadow map - which is</span>
+<span class="tok-comment">//! exactly why the whole thing runs on all three zimr shader targets: WGSL</span>
+<span class="tok-comment">//! (GPU), native Zig (raster CPU dispatcher), and comptime (baked corner). A</span>
+<span class="tok-comment">//! shadow map would need a precomputed depth texture the CPU/comptime targets</span>
+<span class="tok-comment">//! can't produce. No recursion, no pointers-into-scene, no dynamic loops; the</span>
+<span class="tok-comment">//! scene is a fixed handful of primitives tested through small helper fns.</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> safeNormalize3 = zm.safeNormalize3;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> vec4 = zm.vec4;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"rayshadow_fs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"rayshadow_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_io.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">const</span> miss_t: f32 = <span class="tok-num">1.0e30</span>;
+
+<span class="tok-comment">/// Slab ray-box against [bmin, bmax]. Returns the entry distance when the ray</span>
+<span class="tok-comment">/// enters the box ahead of the origin, else `miss_t`. Per-axis @min/@max avoids</span>
+<span class="tok-comment">/// a swap branch; axis-aligned rays give inf via 1/0 and stay correct.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">hitBox</span>(ro: Vec, rd: Vec, bmin: Vec, bmax: Vec) f32 {
+    <span class="tok-kw">const</span> ix: f32 = <span class="tok-num">1.0</span> / rd[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> x0: f32 = (bmin[<span class="tok-num">0</span>] - ro[<span class="tok-num">0</span>]) * ix;
+    <span class="tok-kw">const</span> x1: f32 = (bmax[<span class="tok-num">0</span>] - ro[<span class="tok-num">0</span>]) * ix;
+    <span class="tok-kw">const</span> iy: f32 = <span class="tok-num">1.0</span> / rd[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> y0: f32 = (bmin[<span class="tok-num">1</span>] - ro[<span class="tok-num">1</span>]) * iy;
+    <span class="tok-kw">const</span> y1: f32 = (bmax[<span class="tok-num">1</span>] - ro[<span class="tok-num">1</span>]) * iy;
+    <span class="tok-kw">const</span> iz: f32 = <span class="tok-num">1.0</span> / rd[<span class="tok-num">2</span>];
+    <span class="tok-kw">const</span> z0: f32 = (bmin[<span class="tok-num">2</span>] - ro[<span class="tok-num">2</span>]) * iz;
+    <span class="tok-kw">const</span> z1: f32 = (bmax[<span class="tok-num">2</span>] - ro[<span class="tok-num">2</span>]) * iz;
+    <span class="tok-kw">const</span> tmin: f32 = <span class="tok-builtin">@max</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@min</span>(x0, x1), <span class="tok-builtin">@min</span>(y0, y1)), <span class="tok-builtin">@min</span>(z0, z1));
+    <span class="tok-kw">const</span> tmax: f32 = <span class="tok-builtin">@min</span>(<span class="tok-builtin">@min</span>(<span class="tok-builtin">@max</span>(x0, x1), <span class="tok-builtin">@max</span>(y0, y1)), <span class="tok-builtin">@max</span>(z0, z1));
+    <span class="tok-kw">if</span> (tmax &gt;= tmin <span class="tok-kw">and</span> tmin &gt; <span class="tok-num">0.0</span>) {
+        <span class="tok-kw">return</span> tmin;
+    }
+    <span class="tok-kw">return</span> miss_t;
+}
+
+<span class="tok-comment">/// Bounded ground platform at y=0 (an 8x8 square so sky shows around it).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">hitPlatform</span>(ro: Vec, rd: Vec) f32 {
+    <span class="tok-kw">if</span> (rd[<span class="tok-num">1</span>] &gt; -<span class="tok-num">1.0e-6</span>) {
+        <span class="tok-kw">return</span> miss_t;
+    }
+    <span class="tok-kw">const</span> t: f32 = -ro[<span class="tok-num">1</span>] / rd[<span class="tok-num">1</span>];
+    <span class="tok-kw">if</span> (t &lt;= <span class="tok-num">0.0</span>) {
+        <span class="tok-kw">return</span> miss_t;
+    }
+    <span class="tok-kw">const</span> hx: f32 = ro[<span class="tok-num">0</span>] + rd[<span class="tok-num">0</span>] * t;
+    <span class="tok-kw">const</span> hz: f32 = ro[<span class="tok-num">2</span>] + rd[<span class="tok-num">2</span>] * t;
+    <span class="tok-kw">if</span> (hx &lt; -<span class="tok-num">4.0</span> <span class="tok-kw">or</span> hx &gt; <span class="tok-num">4.0</span> <span class="tok-kw">or</span> hz &lt; -<span class="tok-num">4.0</span> <span class="tok-kw">or</span> hz &gt; <span class="tok-num">4.0</span>) {
+        <span class="tok-kw">return</span> miss_t;
+    }
+    <span class="tok-kw">return</span> t;
+}
+
+<span class="tok-comment">/// Outward normal of an axis-aligned box at surface point `p`: the axis whose</span>
+<span class="tok-comment">/// normalized offset from the center is largest is the hit face.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">boxNormal</span>(p: Vec, center: Vec, half: Vec) Vec {
+    <span class="tok-kw">const</span> dx: f32 = (p[<span class="tok-num">0</span>] - center[<span class="tok-num">0</span>]) / half[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> dy: f32 = (p[<span class="tok-num">1</span>] - center[<span class="tok-num">1</span>]) / half[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> dz: f32 = (p[<span class="tok-num">2</span>] - center[<span class="tok-num">2</span>]) / half[<span class="tok-num">2</span>];
+    <span class="tok-kw">const</span> ax: f32 = <span class="tok-builtin">@abs</span>(dx);
+    <span class="tok-kw">const</span> ay: f32 = <span class="tok-builtin">@abs</span>(dy);
+    <span class="tok-kw">const</span> az: f32 = <span class="tok-builtin">@abs</span>(dz);
+    <span class="tok-kw">if</span> (ax &gt;= ay <span class="tok-kw">and</span> ax &gt;= az) {
+        <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(<span class="tok-kw">if</span> (dx &gt; <span class="tok-num">0.0</span>) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>);
+    }
+    <span class="tok-kw">if</span> (ay &gt;= az) {
+        <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(<span class="tok-num">0.0</span>, <span class="tok-kw">if</span> (dy &gt; <span class="tok-num">0.0</span>) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>, <span class="tok-num">0.0</span>);
+    }
+    <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-kw">if</span> (dz &gt; <span class="tok-num">0.0</span>) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> px: f32 = io_in.frag_tex_coord[<span class="tok-num">0</span>] * io_in.u.resolution[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> py: f32 = io_in.frag_tex_coord[<span class="tok-num">1</span>] * io_in.u.resolution[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> ro: Vec = io_in.u.cam_origin;
+    <span class="tok-kw">const</span> pixel_center: Vec = io_in.u.px00 +
+        io_in.u.pdu * <span class="tok-fn">splat</span>(px) +
+        io_in.u.pdv * <span class="tok-fn">splat</span>(py);
+    <span class="tok-kw">const</span> rd: Vec = <span class="tok-fn">safeNormalize3</span>(pixel_center - ro, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span>));
+
+    <span class="tok-comment">// Scene: two boxes on the platform. Center + half-extent; box A taller/warm,</span>
+    <span class="tok-comment">// box B shorter/cool. Both rest on y=0.</span>
+    <span class="tok-kw">const</span> a_center: Vec = <span class="tok-fn">vec</span>(-<span class="tok-num">1.05</span>, <span class="tok-num">0.78</span>, <span class="tok-num">0.10</span>);
+    <span class="tok-kw">const</span> a_half: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.72</span>, <span class="tok-num">0.78</span>, <span class="tok-num">0.72</span>);
+    <span class="tok-kw">const</span> b_center: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">1.05</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.25</span>);
+    <span class="tok-kw">const</span> b_half: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.66</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.62</span>);
+    <span class="tok-kw">const</span> a_min: Vec = a_center - a_half;
+    <span class="tok-kw">const</span> a_max: Vec = a_center + a_half;
+    <span class="tok-kw">const</span> b_min: Vec = b_center - b_half;
+    <span class="tok-kw">const</span> b_max: Vec = b_center + b_half;
+
+    <span class="tok-comment">// Fixed world light (direction TO the light).</span>
+    <span class="tok-kw">const</span> light: Vec = <span class="tok-fn">safeNormalize3</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0.5</span>, <span class="tok-num">0.9</span>, <span class="tok-num">0.42</span>), <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+
+    <span class="tok-comment">// ---- Primary ray: nearest of platform / box A / box B ----</span>
+    <span class="tok-kw">const</span> t_plat: f32 = <span class="tok-fn">hitPlatform</span>(ro, rd);
+    <span class="tok-kw">const</span> t_a: f32 = <span class="tok-fn">hitBox</span>(ro, rd, a_min, a_max);
+    <span class="tok-kw">const</span> t_b: f32 = <span class="tok-fn">hitBox</span>(ro, rd, b_min, b_max);
+
+    <span class="tok-kw">var</span> best_t: f32 = miss_t;
+    <span class="tok-kw">var</span> kind: u32 = <span class="tok-num">0</span>; <span class="tok-comment">// 0 miss, 1 platform, 2 box A, 3 box B</span>
+    <span class="tok-kw">if</span> (t_plat &lt; best_t) {
+        best_t = t_plat;
+        kind = <span class="tok-num">1</span>;
+    }
+    <span class="tok-kw">if</span> (t_a &lt; best_t) {
+        best_t = t_a;
+        kind = <span class="tok-num">2</span>;
+    }
+    <span class="tok-kw">if</span> (t_b &lt; best_t) {
+        best_t = t_b;
+        kind = <span class="tok-num">3</span>;
+    }
+
+    <span class="tok-kw">var</span> color: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    <span class="tok-kw">if</span> (kind == <span class="tok-num">0</span>) {
+        <span class="tok-comment">// Gradient sky (warm horizon -&gt; deep-blue zenith).</span>
+        <span class="tok-kw">const</span> s: f32 = <span class="tok-num">0.5</span> * (rd[<span class="tok-num">1</span>] + <span class="tok-num">1.0</span>);
+        <span class="tok-kw">const</span> bot: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.85</span>, <span class="tok-num">0.52</span>, <span class="tok-num">0.32</span>);
+        <span class="tok-kw">const</span> top: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.12</span>, <span class="tok-num">0.20</span>, <span class="tok-num">0.48</span>);
+        color = bot * <span class="tok-fn">splat</span>(<span class="tok-num">1.0</span> - s) + top * <span class="tok-fn">splat</span>(s);
+    } <span class="tok-kw">else</span> {
+        <span class="tok-kw">const</span> hit: Vec = ro + rd * <span class="tok-fn">splat</span>(best_t);
+
+        <span class="tok-kw">var</span> normal: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>);
+        <span class="tok-kw">var</span> albedo: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0.72</span>, <span class="tok-num">0.73</span>, <span class="tok-num">0.78</span>);
+        <span class="tok-kw">if</span> (kind == <span class="tok-num">2</span>) {
+            normal = <span class="tok-fn">boxNormal</span>(hit, a_center, a_half);
+            albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.86</span>, <span class="tok-num">0.46</span>, <span class="tok-num">0.40</span>);
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (kind == <span class="tok-num">3</span>) {
+            normal = <span class="tok-fn">boxNormal</span>(hit, b_center, b_half);
+            albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.44</span>, <span class="tok-num">0.60</span>, <span class="tok-num">0.86</span>);
+        }
+
+        <span class="tok-kw">const</span> ndl: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">0.0</span>, normal[<span class="tok-num">0</span>] * light[<span class="tok-num">0</span>] + normal[<span class="tok-num">1</span>] * light[<span class="tok-num">1</span>] + normal[<span class="tok-num">2</span>] * light[<span class="tok-num">2</span>]);
+
+        <span class="tok-comment">// Shadow ray from just above the surface toward the light; either box</span>
+        <span class="tok-comment">// occludes. (The platform can't shadow - the light is above it.)</span>
+        <span class="tok-kw">const</span> origin: Vec = hit + normal * <span class="tok-fn">splat</span>(<span class="tok-num">0.004</span>);
+        <span class="tok-kw">const</span> sa: f32 = <span class="tok-fn">hitBox</span>(origin, light, a_min, a_max);
+        <span class="tok-kw">const</span> sb: f32 = <span class="tok-fn">hitBox</span>(origin, light, b_min, b_max);
+        <span class="tok-kw">const</span> shadow: f32 = <span class="tok-kw">if</span> (sa &lt; miss_t <span class="tok-kw">or</span> sb &lt; miss_t) <span class="tok-num">0.0</span> <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+
+        <span class="tok-kw">const</span> ambient: f32 = <span class="tok-num">0.22</span>;
+        <span class="tok-kw">const</span> lit: f32 = ambient + (<span class="tok-num">1.0</span> - ambient) * ndl * shadow;
+        color = albedo * <span class="tok-fn">splat</span>(lit);
+    }
+
+    out.out_color = <span class="tok-fn">vec4</span>(color[<span class="tok-num">0</span>], color[<span class="tok-num">1</span>], color[<span class="tok-num">2</span>], <span class="tok-num">1.0</span>);
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/rayshadow_fs_io.zig" data-lines="32"><figcaption><span>examples/rayshadow_fs_io.zig</span><span>32 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/rayshadow_fs_io.zig - schema for the ray-traced hard-shadow shader.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The SAME `shaderMain` (rayshadow_fs.zig) compiles to WGSL (GPU), to native</span>
+<span class="tok-comment">//! Zig (the raster software dispatcher), and runs at comptime (baked corner) -</span>
+<span class="tok-comment">//! one shader, three execution targets. It ray-traces a ground plane + two</span>
+<span class="tok-comment">//! boxes lit by one directional light, casting HARD SHADOWS via a shadow ray</span>
+<span class="tok-comment">//! (no shadow map: the shadow test is a second ray-scene intersection, which is</span>
+<span class="tok-comment">//! why it runs identically on all three targets). The camera basis is</span>
+<span class="tok-comment">//! precomputed host-side; the shader rebuilds the per-pixel ray from it.</span>
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    out_color: Vec,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">// Camera basis (precomputed host-side; the shader rebuilds the per-pixel ray).</span>
+    cam_origin: Vec, <span class="tok-comment">// xyz eye, w unused</span>
+    px00: Vec, <span class="tok-comment">// centre of the top-left pixel (world)</span>
+    pdu: Vec, <span class="tok-comment">// one pixel right (world)</span>
+    pdv: Vec, <span class="tok-comment">// one pixel down (world)</span>
+
+    resolution: Vec2, <span class="tok-comment">// render target px (x, y)</span>
+    _pad0: f32 = <span class="tok-num">0</span>, <span class="tok-comment">// the orbit lives in the camera basis (cam_origin/px00/pdu/pdv)</span>
+    _pad1: f32 = <span class="tok-num">0</span>,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/trivial_vs.zig" data-lines="34"><figcaption><span>examples/trivial_vs.zig</span><span>34 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/trivial_vs.zig - minimal vertex shader for the</span>
+<span class="tok-comment">//! wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes</span>
+<span class="tok-comment">//! clip-space positions; VS forwards them with w=1.  UV varies to</span>
+<span class="tok-comment">//! the FS unchanged.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema: `trivial_vs_io.zig`.  No Ubo, no Samplers.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> vec4 = zm.vec4;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    out.position = <span class="tok-fn">vec4</span>(
+        io_in.vertex_position[<span class="tok-num">0</span>],
+        io_in.vertex_position[<span class="tok-num">1</span>],
+        <span class="tok-num">0.0</span>,
+        <span class="tok-num">1.0</span>,
+    );
+    out.frag_tex_coord = io_in.vertex_tex_coord;
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/trivial_vs_io.zig" data-lines="23"><figcaption><span>examples/trivial_vs_io.zig</span><span>23 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/trivial_vs_io.zig - schema for the trivial VS used</span>
+<span class="tok-comment">//! by the wgpu_bringup to validate Phase D1 (loadShader) end-to-end.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! No Ubo, no Samplers - purest possible shape.  Vertex positions</span>
+<span class="tok-comment">//! arrive already in clip space (-1..+1); the VS passes them through.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Vertex attributes - matches the Vertex2D layout that loadShader</span>
+<span class="tok-comment">/// hardcodes: pos: vec2 at location 0, uv: vec2 at location 1.</span>
+<span class="tok-comment">/// The color attribute at location 2 is part of the layout (so the</span>
+<span class="tok-comment">/// vertex buffer stride matches) but not consumed by this VS.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {
+    vertex_position: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">0</span>),
+    vertex_tex_coord: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">1</span>),
+};
+
+<span class="tok-comment">/// Pass-through outputs.  frag_tex_coord becomes a varying to the FS.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+</code></pre></figure>
+</body>
+</html>

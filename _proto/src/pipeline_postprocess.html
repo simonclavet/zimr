@@ -1,0 +1,712 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>pipeline_postprocess — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>pipeline_postprocess</h1>
+<figure class="code src-file" data-path="examples/pipeline_postprocess/pipeline_postprocess.zig" data-lines="183"><figcaption><span>examples/pipeline_postprocess/pipeline_postprocess.zig</span><span>183 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! pipeline_postprocess - a pass whose INPUT is a previous pass's output.</span>
+<span class="tok-comment">//! Render a spinning gradient triangle into a RenderTexture, then a FULLSCREEN</span>
+<span class="tok-comment">//! shader SAMPLES that texture and applies a screen-space effect (chromatic</span>
+<span class="tok-comment">//! aberration + vignette). The post-processing / bloom foundation.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! No inline WGSL: every shader is authored in Zig.</span>
+<span class="tok-comment">//!   - Scene pass reuses the `pipeline_uniforms` shaders (a vertex-stage mat4</span>
+<span class="tok-comment">//!     transform + gradient) rendered into the RT.</span>
+<span class="tok-comment">//!   - Post pass = the fullscreen `trivial_vs` + `postprocess_post_fs`,</span>
+<span class="tok-comment">//!     which declares a `scene` sampler. That sampler is the FIRST texture bound</span>
+<span class="tok-comment">//!     through `z.shader.loadShaderVF` - the unified `Resources` machinery</span>
+<span class="tok-comment">//!     builds its bind group; no hand-built pipeline. The texture is supplied by</span>
+<span class="tok-comment">//!     name: `.textures = .{ .scene = rt.asTexture() }`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The scene triangle is aspect-corrected for the WINDOW before going into the</span>
+<span class="tok-comment">//! square RT, so the full-bleed post pass (square RT stretched to screen) shows</span>
+<span class="tok-comment">//! it undistorted.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Build:  zig build wgpu-pipeline-postprocess</span>
+<span class="tok-comment">//! Device: zig build wgpu-pipeline-postprocess-standalone -Dmode=release</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> rotationZ = zm.rotationZ;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// Scene pass: reuse the pipeline_uniforms shaders (VS-stage mat4 transform).</span>
+<span class="tok-kw">const</span> scene_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"pipeline_uniforms_vs.wgsl"</span>);
+<span class="tok-kw">const</span> scene_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"pipeline_uniforms_fs.wgsl"</span>);
+<span class="tok-kw">const</span> scene_vs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"pipeline_uniforms_vs_io.zig"</span>);
+<span class="tok-kw">const</span> scene_fs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"pipeline_uniforms_fs_io.zig"</span>);
+
+<span class="tok-comment">// Post pass: fullscreen trivial VS + the chromatic/vignette FS (a sampler shader).</span>
+<span class="tok-kw">const</span> post_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"trivial_vs.wgsl"</span>);
+<span class="tok-kw">const</span> post_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"postprocess_post_fs.wgsl"</span>);
+<span class="tok-kw">const</span> post_vs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_io.zig"</span>);
+<span class="tok-kw">const</span> post_fs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"postprocess_post_fs_io.zig"</span>);
+
+<span class="tok-kw">const</span> rt_size: i32 = <span class="tok-num">720</span>;
+
+<span class="tok-comment">/// Scene vertex: clip-ish position + per-vertex colour (matches the</span>
+<span class="tok-comment">/// pipeline_uniforms vertex layout: vec2 @0, vec3 @1).</span>
+<span class="tok-kw">const</span> Vertex = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    x: f32,
+    y: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+};
+
+<span class="tok-kw">const</span> vertices = [_]Vertex{
+    .{ .x = <span class="tok-num">0.0</span>, .y = <span class="tok-num">0.7</span>, .r = <span class="tok-num">1.0</span>, .g = <span class="tok-num">0.2</span>, .b = <span class="tok-num">0.2</span> },
+    .{ .x = -<span class="tok-num">0.7</span>, .y = -<span class="tok-num">0.6</span>, .r = <span class="tok-num">0.2</span>, .g = <span class="tok-num">1.0</span>, .b = <span class="tok-num">0.3</span> },
+    .{ .x = <span class="tok-num">0.7</span>, .y = -<span class="tok-num">0.6</span>, .r = <span class="tok-num">0.3</span>, .g = <span class="tok-num">0.4</span>, .b = <span class="tok-num">1.0</span> },
+};
+
+<span class="tok-comment">/// transform = scale(sx, sy) * rotateZ(angle), in zm row convention so the</span>
+<span class="tok-comment">/// shader's `mulMatPoint` matches WGSL `m * vec4(p, 1)`.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">transform2d</span>(angle: f32, sx: f32, sy: f32) zm.Mat {
+    <span class="tok-kw">return</span> <span class="tok-fn">mulMat</span>(<span class="tok-fn">scaling</span>(sx, sy, <span class="tok-num">1.0</span>), <span class="tok-fn">rotationZ</span>(angle));
+}
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    rt: z.RenderTexture,
+    vbo: z.wgpu.BufferHandle,
+    scene: z.shader.<span class="tok-fn">LoadedShader</span>(scene_vs_io),
+    post: z.shader.<span class="tok-fn">LoadedShader</span>(post_fs_io),
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.scene.<span class="tok-fn">deinit</span>();
+    s.post.<span class="tok-fn">deinit</span>();
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.vbo);
+    s.rt.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(f.gpu.device, .{
+        .size = <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(vertices)),
+        .usage = .{ .vertex = true, .copy_dst = true },
+        .label = <span class="tok-str">"scene_vbo"</span>,
+    });
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, vbo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;vertices));
+
+    <span class="tok-kw">const</span> rt: z.RenderTexture = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, rt_size, rt_size);
+
+    <span class="tok-comment">// Scene shader (renders into the RT - pin to the RT's rgba8/no-depth pass).</span>
+    <span class="tok-kw">const</span> scene: z.shader.<span class="tok-fn">LoadedShader</span>(scene_vs_io) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(scene_vs_io, scene_fs_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = scene_vs_wgsl,
+        .fs_wgsl_source = scene_fs_wgsl,
+        .vertex_buffer_layouts = &amp;.{z.shader.<span class="tok-fn">vertexLayout</span>(scene_vs_io)},
+        .initial_ubo = .{ .transform = <span class="tok-fn">transform2d</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>) },
+        .color_format = .rgba8_unorm,
+        .depth_state = .none,
+        .label = <span class="tok-str">"postprocess_scene"</span>,
+    });
+
+    <span class="tok-comment">// Post shader: fullscreen, samples the RT. The `scene` sampler is bound by</span>
+    <span class="tok-comment">// name from the schema's `Samplers` - the new unified texture path.</span>
+    <span class="tok-kw">const</span> post: z.shader.<span class="tok-fn">LoadedShader</span>(post_fs_io) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(post_vs_io, post_fs_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = post_vs_wgsl,
+        .fs_wgsl_source = post_fs_wgsl,
+        .textures = .{ .scene = rt.<span class="tok-fn">asTexture</span>() },
+        .label = <span class="tok-str">"postprocess_post"</span>,
+    });
+
+    s.* = .{
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>),
+        .rt = rt,
+        .vbo = vbo,
+        .scene = scene,
+        .post = post,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// 1) Scene -&gt; render texture. Aspect-correct for the window so the</span>
+    <span class="tok-comment">//    full-bleed post pass (square RT stretched to screen) is undistorted.</span>
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> aspect: f32 = w / <span class="tok-builtin">@max</span>(h, <span class="tok-num">1.0</span>);
+    <span class="tok-kw">const</span> sx: f32 = <span class="tok-kw">if</span> (aspect &lt; <span class="tok-num">1.0</span>) <span class="tok-num">1.0</span> <span class="tok-kw">else</span> <span class="tok-num">1.0</span> / aspect;
+    <span class="tok-kw">const</span> sy: f32 = <span class="tok-kw">if</span> (aspect &lt; <span class="tok-num">1.0</span>) aspect <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+    s.scene.<span class="tok-fn">pushUbo</span>(f.gpu.queue, .{ .transform = <span class="tok-fn">transform2d</span>(f.time.time * <span class="tok-num">0.7</span>, sx, sy) });
+
+    <span class="tok-kw">const</span> scene_bg_clear: zm.Color = .{ .r = <span class="tok-num">14</span>, .g = <span class="tok-num">16</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> };
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt, scene_bg_clear);
+    <span class="tok-kw">const</span> rps: *z.PassState = f.gl.pass;
+    s.scene.<span class="tok-fn">bindForDraw</span>(rps);
+    s.scene.<span class="tok-fn">setVertex</span>(rps, <span class="tok-num">0</span>, s.vbo, <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(vertices)));
+    s.scene.<span class="tok-fn">draw</span>(rps, vertices.len, <span class="tok-num">1</span>);
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+
+    <span class="tok-comment">// SCREEN PASS: open once (app owns begin/endDrawing).</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+
+    <span class="tok-comment">// 2) Post pass: the fullscreen sampler shader reads the RT into the</span>
+    <span class="tok-comment">//    backbuffer. drawFullscreenShader routes through the post shader's OWN</span>
+    <span class="tok-comment">//    pipeline + bind groups (group-1 RT sampler intact), NOT the 2D batch -</span>
+    <span class="tok-comment">//    so the batch's atlas can't clobber the sampler.</span>
+    z.<span class="tok-fn">drawFullscreenShader</span>(f.gl, post_fs_io, &amp;s.post);
+
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"pipeline_postprocess: scene -&gt; texture -&gt; fullscreen sampler (chromatic + vignette)"</span>);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    <span class="tok-comment">// Transient GPU-technique demo: render-target/shader teardown leaves</span>
+    <span class="tok-comment">// residual engine handles, so opt out of the managed leak gate.</span>
+    .memory = .managed,
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - pipeline postprocess"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+            .clear = .{ .r = <span class="tok-num">0.0</span>, .g = <span class="tok-num">0.0</span>, .b = <span class="tok-num">0.0</span>, .a = <span class="tok-num">1.0</span> },
+        },
+    },
+    .init = initState,
+    <span class="tok-comment">// .memory left default (arena): per-lifecycle teardown is balanced (scene +</span>
+    <span class="tok-comment">// post + vbo + rt all freed), but the shutdown proof flags 1 residual buffer</span>
+    <span class="tok-comment">// from the LoadedShader/rt-sampling path that isn't reachable from State -</span>
+    <span class="tok-comment">// deferred rather than guess at an engine-owned handle.</span>
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// Offscreen render-texture drawn before the screen opens (tile-based-GPU</span>
+    <span class="tok-comment">// safe); owns its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/pipeline_uniforms_fs.zig" data-lines="19"><figcaption><span>examples/pipeline_uniforms_fs.zig</span><span>19 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/pipeline_uniforms_fs.zig - pipeline_uniforms fragment shader body.</span>
+<span class="tok-comment">//! Emits the interpolated colour straight through.</span>
+
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"pipeline_uniforms_fs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"pipeline_uniforms_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    out.final_color = io_in.frag_color;
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/pipeline_uniforms_fs_io.zig" data-lines="19"><figcaption><span>examples/pipeline_uniforms_fs_io.zig</span><span>19 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/pipeline_uniforms_fs_io.zig - typed interface for the</span>
+<span class="tok-comment">//! pipeline_uniforms fragment shader. Companion to `pipeline_uniforms_fs.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Pure pass-through: the fragment stage has no uniforms (the transform lives in</span>
+<span class="tok-comment">//! the vertex schema) - it just emits the interpolated colour. `Inputs` mirrors</span>
+<span class="tok-comment">//! the VS `Outputs` field-for-field (structural match).</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+
+<span class="tok-comment">/// Interpolated inputs from `pipeline_uniforms_vs`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    frag_color: Vec,
+};
+
+<span class="tok-comment">/// Stage output - the final fragment colour.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    final_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/pipeline_uniforms_vs.zig" data-lines="32"><figcaption><span>examples/pipeline_uniforms_vs.zig</span><span>32 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/pipeline_uniforms_vs.zig - pipeline_uniforms vertex shader body.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Transforms each 2D vertex by the UBO's 4x4 matrix and passes the colour</span>
+<span class="tok-comment">//! through. The matrix (host-supplied) spins the triangle and squashes it</span>
+<span class="tok-comment">//! aspect-correct, replacing the CPU vertex-rewrite the basic example used.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> mulMatPoint = zm.mulMatPoint;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"pipeline_uniforms_vs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"pipeline_uniforms_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_io.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-comment">// mat4 * vec4(p.xy, 0, 1): treat the 2D vertex as a point on the z=0 plane.</span>
+    <span class="tok-kw">const</span> p: Vec3 = .{ io_in.vertex_position[<span class="tok-num">0</span>], io_in.vertex_position[<span class="tok-num">1</span>], <span class="tok-num">0.0</span> };
+    out.position = <span class="tok-fn">mulMatPoint</span>(io_in.u.transform, p);
+
+    <span class="tok-kw">const</span> c: Vec3 = io_in.vertex_color;
+    out.frag_color = .{ c[<span class="tok-num">0</span>], c[<span class="tok-num">1</span>], c[<span class="tok-num">2</span>], <span class="tok-num">1.0</span> };
+
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/pipeline_uniforms_vs_io.zig" data-lines="33"><figcaption><span>examples/pipeline_uniforms_vs_io.zig</span><span>33 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/pipeline_uniforms_vs_io.zig - typed interface for the</span>
+<span class="tok-comment">//! pipeline_uniforms vertex shader. Companion to `pipeline_uniforms_vs.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Demonstrates a VERTEX-STAGE uniform: the only uniform is a 4x4 transform the</span>
+<span class="tok-comment">//! host rewrites every frame, so the triangle spins and stays aspect-correct.</span>
+<span class="tok-comment">//! Because the `Ubo` is declared here (the vertex schema), the codegen binds it</span>
+<span class="tok-comment">//! at @group(0) and `loadShaderVF` routes it there automatically - the host</span>
+<span class="tok-comment">//! never names a group.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Vertex attributes: clip-ish position (the matrix finishes the transform) and</span>
+<span class="tok-comment">/// a per-vertex colour. Locations match the interleaved vertex buffer; the</span>
+<span class="tok-comment">/// layout is DERIVED from these via `z.shader.vertexLayout`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {
+    vertex_position: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">0</span>),
+    vertex_color: shader.<span class="tok-fn">Attr</span>(.vec3, <span class="tok-num">1</span>),
+};
+
+<span class="tok-comment">/// Single uniform block (group 0, binding 0): a 4x4 transform.</span>
+<span class="tok-comment">/// mat4 == [4]Vec (std140 rows; uploaded raw, read by the shader as</span>
+<span class="tok-comment">/// `mulMatPoint`, which matches WGSL `m * vec4(p, 1)`).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    transform: [<span class="tok-num">4</span>]Vec,
+};
+
+<span class="tok-comment">/// Varying to the fragment stage - the interpolated colour (inlined, not shared,</span>
+<span class="tok-comment">/// so the vs/fs io files stay in separate modules; the match is structural).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    frag_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/postprocess_post_fs.zig" data-lines="52"><figcaption><span>examples/postprocess_post_fs.zig</span><span>52 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/postprocess_post_fs.zig - fullscreen post-processing fragment</span>
+<span class="tok-comment">//! shader for the postprocess demo. Samples the `scene` texture three times at</span>
+<span class="tok-comment">//! UV offsets along the radial direction (a chromatic-aberration RGB split),</span>
+<span class="tok-comment">//! then darkens toward the edges (vignette).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! This is the FIRST sampler shader to go through `z.shader.loadShaderVF`: the</span>
+<span class="tok-comment">//! schema's `Samplers` field drives a bind group built by the unified</span>
+<span class="tok-comment">//! `Resources` machinery, with no hand-built pipeline. Same authoring shape as</span>
+<span class="tok-comment">//! every other Zig shader - `io.scene(uv)` is the texture read.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema (Inputs / Samplers / Outputs) lives in `postprocess_post_fs_io.zig`.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"postprocess_post_fs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"postprocess_post_fs_externs"</span>);
+
+<span class="tok-comment">// IoT(void) - no Ubo; the texture binding is all this stage needs.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> TextureRef = shader_externs.TextureRef;
+
+<span class="tok-kw">const</span> smoothstep = zm.smoothstep;
+<span class="tok-kw">const</span> length = zm.length;
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> uv: Vec2 = io_in.frag_tex_coord;
+    <span class="tok-kw">const</span> center: Vec2 = .{ <span class="tok-num">0.5</span>, <span class="tok-num">0.5</span> };
+    <span class="tok-kw">const</span> dir: Vec2 = uv - center;
+
+    <span class="tok-comment">// Chromatic aberration: pull R outward and B inward along `dir`.</span>
+    <span class="tok-kw">const</span> off: Vec2 = dir * <span class="tok-builtin">@as</span>(Vec2, <span class="tok-builtin">@splat</span>(<span class="tok-num">0.008</span>));
+    <span class="tok-kw">const</span> r: f32 = io_in.<span class="tok-fn">scene</span>(uv + off)[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> g: f32 = io_in.<span class="tok-fn">scene</span>(uv)[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> b: f32 = io_in.<span class="tok-fn">scene</span>(uv - off)[<span class="tok-num">2</span>];
+
+    <span class="tok-comment">// Vignette: fade toward the edges (edge0 &gt; edge1 -&gt; bright center).</span>
+    <span class="tok-kw">const</span> vig: f32 = <span class="tok-fn">smoothstep</span>(<span class="tok-num">0.85</span>, <span class="tok-num">0.30</span>, <span class="tok-fn">length</span>(dir));
+
+    out.final_color = .{ r * vig, g * vig, b * vig, <span class="tok-num">1.0</span> };
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/postprocess_post_fs_io.zig" data-lines="29"><figcaption><span>examples/postprocess_post_fs_io.zig</span><span>29 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/postprocess_post_fs_io.zig - schema for the postprocess demo's</span>
+<span class="tok-comment">//! FULLSCREEN post-processing fragment shader. Declares Inputs / Samplers /</span>
+<span class="tok-comment">//! Outputs; no Ubo (the effect is parameter-free).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `Inputs.frag_tex_coord` MUST match `trivial_vs_io.Outputs` field-for-</span>
+<span class="tok-comment">//! field - the post pass reuses the trivial fullscreen VS, which emits a single</span>
+<span class="tok-comment">//! `frag_tex_coord` varying. The `scene` sampler is the previous pass's</span>
+<span class="tok-comment">//! RenderTexture (bound by name in `desc.textures`).</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Varying from the fullscreen VS - the screen UV (0..1).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+
+<span class="tok-comment">/// The scene texture to post-process. Bound by name: `.textures = .{ .scene =</span>
+<span class="tok-comment">/// rt.asTexture() }`. The field name becomes the sampling method `io.scene(uv)`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+    scene: shader.<span class="tok-fn">Sampler2D</span>(.albedo, .{}),
+};
+
+<span class="tok-comment">/// Final fragment colour.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    final_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/trivial_vs.zig" data-lines="34"><figcaption><span>examples/trivial_vs.zig</span><span>34 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/trivial_vs.zig - minimal vertex shader for the</span>
+<span class="tok-comment">//! wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes</span>
+<span class="tok-comment">//! clip-space positions; VS forwards them with w=1.  UV varies to</span>
+<span class="tok-comment">//! the FS unchanged.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Schema: `trivial_vs_io.zig`.  No Ubo, no Samplers.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> vec4 = zm.vec4;
+<span class="tok-kw">const</span> shader_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_io.zig"</span>);
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"trivial_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+    out.position = <span class="tok-fn">vec4</span>(
+        io_in.vertex_position[<span class="tok-num">0</span>],
+        io_in.vertex_position[<span class="tok-num">1</span>],
+        <span class="tok-num">0.0</span>,
+        <span class="tok-num">1.0</span>,
+    );
+    out.frag_tex_coord = io_in.vertex_tex_coord;
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/trivial_vs_io.zig" data-lines="23"><figcaption><span>examples/trivial_vs_io.zig</span><span>23 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/trivial_vs_io.zig - schema for the trivial VS used</span>
+<span class="tok-comment">//! by the wgpu_bringup to validate Phase D1 (loadShader) end-to-end.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! No Ubo, no Samplers - purest possible shape.  Vertex positions</span>
+<span class="tok-comment">//! arrive already in clip space (-1..+1); the VS passes them through.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+
+<span class="tok-comment">/// Vertex attributes - matches the Vertex2D layout that loadShader</span>
+<span class="tok-comment">/// hardcodes: pos: vec2 at location 0, uv: vec2 at location 1.</span>
+<span class="tok-comment">/// The color attribute at location 2 is part of the layout (so the</span>
+<span class="tok-comment">/// vertex buffer stride matches) but not consumed by this VS.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {
+    vertex_position: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">0</span>),
+    vertex_tex_coord: shader.<span class="tok-fn">Attr</span>(.vec2, <span class="tok-num">1</span>),
+};
+
+<span class="tok-comment">/// Pass-through outputs.  frag_tex_coord becomes a varying to the FS.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    frag_tex_coord: Vec2,
+};
+</code></pre></figure>
+</body>
+</html>

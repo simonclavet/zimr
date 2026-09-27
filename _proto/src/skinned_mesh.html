@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>skinned_mesh — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>skinned_mesh</h1>
+<figure class="code src-file" data-path="examples/skinned_mesh/skinned_mesh.zig" data-lines="335"><figcaption><span>examples/skinned_mesh/skinned_mesh.zig</span><span>335 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! skinned_mesh - port of the GL `skinned_mesh`: a skinned glTF rig,</span>
+<span class="tok-comment">//! animated and deformed every frame. (The bone-socket technique - parenting</span>
+<span class="tok-comment">//! an object to a bone - now lives in its own `bone_socket` example on a real</span>
+<span class="tok-comment">//! rigged character, so this stays a focused pure-skinning demo.)</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The 2KB embedded GLB (same `skinned_mesh_data` the GL demo generated):</span>
+<span class="tok-comment">//! a 6-vertex quad, 2 bones, JOINTS_0/WEIGHTS_0, inverseBindMatrices, and a</span>
+<span class="tok-comment">//! "wave" animation rotating bone 1 +/-45 deg around Z over 1.5s - so the right</span>
+<span class="tok-comment">//! edge of the quad waves while the left edge stays anchored.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Port shape: the GL original ran a GPU skinning shader (bone VBOs in</span>
+<span class="tok-comment">//! slots 7/8 + a boneMatrices uniform).  The wgpu typed-shader path has no</span>
+<span class="tok-comment">//! skinned pipeline variant yet, so this is the honest CPU-SKINNED v1:</span>
+<span class="tok-comment">//!   parse (codecs.gltf already does skins + animations + JOINTS/WEIGHTS)</span>
+<span class="tok-comment">//!   -&gt; sample keyframes (nlerp quats) -&gt; per-joint world = v*R*T</span>
+<span class="tok-comment">//!   -&gt; skin matrix = v*inverseBind*world -&gt; vertices deformed on the CPU</span>
+<span class="tok-comment">//!   -&gt; `updateMeshBuffer` (the dynamic-mesh path) -&gt; `drawModel`.</span>
+<span class="tok-comment">//! Bone gizmos (spheres + a line) draw the live skeleton over the mesh.</span>
+<span class="tok-comment">//! When the typed-3D-shader arc grows a skinned variant, the pose math</span>
+<span class="tok-comment">//! here moves behind it unchanged - the matrices are the same either way.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Matrix conventions, derived from zm's source: zm is row-vector /</span>
+<span class="tok-comment">//! row-major (`mulMatVec(m, v) = v*m`, translation lives in row 3), which</span>
+<span class="tok-comment">//! makes glTF's COLUMN-major mat4 floats map DIRECTLY onto zm.Mat rows,</span>
+<span class="tok-comment">//! and "rotate then translate" compose as `mulMat(R, T)`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> f32x4 = zm.f32x4;
+<span class="tok-kw">const</span> matFromQuat = zm.matFromQuat;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> mulMatVec = zm.mulMatVec;
+<span class="tok-kw">const</span> pointVec = zm.pointVec;
+<span class="tok-kw">const</span> quat_identity = zm.quat_identity;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> translationV = zm.translationV;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+<span class="tok-kw">const</span> c = z.colors;
+<span class="tok-kw">const</span> skin_data = <span class="tok-builtin">@import</span>(<span class="tok-str">"skinned_mesh_data.zig"</span>);
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> max_joints: usize = <span class="tok-num">8</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    model: z.Model,
+    <span class="tok-comment">/// Bind-pose positions (the skin source - never mutated).</span>
+    base_positions: []f32,
+    <span class="tok-comment">/// Per-frame skinned positions, memcpy'd into the mesh via</span>
+    <span class="tok-comment">/// `updateMeshBuffer`.</span>
+    skinned: []f32,
+    <span class="tok-comment">/// vec4 u8 per vertex / vec4 f32 per vertex (views into the mesh).</span>
+    bone_ids: [*c]u8,
+    bone_weights: [*c]f32,
+    vertex_count: usize,
+
+    <span class="tok-comment">// ---- the rig, extracted from the GLB at init ----</span>
+    joint_count: usize,
+    <span class="tok-comment">/// glTF node index per joint slot.</span>
+    joint_nodes: [max_joints]u32,
+    <span class="tok-comment">/// Bind translation per joint node (the rig animates rotation only).</span>
+    node_translation: [max_joints]Vec,
+    inverse_bind: [max_joints]Mat,
+    <span class="tok-comment">/// Keyframe times (shared by both channels in this rig).</span>
+    times: []f32,
+    <span class="tok-comment">/// Per-joint keyframe rotations: rot[j][k] = quat at keyframe k.</span>
+    rot: [max_joints][]Vec,
+
+    t: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    z.<span class="tok-fn">unloadModel</span>(gpa, s.model);
+    gpa.<span class="tok-fn">free</span>(s.base_positions);
+    gpa.<span class="tok-fn">free</span>(s.skinned);
+    gpa.<span class="tok-fn">free</span>(s.times);
+    <span class="tok-kw">var</span> j: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; s.joint_count) : (j += <span class="tok-num">1</span>) {
+        gpa.<span class="tok-fn">free</span>(s.rot[j]);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">var</span> document: z.codecs.gltf.Data = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">parse</span>(gpa, &amp;skin_data.skin_glb);
+    <span class="tok-kw">defer</span> document.<span class="tok-fn">deinit</span>();
+
+    <span class="tok-kw">const</span> meshes: []z.types.Mesh = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">meshesFromGltf</span>(gpa, document);
+    <span class="tok-kw">if</span> (meshes.len == <span class="tok-num">0</span> <span class="tok-kw">or</span> meshes[<span class="tok-num">0</span>].boneIndices == null <span class="tok-kw">or</span> meshes[<span class="tok-num">0</span>].boneWeights == null) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NotASkinnedMesh;
+    }
+    <span class="tok-kw">const</span> mesh: z.types.Mesh = meshes[<span class="tok-num">0</span>];
+    <span class="tok-comment">// Free the outer slice from meshesFromGltf (we keep meshes[0] by value; its</span>
+    <span class="tok-comment">// CPU arrays travel with the model). Without this the twice-lifecycle census</span>
+    <span class="tok-comment">// leaks a little each cycle.</span>
+    gpa.<span class="tok-fn">free</span>(meshes);
+    <span class="tok-kw">const</span> vertex_count: usize = <span class="tok-builtin">@intCast</span>(mesh.vertexCount);
+
+    <span class="tok-comment">// Snapshot the bind pose; the mesh's own position array becomes the</span>
+    <span class="tok-comment">// per-frame skinning destination.</span>
+    <span class="tok-kw">const</span> base: []f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, vertex_count * <span class="tok-num">3</span>);
+    <span class="tok-builtin">@memcpy</span>(base, mesh.vertices[<span class="tok-num">0</span> .. vertex_count * <span class="tok-num">3</span>]);
+    <span class="tok-kw">const</span> skinned: []f32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(f32, vertex_count * <span class="tok-num">3</span>);
+    <span class="tok-builtin">@memcpy</span>(skinned, base);
+
+    <span class="tok-comment">// ---- skin: joints + inverse binds (glTF column-major -&gt; zm rows) ----</span>
+    <span class="tok-kw">if</span> (document.skins.len == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NotASkinnedMesh;
+    }
+    <span class="tok-kw">const</span> skin: z.codecs.gltf.Skin = document.skins[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> joint_count: usize = <span class="tok-builtin">@min</span>(skin.joints.len, max_joints);
+    <span class="tok-kw">var</span> joint_nodes: [max_joints]u32 = undefined;
+    <span class="tok-kw">var</span> node_translation: [max_joints]Vec = undefined;
+    <span class="tok-kw">var</span> inverse_bind: [max_joints]Mat = undefined;
+    <span class="tok-kw">const</span> ibm_accessor: u32 = skin.inverse_bind_matrices <span class="tok-kw">orelse</span> <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NotASkinnedMesh;
+    <span class="tok-kw">const</span> ibm: []f32 = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">readAccessor</span>(f32, gpa, document, document.accessors[ibm_accessor]);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(ibm);
+    <span class="tok-kw">var</span> j: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; joint_count) : (j += <span class="tok-num">1</span>) {
+        joint_nodes[j] = skin.joints[j];
+        node_translation[j] = document.nodes[skin.joints[j]].translation;
+        <span class="tok-kw">const</span> base_f: usize = j * <span class="tok-num">16</span>;
+        inverse_bind[j] = .{
+            <span class="tok-fn">f32x4</span>(ibm[base_f + <span class="tok-num">0</span>], ibm[base_f + <span class="tok-num">1</span>], ibm[base_f + <span class="tok-num">2</span>], ibm[base_f + <span class="tok-num">3</span>]),
+            <span class="tok-fn">f32x4</span>(ibm[base_f + <span class="tok-num">4</span>], ibm[base_f + <span class="tok-num">5</span>], ibm[base_f + <span class="tok-num">6</span>], ibm[base_f + <span class="tok-num">7</span>]),
+            <span class="tok-fn">f32x4</span>(ibm[base_f + <span class="tok-num">8</span>], ibm[base_f + <span class="tok-num">9</span>], ibm[base_f + <span class="tok-num">10</span>], ibm[base_f + <span class="tok-num">11</span>]),
+            <span class="tok-fn">f32x4</span>(ibm[base_f + <span class="tok-num">12</span>], ibm[base_f + <span class="tok-num">13</span>], ibm[base_f + <span class="tok-num">14</span>], ibm[base_f + <span class="tok-num">15</span>]),
+        };
+    }
+
+    <span class="tok-comment">// ---- animation: shared timeline + per-joint rotation tracks ----</span>
+    <span class="tok-kw">if</span> (document.animations.len == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.NoAnimation;
+    }
+    <span class="tok-kw">const</span> anim: z.codecs.gltf.Animation = document.animations[<span class="tok-num">0</span>];
+    <span class="tok-kw">var</span> times: []f32 = &amp;.{};
+    <span class="tok-kw">var</span> rot: [max_joints][]Vec = undefined;
+    <span class="tok-kw">var</span> have_rot: [max_joints]bool = <span class="tok-builtin">@splat</span>(false);
+    <span class="tok-kw">for</span> (anim.channels) |ch| {
+        <span class="tok-kw">if</span> (ch.target_path != .rotation) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-comment">// Which joint slot does this channel's node drive?</span>
+        <span class="tok-kw">var</span> slot: ?usize = null;
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k &lt; joint_count) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">if</span> (joint_nodes[k] == ch.target_node) {
+                slot = k;
+            }
+        }
+        <span class="tok-kw">const</span> joint_slot: usize = slot <span class="tok-kw">orelse</span> <span class="tok-kw">continue</span>;
+        <span class="tok-kw">const</span> sampler: z.codecs.gltf.AnimationSampler = anim.samplers[ch.sampler];
+        <span class="tok-kw">if</span> (times.len == <span class="tok-num">0</span>) {
+            times = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">readAccessor</span>(f32, gpa, document, document.accessors[sampler.input]);
+        }
+        <span class="tok-kw">const</span> raw: []f32 = <span class="tok-kw">try</span> z.codecs.gltf.<span class="tok-fn">readAccessor</span>(f32, gpa, document, document.accessors[sampler.output]);
+        <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(raw);
+        <span class="tok-kw">const</span> quats: []Vec = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, raw.len / <span class="tok-num">4</span>);
+        <span class="tok-kw">for</span> (quats, <span class="tok-num">0</span>..) |*q, qi| {
+            q.* = <span class="tok-fn">f32x4</span>(raw[qi * <span class="tok-num">4</span>], raw[qi * <span class="tok-num">4</span> + <span class="tok-num">1</span>], raw[qi * <span class="tok-num">4</span> + <span class="tok-num">2</span>], raw[qi * <span class="tok-num">4</span> + <span class="tok-num">3</span>]);
+        }
+        rot[joint_slot] = quats;
+        have_rot[joint_slot] = true;
+    }
+    <span class="tok-comment">// Joints without a rotation track hold the bind rotation.</span>
+    j = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; joint_count) : (j += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (!have_rot[j]) {
+            <span class="tok-kw">const</span> quats: []Vec = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, <span class="tok-num">1</span>);
+            quats[<span class="tok-num">0</span>] = document.nodes[joint_nodes[j]].rotation;
+            rot[j] = quats;
+        }
+    }
+
+    s.* = .{
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>),
+        .model = <span class="tok-kw">try</span> z.<span class="tok-fn">loadModelFromMesh</span>(f.gl, gpa, mesh),
+        .base_positions = base,
+        .skinned = skinned,
+        .bone_ids = mesh.boneIndices,
+        .bone_weights = mesh.boneWeights,
+        .vertex_count = vertex_count,
+        .joint_count = joint_count,
+        .joint_nodes = joint_nodes,
+        .node_translation = node_translation,
+        .inverse_bind = inverse_bind,
+        .times = times,
+        .rot = rot,
+    };
+}
+
+<span class="tok-comment">/// Normalized lerp between two quaternions - plenty for +/-45 deg keyframes.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">nlerp</span>(a: Vec, b: Vec, alpha: f32) Vec {
+    <span class="tok-kw">const</span> va: Vec = a * <span class="tok-fn">splat</span>(<span class="tok-num">1.0</span> - alpha) + b * <span class="tok-fn">splat</span>(alpha);
+    <span class="tok-kw">const</span> len: f32 = <span class="tok-builtin">@sqrt</span>(va[<span class="tok-num">0</span>] * va[<span class="tok-num">0</span>] + va[<span class="tok-num">1</span>] * va[<span class="tok-num">1</span>] + va[<span class="tok-num">2</span>] * va[<span class="tok-num">2</span>] + va[<span class="tok-num">3</span>] * va[<span class="tok-num">3</span>]);
+    <span class="tok-kw">if</span> (len &lt; <span class="tok-num">1e-8</span>) {
+        <span class="tok-kw">return</span> quat_identity;
+    }
+    <span class="tok-kw">return</span> va / <span class="tok-fn">splat</span>(len);
+}
+
+<span class="tok-comment">/// Sample joint `j`'s rotation track at time `t` (looped externally).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">sampleRotation</span>(s: *<span class="tok-kw">const</span> State, j: usize, t: f32) Vec {
+    <span class="tok-kw">const</span> track: []Vec = s.rot[j];
+    <span class="tok-kw">if</span> (track.len &lt;= <span class="tok-num">1</span> <span class="tok-kw">or</span> s.times.len &lt;= <span class="tok-num">1</span>) {
+        <span class="tok-kw">return</span> track[<span class="tok-num">0</span>];
+    }
+    <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (k + <span class="tok-num">1</span> &lt; s.times.len <span class="tok-kw">and</span> s.times[k + <span class="tok-num">1</span>] &lt; t) : (k += <span class="tok-num">1</span>) {}
+    <span class="tok-kw">if</span> (k + <span class="tok-num">1</span> &gt;= track.len) {
+        <span class="tok-kw">return</span> track[track.len - <span class="tok-num">1</span>];
+    }
+    <span class="tok-kw">const</span> span: f32 = <span class="tok-builtin">@max</span>(s.times[k + <span class="tok-num">1</span>] - s.times[k], <span class="tok-num">1e-6</span>);
+    <span class="tok-kw">const</span> alpha: f32 = <span class="tok-fn">clamp</span>((t - s.times[k]) / span, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+    <span class="tok-kw">return</span> <span class="tok-fn">nlerp</span>(track[k], track[k + <span class="tok-num">1</span>], alpha);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// ---- pose: loop the timeline, build per-joint world + skin matrices ----</span>
+    <span class="tok-kw">const</span> duration: f32 = <span class="tok-kw">if</span> (s.times.len &gt; <span class="tok-num">0</span>) s.times[s.times.len - <span class="tok-num">1</span>] <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+    s.t += f.time.delta_time;
+    <span class="tok-kw">if</span> (s.t &gt; duration) {
+        s.t -= duration;
+    }
+    <span class="tok-kw">var</span> world: [max_joints]Mat = undefined;
+    <span class="tok-kw">var</span> skin_mat: [max_joints]Mat = undefined;
+    <span class="tok-kw">var</span> j: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; s.joint_count) : (j += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> rot_m: Mat = <span class="tok-fn">matFromQuat</span>(<span class="tok-fn">sampleRotation</span>(s, j, s.t));
+        <span class="tok-comment">// Rotate then translate (this rig's joints are unparented; a</span>
+        <span class="tok-comment">// hierarchy would multiply the parent's world here too).</span>
+        world[j] = <span class="tok-fn">mulMat</span>(rot_m, <span class="tok-fn">translationV</span>(s.node_translation[j]));
+        <span class="tok-comment">// Bind space -&gt; joint local -&gt; world:  v * invBind * world.</span>
+        skin_mat[j] = <span class="tok-fn">mulMat</span>(s.inverse_bind[j], world[j]);
+    }
+
+    <span class="tok-comment">// ---- CPU skinning: v' = sum_k w_k * (v * skin[joint_k]) ----</span>
+    <span class="tok-kw">var</span> vi: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (vi &lt; s.vertex_count) : (vi += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> p: Vec = <span class="tok-fn">f32x4</span>(
+            s.base_positions[vi * <span class="tok-num">3</span>],
+            s.base_positions[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+            s.base_positions[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+            <span class="tok-num">1.0</span>,
+        );
+        <span class="tok-kw">var</span> acc: Vec = <span class="tok-fn">f32x4</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k &lt; <span class="tok-num">4</span>) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> w: f32 = s.bone_weights[vi * <span class="tok-num">4</span> + k];
+            <span class="tok-kw">if</span> (w == <span class="tok-num">0</span>) {
+                <span class="tok-kw">continue</span>;
+            }
+            <span class="tok-kw">const</span> joint: usize = s.bone_ids[vi * <span class="tok-num">4</span> + k];
+            <span class="tok-kw">if</span> (joint &gt;= s.joint_count) {
+                <span class="tok-kw">continue</span>;
+            }
+            acc += <span class="tok-fn">mulMatVec</span>(skin_mat[joint], p) * <span class="tok-fn">splat</span>(w);
+        }
+        s.skinned[vi * <span class="tok-num">3</span>] = acc[<span class="tok-num">0</span>];
+        s.skinned[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>] = acc[<span class="tok-num">1</span>];
+        s.skinned[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>] = acc[<span class="tok-num">2</span>];
+    }
+    z.<span class="tok-fn">updateMeshBuffer</span>(s.model.meshes[<span class="tok-num">0</span>], <span class="tok-num">0</span>, std.mem.<span class="tok-fn">sliceAsBytes</span>(s.skinned), <span class="tok-num">0</span>);
+
+    <span class="tok-comment">// ---- draw: the deformed quad + the live skeleton over it ----</span>
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> cam: Camera3D = .{
+        .position = <span class="tok-fn">pointVec</span>(<span class="tok-num">1.0</span>, <span class="tok-num">1.2</span>, <span class="tok-num">4.5</span>),
+        .target = <span class="tok-fn">pointVec</span>(<span class="tok-num">1.0</span>, <span class="tok-num">0.2</span>, <span class="tok-num">0</span>),
+        .up = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>),
+        .fovy_deg = <span class="tok-num">55</span>,
+        .projection = <span class="tok-num">0</span>,
+    };
+    z.<span class="tok-fn">beginMode3D</span>(f.gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(f.gl, <span class="tok-num">10</span>, <span class="tok-num">0.5</span>);
+    z.<span class="tok-fn">drawModel</span>(f.gl, s.model, <span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), <span class="tok-num">1.0</span>, c.emerald_400);
+    <span class="tok-comment">// Skeleton gizmos: joint world position is the world matrix's</span>
+    <span class="tok-comment">// translation row (row-major zm).</span>
+    j = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; s.joint_count) : (j += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> pos: Vec = <span class="tok-fn">pointVec</span>(world[j][<span class="tok-num">3</span>][<span class="tok-num">0</span>], world[j][<span class="tok-num">3</span>][<span class="tok-num">1</span>], world[j][<span class="tok-num">3</span>][<span class="tok-num">2</span>]);
+        z.<span class="tok-fn">drawSphere</span>(f.gl, pos, .{ .radius = <span class="tok-num">0.08</span>, .rings = <span class="tok-num">6</span>, .slices = <span class="tok-num">8</span>, .color = c.amber_400 });
+        <span class="tok-kw">if</span> (j + <span class="tok-num">1</span> &lt; s.joint_count) {
+            <span class="tok-kw">const</span> next: Vec = <span class="tok-fn">pointVec</span>(world[j + <span class="tok-num">1</span>][<span class="tok-num">3</span>][<span class="tok-num">0</span>], world[j + <span class="tok-num">1</span>][<span class="tok-num">3</span>][<span class="tok-num">1</span>], world[j + <span class="tok-num">1</span>][<span class="tok-num">3</span>][<span class="tok-num">2</span>]);
+            z.<span class="tok-fn">drawLine3D</span>(f.gl, pos, next, c.amber_300);
+        }
+    }
+
+    z.<span class="tok-fn">endMode3D</span>(f.gl);
+
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"skinned mesh - CPU skinning"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    <span class="tok-kw">var</span> hud_buf: [<span class="tok-num">64</span>]u8 = undefined;
+    <span class="tok-kw">const</span> hud: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(
+        &amp;hud_buf,
+        <span class="tok-str">"anim 'wave'  t = {d:.2}s / {d:.2}s"</span>,
+        .{ s.t, duration },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">16</span>, <span class="tok-num">42</span> }, hud, .{ .size = <span class="tok-num">16</span>, .color = .{ .r = <span class="tok-num">170</span>, .g = <span class="tok-num">180</span>, .b = <span class="tok-num">200</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font });
+    _ = vw;
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"glTF skin + animation parsed by codecs - bone 1 waves the right edge"</span>);
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - skinned mesh (CPU skinning)"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">540</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+            <span class="tok-comment">// Clear via the pass loadOp (the runner does this in beginDrawing),</span>
+            <span class="tok-comment">// NOT a fullscreen clearViewport quad - that quad overwrites the 3D</span>
+            <span class="tok-comment">// pass on tile GPUs and the whole 3D block disappears.</span>
+            .clear = .{ .r = <span class="tok-num">10.0</span> / <span class="tok-num">255.0</span>, .g = <span class="tok-num">12.0</span> / <span class="tok-num">255.0</span>, .b = <span class="tok-num">18.0</span> / <span class="tok-num">255.0</span>, .a = <span class="tok-num">1.0</span> },
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/skinned_mesh/skinned_mesh_data.zig" data-lines="179"><figcaption><span>examples/skinned_mesh/skinned_mesh_data.zig</span><span>179 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/skinned_mesh_data.zig</span>
+<span class="tok-comment">// Auto-generated by examples/skinned_mesh.zig's pipeline.</span>
+<span class="tok-comment">// 6-vertex skinned quad with 2 bones + 4-keyframe rotation animation.</span>
+<span class="tok-comment">// Bone 0 at origin (static), bone 1 oscillates +/-45 deg around Z over 1.5 sec.</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> skin_glb: [<span class="tok-num">2060</span>]u8 = .{
+    <span class="tok-num">0x67</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x46</span>, <span class="tok-num">0x02</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x0c</span>, <span class="tok-num">0x08</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x08</span>, <span class="tok-num">0x06</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x4a</span>, <span class="tok-num">0x53</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x4e</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x73</span>,
+    <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x76</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x69</span>,
+    <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2e</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x67</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7a</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x2d</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x2d</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x6b</span>, <span class="tok-num">0x69</span>,
+    <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>,
+    <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x5d</span>,
+    <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>,
+    <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>,
+    <span class="tok-num">0x6b</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x53</span>, <span class="tok-num">0x6b</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>,
+    <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x6f</span>,
+    <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x72</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x5b</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2e</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2e</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2e</span>, <span class="tok-num">0x30</span>,
+    <span class="tok-num">0x5d</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x76</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x69</span>,
+    <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x50</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x53</span>,
+    <span class="tok-num">0x49</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x49</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x4e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x4a</span>, <span class="tok-num">0x4f</span>,
+    <span class="tok-num">0x49</span>, <span class="tok-num">0x4e</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x53</span>, <span class="tok-num">0x5f</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x57</span>,
+    <span class="tok-num">0x45</span>, <span class="tok-num">0x49</span>, <span class="tok-num">0x47</span>, <span class="tok-num">0x48</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x53</span>, <span class="tok-num">0x5f</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x7d</span>,
+    <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x33</span>,
+    <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x7d</span>,
+    <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x6b</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x6a</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x32</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x76</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x42</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x4d</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x76</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>,
+    <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x49</span>, <span class="tok-num">0x4e</span>, <span class="tok-num">0x45</span>, <span class="tok-num">0x41</span>, <span class="tok-num">0x52</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x37</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x49</span>, <span class="tok-num">0x4e</span>, <span class="tok-num">0x45</span>, <span class="tok-num">0x41</span>, <span class="tok-num">0x52</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x63</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>,
+    <span class="tok-num">0x6f</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x7d</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x64</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x70</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x61</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x61</span>,
+    <span class="tok-num">0x63</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x45</span>, <span class="tok-num">0x43</span>, <span class="tok-num">0x33</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>,
+    <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>,
+    <span class="tok-num">0x31</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x45</span>, <span class="tok-num">0x43</span>, <span class="tok-num">0x34</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>,
+    <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>,
+    <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>,
+    <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x45</span>,
+    <span class="tok-num">0x43</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x33</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>,
+    <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x33</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x53</span>, <span class="tok-num">0x43</span>, <span class="tok-num">0x41</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x41</span>, <span class="tok-num">0x52</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x37</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>,
+    <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x4d</span>, <span class="tok-num">0x41</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x36</span>,
+    <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x53</span>, <span class="tok-num">0x43</span>, <span class="tok-num">0x41</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x41</span>,
+    <span class="tok-num">0x52</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>,
+    <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>,
+    <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x56</span>,
+    <span class="tok-num">0x45</span>, <span class="tok-num">0x43</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>,
+    <span class="tok-num">0x6f</span>, <span class="tok-num">0x6d</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x54</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x35</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x63</span>, <span class="tok-num">0x6f</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x6e</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x70</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x45</span>, <span class="tok-num">0x43</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>,
+    <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x56</span>, <span class="tok-num">0x69</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x77</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>,
+    <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x37</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>,
+    <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x37</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>,
+    <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x39</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x39</span>, <span class="tok-num">0x36</span>,
+    <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x39</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x31</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>,
+    <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>,
+    <span class="tok-num">0x33</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>,
+    <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>,
+    <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x39</span>, <span class="tok-num">0x36</span>,
+    <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>,
+    <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x72</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4f</span>,
+    <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x33</span>, <span class="tok-num">0x36</span>, <span class="tok-num">0x30</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>,
+    <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>,
+    <span class="tok-num">0x31</span>, <span class="tok-num">0x32</span>, <span class="tok-num">0x38</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>, <span class="tok-num">0x2c</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x75</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x66</span>, <span class="tok-num">0x65</span>,
+    <span class="tok-num">0x72</span>, <span class="tok-num">0x73</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x5b</span>, <span class="tok-num">0x7b</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x62</span>, <span class="tok-num">0x79</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x65</span>, <span class="tok-num">0x4c</span>,
+    <span class="tok-num">0x65</span>, <span class="tok-num">0x6e</span>, <span class="tok-num">0x67</span>, <span class="tok-num">0x74</span>, <span class="tok-num">0x68</span>, <span class="tok-num">0x22</span>, <span class="tok-num">0x3a</span>, <span class="tok-num">0x34</span>, <span class="tok-num">0x38</span>, <span class="tok-num">0x38</span>, <span class="tok-num">0x7d</span>, <span class="tok-num">0x5d</span>,
+    <span class="tok-num">0x7d</span>, <span class="tok-num">0x20</span>, <span class="tok-num">0x20</span>, <span class="tok-num">0x20</span>, <span class="tok-num">0xe8</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x42</span>, <span class="tok-num">0x49</span>, <span class="tok-num">0x4e</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0xbf</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0xbf</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0xbf</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0xbf</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x40</span>, <span class="tok-num">0x40</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0xbf</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x40</span>, <span class="tok-num">0x40</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x02</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x02</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x03</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x04</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x05</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x01</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x05</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x02</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0xc0</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x15</span>, <span class="tok-num">0xef</span>, <span class="tok-num">0xc3</span>, <span class="tok-num">0x3e</span>,
+    <span class="tok-num">0x5e</span>, <span class="tok-num">0x83</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x15</span>, <span class="tok-num">0xef</span>, <span class="tok-num">0xc3</span>, <span class="tok-num">0xbe</span>, <span class="tok-num">0x5e</span>, <span class="tok-num">0x83</span>, <span class="tok-num">0x6c</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0xc0</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>,
+    <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x00</span>, <span class="tok-num">0x80</span>, <span class="tok-num">0x3f</span>,
+};
+</code></pre></figure>
+</body>
+</html>

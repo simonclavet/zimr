@@ -1,0 +1,787 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>mocap_viewer — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>mocap_viewer</h1>
+<figure class="code src-file" data-path="examples/mocap_viewer/mocap_viewer.zig" data-lines="507"><figcaption><span>examples/mocap_viewer/mocap_viewer.zig</span><span>507 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/mocap_viewer - a BVH scrubber you can drop files onto.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Reproduces the core of **BVHView** (and its descendant flomo, Simon's mocap tool): load a</span>
+<span class="tok-comment">//! motion-capture clip, play it, scrub it, and compare several at once in different colours.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! * IT OPENS BOTH `.bvh` AND `.fbx`, and the code below barely notices. FBX is normalised into</span>
+<span class="tok-comment">//! `codecs.bvh.Data` at load, so the skeleton conversion, sampling, forward kinematics and the</span>
+<span class="tok-comment">//! whole timeline are written once. That is the dividend of flomo's design decision - normalise</span>
+<span class="tok-comment">//! into BVH rather than build a parallel representation - and it is why adding a format this</span>
+<span class="tok-comment">//! much larger cost one branch in `addClip`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! What it exercises that nothing else in the tree did:</span>
+<span class="tok-comment">//!   * `codecs.bvh` - the parser, on real captures rather than fixtures</span>
+<span class="tok-comment">//!   * `draw3d.loadBvhSkeletalClip` - BVH into `ModelSkeleton` + `ModelAnimation`</span>
+<span class="tok-comment">//!   * `web.userfile` - the first RUNTIME file input zimr has ever had. Every other example</span>
+<span class="tok-comment">//!     gets its assets from `@embedFile` at comptime.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! -- * THE UNIT SELECTOR IS NOT A NICETY --</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! BVH carries no unit. The load-time guess ("taller than 10 units, so it must be centimetres")</span>
+<span class="tok-comment">//! is right for one of the two real fixtures and WRONG for the other: `0005_2FeetJump001` is</span>
+<span class="tok-comment">//! 61.7 units tall, which the guess reads as 0.62 m - a knee-high dancer. At 0.0254 (inches) it</span>
+<span class="tok-comment">//! is 1.57 m, which is a person. Both BVHView (`bvhview.c:3656`) and flomo (`flomo.cpp:1327`)</span>
+<span class="tok-comment">//! ship the same five buttons rather than a cleverer heuristic, so this does too. Without them</span>
+<span class="tok-comment">//! the viewer looks broken on the second file it is handed.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> ui = z.ui_real;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Quat = zm.Quat;
+<span class="tok-kw">const</span> d3 = z.draw3d;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">/// The default clip, so the viewer is never blank: 10 seconds of `dance1_subject2`, frames</span>
+<span class="tok-comment">/// 1200-1800 (20 s to 30 s in), where the dance has actually got going - the opening seconds</span>
+<span class="tok-comment">/// are mostly the performer standing still.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Trimmed from a 43 MB original, which cannot be embedded: the whole launcher is 13 MB. Cut</span>
+<span class="tok-comment">/// reproducibly with `zig build run-bvh-trim` (`tools/bvh_trim.zig`), which runs on zimr's own</span>
+<span class="tok-comment">/// bvh codec, so this asset is a product of the parse/encode round trip the tests assert rather</span>
+<span class="tok-comment">/// than a blob trimmed by hand.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///     bvh_trim &lt;source&gt;/dance1_subject2.bvh examples/mocap_viewer/dance1_20s.bvh 1200 600</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The 43 MB source is NOT in the repo - it is the one capture nothing reads at runtime, so</span>
+<span class="tok-comment">/// vendoring it would cost more than every other fixture combined. Re-cutting this clip means</span>
+<span class="tok-comment">/// fetching it from the capture bundle first; `assets/dance1_subject2_300.bvh` is the same take</span>
+<span class="tok-comment">/// at 300 frames if all you need is something to parse.</span>
+<span class="tok-kw">const</span> embedded_bvh = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"dance1_20s.bvh"</span>);
+
+<span class="tok-kw">const</span> screen_w: i32 = <span class="tok-num">1000</span>;
+<span class="tok-kw">const</span> screen_h: i32 = <span class="tok-num">760</span>;
+
+<span class="tok-comment">/// Beyond this a drop is refused rather than allowed to exhaust wasm memory. Real captures run</span>
+<span class="tok-comment">/// to tens of megabytes: `dance1_subject2` is 43 MB, so the ceiling has to be generous.</span>
+<span class="tok-kw">const</span> max_file_bytes: usize = <span class="tok-num">64</span> &lt;&lt; <span class="tok-num">20</span>;
+
+<span class="tok-kw">const</span> max_clips: usize = <span class="tok-num">8</span>;
+
+<span class="tok-comment">/// The five unit choices both reference viewers offer. `auto` is not a unit at all - it</span>
+<span class="tok-comment">/// normalises whatever the file says to a 1.8 m figure, which is the only option that is right</span>
+<span class="tok-comment">/// for every file.</span>
+<span class="tok-kw">const</span> Units = <span class="tok-kw">enum</span> {
+    meters,
+    centimeters,
+    inches,
+    feet,
+    auto,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">label</span>(self: Units) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .meters =&gt; <span class="tok-str">"m"</span>,
+            .centimeters =&gt; <span class="tok-str">"cm"</span>,
+            .inches =&gt; <span class="tok-str">"inch"</span>,
+            .feet =&gt; <span class="tok-str">"feet"</span>,
+            .auto =&gt; <span class="tok-str">"auto"</span>,
+        };
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">scale</span>(self: Units, auto_scale: f32) f32 {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .meters =&gt; <span class="tok-num">1.0</span>,
+            .centimeters =&gt; <span class="tok-num">0.01</span>,
+            .inches =&gt; <span class="tok-num">0.0254</span>,
+            .feet =&gt; <span class="tok-num">0.3048</span>,
+            .auto =&gt; auto_scale,
+        };
+    }
+};
+
+<span class="tok-kw">const</span> Clip = <span class="tok-kw">struct</span> {
+    clip: d3.BvhSkeletalClip,
+    name: [<span class="tok-num">64</span>]u8,
+    name_len: usize,
+    color: Color,
+    visible: bool,
+    units: Units,
+    <span class="tok-comment">/// `1.8 / height`, so `.auto` renders any skeleton at human size.</span>
+    auto_scale: f32,
+    <span class="tok-comment">/// Scratch for one frame of forward kinematics. Sized once at load.</span>
+    positions: []Vec,
+    rotations: []Quat,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">label</span>(self: *<span class="tok-kw">const</span> Clip) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> self.name[<span class="tok-num">0</span>..self.name_len];
+    }
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    ui_host: z.UiHost,
+    font: z.Font,
+    cam: z.OrbitCamera,
+    gpa: Allocator,
+
+    clips: [max_clips]Clip = undefined,
+    clip_count: usize = <span class="tok-num">0</span>,
+    active: usize = <span class="tok-num">0</span>,
+
+    play_time: f32 = <span class="tok-num">0</span>,
+    playing: bool = true,
+    looping: bool = true,
+    <span class="tok-comment">/// Lock the root's horizontal travel so the figure dances in place. What makes this a</span>
+    <span class="tok-comment">/// scrubber rather than a player: a clip that walks away leaves the frame.</span>
+    in_place: bool = false,
+    show_end_sites: bool = true,
+    show_axes: bool = false,
+
+    <span class="tok-comment">/// Where the Load button is drawn, so the invisible `&lt;input type="file"&gt;` can be parked on</span>
+    <span class="tok-comment">/// top of it. See `web.userfile` - a wasm-drawn button is not a user gesture.</span>
+    picker_rect: [<span class="tok-num">4</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+
+    status: [<span class="tok-num">128</span>]u8 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+    status_len: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-comment">/// Palette for successive clips, so a comparison reads at a glance.</span>
+<span class="tok-kw">const</span> clip_colors = [_]Color{
+    .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">200</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">170</span>, .b = <span class="tok-num">90</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">150</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">150</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">130</span>, .b = <span class="tok-num">200</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">230</span>, .g = <span class="tok-num">230</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">170</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">225</span>, .a = <span class="tok-num">255</span> },
+    .{ .r = <span class="tok-num">240</span>, .g = <span class="tok-num">120</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> },
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">setStatus</span>(s: *State, <span class="tok-kw">comptime</span> fmt: []<span class="tok-kw">const</span> u8, args: <span class="tok-kw">anytype</span>) void {
+    <span class="tok-kw">const</span> written: []u8 = <span class="tok-fn">bufPrint</span>(&amp;s.status, fmt, args) <span class="tok-kw">catch</span> {
+        s.status_len = <span class="tok-num">0</span>;
+        <span class="tok-kw">return</span>;
+    };
+    s.status_len = written.len;
+}
+
+<span class="tok-comment">/// Parse `bytes` and append the result as a new clip.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The BVH `Data` is a scratch value: everything the viewer needs is copied into the engine</span>
+<span class="tok-comment">/// types by `loadBvhSkeletalClip`, so the parse is freed before this returns. That matters -</span>
+<span class="tok-comment">/// `Data` holds the whole motion matrix, which for a real capture is most of the file.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">addClip</span>(s: *State, gpa: Allocator, bytes: []<span class="tok-kw">const</span> u8, name: []<span class="tok-kw">const</span> u8) !void {
+    <span class="tok-kw">if</span> (s.clip_count &gt;= max_clips) {
+        <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"clip limit reached ({d})"</span>, .{max_clips});
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-comment">// * THE FORMAT IS SNIFFED FROM THE BYTES, NOT THE FILE NAME. A dropped file's name is</span>
+    <span class="tok-comment">// whatever the user called it, and on the web there is no path at all - but an FBX opens</span>
+    <span class="tok-comment">// with a 23-byte magic, so the content answers definitively.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// Both branches end at the SAME `bvh.Data`, which is the payoff of normalising FBX into</span>
+    <span class="tok-comment">// BVH rather than into a parallel representation: everything below this point - the</span>
+    <span class="tok-comment">// skeleton conversion, sampling, forward kinematics, the timeline - never learns which</span>
+    <span class="tok-comment">// format it came from.</span>
+    <span class="tok-kw">var</span> data: z.codecs.bvh.Data = <span class="tok-kw">if</span> (z.codecs.fbx.<span class="tok-fn">isBinary</span>(bytes)) blk: {
+        <span class="tok-kw">var</span> scene: z.codecs.fbx.Scene = z.codecs.fbx.<span class="tok-fn">loadScene</span>(gpa, bytes) <span class="tok-kw">catch</span> |err| {
+            <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"{s}: {s}"</span>, .{ name, <span class="tok-builtin">@errorName</span>(err) });
+            <span class="tok-kw">return</span>;
+        };
+        <span class="tok-kw">defer</span> scene.<span class="tok-fn">deinit</span>();
+        <span class="tok-comment">// Read the capture's own rate; 30/60/120 all occur across the fixtures.</span>
+        <span class="tok-kw">const</span> hint: ?f32 = z.codecs.bvh.<span class="tok-fn">fbxFrameTimeHint</span>(&amp;scene);
+        <span class="tok-kw">const</span> fps: f32 = <span class="tok-kw">if</span> (hint) |ft| (<span class="tok-kw">if</span> (ft &gt; <span class="tok-num">0</span>) <span class="tok-num">1.0</span> / ft <span class="tok-kw">else</span> <span class="tok-num">30.0</span>) <span class="tok-kw">else</span> <span class="tok-num">30.0</span>;
+        <span class="tok-kw">break</span> :blk z.codecs.bvh.<span class="tok-fn">fromFbx</span>(gpa, &amp;scene, .{ .fps = fps }) <span class="tok-kw">catch</span> |err| {
+            <span class="tok-comment">// A valid FBX that simply is not a character - an optical-marker capture or a</span>
+            <span class="tok-comment">// blend-shape rig - deserves that answer rather than "parse failed".</span>
+            <span class="tok-kw">if</span> (err == z.codecs.bvh.Error.NoSkeleton) {
+                <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"{s}: no skeleton (mesh or marker data?)"</span>, .{name});
+            } <span class="tok-kw">else</span> {
+                <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"{s}: {s}"</span>, .{ name, <span class="tok-builtin">@errorName</span>(err) });
+            }
+            <span class="tok-kw">return</span>;
+        };
+    } <span class="tok-kw">else</span> blk: {
+        <span class="tok-kw">var</span> diag: z.codecs.bvh.Diagnostic = .{};
+        <span class="tok-kw">break</span> :blk z.codecs.bvh.<span class="tok-fn">parse</span>(gpa, bytes, &amp;diag) <span class="tok-kw">catch</span> |err| {
+            <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"{s}: {s} at line {d}"</span>, .{ name, <span class="tok-builtin">@errorName</span>(err), diag.line });
+            <span class="tok-kw">return</span>;
+        };
+    };
+    <span class="tok-kw">defer</span> data.<span class="tok-fn">deinit</span>();
+
+    <span class="tok-kw">const</span> clip: d3.BvhSkeletalClip = <span class="tok-kw">try</span> d3.<span class="tok-fn">loadBvhSkeletalClip</span>(gpa, data);
+    <span class="tok-kw">errdefer</span> d3.<span class="tok-fn">unloadBvhSkeletalClip</span>(gpa, clip);
+
+    <span class="tok-kw">const</span> n: usize = clip.<span class="tok-fn">boneCount</span>();
+    <span class="tok-kw">const</span> positions: []Vec = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, n);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(positions);
+    <span class="tok-kw">const</span> rotations: []Quat = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Quat, n);
+    <span class="tok-kw">errdefer</span> gpa.<span class="tok-fn">free</span>(rotations);
+
+    <span class="tok-kw">const</span> idx: usize = s.clip_count;
+    s.clips[idx] = .{
+        .clip = clip,
+        .name = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+        .name_len = <span class="tok-builtin">@min</span>(name.len, <span class="tok-num">64</span>),
+        .color = clip_colors[idx % clip_colors.len],
+        .visible = true,
+        .units = .auto,
+        .auto_scale = <span class="tok-num">1.0</span>,
+        .positions = positions,
+        .rotations = rotations,
+    };
+    <span class="tok-builtin">@memcpy</span>(s.clips[idx].name[<span class="tok-num">0</span>..s.clips[idx].name_len], name[<span class="tok-num">0</span>..s.clips[idx].name_len]);
+
+    <span class="tok-comment">// Height at frame 0 decides the auto scale AND the initial unit guess. Run FK once rather</span>
+    <span class="tok-comment">// than trusting the bind pose: a file whose joints all carry position channels (dance1)</span>
+    <span class="tok-comment">// has offsets that say nothing about where the skeleton actually stands.</span>
+    d3.<span class="tok-fn">bvhForwardKinematics</span>(clip, <span class="tok-num">0</span>, positions, rotations);
+    <span class="tok-kw">var</span> height: f32 = <span class="tok-num">1.0e-8</span>;
+    <span class="tok-kw">for</span> (positions) |p| {
+        height = <span class="tok-builtin">@max</span>(height, p[<span class="tok-num">1</span>]);
+    }
+    s.clips[idx].auto_scale = <span class="tok-num">1.8</span> / height;
+
+    s.clip_count += <span class="tok-num">1</span>;
+    s.active = idx;
+    s.play_time = <span class="tok-num">0</span>;
+    <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"{s}: {d} joints, {d} frames, {d:.1}s"</span>, .{
+        name,
+        n,
+        clip.animation.keyframeCount,
+        <span class="tok-fn">float</span>(clip.animation.keyframeCount) * clip.frame_time,
+    });
+}
+
+<span class="tok-comment">/// Drain any files the user dropped or picked since the last frame.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Polled rather than delivered by callback: a browser read resolves whenever it resolves, and</span>
+<span class="tok-comment">/// `web.userfile` exposes that instead of hiding it behind a virtual filesystem the way</span>
+<span class="tok-comment">/// emscripten does. See its doc comment.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">pollUserFiles</span>(s: *State, gpa: Allocator) void {
+    <span class="tok-kw">while</span> (z.web.userfile.<span class="tok-fn">pendingCount</span>() &gt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">const</span> size: usize = z.web.userfile.<span class="tok-fn">nextSize</span>();
+        <span class="tok-kw">if</span> (size == <span class="tok-num">0</span> <span class="tok-kw">or</span> size &gt; max_file_bytes) {
+            <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"file too large ({d} bytes); skipped"</span>, .{size});
+            z.web.userfile.<span class="tok-fn">discardNext</span>();
+            <span class="tok-kw">continue</span>;
+        }
+
+        <span class="tok-kw">var</span> name_buf: [<span class="tok-num">64</span>]u8 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> name_len: usize = z.web.userfile.<span class="tok-fn">nextName</span>(&amp;name_buf);
+
+        <span class="tok-kw">const</span> buf: []u8 = gpa.<span class="tok-fn">alloc</span>(u8, size) <span class="tok-kw">catch</span> {
+            <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"out of memory for {d} bytes"</span>, .{size});
+            z.web.userfile.<span class="tok-fn">discardNext</span>();
+            <span class="tok-kw">continue</span>;
+        };
+        <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(buf);
+
+        <span class="tok-kw">const</span> got: usize = z.web.userfile.<span class="tok-fn">readNext</span>(buf);
+        <span class="tok-kw">if</span> (got == <span class="tok-num">0</span>) {
+            <span class="tok-comment">// The buffer was refused, so the file is still queued. Discard it explicitly or</span>
+            <span class="tok-comment">// this loop spins forever on the same entry.</span>
+            <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"could not read {d} bytes"</span>, .{size});
+            z.web.userfile.<span class="tok-fn">discardNext</span>();
+            <span class="tok-kw">continue</span>;
+        }
+
+        <span class="tok-kw">const</span> name: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (name_len &gt; <span class="tok-num">0</span>) name_buf[<span class="tok-num">0</span>..name_len] <span class="tok-kw">else</span> <span class="tok-str">"dropped.bvh"</span>;
+        <span class="tok-fn">addClip</span>(s, gpa, buf[<span class="tok-num">0</span>..got], name) <span class="tok-kw">catch</span> |err| {
+            <span class="tok-fn">setStatus</span>(s, <span class="tok-str">"load failed: {s}"</span>, .{<span class="tok-builtin">@errorName</span>(err)});
+        };
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">20</span>);
+    s.* = .{
+        .font = font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .cam = z.OrbitCamera.<span class="tok-fn">init</span>(<span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.9</span>, <span class="tok-num">0</span>), <span class="tok-num">3.6</span>),
+        .gpa = gpa,
+    };
+    <span class="tok-kw">try</span> <span class="tok-fn">addClip</span>(s, gpa, embedded_bvh, <span class="tok-str">"dance1_20s.bvh"</span>);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    <span class="tok-kw">for</span> (s.clips[<span class="tok-num">0</span>..s.clip_count]) |c| {
+        d3.<span class="tok-fn">unloadBvhSkeletalClip</span>(gpa, c.clip);
+        gpa.<span class="tok-fn">free</span>(c.positions);
+        gpa.<span class="tok-fn">free</span>(c.rotations);
+    }
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Draw one posed skeleton: a joint marker per bone and a line to its parent.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Deliberately the wireframe view, matching `flomo.cpp:887` - capsules with analytical</span>
+<span class="tok-comment">/// shadows and ambient occlusion are a separate arc (see `mocap_plan.md` section 7a) and would</span>
+<span class="tok-comment">/// obscure whether the POSE is right, which is what this example exists to show.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawSkeleton</span>(
+    gl: *z.WgpuGl,
+    c: *<span class="tok-kw">const</span> Clip,
+    scale: f32,
+    show_end_sites: bool,
+    show_axes: bool,
+) void {
+    <span class="tok-kw">const</span> n: usize = c.clip.<span class="tok-fn">boneCount</span>();
+    <span class="tok-kw">const</span> end_color: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">90</span>, .b = <span class="tok-num">90</span>, .a = <span class="tok-num">255</span> };
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..n) |i| {
+        <span class="tok-kw">const</span> p: Vec = c.positions[i] * <span class="tok-builtin">@as</span>(Vec, <span class="tok-builtin">@splat</span>(scale));
+        <span class="tok-kw">const</span> is_end: bool = c.clip.end_site[i];
+        <span class="tok-kw">if</span> (is_end <span class="tok-kw">and</span> !show_end_sites) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">if</span> (is_end) {
+            z.<span class="tok-fn">drawCubeWires</span>(gl, p, .{ .size = <span class="tok-fn">vec</span>(<span class="tok-num">0.02</span>, <span class="tok-num">0.02</span>, <span class="tok-num">0.02</span>), .color = end_color });
+        } <span class="tok-kw">else</span> {
+            z.<span class="tok-fn">drawSphereWires</span>(gl, p, .{ .radius = <span class="tok-num">0.012</span>, .rings = <span class="tok-num">4</span>, .slices = <span class="tok-num">6</span>, .color = c.color });
+        }
+
+        <span class="tok-kw">const</span> parent: i32 = c.clip.skeleton.bones[i].parent;
+        <span class="tok-kw">if</span> (parent &gt;= <span class="tok-num">0</span>) {
+            <span class="tok-kw">const</span> pp: Vec = c.positions[<span class="tok-builtin">@intCast</span>(parent)] * <span class="tok-builtin">@as</span>(Vec, <span class="tok-builtin">@splat</span>(scale));
+            z.<span class="tok-fn">drawLine3D</span>(gl, p, pp, <span class="tok-kw">if</span> (is_end) end_color <span class="tok-kw">else</span> c.color);
+        }
+
+        <span class="tok-comment">// An RGB triad is the fastest way to SEE a wrong rotation order - the single most</span>
+        <span class="tok-comment">// likely BVH bug, since real files disagree (ZYX, XYZ, ZXY all occur).</span>
+        <span class="tok-kw">if</span> (show_axes <span class="tok-kw">and</span> !is_end) {
+            <span class="tok-kw">const</span> q: Quat = c.rotations[i];
+            <span class="tok-kw">const</span> len: f32 = <span class="tok-num">0.06</span>;
+            z.<span class="tok-fn">drawLine3D</span>(gl, p, p + zm.<span class="tok-fn">rotate</span>(q, <span class="tok-fn">vec</span>(len, <span class="tok-num">0</span>, <span class="tok-num">0</span>)), .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">60</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> });
+            z.<span class="tok-fn">drawLine3D</span>(gl, p, p + zm.<span class="tok-fn">rotate</span>(q, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, len, <span class="tok-num">0</span>)), .{ .r = <span class="tok-num">60</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> });
+            z.<span class="tok-fn">drawLine3D</span>(gl, p, p + zm.<span class="tok-fn">rotate</span>(q, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, len)), .{ .r = <span class="tok-num">60</span>, .g = <span class="tok-num">120</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> });
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-fn">pollUserFiles</span>(s, s.gpa);
+
+    <span class="tok-comment">// Advance the clock off the ACTIVE clip's frame time. 60 fps and 120 fps files both occur;</span>
+    <span class="tok-comment">// assuming either turns the other into slow motion or a blur.</span>
+    <span class="tok-kw">if</span> (s.playing <span class="tok-kw">and</span> s.clip_count &gt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">const</span> a: *<span class="tok-kw">const</span> Clip = &amp;s.clips[s.active];
+        <span class="tok-kw">const</span> duration: f32 = <span class="tok-fn">float</span>(a.clip.animation.keyframeCount) * a.clip.frame_time;
+        s.play_time += f.time.delta_time;
+        <span class="tok-kw">if</span> (s.play_time &gt;= duration) {
+            s.play_time = <span class="tok-kw">if</span> (s.looping) <span class="tok-num">0</span> <span class="tok-kw">else</span> duration;
+        }
+    }
+
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">16</span>, .g = <span class="tok-num">18</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> cam: Camera3D = s.cam.<span class="tok-fn">update</span>(f, u.<span class="tok-fn">wantCaptureMouse</span>(), .{
+        .min_distance = <span class="tok-num">0.5</span>,
+        .max_distance = <span class="tok-num">12.0</span>,
+    });
+    z.<span class="tok-fn">beginMode3D</span>(gl, cam);
+    z.<span class="tok-fn">drawGrid</span>(gl, <span class="tok-num">20</span>, <span class="tok-num">0.25</span>);
+
+    <span class="tok-kw">for</span> (s.clips[<span class="tok-num">0</span>..s.clip_count]) |*c| {
+        <span class="tok-kw">if</span> (!c.visible) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> frames: usize = <span class="tok-builtin">@intCast</span>(<span class="tok-builtin">@max</span>(c.clip.animation.keyframeCount, <span class="tok-num">0</span>));
+        <span class="tok-kw">if</span> (frames == <span class="tok-num">0</span>) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-comment">// Each clip is sampled at the SHARED wall-clock time, converted through its own frame</span>
+        <span class="tok-comment">// rate - that is what lets a 60 fps and a 120 fps capture play side by side correctly.</span>
+        <span class="tok-kw">var</span> k: usize = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(s.play_time / c.clip.frame_time, <span class="tok-num">0</span>));
+        <span class="tok-kw">if</span> (k &gt;= frames) {
+            k = <span class="tok-kw">if</span> (s.looping) k % frames <span class="tok-kw">else</span> frames - <span class="tok-num">1</span>;
+        }
+        d3.<span class="tok-fn">bvhForwardKinematics</span>(c.clip, k, c.positions, c.rotations);
+        <span class="tok-kw">if</span> (s.in_place) {
+            <span class="tok-comment">// Cancel the root's horizontal travel, keeping height so a jump still reads.</span>
+            <span class="tok-kw">const</span> root: Vec = c.positions[<span class="tok-num">0</span>];
+            <span class="tok-kw">const</span> shift: Vec = <span class="tok-fn">vec</span>(root[<span class="tok-num">0</span>], <span class="tok-num">0</span>, root[<span class="tok-num">2</span>]);
+            <span class="tok-kw">for</span> (c.positions) |*p| {
+                p.* -= shift;
+            }
+        }
+        <span class="tok-fn">drawSkeleton</span>(gl, c, c.units.<span class="tok-fn">scale</span>(c.auto_scale), s.show_end_sites, s.show_axes);
+    }
+    z.<span class="tok-fn">endMode3D</span>(gl);
+
+    <span class="tok-fn">drawPanel</span>(s, u);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(s: *State, u: ui.Ui) void {
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"mocap viewer"</span>, .{
+        .initial_pos = .{ <span class="tok-num">12</span>, <span class="tok-num">12</span> },
+        .initial_size = .{ <span class="tok-num">330</span>, <span class="tok-num">470</span> },
+    })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"Drop .bvh or .fbx files anywhere, or tap Load."</span>, .{});
+
+        <span class="tok-comment">// The Load button's rectangle is handed to the host every frame so the invisible</span>
+        <span class="tok-comment">// &lt;input type="file"&gt; tracks it. A stale overlay would swallow taps meant elsewhere.</span>
+        _ = u.<span class="tok-fn">button</span>(<span class="tok-str">"Load .bvh / .fbx"</span>, .{});
+        <span class="tok-kw">const</span> rmin: zm.Vec2 = u.<span class="tok-fn">getItemRectMin</span>();
+        <span class="tok-kw">const</span> rmax: zm.Vec2 = u.<span class="tok-fn">getItemRectMax</span>();
+        s.picker_rect = .{ rmin[<span class="tok-num">0</span>], rmin[<span class="tok-num">1</span>], rmax[<span class="tok-num">0</span>] - rmin[<span class="tok-num">0</span>], rmax[<span class="tok-num">1</span>] - rmin[<span class="tok-num">1</span>] };
+        z.web.userfile.<span class="tok-fn">setPickerRect</span>(
+            s.picker_rect[<span class="tok-num">0</span>],
+            s.picker_rect[<span class="tok-num">1</span>],
+            s.picker_rect[<span class="tok-num">2</span>],
+            s.picker_rect[<span class="tok-num">3</span>],
+            <span class="tok-str">".bvh,.fbx"</span>,
+        );
+
+        <span class="tok-kw">if</span> (s.status_len &gt; <span class="tok-num">0</span>) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{s.status[<span class="tok-num">0</span>..s.status_len]});
+        }
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-kw">if</span> (s.clip_count == <span class="tok-num">0</span>) {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"no clips loaded"</span>, .{});
+            <span class="tok-kw">return</span>;
+        }
+
+        <span class="tok-kw">const</span> a: *Clip = &amp;s.clips[s.active];
+        <span class="tok-kw">const</span> frames: f32 = <span class="tok-fn">float</span>(<span class="tok-builtin">@max</span>(a.clip.animation.keyframeCount, <span class="tok-num">0</span>));
+        <span class="tok-kw">const</span> duration: f32 = frames * a.clip.frame_time;
+
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"play"</span>, &amp;s.playing);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"loop"</span>, &amp;s.looping);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"in place"</span>, &amp;s.in_place);
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"end sites"</span>, &amp;s.show_end_sites);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"axes"</span>, &amp;s.show_axes);
+
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"time"</span>, &amp;s.play_time, .{ .min = <span class="tok-num">0.0</span>, .max = duration, .fmt = <span class="tok-str">"{d:.2}s"</span> });
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"frame {d} / {d}   {d:.0} fps"</span>, .{
+            <span class="tok-builtin">@as</span>(usize, <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(s.play_time / a.clip.frame_time, <span class="tok-num">0</span>))),
+            <span class="tok-builtin">@as</span>(usize, <span class="tok-builtin">@trunc</span>(frames)),
+            <span class="tok-num">1.0</span> / a.clip.frame_time,
+        });
+
+        u.<span class="tok-fn">separator</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"units ({s})"</span>, .{a.units.<span class="tok-fn">label</span>()});
+        <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (<span class="tok-builtin">@typeInfo</span>(Units).@"enum".field_names, <span class="tok-num">0</span>..) |_, i| {
+            <span class="tok-kw">const</span> unit: Units = <span class="tok-builtin">@fromBackingInt</span>(<span class="tok-builtin">@intCast</span>(i));
+            <span class="tok-kw">if</span> (i &gt; <span class="tok-num">0</span>) {
+                u.<span class="tok-fn">sameLine</span>(.{});
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(unit.<span class="tok-fn">label</span>(), .{})) {
+                a.units = unit;
+            }
+        }
+
+        u.<span class="tok-fn">separator</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"clips"</span>, .{});
+        <span class="tok-kw">for</span> (s.clips[<span class="tok-num">0</span>..s.clip_count], <span class="tok-num">0</span>..) |*c, i| {
+            _ = u.<span class="tok-fn">checkbox</span>(c.<span class="tok-fn">label</span>(), &amp;c.visible);
+            u.<span class="tok-fn">sameLine</span>(.{});
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"select"</span>, .{})) {
+                s.active = i;
+            }
+        }
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - mocap viewer"</span>,
+            .width = screen_w,
+            .height = screen_h,
+            <span class="tok-comment">// The 3D primitives are depth-tested, so the main pass needs a depth attachment.</span>
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    .memory = .managed,
+};
+</code></pre></figure>
+</body>
+</html>

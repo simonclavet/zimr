@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>four_ways — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>four_ways</h1>
+<figure class="code src-file" data-path="examples/four_ways/four_ways.zig" data-lines="510"><figcaption><span>examples/four_ways/four_ways.zig</span><span>510 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/four_ways/four_ways.zig - ONE Zig function, FOUR machines.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `escape.zig` is seven lines and says nothing about threads, GPUs or compile time. This</span>
+<span class="tok-comment">//! app runs it on all four:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   comptime  a 32x16 fractal in CHARACTERS, computed before the program existed. The</span>
+<span class="tok-comment">//!             binary holds the text and no loop at all.</span>
+<span class="tok-comment">//!   cpu       the real fractal, on the main thread. Watch the frame hitch.</span>
+<span class="tok-comment">//!   worker    the same work, on another core. Watch it NOT hitch.</span>
+<span class="tok-comment">//!   gpu       12288 invocations, 64 wide.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The three runtime panels share the KERNEL (`escape_kernel.zig`); all four share the</span>
+<span class="tok-comment">//! FUNCTION. That distinction is the honest one, and you can see it: the comptime panel is</span>
+<span class="tok-comment">//! the same shape, drawn in characters.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! And the point the demo actually exists to make: **the backends are interchangeable in</span>
+<span class="tok-comment">//! CODE, not in COST.** The lines that dispatch them are identical -</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!     pipe.run("mandel", n);                     // cpu | worker | gpu</span>
+<span class="tok-comment">//!     if (pipe.readLatest(.out)) |px| { ... }    // same line for all three</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! - and their costs span four orders of magnitude. Both halves are true, and a demo that</span>
+<span class="tok-comment">//! showed only the first would be a magic trick with a false bottom.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> fk = <span class="tok-builtin">@import</span>(<span class="tok-str">"escape_kernel.zig"</span>);
+<span class="tok-kw">const</span> escape = <span class="tok-builtin">@import</span>(<span class="tok-str">"escape.zig"</span>).escape;
+
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> Pipe = z.<span class="tok-fn">Compute</span>(fk);
+
+<span class="tok-comment">/// Each kernel's transpiled WGSL, embedded by the build.</span>
+<span class="tok-kw">const</span> kernel_wgsls: [fk.kernels.len]Pipe.KernelWgsl = blk: {
+    <span class="tok-kw">var</span> arr: [fk.kernels.len]Pipe.KernelWgsl = undefined;
+    <span class="tok-kw">for</span> (fk.kernels, <span class="tok-num">0</span>..) |name, i| {
+        arr[i] = .{ .name = name, .wgsl = <span class="tok-builtin">@embedFile</span>(name ++ <span class="tok-str">"_wgsl"</span>) };
+    }
+    <span class="tok-kw">break</span> :blk arr;
+};
+
+<span class="tok-comment">// ---------------------------------------------------------------------------------------</span>
+<span class="tok-comment">// MACHINE 1 - COMPTIME.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The strange one, and it earns its place by being strange: this fractal's pixels were</span>
+<span class="tok-comment">// decided before the program ran. There is no loop in the binary for it - just the text.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Note what is being called: `escape`, the FUNCTION. Not the kernel. The kernel indexes</span>
+<span class="tok-comment">// `M.g.B`, a module-level `var`, and comptime cannot touch runtime memory. So comptime gets</span>
+<span class="tok-comment">// the function and the other three get the kernel that wraps it - which is exactly the</span>
+<span class="tok-comment">// claim this demo is making, and the reason it is worth making.</span>
+<span class="tok-kw">const</span> ascii_w: usize = <span class="tok-num">40</span>;
+<span class="tok-kw">const</span> ascii_h: usize = <span class="tok-num">18</span>;
+<span class="tok-kw">const</span> ramp = <span class="tok-str">" .:-=+*#%@"</span>;
+
+<span class="tok-kw">const</span> ascii_art: [ascii_h][ascii_w]u8 = blk: {
+    <span class="tok-builtin">@setEvalBranchQuota</span>(<span class="tok-num">2_000_000</span>);
+    <span class="tok-kw">var</span> rows: [ascii_h][ascii_w]u8 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..ascii_h) |py| {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..ascii_w) |px| {
+            <span class="tok-kw">const</span> u: f32 = (<span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(px))) / ascii_w - <span class="tok-num">0.5</span>) * <span class="tok-num">3.0</span> - <span class="tok-num">0.6</span>;
+            <span class="tok-kw">const</span> v: f32 = (<span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(py))) / ascii_h - <span class="tok-num">0.5</span>) * <span class="tok-num">2.2</span>;
+            <span class="tok-kw">const</span> it: u32 = <span class="tok-fn">escape</span>(u, v, <span class="tok-num">40</span>); <span class="tok-comment">// &lt;-- THE SAME FUNCTION, at compile time</span>
+            <span class="tok-kw">const</span> idx: usize = <span class="tok-builtin">@min</span>(it * ramp.len / <span class="tok-num">40</span>, ramp.len - <span class="tok-num">1</span>);
+            rows[py][px] = ramp[idx];
+        }
+    }
+    <span class="tok-kw">break</span> :blk rows;
+};
+
+<span class="tok-kw">const</span> Machine = <span class="tok-kw">enum</span> { comptime_, cpu, worker, gpu };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    font: z.Font,
+    ui_host: z.UiHost,
+
+    <span class="tok-comment">/// Three pipes, three backends, ONE module. Each owns its own state - a `.cpu` pipe and</span>
+    <span class="tok-comment">/// a `.worker` pipe on the same module used to contaminate each other through kompute's</span>
+    <span class="tok-comment">/// module-level globals; they no longer can, which is what makes this panel layout</span>
+    <span class="tok-comment">/// possible at all.</span>
+    cpu: Pipe,
+    worker: ?Pipe = null,
+    gpu: Pipe,
+
+    <span class="tok-comment">/// Pixels, per machine, as `escape` returned them.</span>
+    img: [<span class="tok-num">3</span>][fk.pixels]u32 = <span class="tok-builtin">@splat</span>(<span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>)),
+
+    <span class="tok-comment">/// Has this pipe been DISPATCHED since the app started?</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Load-bearing, and I got it wrong the first time. A `.cpu` pipe's `readLatest` is</span>
+    <span class="tok-comment">/// never "not ready" - it hands back `M.g.B` directly - so polling it before any</span>
+    <span class="tok-comment">/// dispatch returns the ZEROED buffer, and the panel cheerfully drew 12288 pixels of</span>
+    <span class="tok-comment">/// `escape = 0`. Uniform dark blue, no fractal, and no error anywhere. The `.gpu` and</span>
+    <span class="tok-comment">/// `.worker` arms genuinely do return null until their readback lands; `.cpu` cannot,</span>
+    <span class="tok-comment">/// because there is nothing asynchronous about it. So the app has to remember.</span>
+    sent: [<span class="tok-num">3</span>]bool = <span class="tok-builtin">@splat</span>(false),
+    got: [<span class="tok-num">3</span>]bool = <span class="tok-builtin">@splat</span>(false),
+    ms: [<span class="tok-num">3</span>]f32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+
+    <span class="tok-comment">/// Worst frame gap seen since this machine's dispatch - the number the whole demo rests</span>
+    <span class="tok-comment">/// on, and the first version could not see it.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// Two reasons it read 0 ms while the main thread stalled for two seconds:</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">///   * `gap_watch` was ONE slot, so `RUN ALL` (cpu, then worker, then gpu) left it</span>
+    <span class="tok-comment">///     pointing at `.gpu`. The CPU's stall was charged to the GPU, or to nobody.</span>
+    <span class="tok-comment">///   * a `.cpu` pipe finishes SYNCHRONOUSLY, so `got[cpu]` went true on the same frame as</span>
+    <span class="tok-comment">///     the dispatch - clearing the watch BEFORE the next frame could report the gap the</span>
+    <span class="tok-comment">///     dispatch had just caused. The cost always lands on the frame AFTER.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// So: watch one machine at a time, and keep watching for a few frames after it lands.</span>
+    worst_gap_ms: [<span class="tok-num">3</span>]f32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+    gap_watch: ?Machine = null,
+    settle: u32 = <span class="tok-num">0</span>,
+
+    <span class="tok-comment">/// `RUN ALL` STAGGERS the three, one per frame-window. Dispatching them together would</span>
+    <span class="tok-comment">/// confound the measurement outright: the worker and the GPU would be charged for the</span>
+    <span class="tok-comment">/// two seconds the CPU spent blocking the same frame they were queued on.</span>
+    queue: [<span class="tok-num">3</span>]Machine = undefined,
+    queue_len: usize = <span class="tok-num">0</span>,
+    queue_i: usize = <span class="tok-num">0</span>,
+
+    zoom: f32 = <span class="tok-num">1.0</span>,
+
+    <span class="tok-comment">/// Deliberately EXPENSIVE. At 64 iterations the CPU pass is ~800k inner steps - two</span>
+    <span class="tok-comment">/// milliseconds, no hitch, and the `.worker` panel has nothing to prove. The demo only</span>
+    <span class="tok-comment">/// says anything if the main-thread pass actually costs you frames, so the default is</span>
+    <span class="tok-comment">/// 12288 px x 1500 = ~18M steps, which visibly stalls a phone.</span>
+    max_iter: u32 = <span class="tok-num">1500</span>,
+    running: ?Machine = null,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">paramsNow</span>(s: *<span class="tok-kw">const</span> State) fk.Params {
+    <span class="tok-kw">return</span> .{
+        .max_iter = s.max_iter,
+        .w = fk.width,
+        .h = fk.height,
+        .cx = -<span class="tok-num">0.6</span>,
+        .cy = <span class="tok-num">0.0</span>,
+        .zoom = s.zoom,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">slot</span>(m: Machine) usize {
+    <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (m) {
+        .comptime_ =&gt; <span class="tok-num">0</span>, <span class="tok-comment">// never used - comptime has no pipe</span>
+        .cpu =&gt; <span class="tok-num">0</span>,
+        .worker =&gt; <span class="tok-num">1</span>,
+        .gpu =&gt; <span class="tok-num">2</span>,
+    };
+}
+
+<span class="tok-comment">/// Dispatch `escape` on one machine. **These two lines are identical for all three.** That</span>
+<span class="tok-comment">/// is the entire feature; everything else in this file is presentation.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">dispatch</span>(s: *State, m: Machine) void {
+    <span class="tok-kw">const</span> p: *Pipe = <span class="tok-kw">switch</span> (m) {
+        .cpu =&gt; &amp;s.cpu,
+        .worker =&gt; &amp;(s.worker <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>),
+        .gpu =&gt; &amp;s.gpu,
+        .comptime_ =&gt; <span class="tok-kw">return</span>,
+    };
+    p.element_count = fk.pixels;
+    p.params = <span class="tok-fn">paramsNow</span>(s);
+    p.<span class="tok-fn">run</span>(<span class="tok-str">"mandel"</span>, fk.pixels); <span class="tok-comment">// &lt;-- cpu | worker | gpu</span>
+
+    s.sent[<span class="tok-fn">slot</span>(m)] = true;
+    s.got[<span class="tok-fn">slot</span>(m)] = false;
+    s.worst_gap_ms[<span class="tok-fn">slot</span>(m)] = <span class="tok-num">0</span>;
+    s.gap_watch = m;
+    s.settle = <span class="tok-num">3</span>; <span class="tok-comment">// keep watching past the landing frame - the cost shows up AFTER</span>
+    s.running = m;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">poll</span>(s: *State, m: Machine) void {
+    <span class="tok-kw">const</span> i: usize = <span class="tok-fn">slot</span>(m);
+    <span class="tok-kw">if</span> (s.got[i] <span class="tok-kw">or</span> !s.sent[i]) {
+        <span class="tok-kw">return</span>; <span class="tok-comment">// never dispatched -&gt; `.cpu` would hand back a zeroed g.B and look "done"</span>
+    }
+    <span class="tok-kw">const</span> p: *Pipe = <span class="tok-kw">switch</span> (m) {
+        .cpu =&gt; &amp;s.cpu,
+        .worker =&gt; &amp;(s.worker <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>),
+        .gpu =&gt; &amp;s.gpu,
+        .comptime_ =&gt; <span class="tok-kw">return</span>,
+    };
+    <span class="tok-kw">if</span> (p.<span class="tok-fn">readLatest</span>(.out)) |px| { <span class="tok-comment">// &lt;-- and this line is identical too</span>
+        <span class="tok-builtin">@memcpy</span>(s.img[i][<span class="tok-num">0</span>..<span class="tok-builtin">@min</span>(px.len, fk.pixels)], px[<span class="tok-num">0</span>..<span class="tok-builtin">@min</span>(px.len, fk.pixels)]);
+        s.got[i] = true;
+        <span class="tok-kw">if</span> (s.running == m) {
+            s.running = null;
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">20</span>);
+
+    s.* = .{
+        .gpa = gpa,
+        .font = font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .cpu = Pipe.<span class="tok-fn">initCpu</span>(),
+        .gpu = <span class="tok-kw">try</span> Pipe.<span class="tok-fn">initGpu</span>(gpa, f.gpu.device, f.gpu.queue, &amp;kernel_wgsls),
+    };
+    <span class="tok-comment">// The worker backend needs a kernel wasm. If the page did not ship one - or the browser</span>
+    <span class="tok-comment">// refused `new Worker()` - `jobs` runs the kernel INLINE and the panel behaves exactly</span>
+    <span class="tok-comment">// like the CPU one, hitch and all. That is the honest fallback, and it is why the panel</span>
+    <span class="tok-comment">// reports which it got rather than assuming.</span>
+    s.worker = Pipe.<span class="tok-fn">initWorker</span>(gpa) <span class="tok-kw">catch</span> null;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> t_frame: f32 = f.time.delta_time * <span class="tok-num">1000.0</span>;
+
+    <span class="tok-comment">// The number that tells the truth. A dispatch that blocks the main thread shows up here</span>
+    <span class="tok-comment">// as a spike; one that does not, does not.</span>
+    <span class="tok-kw">if</span> (s.gap_watch) |m| {
+        <span class="tok-kw">const</span> i: usize = <span class="tok-fn">slot</span>(m);
+        <span class="tok-kw">if</span> (t_frame &gt; s.worst_gap_ms[i]) {
+            s.worst_gap_ms[i] = t_frame;
+        }
+        <span class="tok-kw">if</span> (s.got[i]) {
+            <span class="tok-comment">// Landed - but do NOT stop watching yet. A `.cpu` dispatch blocks INSIDE its</span>
+            <span class="tok-comment">// frame, so the frame time that proves it only arrives on the next one.</span>
+            <span class="tok-kw">if</span> (s.settle &gt; <span class="tok-num">0</span>) {
+                s.settle -= <span class="tok-num">1</span>;
+            } <span class="tok-kw">else</span> {
+                s.gap_watch = null;
+            }
+        }
+    }
+
+    <span class="tok-fn">poll</span>(s, .cpu);
+    <span class="tok-fn">poll</span>(s, .worker);
+    <span class="tok-fn">poll</span>(s, .gpu);
+
+    <span class="tok-comment">// One at a time, so each machine's gap is ITS OWN.</span>
+    <span class="tok-kw">if</span> (s.queue_i &lt; s.queue_len <span class="tok-kw">and</span> s.gap_watch == null) {
+        <span class="tok-fn">dispatch</span>(s, s.queue[s.queue_i]);
+        s.queue_i += <span class="tok-num">1</span>;
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, z.colors.slate_900);
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-comment">// Twice the old size. The SOURCE gets its own, smaller size: it is code, its longest</span>
+    <span class="tok-comment">// line is ~56 characters, and a monospace listing that overflows the canvas is worse</span>
+    <span class="tok-comment">// than a small one.</span>
+    <span class="tok-kw">const</span> fsz: f32 = <span class="tok-fn">clamp</span>(w / <span class="tok-num">26.0</span>, <span class="tok-num">16.0</span>, <span class="tok-num">30.0</span>);
+    <span class="tok-kw">const</span> src_fsz: f32 = <span class="tok-fn">clamp</span>(w / <span class="tok-num">54.0</span>, <span class="tok-num">9.0</span>, <span class="tok-num">15.0</span>);
+
+    <span class="tok-comment">// The control bar goes at the TOP. It used to sit at the bottom of a canvas taller than</span>
+    <span class="tok-comment">// a phone viewport, which put it off-screen entirely - the demo shipped with no reachable</span>
+    <span class="tok-comment">// RUN button.</span>
+    <span class="tok-kw">const</span> bar_h: f32 = fsz * <span class="tok-num">5.6</span>;
+    <span class="tok-kw">var</span> y: f32 = bar_h + fsz * <span class="tok-num">0.8</span>;
+
+    <span class="tok-comment">// ---- the source. It is seven lines, so show it, and let the viewer confirm there is</span>
+    <span class="tok-comment">// no annotation, no attribute, no pragma. That IS the demo.</span>
+    <span class="tok-kw">const</span> src = [_][]<span class="tok-kw">const</span> u8{
+        <span class="tok-str">"pub fn escape(cx: f32, cy: f32, max: u32) u32 {"</span>,
+        <span class="tok-str">"    var x: f32 = 0.0;  var y: f32 = 0.0;  var i: u32 = 0;"</span>,
+        <span class="tok-str">"    while (i &lt; max and x * x + y * y &lt; 4.0) : (i += 1) {"</span>,
+        <span class="tok-str">"        const t: f32 = x * x - y * y + cx;"</span>,
+        <span class="tok-str">"        y = 2.0 * x * y + cy;"</span>,
+        <span class="tok-str">"        x = t;"</span>,
+        <span class="tok-str">"    }"</span>,
+        <span class="tok-str">"    return i;"</span>,
+        <span class="tok-str">"}"</span>,
+    };
+    <span class="tok-kw">for</span> (src) |line| {
+        f.gl.<span class="tok-fn">text</span>(.{ fsz * <span class="tok-num">0.5</span>, y }, line, .{
+            .size = src_fsz,
+            .color = z.colors.slate_400,
+            .font = &amp;s.font,
+        });
+        y += src_fsz * <span class="tok-num">1.25</span>;
+    }
+    y += fsz * <span class="tok-num">0.5</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ fsz * <span class="tok-num">0.5</span>, y }, <span class="tok-str">"ONE function.  FOUR machines."</span>, .{
+        .size = fsz,
+        .color = z.colors.amber_400,
+        .font = &amp;s.font,
+    });
+    y += fsz * <span class="tok-num">1.3</span>;
+    <span class="tok-comment">// The point, said out loud. Four identical fractals prove nothing on their own - the</span>
+    <span class="tok-comment">// claim is about WHERE the same seven lines ran, and what each one COST.</span>
+    f.gl.<span class="tok-fn">text</span>(
+        .{ fsz * <span class="tok-num">0.5</span>, y },
+        <span class="tok-str">"RUN ALL, then compare the frame gaps."</span>,
+        .{ .size = fsz * <span class="tok-num">0.8</span>, .color = z.colors.slate_400, .font = &amp;s.font },
+    );
+    y += fsz * <span class="tok-num">1.6</span>;
+
+    <span class="tok-comment">// ---- four panels.</span>
+    <span class="tok-kw">const</span> panel_w: f32 = (w - fsz * <span class="tok-num">3.0</span>) / <span class="tok-num">2.0</span>;
+    <span class="tok-kw">const</span> panel_h: f32 = (h - y - fsz * <span class="tok-num">3.0</span>) / <span class="tok-num">2.0</span>;
+    <span class="tok-fn">drawPanel</span>(f, s, .comptime_, .{ fsz, y }, .{ panel_w, panel_h }, fsz);
+    <span class="tok-fn">drawPanel</span>(f, s, .cpu, .{ fsz * <span class="tok-num">2.0</span> + panel_w, y }, .{ panel_w, panel_h }, fsz);
+    <span class="tok-fn">drawPanel</span>(f, s, .worker, .{ fsz, y + panel_h + fsz }, .{ panel_w, panel_h }, fsz);
+    <span class="tok-fn">drawPanel</span>(f, s, .gpu, .{ fsz * <span class="tok-num">2.0</span> + panel_w, y + panel_h + fsz }, .{ panel_w, panel_h }, fsz);
+
+    <span class="tok-comment">// ---- controls. A WINDOW is not optional: `u.button` outside one draws nothing, which</span>
+    <span class="tok-comment">// is how the first build shipped with no RUN button and four panels of zeroes.</span>
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    u.<span class="tok-fn">style</span>().font_size = fsz;
+    u.<span class="tok-fn">style</span>().frame_padding = .{ fsz * <span class="tok-num">0.35</span>, fsz * <span class="tok-num">0.3</span> };
+    u.<span class="tok-fn">style</span>().item_spacing = .{ fsz * <span class="tok-num">0.4</span>, fsz * <span class="tok-num">0.4</span> };
+    u.<span class="tok-fn">style</span>().window_padding = .{ fsz * <span class="tok-num">0.5</span>, fsz * <span class="tok-num">0.5</span> };
+    u.<span class="tok-fn">style</span>().title_bar_height = fsz * <span class="tok-num">1.6</span>;
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ w, bar_h }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"run"</span>, .{ .flags = .{
+        .no_move = true,
+        .no_resize = true,
+        .no_title_bar = true,
+    } })) |win| {
+        <span class="tok-kw">defer</span> win.<span class="tok-fn">close</span>();
+        <span class="tok-kw">const</span> bh: f32 = fsz * <span class="tok-num">2.0</span>;
+        <span class="tok-kw">const</span> bw: f32 = <span class="tok-builtin">@min</span>((w - fsz * <span class="tok-num">3.0</span>) / <span class="tok-num">4.0</span>, fsz * <span class="tok-num">8.0</span>);
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"RUN ALL"</span>, .{ .size = .{ bw, bh } })) {
+            s.queue = .{ .cpu, .worker, .gpu };
+            s.queue_len = <span class="tok-num">3</span>;
+            s.queue_i = <span class="tok-num">0</span>;
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"cpu"</span>, .{ .size = .{ bw * <span class="tok-num">0.8</span>, bh } })) {
+            <span class="tok-fn">dispatch</span>(s, .cpu);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"worker"</span>, .{ .size = .{ bw * <span class="tok-num">0.8</span>, bh } })) {
+            <span class="tok-fn">dispatch</span>(s, .worker);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"gpu"</span>, .{ .size = .{ bw * <span class="tok-num">0.8</span>, bh } })) {
+            <span class="tok-fn">dispatch</span>(s, .gpu);
+        }
+
+        <span class="tok-comment">// Row 2 - the cost knob. No keyboard on a phone, so halve/double buttons rather</span>
+        <span class="tok-comment">// than a slider: the whole useful range in a few taps.</span>
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"iter /2"</span>, .{ .size = .{ bw * <span class="tok-num">0.8</span>, bh } })) {
+            s.max_iter = <span class="tok-builtin">@max</span>(<span class="tok-num">64</span>, s.max_iter / <span class="tok-num">2</span>);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"iter x2"</span>, .{ .size = .{ bw * <span class="tok-num">0.8</span>, bh } })) {
+            s.max_iter = <span class="tok-builtin">@min</span>(<span class="tok-num">12000</span>, s.max_iter * <span class="tok-num">2</span>);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"iter {d}   workers {s}"</span>, .{
+            s.max_iter,
+            <span class="tok-kw">if</span> (z.jobs.<span class="tok-fn">parallel</span>()) <span class="tok-str">"REAL"</span> <span class="tok-kw">else</span> <span class="tok-str">"INLINE (no worker wasm)"</span>,
+        });
+    }
+    s.ui_host.<span class="tok-fn">render</span>(f);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPanel</span>(
+    f: *z.Frame,
+    s: *State,
+    m: Machine,
+    at: Vec2,
+    size: Vec2,
+    fsz: f32,
+) void {
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = at[<span class="tok-num">0</span>], .y = at[<span class="tok-num">1</span>], .width = size[<span class="tok-num">0</span>], .height = size[<span class="tok-num">1</span>] },
+        .{ .color = z.colors.slate_700, .outline = <span class="tok-num">1.0</span> },
+    );
+
+    <span class="tok-kw">const</span> title: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">switch</span> (m) {
+        .comptime_ =&gt; <span class="tok-str">"comptime"</span>,
+        .cpu =&gt; <span class="tok-str">"CPU - main thread"</span>,
+        .worker =&gt; <span class="tok-str">"CPU - worker"</span>,
+        .gpu =&gt; <span class="tok-str">"GPU - compute"</span>,
+    };
+    <span class="tok-comment">// Short, because they are now twice the size and the panel is half the width.</span>
+    <span class="tok-kw">const</span> caption: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">switch</span> (m) {
+        .comptime_ =&gt; <span class="tok-str">"ran in the COMPILER"</span>,
+        .cpu =&gt; <span class="tok-str">"BLOCKS the frame"</span>,
+        .worker =&gt; <span class="tok-str">"another core. NO hitch"</span>,
+        .gpu =&gt; <span class="tok-str">"SPIR-V. 12288 at once"</span>,
+    };
+    f.gl.<span class="tok-fn">text</span>(.{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, at[<span class="tok-num">1</span>] + fsz * <span class="tok-num">0.3</span> }, title, .{
+        .size = fsz,
+        .color = z.colors.sky_300,
+        .font = &amp;s.font,
+    });
+    f.gl.<span class="tok-fn">text</span>(.{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, at[<span class="tok-num">1</span>] + fsz * <span class="tok-num">1.3</span> }, caption, .{
+        .size = fsz * <span class="tok-num">0.75</span>,
+        .color = z.colors.slate_500,
+        .font = &amp;s.font,
+    });
+
+    <span class="tok-kw">const</span> body_y: f32 = at[<span class="tok-num">1</span>] + fsz * <span class="tok-num">2.6</span>;
+
+    <span class="tok-kw">if</span> (m == .comptime_) {
+        <span class="tok-comment">// The binary holds these characters. There is no loop for them anywhere in the</span>
+        <span class="tok-comment">// program - the answer existed before the program did.</span>
+        <span class="tok-kw">const</span> cw: f32 = <span class="tok-builtin">@min</span>(size[<span class="tok-num">0</span>] / <span class="tok-fn">float</span>(ascii_w + <span class="tok-num">1</span>), fsz * <span class="tok-num">0.5</span>);
+        <span class="tok-kw">var</span> yy: f32 = body_y;
+        <span class="tok-kw">for</span> (ascii_art) |row| {
+            f.gl.<span class="tok-fn">text</span>(.{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, yy }, &amp;row, .{
+                .size = cw * <span class="tok-num">1.6</span>,
+                .color = z.colors.emerald_400,
+                .font = &amp;s.font,
+            });
+            yy += cw * <span class="tok-num">1.5</span>;
+        }
+        f.gl.<span class="tok-fn">text</span>(.{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, at[<span class="tok-num">1</span>] + size[<span class="tok-num">1</span>] - fsz * <span class="tok-num">1.5</span> }, <span class="tok-str">"no loop in the binary"</span>, .{
+            .size = fsz * <span class="tok-num">0.85</span>,
+            .color = z.colors.slate_500,
+            .font = &amp;s.font,
+        });
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-kw">const</span> i: usize = <span class="tok-fn">slot</span>(m);
+    <span class="tok-kw">if</span> (!s.got[i]) {
+        <span class="tok-kw">const</span> msg: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.running == m) <span class="tok-str">"working..."</span> <span class="tok-kw">else</span> <span class="tok-str">"tap RUN"</span>;
+        f.gl.<span class="tok-fn">text</span>(.{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, body_y }, msg, .{
+            .size = fsz,
+            .color = z.colors.slate_500,
+            .font = &amp;s.font,
+        });
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-comment">// Draw the fractal as a grid of cells. Deliberately dumb - the interesting thing is the</span>
+    <span class="tok-comment">// number underneath, not the rendering.</span>
+    <span class="tok-kw">const</span> cell: f32 = <span class="tok-builtin">@min</span>(
+        (size[<span class="tok-num">0</span>] - fsz) / <span class="tok-fn">float</span>(fk.width),
+        (size[<span class="tok-num">1</span>] - fsz * <span class="tok-num">3.5</span>) / <span class="tok-fn">float</span>(fk.height),
+    );
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..fk.height) |py| {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..fk.width) |px| {
+            <span class="tok-kw">const</span> it: u32 = s.img[i][py * fk.width + px];
+            <span class="tok-kw">if</span> (it &gt;= s.max_iter) {
+                <span class="tok-kw">continue</span>; <span class="tok-comment">// in the set - leave it black</span>
+            }
+            <span class="tok-kw">const</span> t: f32 = <span class="tok-fn">float</span>(it) / <span class="tok-fn">float</span>(s.max_iter);
+            <span class="tok-kw">const</span> c: zm.Color = .{
+                .r = <span class="tok-builtin">@intFromFloat</span>(<span class="tok-fn">clamp</span>(t * <span class="tok-num">3.0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>) * <span class="tok-num">90.0</span>),
+                .g = <span class="tok-builtin">@intFromFloat</span>(<span class="tok-fn">clamp</span>(t * <span class="tok-num">2.0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>) * <span class="tok-num">190.0</span>),
+                .b = <span class="tok-builtin">@intFromFloat</span>(<span class="tok-fn">clamp</span>(<span class="tok-num">0.35</span> + t, <span class="tok-num">0</span>, <span class="tok-num">1</span>) * <span class="tok-num">255.0</span>),
+                .a = <span class="tok-num">255</span>,
+            };
+            f.gl.<span class="tok-fn">rect</span>(.{
+                .x = at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span> + <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(px))) * cell,
+                .y = body_y + <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(py))) * cell,
+                .width = cell + <span class="tok-num">0.6</span>,
+                .height = cell + <span class="tok-num">0.6</span>,
+            }, .{ .color = c });
+        }
+    }
+
+    <span class="tok-comment">// THE HONEST NUMBER. Not "how fast", but "did it cost you a frame".</span>
+    <span class="tok-kw">const</span> gap: f32 = s.worst_gap_ms[i];
+    <span class="tok-kw">const</span> bad: bool = gap &gt; <span class="tok-num">34.0</span>; <span class="tok-comment">// two dropped frames at 60 Hz</span>
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">96</span>]u8 = undefined;
+
+    <span class="tok-comment">// An INLINE worker is not a worker. Rather than let the panel imply a contrast it is not</span>
+    <span class="tok-comment">// making, it says so - a green 0 ms here with no real thread behind it would be a lie.</span>
+    <span class="tok-kw">if</span> (m == .worker <span class="tok-kw">and</span> !z.jobs.<span class="tok-fn">parallel</span>()) {
+        f.gl.<span class="tok-fn">text</span>(
+            .{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, at[<span class="tok-num">1</span>] + size[<span class="tok-num">1</span>] - fsz * <span class="tok-num">1.5</span> },
+            <span class="tok-str">"NO WORKER - inline"</span>,
+            .{ .size = fsz * <span class="tok-num">0.9</span>, .color = z.colors.amber_400, .font = &amp;s.font },
+        );
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-kw">const</span> txt: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"frame gap {d:.0} ms"</span>, .{gap}) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+    f.gl.<span class="tok-fn">text</span>(.{ at[<span class="tok-num">0</span>] + fsz * <span class="tok-num">0.4</span>, at[<span class="tok-num">1</span>] + size[<span class="tok-num">1</span>] - fsz * <span class="tok-num">1.5</span> }, txt, .{
+        .size = fsz,
+        .color = <span class="tok-kw">if</span> (bad) z.colors.red_400 <span class="tok-kw">else</span> z.colors.emerald_400,
+        .font = &amp;s.font,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    _ = gpa;
+    s.gpu.<span class="tok-fn">deinit</span>();
+    <span class="tok-kw">if</span> (s.worker) |*wk| {
+        wk.<span class="tok-fn">deinit</span>();
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - one function, four machines"</span>,
+            .width = <span class="tok-num">1000</span>,
+            .height = <span class="tok-num">760</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/four_ways/escape.zig" data-lines="41"><figcaption><span>examples/four_ways/escape.zig</span><span>41 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/four_ways/escape.zig - THE function.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Read it. There is nothing here about threads, or GPUs, or compile time. No annotation,</span>
+<span class="tok-comment">//! no attribute, no `#pragma`, no `__device__`, no `[numthreads]`. It is a Zig function.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It runs on four machines:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * at COMPILE TIME, producing an ASCII fractal that is baked into the binary - the</span>
+<span class="tok-comment">//!     program never executes this loop at all;</span>
+<span class="tok-comment">//!   * on the CPU's main thread, where it is expensive enough to visibly hitch the frame;</span>
+<span class="tok-comment">//!   * on a CPU worker thread, doing the same work without hitching anything;</span>
+<span class="tok-comment">//!   * on the GPU, as SPIR-V, transpiled to WGSL, across thousands of invocations.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The demo is not "look, four fractals". The demo is: **look how little the code changed.**</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> expectEqual = std.testing.expectEqual;
+
+<span class="tok-comment">/// Iterations before the orbit of z -&gt; z^2 + c escapes the disc of radius 2, capped at</span>
+<span class="tok-comment">/// `max`. The Mandelbrot set is the points that never escape.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Deliberately written the boring way: plain f32, one loop, no vectors, no comptime</span>
+<span class="tok-comment">/// cleverness. The claim being made is about WHERE it can run, and any cleverness here</span>
+<span class="tok-comment">/// would muddy it.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">escape</span>(cx: f32, cy: f32, max: u32) u32 {
+    <span class="tok-kw">var</span> x: f32 = <span class="tok-num">0.0</span>;
+    <span class="tok-kw">var</span> y: f32 = <span class="tok-num">0.0</span>;
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; max <span class="tok-kw">and</span> x * x + y * y &lt; <span class="tok-num">4.0</span>) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> t: f32 = x * x - y * y + cx;
+        y = <span class="tok-num">2.0</span> * x * y + cy;
+        x = t;
+    }
+    <span class="tok-kw">return</span> i;
+}
+
+<span class="tok-kw">test</span> <span class="tok-str">"escape: the origin never escapes, and 2+0i leaves immediately"</span> {
+    <span class="tok-comment">// 0 is in the set: the orbit is 0, 0, 0, ... so it runs out the cap.</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">expectEqual</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-num">64</span>), <span class="tok-fn">escape</span>(<span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">64</span>));
+    <span class="tok-comment">// 2 is not: |2| = 2, so x*x + y*y = 4 is not &lt; 4 and it never enters the loop.</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">expectEqual</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-num">0</span>), <span class="tok-fn">escape</span>(<span class="tok-num">2.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">64</span>));
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/four_ways/escape_kernel.zig" data-lines="92"><figcaption><span>examples/four_ways/escape_kernel.zig</span><span>92 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/four_ways/escape_kernel.zig - the kernel.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Three lines of body. All it does is turn an invocation id into a pixel coordinate and</span>
+<span class="tok-comment">//! call `escape`. That call is the entire content of this file, and it is what reaches all</span>
+<span class="tok-comment">//! three RUNTIME machines:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * `.cpu`    - kompute runs the kernel as a plain `while` loop over ids;</span>
+<span class="tok-comment">//!   * `.worker` - the SAME loop, in another wasm instance on another thread;</span>
+<span class="tok-comment">//!   * `.gpu`    - compiled to SPIR-V (`escape` appears in it by name), then transpiled to</span>
+<span class="tok-comment">//!                 WGSL, then dispatched `ceil(n/64)` workgroups wide.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! What does NOT reach comptime is this kernel - only the function it calls. The kernel</span>
+<span class="tok-comment">//! indexes `M.g.B`, a module-level `var`, and comptime cannot touch module-level runtime</span>
+<span class="tok-comment">//! memory. That is not a limitation to engineer around: the globals exist BECAUSE the GPU</span>
+<span class="tok-comment">//! needs per-field storage bindings (one megastruct binding corrupts on Adreno past ~1000</span>
+<span class="tok-comment">//! invocations - kompute learned that the hard way). The globals are forced by hardware.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! So the honest claim, and the more interesting one:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!     the FUNCTION is shared by all four.</span>
+<span class="tok-comment">//!     the KERNEL   is shared by three.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The comptime panel draws its fractal in characters by calling `escape` directly. The</span>
+<span class="tok-comment">//! other three draw the same fractal in pixels by calling it from here. You can see the</span>
+<span class="tok-comment">//! same shape twice, and nobody has to tell you the function is the invariant.</span>
+<span class="tok-kw">const</span> k = <span class="tok-builtin">@import</span>(<span class="tok-str">"kompute"</span>);
+<span class="tok-kw">const</span> escape = <span class="tok-builtin">@import</span>(<span class="tok-str">"escape.zig"</span>).escape;
+
+<span class="tok-comment">/// 128x96 = 12288 pixels. Big enough that the main-thread CPU pass VISIBLY hitches (which</span>
+<span class="tok-comment">/// is the point of the `.worker` panel), small enough that the whole `Buffers` image is</span>
+<span class="tok-comment">/// 48 KB - so shipping it to a worker and back costs microseconds, not milliseconds.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> width: u32 = <span class="tok-num">128</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> height: u32 = <span class="tok-num">96</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> pixels: u32 = width * height;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = pixels, .workgroup = <span class="tok-num">64</span> };
+
+<span class="tok-comment">/// ONE buffer. The `.worker` backend copies the whole `Buffers` image both ways on every</span>
+<span class="tok-comment">/// dispatch, so a module that wants a worker arm should keep its state modest - 48 KB here.</span>
+<span class="tok-comment">/// (A megabyte of particles you wanted stepped every frame is what `.gpu` is for.)</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    out: [pixels]u32,
+};
+
+<span class="tok-comment">/// `extern`: these bytes are memcpy'd out of the app's wasm and into the KERNEL's wasm -</span>
+<span class="tok-comment">/// two separate compilations - and Zig's auto layout is explicitly free to reorder fields.</span>
+<span class="tok-comment">/// It is deterministic for one compiler and target, so auto would work today, by luck.</span>
+<span class="tok-comment">/// `extern` is what the language provides for "these bytes cross a boundary".</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    max_iter: u32,
+    w: u32,
+    h: u32,
+    _pad: u32 = <span class="tok-num">0</span>,
+    cx: f32,
+    cy: f32,
+    zoom: f32,
+    _pad1: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> g = k.<span class="tok-fn">Globals</span>(<span class="tok-builtin">@This</span>());
+
+<span class="tok-comment">/// Named here so the worker's kernel wasm knows what to export, and so `komputeTable` can</span>
+<span class="tok-comment">/// derive a job kernel per name. (This Zig's `@typeInfo` has no `.decls`, so the list has</span>
+<span class="tok-comment">/// to be written down - `installKernels` reads the same one.)</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> kernels = [_][:<span class="tok-num">0</span>]<span class="tok-kw">const</span> u8{<span class="tok-str">"mandel"</span>};
+
+<span class="tok-kw">const</span> b_out = g.<span class="tok-fn">bind</span>(.out);
+
+<span class="tok-comment">/// id -&gt; pixel -&gt; complex plane -&gt; `escape`. That last call is the only line that matters.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">mandel</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">const</span> i: u32 = c.id;
+    <span class="tok-kw">if</span> (i &gt;= c.params.w * c.params.h) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> px: u32 = i % c.params.w;
+    <span class="tok-kw">const</span> py: u32 = i / c.params.w;
+
+    <span class="tok-kw">const</span> fx: f32 = <span class="tok-builtin">@floatFromInt</span>(px);
+    <span class="tok-kw">const</span> fy: f32 = <span class="tok-builtin">@floatFromInt</span>(py);
+    <span class="tok-kw">const</span> fw: f32 = <span class="tok-builtin">@floatFromInt</span>(c.params.w);
+    <span class="tok-kw">const</span> fh: f32 = <span class="tok-builtin">@floatFromInt</span>(c.params.h);
+
+    <span class="tok-comment">// Pixel -&gt; the complex plane, centred on (cx, cy).</span>
+    <span class="tok-kw">const</span> u: f32 = (fx / fw - <span class="tok-num">0.5</span>) * <span class="tok-num">3.0</span> / c.params.zoom;
+    <span class="tok-kw">const</span> v: f32 = (fy / fh - <span class="tok-num">0.5</span>) * <span class="tok-num">2.2</span> / c.params.zoom;
+
+    b_out[i] = <span class="tok-fn">escape</span>(c.params.cx + u, c.params.cy + v, c.params.max_iter);
+}
+
+<span class="tok-kw">comptime</span> {
+    k.<span class="tok-fn">installKernels</span>(<span class="tok-builtin">@This</span>());
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/four_ways/kernels.zig" data-lines="40"><figcaption><span>examples/four_ways/kernels.zig</span><span>40 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/four_ways/kernels.zig - the worker's half, and it is FOUR LINES of substance.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Compare `examples/worker_png/kernels.zig`: that one hand-writes its kernel function, its</span>
+<span class="tok-comment">//! header type, its table, and guesses `max_input`/`max_output`. It has to - `encodePng` is</span>
+<span class="tok-comment">//! an ordinary function, not a data-parallel kernel, so there is nothing to derive it from.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A kompute module is different. Everything the jobs system needs is ALREADY declared on</span>
+<span class="tok-comment">//! it, so `komputeRegistry` derives the lot:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * the kernel functions - one per name in `M.kernels`, each wrapping the same `while`</span>
+<span class="tok-comment">//!     loop over ids that the `.cpu` backend runs;</span>
+<span class="tok-comment">//!   * the header type      - `{ n: u32, params: M.Params }`;</span>
+<span class="tok-comment">//!   * the bounds           - EXACTLY `@sizeOf(Hdr) + @sizeOf(M.Buffers)` in and</span>
+<span class="tok-comment">//!     `@sizeOf(M.Buffers)` out. Not a guess. Not a knob.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! So the app-author cost of giving an existing compute kernel a worker backend is: this</span>
+<span class="tok-comment">//! file, plus `.job_kernels = true` in build.zig, plus changing `initGpu` to `initWorker`.</span>
+<span class="tok-comment">//! **That is the feature.** The demo is downstream of it.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! This file is compiled TWICE - into the app (so `submit` knows the header type, checked at</span>
+<span class="tok-comment">//! comptime) and into a separate freestanding kernel wasm with ZERO imports, which the Web</span>
+<span class="tok-comment">//! Workers instantiate with `{}`. The build ASSERTS that import section is empty, so a</span>
+<span class="tok-comment">//! kernel that reaches for the DOM fails to build rather than failing on a phone.</span>
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+
+<span class="tok-comment">/// The kompute module. Note it is the SAME file the GPU path compiles to SPIR-V - one</span>
+<span class="tok-comment">/// module, three runtime machines.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> module = <span class="tok-builtin">@import</span>(<span class="tok-str">"escape_kernel.zig"</span>);
+
+<span class="tok-comment">/// Everything below is derived. There is nothing to configure and nothing to keep in sync.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> registry = z.<span class="tok-fn">komputeRegistry</span>(module);
+
+<span class="tok-comment">/// Exposed so registries COMPOSE: the launcher bundles many examples into one kernel wasm</span>
+<span class="tok-comment">/// and needs a single table.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///     jobs.Registry(worker_png.job_kernels ++ four_ways.job_kernels, .{})</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// This works only because the wasm exports are keyed by NAME rather than an index or a</span>
+<span class="tok-comment">/// hash - a merged kernel wasm satisfies every example's `submit` with nobody renumbering.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> job_kernels = z.<span class="tok-fn">komputeTable</span>(module);
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>text_sprite_fonts — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>text_sprite_fonts</h1>
+<figure class="code src-file" data-path="examples/text_sprite_fonts/text_sprite_fonts.zig" data-lines="192"><figcaption><span>examples/text_sprite_fonts/text_sprite_fonts.zig</span><span>192 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! text_sprite_fonts - port of raylib [text] examples "font spritefont" and</span>
+<span class="tok-comment">//! "sprite fonts" (merged). raylib sources: examples/text/text_font_spritefont.c</span>
+<span class="tok-comment">//! and examples/text/text_sprite_fonts.c.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Both raylib samples do the same thing: `LoadFont("something.png")`, which for</span>
+<span class="tok-comment">//! a PNG routes into `LoadFontFromImage` - an XNA-style BITMAP font where the</span>
+<span class="tok-comment">//! glyphs sit on a MAGENTA key background and are separated by key-coloured</span>
+<span class="tok-comment">//! gutters. raylib then draws a fixed sentence per font and exits; nothing is</span>
+<span class="tok-comment">//! interactive. This is the honest phone translation and adds what a touch UI</span>
+<span class="tok-comment">//! makes worth having: pick the sample text, scale every font live, and tighten</span>
+<span class="tok-comment">//! or loosen the inter-glyph spacing (raylib's `DrawTextEx` spacing) - so you</span>
+<span class="tok-comment">//! can actually see how each face behaves, not just a frozen screenshot.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The engine work this drove is `z.loadFontFromImage` (raylib's</span>
+<span class="tok-comment">//! `LoadFontFromImage`): segment the image into glyph rectangles (a pure,</span>
+<span class="tok-comment">//! unit-tested `image.segmentSpriteFont` - first non-key pixel gives the shared</span>
+<span class="tok-comment">//! char/line spacing border, the first glyph column gives the char height, then</span>
+<span class="tok-comment">//! each line band is walked splitting glyphs on key columns), replace the key</span>
+<span class="tok-comment">//! colour with transparent, and upload the cleaned image as a NEAREST atlas.</span>
+<span class="tok-comment">//! The glyphs carry `advanceX = 0`, so the existing text path advances by the</span>
+<span class="tok-comment">//! rec width - exactly like raylib. The segmentation was validated headless:</span>
+<span class="tok-comment">//! pixel-for-pixel identical glyph counts/rects to a reference scan on all three</span>
+<span class="tok-comment">//! real fonts (mecha 96, alagard 95, jupiter_crash 96 glyphs).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! `.memory = .managed`: all four fonts (three sprite + the TTF UI font) and the</span>
+<span class="tok-comment">//! UI host are freed in `deinit`; the sprite-font atlases are engine-owned</span>
+<span class="tok-comment">//! (registered) and reclaimed with the renderer at teardown, so the twice-</span>
+<span class="tok-comment">//! lifecycle smoke census must come back FLAT.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> c = z.colors;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-kw">const</span> mecha_png = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"mecha.png"</span>);
+<span class="tok-kw">const</span> alagard_png = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"alagard.png"</span>);
+<span class="tok-kw">const</span> jupiter_png = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"jupiter_crash.png"</span>);
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">/// The MAGENTA key colour these XNA-style fonts use for their background.</span>
+<span class="tok-kw">const</span> key_magenta: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> FontInfo = <span class="tok-kw">struct</span> {
+    label: []<span class="tok-kw">const</span> u8,
+    tint: Color,
+};
+
+<span class="tok-kw">const</span> font_info = [_]FontInfo{
+    .{ .label = <span class="tok-str">"MECHA  -  by Captain Falcon"</span>, .tint = .{ .r = <span class="tok-num">120</span>, .g = <span class="tok-num">220</span>, .b = <span class="tok-num">160</span>, .a = <span class="tok-num">255</span> } },
+    .{ .label = <span class="tok-str">"ALAGARD  -  by Hewett Tsoi"</span>, .tint = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> } },
+    .{ .label = <span class="tok-str">"JUPITER CRASH  -  by Brian Kent"</span>, .tint = .{ .r = <span class="tok-num">240</span>, .g = <span class="tok-num">205</span>, .b = <span class="tok-num">110</span>, .a = <span class="tok-num">255</span> } },
+};
+
+<span class="tok-kw">const</span> samples = [_][]<span class="tok-kw">const</span> u8{
+    <span class="tok-str">"THE QUICK BROWN FOX"</span>,
+    <span class="tok-str">"Sphinx of black quartz"</span>,
+    <span class="tok-str">"ABCDEFG abcdefg"</span>,
+    <span class="tok-str">"0123456789 !?.,:;"</span>,
+    <span class="tok-str">"zimr sprite fonts"</span>,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    ui_font: z.Font,
+    ui_host: z.UiHost,
+    <span class="tok-comment">/// mecha, alagard, jupiter_crash - parsed from magenta-keyed PNGs.</span>
+    fonts: [<span class="tok-num">3</span>]z.Font,
+
+    sample_idx: u32 = <span class="tok-num">0</span>,
+    <span class="tok-comment">/// Multiplier applied to each font's own baseSize.</span>
+    size_scale: f32 = <span class="tok-num">2.0</span>,
+    <span class="tok-comment">/// raylib `DrawTextEx` inter-glyph spacing (logical px; may be negative).</span>
+    spacing: f32 = <span class="tok-num">1.0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">loadSpriteFont</span>(f: *z.Frame, gpa: Allocator, bytes: []<span class="tok-kw">const</span> u8) !z.Font {
+    <span class="tok-comment">// loadFontFromImage copies what it needs, so the decoded image is freed here.</span>
+    <span class="tok-kw">const</span> img: z.Image = <span class="tok-kw">try</span> z.<span class="tok-fn">loadImageFromMemory</span>(gpa, bytes);
+    <span class="tok-kw">defer</span> z.<span class="tok-fn">unloadImage</span>(gpa, img);
+    <span class="tok-kw">return</span> z.<span class="tok-fn">loadFontFromImage</span>(f.gl, gpa, img, key_magenta, <span class="tok-num">32</span>);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    <span class="tok-kw">for</span> (&amp;s.fonts) |font| {
+        z.<span class="tok-fn">unloadFont</span>(gpa, font);
+    }
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.ui_font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> ui_font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">20</span>);
+    s.* = .{
+        .ui_font = ui_font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, ui_font),
+        .fonts = .{
+            <span class="tok-kw">try</span> <span class="tok-fn">loadSpriteFont</span>(f, gpa, mecha_png),
+            <span class="tok-kw">try</span> <span class="tok-fn">loadSpriteFont</span>(f, gpa, alagard_png),
+            <span class="tok-kw">try</span> <span class="tok-fn">loadSpriteFont</span>(f, gpa, jupiter_png),
+        },
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> fw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> fh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> msg: []<span class="tok-kw">const</span> u8 = samples[s.sample_idx];
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">16</span>, .g = <span class="tok-num">18</span>, .b = <span class="tok-num">26</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+
+    <span class="tok-comment">// ---- three font rows, each centred on its own sample line -------------</span>
+    <span class="tok-kw">const</span> panel_h: f32 = <span class="tok-num">232</span>;
+    <span class="tok-kw">const</span> top: f32 = <span class="tok-num">40</span>;
+    <span class="tok-kw">const</span> avail: f32 = fh - panel_h - top - <span class="tok-num">16</span>;
+    <span class="tok-kw">const</span> row_h: f32 = avail / <span class="tok-num">3.0</span>;
+    <span class="tok-kw">for</span> (s.fonts, <span class="tok-num">0</span>..) |font, i| {
+        <span class="tok-kw">const</span> info: FontInfo = font_info[i];
+        <span class="tok-kw">const</span> size: f32 = <span class="tok-fn">float</span>(font.baseSize) * s.size_scale;
+        <span class="tok-kw">const</span> dim: zm.Vec2 = z.<span class="tok-fn">measureTextEx</span>(font, msg, size, s.spacing);
+        <span class="tok-kw">const</span> row_y: f32 = top + row_h * <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)));
+
+        <span class="tok-comment">// small TTF caption naming the face</span>
+        f.gl.<span class="tok-fn">text</span>(.{ <span class="tok-num">16</span>, row_y + <span class="tok-num">4</span> }, info.label, .{ .size = <span class="tok-num">16</span>, .color = c.slate_400, .font = &amp;s.ui_font });
+
+        <span class="tok-comment">// the sprite-font sample, horizontally centred in its row</span>
+        <span class="tok-kw">const</span> tx: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">16.0</span>, (fw - dim[<span class="tok-num">0</span>]) * <span class="tok-num">0.5</span>);
+        <span class="tok-kw">const</span> ty: f32 = row_y + (row_h - dim[<span class="tok-num">1</span>]) * <span class="tok-num">0.5</span> + <span class="tok-num">10</span>;
+        f.gl.<span class="tok-fn">text</span>(.{ tx, ty }, msg, .{ .size = size, .color = info.tint, .font = &amp;font, .spacing = s.spacing });
+
+        <span class="tok-comment">// a thin divider under each row (except the last)</span>
+        <span class="tok-kw">if</span> (i &lt; <span class="tok-num">2</span>) {
+            <span class="tok-kw">const</span> ly: f32 = top + row_h * <span class="tok-fn">float</span>(<span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(i)) + <span class="tok-num">1</span>);
+            f.gl.<span class="tok-fn">rect</span>(
+                .{ .x = <span class="tok-num">16</span>, .y = ly, .width = fw - <span class="tok-num">32</span>, .height = <span class="tok-num">1</span> },
+                .{ .color = .{ .r = <span class="tok-num">40</span>, .g = <span class="tok-num">44</span>, .b = <span class="tok-num">54</span>, .a = <span class="tok-num">255</span> } },
+            );
+        }
+    }
+
+    <span class="tok-comment">// ---- control panel ----------------------------------------------------</span>
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, fh - panel_h - <span class="tok-num">8</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ fw - <span class="tok-num">16.0</span>, panel_h }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Sprite fonts (LoadFontFromImage)"</span>, .{})) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"XNA-style bitmap fonts: glyphs on a magenta key, split by key gutters."</span>, .{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"glyphs  mecha {d}  alagard {d}  jupiter {d}"</span>, .{
+            s.fonts[<span class="tok-num">0</span>].glyphCount,
+            s.fonts[<span class="tok-num">1</span>].glyphCount,
+            s.fonts[<span class="tok-num">2</span>].glyphCount,
+        });
+        u.<span class="tok-fn">separator</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"sample: {s}"</span>, .{msg});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"&lt; prev text"</span>, .{})) {
+            s.sample_idx = <span class="tok-kw">if</span> (s.sample_idx == <span class="tok-num">0</span>) samples.len - <span class="tok-num">1</span> <span class="tok-kw">else</span> s.sample_idx - <span class="tok-num">1</span>;
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"next text &gt;"</span>, .{})) {
+            s.sample_idx = <span class="tok-kw">if</span> (s.sample_idx + <span class="tok-num">1</span> &gt;= samples.len) <span class="tok-num">0</span> <span class="tok-kw">else</span> s.sample_idx + <span class="tok-num">1</span>;
+        }
+
+        u.<span class="tok-fn">separator</span>();
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"size"</span>, &amp;s.size_scale, .{ .min = <span class="tok-num">1.0</span>, .max = <span class="tok-num">4.0</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"spacing"</span>, &amp;s.spacing, .{ .min = -<span class="tok-num">4.0</span>, .max = <span class="tok-num">12.0</span> });
+    }
+
+    s.ui_host.<span class="tok-fn">render</span>(f);
+
+    common.<span class="tok-fn">caption</span>(f.gl, s.ui_font, <span class="tok-str">"Bitmap fonts parsed by z.loadFontFromImage - fonts (c) their designers"</span>);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner/launcher drives begin/end (no offscreen pass, so</span>
+<span class="tok-comment">/// no `manages_own_frame`), exactly like the other 2D UI examples.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - text sprite fonts"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">640</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,1210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>rt_workers — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>rt_workers</h1>
+<figure class="code src-file" data-path="examples/rt_workers/rt_workers.zig" data-lines="518"><figcaption><span>examples/rt_workers/rt_workers.zig</span><span>518 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/rt_workers/rt_workers.zig - a path tracer, rendered across the worker pool.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! THE POINT: the pool has always been parallel - `pump()` hands every free worker a job off</span>
+<span class="tok-comment">//! the queue - but until `jobs.Group` existed, using it meant N Job values, N polls and N</span>
+<span class="tok-comment">//! done-flags open-coded in every app. So nobody did, and the pool ran ONE thread for its</span>
+<span class="tok-comment">//! entire life. This is the first thing that uses it.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! What you are looking at:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * Tiles pop in AS THEY LAND, out of order. That is not a presentation trick - it is what</span>
+<span class="tok-comment">//!     out-of-order completion actually looks like, and `Group.next()` hands them over in</span>
+<span class="tok-comment">//!     whatever order the workers finish.</span>
+<span class="tok-comment">//!   * The dot keeps spinning. It is the only part of this that cannot be faked, and in</span>
+<span class="tok-comment">//!     `worker_png` it is what finally exposed a 95 ms stall that every number said was fine.</span>
+<span class="tok-comment">//!   * "MAIN THREAD" renders the identical tiles with the identical kernel, inline. The image</span>
+<span class="tok-comment">//!     is the same; the dot stops dead.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! What this is NOT: a speedup benchmark. The pool takes half your cores and never more than</span>
+<span class="tok-comment">//! four, ON PURPOSE - it exists to give the frame back, not to chase throughput (bridge.zig</span>
+<span class="tok-comment">//! measured 8 workers at only ~3.4x aggregate, and a hot CPU throttles the GPU). Selling a</span>
+<span class="tok-comment">//! multiplier would be selling a number the engine deliberately declined to optimise.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> kernels = <span class="tok-builtin">@import</span>(<span class="tok-str">"kernels.zig"</span>);
+<span class="tok-kw">const</span> tracer = <span class="tok-builtin">@import</span>(<span class="tok-str">"tracer.zig"</span>);
+
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> jobs = z.jobs;
+<span class="tok-kw">const</span> Sphere = tracer.Sphere;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> normalize = zm.normalize;
+<span class="tok-kw">const</span> cosRad = zm.cosRad;
+<span class="tok-kw">const</span> sinRad = zm.sinRad;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">/// Small on purpose: a phone, a CPU, and a path tracer. The image is stretched to the canvas.</span>
+<span class="tok-kw">const</span> rt_w: u32 = <span class="tok-num">320</span>;
+<span class="tok-kw">const</span> rt_h: u32 = <span class="tok-num">240</span>;
+<span class="tok-kw">const</span> n_tiles: u32 = <span class="tok-num">16</span>;
+
+<span class="tok-kw">const</span> Group = kernels.registry.<span class="tok-fn">Group</span>(kernels.traceTile);
+
+<span class="tok-kw">const</span> scene = [_]Sphere{
+    <span class="tok-comment">// ground</span>
+    .{ .cx = <span class="tok-num">0</span>, .cy = -<span class="tok-num">100.5</span>, .cz = -<span class="tok-num">1</span>, .r = <span class="tok-num">100</span>, .mr = <span class="tok-num">0.55</span>, .mg = <span class="tok-num">0.55</span>, .mb = <span class="tok-num">0.6</span>, .mat = tracer.mat_diffuse },
+    <span class="tok-comment">// a red diffuse ball</span>
+    .{ .cx = -<span class="tok-num">0.85</span>, .cy = <span class="tok-num">0.0</span>, .cz = -<span class="tok-num">1.1</span>, .r = <span class="tok-num">0.5</span>, .mr = <span class="tok-num">0.85</span>, .mg = <span class="tok-num">0.25</span>, .mb = <span class="tok-num">0.25</span>, .mat = tracer.mat_diffuse },
+    <span class="tok-comment">// a metal ball</span>
+    .{ .cx = <span class="tok-num">0.0</span>, .cy = <span class="tok-num">0.05</span>, .cz = -<span class="tok-num">1.25</span>, .r = <span class="tok-num">0.55</span>, .mr = <span class="tok-num">0.85</span>, .mg = <span class="tok-num">0.86</span>, .mb = <span class="tok-num">0.9</span>, .mat = tracer.mat_metal },
+    <span class="tok-comment">// a green diffuse ball</span>
+    .{ .cx = <span class="tok-num">0.95</span>, .cy = -<span class="tok-num">0.05</span>, .cz = -<span class="tok-num">1.0</span>, .r = <span class="tok-num">0.45</span>, .mr = <span class="tok-num">0.3</span>, .mg = <span class="tok-num">0.75</span>, .mb = <span class="tok-num">0.4</span>, .mat = tracer.mat_diffuse },
+    <span class="tok-comment">// a warm emitter, tucked behind</span>
+    .{ .cx = -<span class="tok-num">0.3</span>, .cy = <span class="tok-num">1.15</span>, .cz = -<span class="tok-num">1.9</span>, .r = <span class="tok-num">0.55</span>, .mr = <span class="tok-num">4.5</span>, .mg = <span class="tok-num">3.4</span>, .mb = <span class="tok-num">2.2</span>, .mat = tracer.mat_light },
+};
+
+<span class="tok-kw">const</span> Ran = <span class="tok-kw">enum</span> { nothing, workers, main_thread };
+
+<span class="tok-comment">/// Samples while dragging. Noisy on purpose: you are aiming, not admiring.</span>
+<span class="tok-kw">const</span> preview_spp: u32 = <span class="tok-num">2</span>;
+
+<span class="tok-comment">/// Matches `rt_sidebyside`'s feel: 0.005 rad/px, and a distance range that keeps the scene</span>
+<span class="tok-comment">/// framed on a phone.</span>
+<span class="tok-kw">const</span> orbit_opts: z.OrbitOptions = .{
+    .orbit_sensitivity = <span class="tok-num">0.005</span>,
+    .min_distance = <span class="tok-num">1.4</span>,
+    .max_distance = <span class="tok-num">9.0</span>,
+    .min_pitch = -<span class="tok-num">0.35</span>,
+    .max_pitch = <span class="tok-num">1.25</span>,
+    .fovy_deg = <span class="tok-num">45.0</span>,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    font: z.Font,
+    ui_host: z.UiHost,
+
+    fb: z.CpuFramebuffer,
+    pixels: []u8, <span class="tok-comment">// rt_w * rt_h * RGBA</span>
+
+    <span class="tok-comment">/// The result buffer, allocated ONCE from the registry's own bound. Handing this to</span>
+    <span class="tok-comment">/// `Group.next` every frame is what keeps the landing frame free: `poll()` would allocate</span>
+    <span class="tok-comment">/// on the frame a tile arrives, and we measured what that costs (154 ms for 2.7 MB).</span>
+    <span class="tok-comment">/// Asking `registry.max_output` rather than typing a number means it cannot drift - a</span>
+    <span class="tok-comment">/// hand-typed constant that is too small fails as `OutputTooLarge`, on a phone.</span>
+    tile_buf: []u8,
+
+    group: ?Group = null,
+    dirty: bool = false,
+
+    samples: u32 = <span class="tok-num">24</span>,
+    bounces: u32 = <span class="tok-num">6</span>,
+    seed: u32 = <span class="tok-num">1</span>,
+
+    <span class="tok-comment">/// The engine's orbit camera - the same one `rt_sidebyside` uses. ONE call gives drag to</span>
+    <span class="tok-comment">/// orbit, pinch to zoom and two-finger pan, and it already handles the things a</span>
+    <span class="tok-comment">/// hand-rolled version gets wrong: touch as well as mouse, and skipping the first drag</span>
+    <span class="tok-comment">/// frame so the camera does not POP by the pointer's initial delta.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// I wrote a hand-rolled left-drag first. It was worse, and it was worse in the specific</span>
+    <span class="tok-comment">/// way that phone-only development punishes: it had no pinch, no pan, and a pop.</span>
+    cam: z.OrbitCamera = .<span class="tok-fn">init</span>(zm.<span class="tok-fn">vec</span>(<span class="tok-num">0.0</span>, <span class="tok-num">0.15</span>, -<span class="tok-num">1.15</span>), <span class="tok-num">3.1</span>),
+
+    <span class="tok-comment">/// The camera pose we last RENDERED. A path trace cannot be realtime, so the render is</span>
+    <span class="tok-comment">/// driven by CHANGE, not by every frame.</span>
+    last_yaw: f32 = <span class="tok-num">999.0</span>,
+    last_pitch: f32 = <span class="tok-num">999.0</span>,
+    last_dist: f32 = <span class="tok-num">999.0</span>,
+
+    <span class="tok-comment">/// PROGRESSIVE REFINEMENT, and it is the whole reason this works on a phone.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// A path trace cannot be realtime. So while you drag we render at `preview_spp` (a</span>
+    <span class="tok-comment">/// couple of samples - noisy, instant, good enough to aim with), and the moment you let</span>
+    <span class="tok-comment">/// go we re-render at full quality. Both go through the pool, so the frame never stalls</span>
+    <span class="tok-comment">/// either way and the dot never stops.</span>
+    <span class="tok-comment">///</span>
+    <span class="tok-comment">/// This only works because a render is CHEAP TO ABANDON: `Group.deinit` cancels every</span>
+    <span class="tok-comment">/// job still in flight, host-side too, so a drag that outruns the tracer discards stale</span>
+    <span class="tok-comment">/// tiles instead of queueing a backlog of renders nobody wants to see.</span>
+    preview: bool = false,
+    settled_frames: u32 = <span class="tok-num">0</span>,
+
+    <span class="tok-comment">/// Whatever went wrong, ON SCREEN. `std.log.err` goes to a console the phone-only</span>
+    <span class="tok-comment">/// developer cannot see, so an example that only logs its failures is an example that</span>
+    <span class="tok-comment">/// fails silently - which is how this shipped rendering a black rectangle.</span>
+    err_msg: []<span class="tok-kw">const</span> u8 = <span class="tok-str">""</span>,
+    submitted: u32 = <span class="tok-num">0</span>,
+
+    ran: Ran = .nothing,
+    worst_gap_ms: f32 = <span class="tok-num">0</span>,
+    watching: bool = false,
+    settle: u32 = <span class="tok-num">0</span>,
+    tiles_in: u32 = <span class="tok-num">0</span>,
+    render_ms: f32 = <span class="tok-num">0</span>,
+    started_at: f64 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-comment">/// `zm.cross` is Vec4. This is three lines and unambiguous.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">cross3</span>(a: zm.Vec3, b: zm.Vec3) zm.Vec3 {
+    <span class="tok-kw">return</span> .{
+        a[<span class="tok-num">1</span>] * b[<span class="tok-num">2</span>] - a[<span class="tok-num">2</span>] * b[<span class="tok-num">1</span>],
+        a[<span class="tok-num">2</span>] * b[<span class="tok-num">0</span>] - a[<span class="tok-num">0</span>] * b[<span class="tok-num">2</span>],
+        a[<span class="tok-num">0</span>] * b[<span class="tok-num">1</span>] - a[<span class="tok-num">1</span>] * b[<span class="tok-num">0</span>],
+    };
+}
+
+<span class="tok-kw">const</span> Basis = <span class="tok-kw">struct</span> {
+    eye: zm.Vec3,
+    right: zm.Vec3,
+    up: zm.Vec3,
+    fwd: zm.Vec3,
+};
+
+<span class="tok-comment">/// The orbit camera, as an eye plus an orthonormal basis. Computed ONCE per render, on the</span>
+<span class="tok-comment">/// host - the kernel does no trigonometry at all (see the note on `tracer.Tile`).</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `OrbitCamera` works in `Vec` (4-wide); the tracer works in Vec3. The conversion happens</span>
+<span class="tok-comment">/// exactly here, once, rather than being sprinkled through the kernel.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">cameraBasis</span>(s: *<span class="tok-kw">const</span> State) Basis {
+    <span class="tok-kw">const</span> e4: zm.Vec = s.cam.<span class="tok-fn">eye</span>();
+    <span class="tok-kw">const</span> t4: zm.Vec = s.cam.target;
+    <span class="tok-kw">const</span> eye: zm.Vec3 = .{ e4[<span class="tok-num">0</span>], e4[<span class="tok-num">1</span>], e4[<span class="tok-num">2</span>] };
+    <span class="tok-kw">const</span> tgt: zm.Vec3 = .{ t4[<span class="tok-num">0</span>], t4[<span class="tok-num">1</span>], t4[<span class="tok-num">2</span>] };
+
+    <span class="tok-kw">const</span> fwd: zm.Vec3 = <span class="tok-fn">normalize</span>(tgt - eye);
+    <span class="tok-kw">const</span> world_up: zm.Vec3 = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> };
+    <span class="tok-kw">const</span> right: zm.Vec3 = <span class="tok-fn">normalize</span>(<span class="tok-fn">cross3</span>(fwd, world_up));
+    <span class="tok-kw">const</span> up: zm.Vec3 = <span class="tok-fn">cross3</span>(right, fwd);
+    <span class="tok-kw">return</span> .{ .eye = eye, .right = right, .up = up, .fwd = fwd };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tileHeaders</span>(s: *<span class="tok-kw">const</span> State, buf: []Group.H, tiles: u32, spp: u32) []Group.H {
+    <span class="tok-kw">const</span> cam: Basis = <span class="tok-fn">cameraBasis</span>(s);
+    <span class="tok-kw">const</span> rows: u32 = (rt_h + tiles - <span class="tok-num">1</span>) / tiles;
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; tiles) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> y0: u32 = i * rows;
+        <span class="tok-kw">const</span> y1: u32 = <span class="tok-builtin">@min</span>(y0 + rows, rt_h);
+        buf[i] = .{
+            .y0 = y0,
+            .y1 = y1,
+            .w = rt_w,
+            .h = rt_h,
+            .samples = spp,
+            .bounces = <span class="tok-kw">if</span> (spp &lt;= preview_spp) <span class="tok-num">3</span> <span class="tok-kw">else</span> s.bounces,
+            .n_spheres = scene.len,
+            .seed = s.seed,
+            .ex = cam.eye[<span class="tok-num">0</span>],
+            .ey = cam.eye[<span class="tok-num">1</span>],
+            .ez = cam.eye[<span class="tok-num">2</span>],
+            .rx = cam.right[<span class="tok-num">0</span>],
+            .ry = cam.right[<span class="tok-num">1</span>],
+            .rz = cam.right[<span class="tok-num">2</span>],
+            .ux = cam.up[<span class="tok-num">0</span>],
+            .uy = cam.up[<span class="tok-num">1</span>],
+            .uz = cam.up[<span class="tok-num">2</span>],
+            .fx = cam.fwd[<span class="tok-num">0</span>],
+            .fy = cam.fwd[<span class="tok-num">1</span>],
+            .fz = cam.fwd[<span class="tok-num">2</span>],
+            .focal = <span class="tok-num">1.6</span>,
+        };
+    }
+    <span class="tok-kw">return</span> buf[<span class="tok-num">0</span>..tiles];
+}
+
+<span class="tok-comment">/// Blit a landed band into the framebuffer. `index` is the tile's position in the header</span>
+<span class="tok-comment">/// slice we submitted - which is how an out-of-order result still knows where it belongs.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">blitTile</span>(s: *State, index: usize, bytes: []<span class="tok-kw">const</span> u8) void {
+    <span class="tok-kw">const</span> rows: u32 = (rt_h + n_tiles - <span class="tok-num">1</span>) / n_tiles;
+    <span class="tok-kw">const</span> y0: u32 = <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(index)) * rows;
+    <span class="tok-kw">const</span> y1: u32 = <span class="tok-builtin">@min</span>(y0 + rows, rt_h);
+    <span class="tok-kw">const</span> want: usize = <span class="tok-builtin">@as</span>(usize, rt_w) * (y1 - y0) * <span class="tok-num">4</span>;
+    <span class="tok-kw">if</span> (bytes.len &lt; want) {
+        <span class="tok-kw">return</span>; <span class="tok-comment">// a short band is a bug, not something to paper over with a partial blit</span>
+    }
+    <span class="tok-kw">const</span> dst_off: usize = <span class="tok-builtin">@as</span>(usize, y0) * rt_w * <span class="tok-num">4</span>;
+    <span class="tok-builtin">@memcpy</span>(s.pixels[dst_off .. dst_off + want], bytes[<span class="tok-num">0</span>..want]);
+    s.dirty = true;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">startRender</span>(s: *State, use_workers: bool, spp: u32) void {
+    <span class="tok-kw">if</span> (s.group) |*g| {
+        g.<span class="tok-fn">deinit</span>(); <span class="tok-comment">// cancels anything still in flight, host-side too</span>
+        s.group = null;
+    }
+    <span class="tok-builtin">@memset</span>(s.pixels, <span class="tok-num">0</span>);
+    s.dirty = true;
+    s.tiles_in = <span class="tok-num">0</span>;
+    s.err_msg = <span class="tok-str">""</span>;
+    s.worst_gap_ms = <span class="tok-num">0</span>;
+    s.watching = true;
+    s.settle = <span class="tok-num">0</span>;
+    s.seed +%= <span class="tok-num">1</span>;
+    s.started_at = z.wgpu.<span class="tok-fn">nowMs</span>();
+    s.ran = <span class="tok-kw">if</span> (use_workers) .workers <span class="tok-kw">else</span> .main_thread;
+    s.preview = spp &lt;= preview_spp;
+
+    <span class="tok-kw">var</span> hdr_buf: [n_tiles]Group.H = undefined;
+    <span class="tok-kw">const</span> headers: []Group.H = <span class="tok-fn">tileHeaders</span>(s, &amp;hdr_buf, n_tiles, spp);
+    <span class="tok-kw">const</span> payload: []<span class="tok-kw">const</span> u8 = std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;scene);
+
+    <span class="tok-kw">if</span> (use_workers) {
+        <span class="tok-comment">// ONE line submits every tile. The pool's `pump()` then hands one to each free worker,</span>
+        <span class="tok-comment">// and re-pumps as each finishes - so N tiles occupy min(N, pool_size) cores without</span>
+        <span class="tok-comment">// this example knowing anything about how many cores there are.</span>
+        <span class="tok-kw">const</span> submitted_group: Group = Group.<span class="tok-fn">submitAll</span>(s.gpa, headers, payload) <span class="tok-kw">catch</span> |submit_error| {
+            s.err_msg = <span class="tok-builtin">@errorName</span>(submit_error);
+            s.watching = false;
+            s.submitted = <span class="tok-num">0</span>;
+            <span class="tok-kw">return</span>;
+        };
+        s.group = submitted_group;
+        s.submitted = n_tiles;
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-comment">// The bad way, kept on purpose: the SAME kernel, run inline, right here. The image comes</span>
+    <span class="tok-comment">// out identical - the tracer is deterministic, and there is a test that says so - and the</span>
+    <span class="tok-comment">// frame simply does not happen while it runs.</span>
+    <span class="tok-kw">var</span> arena: std.heap.ArenaAllocator = .<span class="tok-fn">init</span>(s.gpa);
+    <span class="tok-kw">defer</span> arena.<span class="tok-fn">deinit</span>();
+    <span class="tok-kw">for</span> (headers, <span class="tok-num">0</span>..) |h, i| {
+        <span class="tok-kw">var</span> w: std.Io.Writer = .<span class="tok-fn">fixed</span>(s.tile_buf);
+        tracer.<span class="tok-fn">traceTile</span>(arena.<span class="tok-fn">allocator</span>(), h, payload, &amp;w) <span class="tok-kw">catch</span> |err| {
+            s.err_msg = <span class="tok-builtin">@errorName</span>(err);
+            <span class="tok-kw">continue</span>;
+        };
+        <span class="tok-fn">blitTile</span>(s, i, w.<span class="tok-fn">buffered</span>());
+        s.tiles_in += <span class="tok-num">1</span>;
+    }
+    s.render_ms = <span class="tok-builtin">@floatCast</span>(z.wgpu.<span class="tok-fn">nowMs</span>() - s.started_at);
+    s.settle = <span class="tok-num">3</span>; <span class="tok-comment">// the frame we just blocked shows up on the NEXT frame's delta</span>
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">20</span>);
+    <span class="tok-kw">const</span> pixels: []u8 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u8, rt_w * rt_h * <span class="tok-num">4</span>);
+    <span class="tok-builtin">@memset</span>(pixels, <span class="tok-num">0</span>);
+
+    s.* = .{
+        .gpa = gpa,
+        .font = font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .pixels = pixels,
+        .tile_buf = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u8, kernels.registry.max_output),
+        .fb = z.CpuFramebuffer.<span class="tok-fn">init</span>(f.gpu.device, f.gpu.queue, rt_w, rt_h, pixels, <span class="tok-str">"rt_workers_fb"</span>),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    <span class="tok-kw">if</span> (s.group) |*g| {
+        g.<span class="tok-fn">deinit</span>();
+    }
+    gpa.<span class="tok-fn">free</span>(s.pixels);
+    gpa.<span class="tok-fn">free</span>(s.tile_buf);
+    s.fb.<span class="tok-fn">deinit</span>();
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// Render once on arrival, rather than showing a black rectangle and hoping someone taps.</span>
+    <span class="tok-kw">if</span> (s.ran == .nothing <span class="tok-kw">and</span> s.group == null) {
+        <span class="tok-fn">startRender</span>(s, true, s.samples);
+    }
+
+    <span class="tok-kw">const</span> gap_ms: f32 = f.time.delta_time * <span class="tok-num">1000.0</span>;
+    <span class="tok-kw">if</span> (s.watching) {
+        <span class="tok-kw">if</span> (gap_ms &gt; s.worst_gap_ms) {
+            s.worst_gap_ms = gap_ms;
+        }
+        <span class="tok-kw">if</span> (s.settle &gt; <span class="tok-num">0</span>) {
+            s.settle -= <span class="tok-num">1</span>;
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.group == null <span class="tok-kw">or</span> s.group.?.<span class="tok-fn">complete</span>()) {
+            s.watching = false;
+        }
+    }
+
+    <span class="tok-comment">// ---- collect whatever landed THIS FRAME -------------------------------------------</span>
+    <span class="tok-comment">// Several tiles can arrive in one frame, and they arrive OUT OF ORDER - whichever worker</span>
+    <span class="tok-comment">// finished first. `index` is how a band still knows where it belongs.</span>
+    <span class="tok-kw">if</span> (s.group) |*tile_group| {
+        <span class="tok-comment">// Drain everything that finished THIS FRAME. Several tiles can land in one frame, and</span>
+        <span class="tok-comment">// they land OUT OF ORDER - whichever worker got there first. `landed.index` is the</span>
+        <span class="tok-comment">// position in the header slice we submitted, which is how an out-of-order band still</span>
+        <span class="tok-comment">// knows which scanlines it belongs to.</span>
+        <span class="tok-kw">while</span> (true) {
+            <span class="tok-kw">const</span> landed_tile_or_null: ?Group.Landed = tile_group.<span class="tok-fn">next</span>(s.tile_buf) <span class="tok-kw">catch</span> |tile_error| {
+                <span class="tok-comment">// A tile whose kernel failed. Report it ON SCREEN - `std.log.err` writes to a</span>
+                <span class="tok-comment">// console a phone-only developer cannot read, and an example that only logs</span>
+                <span class="tok-comment">// its failures is an example that fails silently.</span>
+                <span class="tok-comment">//</span>
+                <span class="tok-comment">// Prefer the KERNEL's own error name ("ShortPayload") over the transport's</span>
+                <span class="tok-comment">// ("KernelFailed"). The first says what is wrong; the second says only that</span>
+                <span class="tok-comment">// something is.</span>
+                <span class="tok-kw">const</span> kernel_name: []<span class="tok-kw">const</span> u8 = tile_group.<span class="tok-fn">lastErrorName</span>();
+                s.err_msg = <span class="tok-kw">if</span> (kernel_name.len &gt;= <span class="tok-num">1</span>) kernel_name <span class="tok-kw">else</span> <span class="tok-builtin">@errorName</span>(tile_error);
+                <span class="tok-kw">break</span>;
+            };
+
+            <span class="tok-kw">const</span> landed_tile: Group.Landed = landed_tile_or_null <span class="tok-kw">orelse</span> {
+                <span class="tok-comment">// Nothing more is ready this frame. This is the common case.</span>
+                <span class="tok-kw">break</span>;
+            };
+
+            <span class="tok-fn">blitTile</span>(s, landed_tile.index, landed_tile.bytes);
+            s.tiles_in += <span class="tok-num">1</span>;
+        }
+
+        <span class="tok-kw">const</span> every_tile_has_landed: bool = tile_group.<span class="tok-fn">complete</span>();
+        <span class="tok-kw">if</span> (every_tile_has_landed) {
+            <span class="tok-kw">const</span> now_ms: f64 = z.wgpu.<span class="tok-fn">nowMs</span>();
+            s.render_ms = <span class="tok-builtin">@floatCast</span>(now_ms - s.started_at);
+
+            <span class="tok-comment">// Keep watching the frame gap for a few more frames. A cost incurred INSIDE a</span>
+            <span class="tok-comment">// frame only shows up in the NEXT frame's delta, so stopping here would discard</span>
+            <span class="tok-comment">// the very number this example exists to report.</span>
+            s.settle = <span class="tok-num">3</span>;
+
+            tile_group.<span class="tok-fn">deinit</span>();
+            s.group = null;
+        }
+    }
+
+    <span class="tok-kw">if</span> (s.dirty) {
+        s.fb.<span class="tok-fn">update</span>(f.gpu.queue, s.pixels);
+        s.dirty = false;
+    }
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">11</span>, .g = <span class="tok-num">15</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    _ = h;
+    <span class="tok-kw">const</span> fsz: f32 = <span class="tok-fn">clamp</span>(w / <span class="tok-num">30.0</span>, <span class="tok-num">13.0</span>, <span class="tok-num">26.0</span>);
+    <span class="tok-kw">const</span> bar_h: f32 = fsz * <span class="tok-num">7.6</span>;
+
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+
+    <span class="tok-comment">// ---- the image, BELOW the control bar ----------------------------------------------</span>
+    <span class="tok-kw">const</span> img_w: f32 = w - fsz * <span class="tok-num">2.0</span>;
+    <span class="tok-kw">const</span> img_h: f32 = img_w * <span class="tok-fn">float</span>(rt_h) / <span class="tok-fn">float</span>(rt_w);
+    <span class="tok-kw">const</span> img_x: f32 = fsz;
+    <span class="tok-kw">const</span> img_y: f32 = bar_h + fsz * <span class="tok-num">3.4</span>;
+    s.fb.<span class="tok-fn">present</span>(f.gl, img_x, img_y, img_w, img_h);
+
+    <span class="tok-comment">// ---- DRAG to orbit, PINCH to zoom, TWO FINGERS to pan --------------------------------</span>
+    <span class="tok-comment">// One call. It reads touch AND mouse, and skips the first drag frame so the camera does</span>
+    <span class="tok-comment">// not pop. `wantCaptureMouse` keeps a drag that starts on a button from spinning the</span>
+    <span class="tok-comment">// scene.</span>
+    _ = s.cam.<span class="tok-fn">update</span>(f, u.<span class="tok-fn">wantCaptureMouse</span>(), orbit_opts);
+
+    <span class="tok-comment">// A path trace cannot be realtime, so the render is driven by CHANGE, not by frames.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// While the camera is moving we render at `preview_spp` - noisy, instant, good enough to</span>
+    <span class="tok-comment">// aim with. When it stops, we re-render at full quality. Both go through the pool, so the</span>
+    <span class="tok-comment">// frame never stalls either way and the dot never stops.</span>
+    <span class="tok-comment">//</span>
+    <span class="tok-comment">// This only works because a render is CHEAP TO ABANDON: `Group.deinit` cancels every job</span>
+    <span class="tok-comment">// still in flight, host-side too. A camera that outruns the tracer discards stale tiles</span>
+    <span class="tok-comment">// rather than queueing a backlog of renders nobody will ever see. And a preview only</span>
+    <span class="tok-comment">// starts when the pool is FREE, so fast drags skip renders instead of piling up.</span>
+    <span class="tok-kw">const</span> moved: bool = s.cam.yaw != s.last_yaw <span class="tok-kw">or</span>
+        s.cam.pitch != s.last_pitch <span class="tok-kw">or</span>
+        s.cam.distance != s.last_dist;
+
+    <span class="tok-kw">if</span> (moved) {
+        s.last_yaw = s.cam.yaw;
+        s.last_pitch = s.cam.pitch;
+        s.last_dist = s.cam.distance;
+        s.settled_frames = <span class="tok-num">0</span>;
+        <span class="tok-kw">if</span> (s.group == null) {
+            <span class="tok-fn">startRender</span>(s, true, preview_spp);
+        }
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.preview <span class="tok-kw">and</span> s.group == null) {
+        <span class="tok-comment">// Held still for a few frames after a preview - go to full quality. The delay stops a</span>
+        <span class="tok-comment">// twitchy finger from kicking off a 24 spp render it is about to invalidate.</span>
+        s.settled_frames += <span class="tok-num">1</span>;
+        <span class="tok-kw">if</span> (s.settled_frames &gt; <span class="tok-num">6</span>) {
+            <span class="tok-fn">startRender</span>(s, true, s.samples);
+        }
+    }
+
+    <span class="tok-comment">// ---- the dot. Its smoothness IS the claim. -----------------------------------------</span>
+    <span class="tok-kw">const</span> cx: f32 = w * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> cy: f32 = bar_h + fsz * <span class="tok-num">1.6</span>;
+    <span class="tok-kw">const</span> orbit_r: f32 = fsz * <span class="tok-num">1.2</span>;
+    <span class="tok-kw">const</span> a: f32 = f.time.time * <span class="tok-num">3.0</span>;
+    f.gl.<span class="tok-fn">circle</span>(.{ cx, cy }, fsz * <span class="tok-num">1.45</span>, .{ .color = .{ .r = <span class="tok-num">22</span>, .g = <span class="tok-num">30</span>, .b = <span class="tok-num">48</span>, .a = <span class="tok-num">255</span> }, .segments = <span class="tok-num">32</span> });
+    f.gl.<span class="tok-fn">circle</span>(
+        .{ cx + orbit_r * <span class="tok-fn">cosRad</span>(a), cy + orbit_r * <span class="tok-fn">sinRad</span>(a) },
+        fsz * <span class="tok-num">0.34</span>,
+        .{ .color = .{ .r = <span class="tok-num">126</span>, .g = <span class="tok-num">231</span>, .b = <span class="tok-num">135</span>, .a = <span class="tok-num">255</span> }, .segments = <span class="tok-num">16</span> },
+    );
+    u.<span class="tok-fn">style</span>().font_size = fsz;
+    u.<span class="tok-fn">style</span>().frame_padding = .{ fsz * <span class="tok-num">0.35</span>, fsz * <span class="tok-num">0.3</span> };
+    u.<span class="tok-fn">style</span>().item_spacing = .{ fsz * <span class="tok-num">0.4</span>, fsz * <span class="tok-num">0.4</span> };
+    u.<span class="tok-fn">style</span>().window_padding = .{ fsz * <span class="tok-num">0.5</span>, fsz * <span class="tok-num">0.5</span> };
+
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ w, bar_h }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"render"</span>, .{ .flags = .{
+        .no_move = true,
+        .no_resize = true,
+        .no_title_bar = true,
+    } })) |win| {
+        <span class="tok-kw">defer</span> win.<span class="tok-fn">close</span>();
+        <span class="tok-kw">const</span> busy: bool = s.group != null;
+        <span class="tok-kw">const</span> bw: f32 = <span class="tok-builtin">@min</span>((w - fsz * <span class="tok-num">2.5</span>) / <span class="tok-num">2.0</span>, fsz * <span class="tok-num">12.0</span>);
+        <span class="tok-kw">const</span> bh: f32 = fsz * <span class="tok-num">2.0</span>;
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"RENDER on WORKERS"</span>, .{ .size = .{ bw, bh } }) <span class="tok-kw">and</span> !busy) {
+            <span class="tok-fn">startRender</span>(s, true, s.samples);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"on MAIN THREAD"</span>, .{ .size = .{ bw, bh } }) <span class="tok-kw">and</span> !busy) {
+            <span class="tok-fn">startRender</span>(s, false, s.samples);
+        }
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"samples /2"</span>, .{ .size = .{ bw * <span class="tok-num">0.6</span>, bh } }) <span class="tok-kw">and</span> !busy) {
+            s.samples = <span class="tok-builtin">@max</span>(<span class="tok-num">1</span>, s.samples / <span class="tok-num">2</span>);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">button</span>(<span class="tok-str">"samples x2"</span>, .{ .size = .{ bw * <span class="tok-num">0.6</span>, bh } }) <span class="tok-kw">and</span> !busy) {
+            s.samples = <span class="tok-builtin">@min</span>(<span class="tok-num">512</span>, s.samples * <span class="tok-num">2</span>);
+        }
+        u.<span class="tok-fn">sameLine</span>(.{});
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"{d} spp"</span>, .{s.samples});
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"DRAG THE IMAGE to orbit.  workers: {s}   tiles {d}/{d}"</span>, .{
+            <span class="tok-kw">if</span> (jobs.<span class="tok-fn">parallel</span>()) <span class="tok-str">"REAL"</span> <span class="tok-kw">else</span> <span class="tok-str">"NONE - inline"</span>,
+            s.tiles_in,
+            n_tiles,
+        });
+
+        <span class="tok-comment">// THE number. Not "how fast" - "did it cost you the frame".</span>
+        <span class="tok-kw">var</span> buf: [<span class="tok-num">96</span>]u8 = undefined;
+        <span class="tok-kw">const</span> bad: bool = s.worst_gap_ms &gt; <span class="tok-num">34.0</span>;
+        <span class="tok-kw">const</span> txt: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(
+            &amp;buf,
+            <span class="tok-str">"worst frame gap {d:.0} ms   render {d:.0} ms   [{s}]"</span>,
+            .{ s.worst_gap_ms, s.render_ms, <span class="tok-builtin">@tagName</span>(s.ran) },
+        ) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+        u.<span class="tok-fn">textColored</span>(<span class="tok-kw">if</span> (bad) z.colors.red_400 <span class="tok-kw">else</span> z.colors.emerald_400, <span class="tok-str">"{s}"</span>, .{txt});
+
+        <span class="tok-comment">// The diagnostics that would otherwise be invisible: what we asked for, what came</span>
+        <span class="tok-comment">// back, and what broke. An example that logs its failures to a console nobody can</span>
+        <span class="tok-comment">// read is an example that fails silently.</span>
+        <span class="tok-kw">if</span> (s.err_msg.len &gt;= <span class="tok-num">1</span>) {
+            u.<span class="tok-fn">textColored</span>(z.colors.red_400, <span class="tok-str">"ERROR: {s}"</span>, .{s.err_msg});
+        } <span class="tok-kw">else</span> {
+            u.<span class="tok-fn">text</span>(<span class="tok-str">"submitted {d}  max_out {d} KB  band {d} KB"</span>, .{
+                s.submitted,
+                kernels.registry.max_output / <span class="tok-num">1024</span>,
+                (rt_w * ((rt_h + n_tiles - <span class="tok-num">1</span>) / n_tiles) * <span class="tok-num">4</span>) / <span class="tok-num">1024</span>,
+            });
+        }
+    }
+    s.ui_host.<span class="tok-fn">render</span>(f);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - jobs - a path tracer across the worker pool"</span>,
+            .width = <span class="tok-num">480</span>,
+            .height = <span class="tok-num">760</span>,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/rt_workers/kernels.zig" data-lines="32"><figcaption><span>examples/rt_workers/kernels.zig</span><span>32 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/rt_workers/kernels.zig - the registry.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Compiled TWICE: into the app (so `Group.submitAll` knows the header type, checked at</span>
+<span class="tok-comment">//! comptime) and into a separate freestanding kernel wasm with ZERO imports, which the Web</span>
+<span class="tok-comment">//! Workers instantiate with `{}`. The build ASSERTS that import section is empty, so a kernel</span>
+<span class="tok-comment">//! that reaches for the DOM fails to build rather than failing on a phone.</span>
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+
+<span class="tok-kw">const</span> jobs = z.jobs;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> tracer = <span class="tok-builtin">@import</span>(<span class="tok-str">"tracer.zig"</span>);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> traceTile = tracer.traceTile;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> job_kernels = .{
+    .{ <span class="tok-str">"traceTile"</span>, traceTile },
+};
+
+<span class="tok-comment">/// The bounds are TIGHT, and that is the point of this example.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `worker_png` moves 4 MB in and 2.7 MB out per job, and the cost of moving those bytes is</span>
+<span class="tok-comment">/// what dominated - and hid - its behaviour for weeks. Here:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///   in:  a Tile header + the sphere array. A few hundred bytes.</span>
+<span class="tok-comment">///   out: one band of pixels. At 320x240 in 16 bands that is 320 x 15 x RGBA = 19 KB.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// So the transport is nothing and what you are watching is the POOL, not the plumbing.</span>
+<span class="tok-comment">/// 512 KB of headroom covers a full-frame band even if someone renders one tile for the whole</span>
+<span class="tok-comment">/// image, which is exactly what the "1 worker" comparison does.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> registry = jobs.<span class="tok-fn">Registry</span>(job_kernels, .{
+    .max_input = <span class="tok-num">64</span> &lt;&lt; <span class="tok-num">10</span>, <span class="tok-comment">// 64 KB - a scene is spheres, not geometry</span>
+    .max_output = <span class="tok-num">512</span> &lt;&lt; <span class="tok-num">10</span>, <span class="tok-comment">// 512 KB - one band, with room for the whole image in one tile</span>
+});
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/rt_workers/tracer.zig" data-lines="378"><figcaption><span>examples/rt_workers/tracer.zig</span><span>378 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/rt_workers/tracer.zig - the PURE half. A path tracer that is a job kernel.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! No DOM, no GPU, no globals. It takes a scene and a band of scanlines, and returns those</span>
+<span class="tok-comment">//! scanlines' pixels. That is the whole contract, and it is why this compiles into a</span>
+<span class="tok-comment">//! freestanding kernel wasm with ZERO imports that a Web Worker can instantiate with `{}`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It is also why you can `zig build test` it. The tests at the bottom run the real tracer;</span>
+<span class="tok-comment">//! no browser, no worker, no wasm.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! WHY A TRACER, and not the PNG encoder or the Mandelbrot:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * The payload is TINY - a handful of spheres, a few hundred bytes - and the result is</span>
+<span class="tok-comment">//!     one band of pixels. `worker_png` shoves 4 MB in and 2.7 MB out, and the cost of moving</span>
+<span class="tok-comment">//!     those bytes is what dominated (and hid) its behaviour for weeks. Here the transport is</span>
+<span class="tok-comment">//!     nothing, so what you see is the POOL rather than the plumbing.</span>
+<span class="tok-comment">//!   * The cost is real and TUNABLE. `samples` spans "instant" to "please wait", so the same</span>
+<span class="tok-comment">//!     demo stays honest across the whole range.</span>
+<span class="tok-comment">//!   * Tiles land as they finish, so progressive display is not a presentation trick bolted</span>
+<span class="tok-comment">//!     on afterwards - it is what out-of-order completion actually looks like.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> Writer = std.Io.Writer;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> dot = zm.dot;
+<span class="tok-kw">const</span> normalize = zm.normalize;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> expectEqual = std.testing.expectEqual;
+<span class="tok-kw">const</span> expectEqualSlices = std.testing.expectEqualSlices;
+<span class="tok-kw">const</span> expectError = std.testing.expectError;
+
+<span class="tok-comment">/// `extern`: these bytes are memcpy'd out of the app's wasm and into the KERNEL's - two</span>
+<span class="tok-comment">/// separate compilations - and Zig's auto layout is free to reorder fields across them.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Sphere = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    r: f32,
+    <span class="tok-comment">/// albedo, or emission when `mat == mat_light`</span>
+    mr: f32,
+    mg: f32,
+    mb: f32,
+    mat: u32,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> mat_diffuse: u32 = <span class="tok-num">0</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> mat_metal: u32 = <span class="tok-num">1</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> mat_light: u32 = <span class="tok-num">2</span>;
+
+<span class="tok-comment">/// One unit of work: a horizontal band of the image. The band is the JOB.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The camera arrives as an EYE plus a precomputed ORTHONORMAL BASIS, not as yaw/pitch. The</span>
+<span class="tok-comment">/// host does the trigonometry once per render; the kernel does none. Two reasons, and they</span>
+<span class="tok-comment">/// are both about keeping the kernel dumb:</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">///   * every kernel invocation would otherwise recompute the same sin/cos, per tile, per</span>
+<span class="tok-comment">///     worker, for a value that cannot change during a render;</span>
+<span class="tok-comment">///   * a basis is unambiguous. Yaw/pitch needs a convention, and a convention that lives in</span>
+<span class="tok-comment">///     two places is a convention that will disagree with itself.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Tile = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    y0: u32,
+    y1: u32,
+    w: u32,
+    h: u32,
+    samples: u32,
+    bounces: u32,
+    n_spheres: u32,
+    seed: u32,
+
+    ex: f32, <span class="tok-comment">// eye</span>
+    ey: f32,
+    ez: f32,
+    rx: f32, <span class="tok-comment">// right</span>
+    ry: f32,
+    rz: f32,
+    ux: f32, <span class="tok-comment">// up</span>
+    uy: f32,
+    uz: f32,
+    fx: f32, <span class="tok-comment">// forward (the view direction)</span>
+    fy: f32,
+    fz: f32,
+    focal: f32,
+    _pad: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">const</span> Hit = <span class="tok-kw">struct</span> {
+    t: f32,
+    p: Vec3,
+    n: Vec3,
+    albedo: Vec3,
+    mat: u32,
+};
+
+<span class="tok-comment">/// xorshift32. A kernel gets no globals and wants none - the RNG state is a local, seeded</span>
+<span class="tok-comment">/// from the pixel and the tile, so the same tile renders the same way wherever it runs.</span>
+<span class="tok-comment">/// (That is not a nicety: it is what lets the test below assert the worker and the main</span>
+<span class="tok-comment">/// thread agree.)</span>
+<span class="tok-kw">const</span> Rng = <span class="tok-kw">struct</span> {
+    s: u32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">next</span>(self: *Rng) u32 {
+        <span class="tok-kw">var</span> x: u32 = self.s;
+        x ^= x &lt;&lt; <span class="tok-num">13</span>;
+        x ^= x &gt;&gt; <span class="tok-num">17</span>;
+        x ^= x &lt;&lt; <span class="tok-num">5</span>;
+        self.s = x;
+        <span class="tok-kw">return</span> x;
+    }
+
+    <span class="tok-comment">/// [0, 1). Named `unit`, not `float`: `zm.float` is a reserved math word and shadowing</span>
+    <span class="tok-comment">/// it inside a kernel is exactly the kind of quiet confusion the linter exists to stop.</span>
+    <span class="tok-kw">fn</span> <span class="tok-fn">unit</span>(self: *Rng) f32 {
+        <span class="tok-kw">const</span> bits: u32 = self.<span class="tok-fn">next</span>() &gt;&gt; <span class="tok-num">8</span>; <span class="tok-comment">// 24 bits of mantissa</span>
+        <span class="tok-kw">return</span> <span class="tok-fn">float</span>(bits) / <span class="tok-num">16777216.0</span>;
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">inUnitSphere</span>(self: *Rng) Vec3 {
+        <span class="tok-comment">// Rejection sampling, bounded: a kernel must not be able to spin forever on a bad</span>
+        <span class="tok-comment">// seed. After 8 tries take what we have and normalise - the bias is invisible and</span>
+        <span class="tok-comment">// the bound is absolute.</span>
+        <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (i &lt; <span class="tok-num">8</span>) : (i += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> p: Vec3 = .{
+                self.<span class="tok-fn">unit</span>() * <span class="tok-num">2.0</span> - <span class="tok-num">1.0</span>,
+                self.<span class="tok-fn">unit</span>() * <span class="tok-num">2.0</span> - <span class="tok-num">1.0</span>,
+                self.<span class="tok-fn">unit</span>() * <span class="tok-num">2.0</span> - <span class="tok-num">1.0</span>,
+            };
+            <span class="tok-kw">if</span> (<span class="tok-fn">dot</span>(p, p) &lt; <span class="tok-num">1.0</span>) {
+                <span class="tok-kw">return</span> p;
+            }
+        }
+        <span class="tok-kw">const</span> fallback: Vec3 = .{ <span class="tok-num">0.577</span>, <span class="tok-num">0.577</span>, <span class="tok-num">0.577</span> };
+        <span class="tok-kw">return</span> <span class="tok-fn">normalize</span>(fallback);
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">hitSphere</span>(
+    s: Sphere,
+    ro: Vec3,
+    rd: Vec3,
+    t_min: f32,
+    t_max: f32,
+) ?Hit {
+    <span class="tok-kw">const</span> c: Vec3 = .{ s.cx, s.cy, s.cz };
+    <span class="tok-kw">const</span> oc: Vec3 = ro - c;
+    <span class="tok-kw">const</span> a: f32 = <span class="tok-fn">dot</span>(rd, rd);
+    <span class="tok-kw">const</span> half_b: f32 = <span class="tok-fn">dot</span>(oc, rd);
+    <span class="tok-kw">const</span> cc: f32 = <span class="tok-fn">dot</span>(oc, oc) - s.r * s.r;
+    <span class="tok-kw">const</span> disc: f32 = half_b * half_b - a * cc;
+    <span class="tok-kw">if</span> (disc &lt; <span class="tok-num">0.0</span>) {
+        <span class="tok-kw">return</span> null;
+    }
+    <span class="tok-kw">const</span> root: f32 = <span class="tok-builtin">@sqrt</span>(disc);
+    <span class="tok-kw">var</span> t: f32 = (-half_b - root) / a;
+    <span class="tok-kw">if</span> (t &lt; t_min <span class="tok-kw">or</span> t &gt; t_max) {
+        t = (-half_b + root) / a;
+        <span class="tok-kw">if</span> (t &lt; t_min <span class="tok-kw">or</span> t &gt; t_max) {
+            <span class="tok-kw">return</span> null;
+        }
+    }
+    <span class="tok-kw">const</span> p: Vec3 = ro + rd * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(t));
+    <span class="tok-kw">return</span> .{
+        .t = t,
+        .p = p,
+        .n = (p - c) / <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(s.r)),
+        .albedo = .{ s.mr, s.mg, s.mb },
+        .mat = s.mat,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">hitScene</span>(spheres: []<span class="tok-kw">const</span> Sphere, ro: Vec3, rd: Vec3) ?Hit {
+    <span class="tok-kw">var</span> best: ?Hit = null;
+    <span class="tok-kw">var</span> closest: f32 = <span class="tok-num">1e30</span>;
+    <span class="tok-kw">for</span> (spheres) |s| {
+        <span class="tok-kw">if</span> (<span class="tok-fn">hitSphere</span>(s, ro, rd, <span class="tok-num">0.001</span>, closest)) |h| {
+            closest = h.t;
+            best = h;
+        }
+    }
+    <span class="tok-kw">return</span> best;
+}
+
+<span class="tok-comment">/// Iterative, not recursive. A worker's wasm stack is small and a kernel that blows it takes</span>
+<span class="tok-comment">/// the whole worker with it - and a stack overflow across a postMessage boundary is a</span>
+<span class="tok-comment">/// miserable thing to debug.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">radiance</span>(
+    spheres: []<span class="tok-kw">const</span> Sphere,
+    ro_in: Vec3,
+    rd_in: Vec3,
+    bounces: u32,
+    rng: *Rng,
+) Vec3 {
+    <span class="tok-kw">var</span> ro: Vec3 = ro_in;
+    <span class="tok-kw">var</span> rd: Vec3 = rd_in;
+    <span class="tok-kw">var</span> throughput: Vec3 = .{ <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span> };
+    <span class="tok-kw">var</span> acc: Vec3 = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> };
+
+    <span class="tok-kw">var</span> depth: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (depth &lt; bounces) : (depth += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> h: Hit = <span class="tok-fn">hitScene</span>(spheres, ro, rd) <span class="tok-kw">orelse</span> {
+            <span class="tok-comment">// Sky: a soft vertical gradient. The only light besides the emitters.</span>
+            <span class="tok-kw">const</span> t: f32 = <span class="tok-num">0.5</span> * (<span class="tok-fn">normalize</span>(rd)[<span class="tok-num">1</span>] + <span class="tok-num">1.0</span>);
+            <span class="tok-kw">const</span> white: Vec3 = .{ <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span> };
+            <span class="tok-kw">const</span> blue: Vec3 = .{ <span class="tok-num">0.35</span>, <span class="tok-num">0.55</span>, <span class="tok-num">1.0</span> };
+            <span class="tok-kw">const</span> sky: Vec3 = white + (blue - white) * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(t));
+            acc += throughput * sky * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(<span class="tok-num">0.7</span>));
+            <span class="tok-kw">break</span>;
+        };
+
+        <span class="tok-kw">if</span> (h.mat == mat_light) {
+            acc += throughput * h.albedo;
+            <span class="tok-kw">break</span>;
+        }
+
+        <span class="tok-kw">if</span> (h.mat == mat_metal) {
+            <span class="tok-kw">const</span> refl: Vec3 = rd - h.n * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(<span class="tok-num">2.0</span> * <span class="tok-fn">dot</span>(rd, h.n)));
+            rd = <span class="tok-fn">normalize</span>(refl + rng.<span class="tok-fn">inUnitSphere</span>() * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(<span class="tok-num">0.08</span>)));
+        } <span class="tok-kw">else</span> {
+            rd = <span class="tok-fn">normalize</span>(h.n + rng.<span class="tok-fn">inUnitSphere</span>());
+        }
+        ro = h.p;
+        throughput *= h.albedo;
+    }
+    <span class="tok-kw">return</span> acc;
+}
+
+<span class="tok-comment">/// THE KERNEL. An ordinary Zig function: allocator first, header, payload, writer.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// Nothing here says "worker". It runs identically on a Web Worker, on the main thread via</span>
+<span class="tok-comment">/// the inline fallback, and in a unit test - which is the whole point of the jobs design and</span>
+<span class="tok-comment">/// the reason the tests below can be trusted.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `payload` is the sphere array, verbatim. `gpa` is an ARENA the job system releases when</span>
+<span class="tok-comment">/// the job ends, so there is no `defer free` here and no way to leak.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">traceTile</span>(
+    gpa: Allocator,
+    hdr: Tile,
+    payload: []<span class="tok-kw">const</span> u8,
+    out: *Writer,
+) !void {
+    _ = gpa;
+
+    <span class="tok-kw">const</span> want: usize = <span class="tok-builtin">@sizeOf</span>(Sphere) * hdr.n_spheres;
+    <span class="tok-kw">if</span> (payload.len &lt; want) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.ShortPayload;
+    }
+    <span class="tok-kw">const</span> spheres: []<span class="tok-kw">const</span> Sphere = <span class="tok-builtin">@alignCast</span>(std.mem.<span class="tok-fn">bytesAsSlice</span>(Sphere, payload[<span class="tok-num">0</span>..want]));
+
+    <span class="tok-kw">const</span> fw: f32 = <span class="tok-fn">float</span>(hdr.w);
+    <span class="tok-kw">const</span> fh: f32 = <span class="tok-fn">float</span>(hdr.h);
+    <span class="tok-kw">const</span> aspect: f32 = fw / fh;
+    <span class="tok-kw">const</span> inv_samples: f32 = <span class="tok-num">1.0</span> / <span class="tok-fn">float</span>(hdr.samples);
+
+    <span class="tok-kw">const</span> eye: Vec3 = .{ hdr.ex, hdr.ey, hdr.ez };
+    <span class="tok-kw">const</span> right: Vec3 = .{ hdr.rx, hdr.ry, hdr.rz };
+    <span class="tok-kw">const</span> up: Vec3 = .{ hdr.ux, hdr.uy, hdr.uz };
+    <span class="tok-kw">const</span> fwd: Vec3 = .{ hdr.fx, hdr.fy, hdr.fz };
+
+    <span class="tok-kw">var</span> y: u32 = hdr.y0;
+    <span class="tok-kw">while</span> (y &lt; hdr.y1) : (y += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> x: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (x &lt; hdr.w) : (x += <span class="tok-num">1</span>) {
+            <span class="tok-comment">// Seeded from the PIXEL, not from a running counter, so a tile's output does not</span>
+            <span class="tok-comment">// depend on which worker picked it up or what ran before it.</span>
+            <span class="tok-kw">var</span> rng: Rng = .{ .s = (y *% <span class="tok-num">1973</span> +% x *% <span class="tok-num">9277</span> +% hdr.seed *% <span class="tok-num">26699</span>) | <span class="tok-num">1</span> };
+
+            <span class="tok-kw">var</span> col: Vec3 = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> };
+            <span class="tok-kw">var</span> s: u32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (s &lt; hdr.samples) : (s += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> u: f32 = (<span class="tok-fn">float</span>(x) + rng.<span class="tok-fn">unit</span>()) / fw;
+                <span class="tok-kw">const</span> v: f32 = (<span class="tok-fn">float</span>(y) + rng.<span class="tok-fn">unit</span>()) / fh;
+                <span class="tok-kw">const</span> sx: f32 = (u * <span class="tok-num">2.0</span> - <span class="tok-num">1.0</span>) * aspect;
+                <span class="tok-kw">const</span> sy: f32 = -(v * <span class="tok-num">2.0</span> - <span class="tok-num">1.0</span>);
+                <span class="tok-kw">const</span> ray: Vec3 = right * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(sx)) +
+                    up * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(sy)) +
+                    fwd * <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(hdr.focal));
+                <span class="tok-kw">const</span> dir: Vec3 = <span class="tok-fn">normalize</span>(ray);
+                col += <span class="tok-fn">radiance</span>(spheres, eye, dir, hdr.bounces, &amp;rng);
+            }
+            col *= <span class="tok-builtin">@as</span>(Vec3, <span class="tok-builtin">@splat</span>(inv_samples));
+
+            <span class="tok-comment">// gamma 2.0, then to 8-bit.</span>
+            <span class="tok-kw">const</span> r: u8 = <span class="tok-fn">toByte</span>(<span class="tok-builtin">@sqrt</span>(col[<span class="tok-num">0</span>]));
+            <span class="tok-kw">const</span> g: u8 = <span class="tok-fn">toByte</span>(<span class="tok-builtin">@sqrt</span>(col[<span class="tok-num">1</span>]));
+            <span class="tok-kw">const</span> b: u8 = <span class="tok-fn">toByte</span>(<span class="tok-builtin">@sqrt</span>(col[<span class="tok-num">2</span>]));
+            <span class="tok-kw">try</span> out.<span class="tok-fn">writeAll</span>(&amp;[_]u8{ r, g, b, <span class="tok-num">255</span> });
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">toByte</span>(v: f32) u8 {
+    <span class="tok-kw">const</span> c: f32 = <span class="tok-fn">clamp</span>(v, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>) * <span class="tok-num">255.0</span>;
+    <span class="tok-kw">return</span> <span class="tok-builtin">@trunc</span>(c);
+}
+
+<span class="tok-comment">// ---------------------------------------------------------------------------------------</span>
+<span class="tok-comment">// The kernel is a plain function, so testing it needs no browser, no worker and no wasm.</span>
+<span class="tok-comment">// This is the ergonomic payoff of the jobs design, and it is worth stating plainly: if you</span>
+<span class="tok-comment">// can `zig build test` your kernel, the only thing left to break is transport - and</span>
+<span class="tok-comment">// transport is the engine's problem, not yours.</span>
+<span class="tok-comment">// ---------------------------------------------------------------------------------------</span>
+
+<span class="tok-comment">/// A fixed camera looking down -Z, so the tests exercise the same path the app does.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">testTile</span>(
+    y0: u32,
+    y1: u32,
+    w: u32,
+    h: u32,
+    samples: u32,
+    bounces: u32,
+    seed: u32,
+) Tile {
+    <span class="tok-kw">return</span> .{
+        .y0 = y0,
+        .y1 = y1,
+        .w = w,
+        .h = h,
+        .samples = samples,
+        .bounces = bounces,
+        .n_spheres = test_scene.len,
+        .seed = seed,
+        .ex = <span class="tok-num">0</span>,
+        .ey = <span class="tok-num">0.55</span>,
+        .ez = <span class="tok-num">2.6</span>,
+        .rx = <span class="tok-num">1</span>,
+        .ry = <span class="tok-num">0</span>,
+        .rz = <span class="tok-num">0</span>,
+        .ux = <span class="tok-num">0</span>,
+        .uy = <span class="tok-num">1</span>,
+        .uz = <span class="tok-num">0</span>,
+        .fx = <span class="tok-num">0</span>,
+        .fy = <span class="tok-num">0</span>,
+        .fz = -<span class="tok-num">1</span>,
+        .focal = <span class="tok-num">1.6</span>,
+    };
+}
+
+<span class="tok-kw">const</span> test_scene = [_]Sphere{
+    .{ .cx = <span class="tok-num">0</span>, .cy = -<span class="tok-num">100.5</span>, .cz = -<span class="tok-num">1</span>, .r = <span class="tok-num">100</span>, .mr = <span class="tok-num">0.5</span>, .mg = <span class="tok-num">0.5</span>, .mb = <span class="tok-num">0.5</span>, .mat = mat_diffuse },
+    .{ .cx = <span class="tok-num">0</span>, .cy = <span class="tok-num">0</span>, .cz = -<span class="tok-num">1</span>, .r = <span class="tok-num">0.5</span>, .mr = <span class="tok-num">0.8</span>, .mg = <span class="tok-num">0.3</span>, .mb = <span class="tok-num">0.3</span>, .mat = mat_diffuse },
+};
+
+<span class="tok-kw">test</span> <span class="tok-str">"traceTile: emits exactly one RGBA pixel per pixel of the band"</span> {
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">4</span> * <span class="tok-num">8</span> * <span class="tok-num">3</span>]u8 = undefined;
+    <span class="tok-kw">var</span> out: Writer = .<span class="tok-fn">fixed</span>(&amp;buf);
+    <span class="tok-kw">const</span> hdr: Tile = <span class="tok-fn">testTile</span>(<span class="tok-num">2</span>, <span class="tok-num">5</span>, <span class="tok-num">8</span>, <span class="tok-num">16</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">7</span>);
+    <span class="tok-kw">try</span> <span class="tok-fn">traceTile</span>(std.testing.allocator, hdr, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;test_scene), &amp;out);
+    <span class="tok-comment">// 3 rows x 8 px x RGBA</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">expectEqual</span>(<span class="tok-builtin">@as</span>(usize, <span class="tok-num">3</span> * <span class="tok-num">8</span> * <span class="tok-num">4</span>), out.<span class="tok-fn">buffered</span>().len);
+}
+
+<span class="tok-kw">test</span> <span class="tok-str">"traceTile: a band is deterministic - same tile, same bytes, wherever it ran"</span> {
+    <span class="tok-comment">// Load-bearing. A worker and the main thread must agree, or a progressively-drawn image</span>
+    <span class="tok-comment">// would show seams at the tile boundaries depending on which core got which band.</span>
+    <span class="tok-kw">const</span> hdr: Tile = <span class="tok-fn">testTile</span>(<span class="tok-num">0</span>, <span class="tok-num">2</span>, <span class="tok-num">6</span>, <span class="tok-num">6</span>, <span class="tok-num">3</span>, <span class="tok-num">3</span>, <span class="tok-num">11</span>);
+    <span class="tok-kw">var</span> a_buf: [<span class="tok-num">2</span> * <span class="tok-num">6</span> * <span class="tok-num">4</span>]u8 = undefined;
+    <span class="tok-kw">var</span> b_buf: [<span class="tok-num">2</span> * <span class="tok-num">6</span> * <span class="tok-num">4</span>]u8 = undefined;
+    <span class="tok-kw">var</span> a: Writer = .<span class="tok-fn">fixed</span>(&amp;a_buf);
+    <span class="tok-kw">var</span> b: Writer = .<span class="tok-fn">fixed</span>(&amp;b_buf);
+    <span class="tok-kw">try</span> <span class="tok-fn">traceTile</span>(std.testing.allocator, hdr, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;test_scene), &amp;a);
+    <span class="tok-kw">try</span> <span class="tok-fn">traceTile</span>(std.testing.allocator, hdr, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;test_scene), &amp;b);
+    <span class="tok-kw">try</span> <span class="tok-fn">expectEqualSlices</span>(u8, a.<span class="tok-fn">buffered</span>(), b.<span class="tok-fn">buffered</span>());
+}
+
+<span class="tok-kw">test</span> <span class="tok-str">"traceTile: a short payload is an error, not a read past the end"</span> {
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">4</span> * <span class="tok-num">4</span> * <span class="tok-num">4</span>]u8 = undefined;
+    <span class="tok-kw">var</span> out: Writer = .<span class="tok-fn">fixed</span>(&amp;buf);
+    <span class="tok-kw">var</span> hdr: Tile = <span class="tok-fn">testTile</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">4</span>, <span class="tok-num">4</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>);
+    hdr.n_spheres = <span class="tok-num">9</span>; <span class="tok-comment">// claims nine spheres...</span>
+    <span class="tok-comment">// ...but hands over two. The kernel runs in a worker with its own linear memory; a</span>
+    <span class="tok-comment">// trusting `bytesAsSlice` here would read whatever happens to follow.</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">expectError</span>(
+        <span class="tok-kw">error</span>.ShortPayload,
+        <span class="tok-fn">traceTile</span>(std.testing.allocator, hdr, std.mem.<span class="tok-fn">sliceAsBytes</span>(&amp;test_scene), &amp;out),
+    );
+}
+</code></pre></figure>
+</body>
+</html>

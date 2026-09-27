@@ -1,0 +1,964 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cel_shading — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>cel_shading</h1>
+<figure class="code src-file" data-path="examples/cel_shading/cel_shading.zig" data-lines="519"><figcaption><span>examples/cel_shading/cel_shading.zig</span><span>519 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! cel_shading - raylib's `shaders_cel_shading`, the zimr way.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Two draws of the same bunny:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   1. THE HULL: the mesh inflated along its normals (`outline_hull_vs`)</span>
+<span class="tok-comment">//!      with FRONT faces culled - only the shell's silhouette survives</span>
+<span class="tok-comment">//!      the depth test, painted flat ink by `depth_fs` (reused).</span>
+<span class="tok-comment">//!   2. THE TOON: `cel_fs` on `gbuffer_vs` (both reused patterns - the</span>
+<span class="tok-comment">//!      forward-material vertex stage and the color-passthrough FS),</span>
+<span class="tok-comment">//!      Lambert snapped to N flat bands.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Shader ledger for the whole example: cel_fs + outline_hull_vs are</span>
+<span class="tok-comment">//! new; gbuffer_vs and depth_fs are borrowed.  Two files for a</span>
+<span class="tok-comment">//! two-pass stylized renderer.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! raylib demos this on a car glb with Q/E band keys and a C outline</span>
+<span class="tok-comment">//! toggle; ours is the Stanford bunny with sliders for bands and ink</span>
+<span class="tok-comment">//! thickness, an outline checkbox, a slowly circling sun (bands sweep</span>
+<span class="tok-comment">//! across the fur live), drag-orbit and pinch-zoom.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> rotationY = zm.rotationY;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-kw">const</span> toon_vs = z.deferred_shaders.gbuffer_vs; <span class="tok-comment">// the forward-material VS</span>
+<span class="tok-kw">const</span> toon_fs = z.toon_shaders.cel_fs;
+<span class="tok-kw">const</span> hull_vs = z.toon_shaders.outline_hull_vs;
+<span class="tok-comment">// (the hull's FS is depth_fs - only its WGSL artifact is needed here)</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">const</span> gbuffer_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"gbuffer_vs.wgsl"</span>);
+<span class="tok-kw">const</span> cel_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"cel_fs.wgsl"</span>);
+<span class="tok-kw">const</span> outline_hull_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"outline_hull_vs.wgsl"</span>);
+<span class="tok-kw">const</span> depth_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"depth_fs.wgsl"</span>);
+<span class="tok-kw">const</span> bunny_obj = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bunny.obj"</span>);
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> ToonVsUbo = <span class="tok-builtin">@FieldType</span>(toon_vs.Io, <span class="tok-str">"u"</span>);
+<span class="tok-kw">const</span> ToonFsUbo = <span class="tok-builtin">@FieldType</span>(toon_fs.Io, <span class="tok-str">"u"</span>);
+<span class="tok-kw">const</span> HullUbo = <span class="tok-builtin">@FieldType</span>(hull_vs.Io, <span class="tok-str">"u"</span>);
+
+<span class="tok-kw">const</span> bg_clear: Color = .{ .r = <span class="tok-num">245</span>, .g = <span class="tok-num">245</span>, .b = <span class="tok-num">246</span>, .a = <span class="tok-num">255</span> }; <span class="tok-comment">// raylib's RAYWHITE</span>
+<span class="tok-kw">const</span> bunny_albedo: [<span class="tok-num">4</span>]f32 = .{ <span class="tok-num">0.95</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.35</span>, <span class="tok-num">1</span> }; <span class="tok-comment">// warm poster orange</span>
+<span class="tok-kw">const</span> ink: [<span class="tok-num">4</span>]f32 = .{ <span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>, <span class="tok-num">0.06</span>, <span class="tok-num">1</span> }; <span class="tok-comment">// near-black</span>
+
+<span class="tok-kw">const</span> MeshVertex = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    position: [<span class="tok-num">3</span>]f32,
+    normal: [<span class="tok-num">3</span>]f32,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    toon_pipeline: z.wgpu.RenderPipelineHandle, <span class="tok-comment">// cull back</span>
+    hull_pipeline: z.wgpu.RenderPipelineHandle, <span class="tok-comment">// cull FRONT - the trick</span>
+
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    vbo_bytes: u64,
+    ibo_bytes: u64,
+    icount: u32,
+
+    toon_vs_ubo: z.wgpu.BufferHandle,
+    toon_g0_bg: z.wgpu.BindGroupHandle,
+    toon_fs_ubo: z.wgpu.BufferHandle,
+    toon_g2_bg: z.wgpu.BindGroupHandle,
+    hull_ubo: z.wgpu.BufferHandle,
+    hull_g0_bg: z.wgpu.BindGroupHandle,
+    empty_bg: z.wgpu.BindGroupHandle,
+
+    <span class="tok-comment">// Bunny placement frame (center + scale-to-height), obj units.</span>
+    center: [<span class="tok-num">3</span>]f32,
+    min_y: f32,
+    scale: f32,
+
+    rt: z.RenderTexture,
+    ui_host: z.UiHost,
+    font: z.Font,
+
+    bands: f32 = <span class="tok-num">4.0</span>,
+    thickness: f32 = <span class="tok-num">0.015</span>, <span class="tok-comment">// WORLD units (converted to model space per frame)</span>
+    outline_on: bool = true,
+
+    cam_yaw: f32 = <span class="tok-num">0.6</span>,
+    cam_pitch: f32 = <span class="tok-num">0.35</span>,
+    cam_dist: f32 = <span class="tok-num">5.5</span>,
+    dragging: bool = false,
+    prev_pinch: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.vbo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.ibo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.toon_vs_ubo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.toon_fs_ubo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.hull_ubo);
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.toon_g0_bg);
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.toon_g2_bg);
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.hull_g0_bg);
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.empty_bg);
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.toon_pipeline);
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.hull_pipeline);
+    s.rt.<span class="tok-fn">deinit</span>();
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformLayout</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    min_size: u64,
+    vis: z.wgpu.ShaderStage,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupLayoutHandle {
+    <span class="tok-kw">const</span> entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+        .{ .binding = <span class="tok-num">0</span>, .visibility = vis, .resource = .{ .uniform_buffer = .{ .min_size = min_size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, blob, label);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformBindGroup</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    bgl: z.wgpu.BindGroupLayoutHandle,
+    buffer: z.wgpu.BufferHandle,
+    size: u64,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupHandle {
+    <span class="tok-kw">const</span> entries = [_]z.gpu.BindGroupEntry{
+        .{ .binding = <span class="tok-num">0</span>, .resource = .{ .buffer = .{ .handle = buffer, .size = size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroup</span>(device, bgl, blob, label);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> device: z.wgpu.DeviceHandle = f.gpu.device;
+    <span class="tok-kw">const</span> queue: z.wgpu.QueueHandle = f.gpu.queue;
+
+    <span class="tok-comment">// ---- the bunny, parsed + measured (shadowmap_sw's pattern) ----</span>
+    <span class="tok-kw">var</span> bunny_data: z.codecs.obj.Data = <span class="tok-kw">try</span> z.codecs.obj.<span class="tok-fn">parse</span>(gpa, bunny_obj);
+    <span class="tok-kw">defer</span> bunny_data.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">const</span> mesh: z.codecs.obj.Mesh = <span class="tok-kw">try</span> bunny_data.<span class="tok-fn">toMesh</span>(gpa);
+    <span class="tok-kw">defer</span> mesh.<span class="tok-fn">deinit</span>(gpa);
+
+    <span class="tok-kw">const</span> vcount: usize = mesh.<span class="tok-fn">vertexCount</span>();
+    <span class="tok-kw">const</span> verts: []MeshVertex = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(MeshVertex, vcount);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(verts);
+    <span class="tok-kw">var</span> mn: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">var</span> mx: [<span class="tok-num">3</span>]f32 = .{ -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">for</span> (verts, <span class="tok-num">0</span>..) |*sv, i| {
+        <span class="tok-kw">const</span> p: [<span class="tok-num">3</span>]f32 = .{
+            mesh.positions[i * <span class="tok-num">3</span> + <span class="tok-num">0</span>],
+            mesh.positions[i * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+            mesh.positions[i * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+        };
+        sv.* = .{ .position = p, .normal = .{
+            mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">0</span>],
+            mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+            mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+        } };
+        <span class="tok-kw">var</span> a: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (a &lt; <span class="tok-num">3</span>) : (a += <span class="tok-num">1</span>) {
+            mn[a] = <span class="tok-builtin">@min</span>(mn[a], p[a]);
+            mx[a] = <span class="tok-builtin">@max</span>(mx[a], p[a]);
+        }
+    }
+
+    <span class="tok-kw">const</span> vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(verts),
+        .{ .vertex = true, .copy_dst = true },
+        <span class="tok-str">"cel_vbo"</span>,
+    );
+    <span class="tok-kw">const</span> ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(mesh.indices),
+        .{ .index = true, .copy_dst = true },
+        <span class="tok-str">"cel_ibo"</span>,
+    );
+
+    <span class="tok-comment">// ---- pipelines: same layout shape, opposite cull faces ----</span>
+    <span class="tok-kw">const</span> pos_normal_layout = z.gpu.VertexBufferLayout{
+        .array_stride = <span class="tok-builtin">@sizeOf</span>(MeshVertex),
+        .step_mode = .vertex,
+        .attributes = &amp;.{
+            .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+            .{ .format = .float32x3, .offset = <span class="tok-num">12</span>, .shader_location = <span class="tok-num">1</span> },
+        },
+    };
+    <span class="tok-kw">const</span> toon_g0_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, <span class="tok-builtin">@sizeOf</span>(ToonVsUbo), .{ .vertex = true }, <span class="tok-str">"cel_g0"</span>);
+    <span class="tok-kw">const</span> toon_g2_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, <span class="tok-builtin">@sizeOf</span>(ToonFsUbo), .{ .fragment = true }, <span class="tok-str">"cel_g2"</span>);
+    <span class="tok-kw">const</span> hull_g0_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, <span class="tok-builtin">@sizeOf</span>(HullUbo), .{ .vertex = true }, <span class="tok-str">"hull_g0"</span>);
+    <span class="tok-kw">const</span> empty_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;.{});
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(empty_blob);
+    <span class="tok-kw">const</span> empty_bgl: z.wgpu.BindGroupLayoutHandle =
+        z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, empty_blob, <span class="tok-str">"cel_empty"</span>);
+    <span class="tok-kw">const</span> empty_bg_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;.{});
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(empty_bg_blob);
+    <span class="tok-kw">const</span> empty_bg: z.wgpu.BindGroupHandle =
+        z.wgpu.<span class="tok-fn">createBindGroup</span>(device, empty_bgl, empty_bg_blob, <span class="tok-str">"cel_empty_bg"</span>);
+
+    <span class="tok-kw">const</span> toon_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(
+        device,
+        &amp;.{ toon_g0_bgl, empty_bgl, toon_g2_bgl },
+        <span class="tok-str">"cel_pl"</span>,
+    );
+    <span class="tok-kw">const</span> hull_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(
+        device,
+        &amp;.{hull_g0_bgl},
+        <span class="tok-str">"hull_pl"</span>,
+    );
+
+    <span class="tok-kw">const</span> toon_vs_mod: z.wgpu.ShaderModuleHandle =
+        z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, gbuffer_vs_wgsl, <span class="tok-str">"gbuffer_vs"</span>);
+    <span class="tok-kw">const</span> toon_fs_mod: z.wgpu.ShaderModuleHandle =
+        z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, cel_fs_wgsl, <span class="tok-str">"cel_fs"</span>);
+    <span class="tok-kw">const</span> hull_vs_mod: z.wgpu.ShaderModuleHandle =
+        z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, outline_hull_vs_wgsl, <span class="tok-str">"outline_hull_vs"</span>);
+    <span class="tok-kw">const</span> ink_fs_mod: z.wgpu.ShaderModuleHandle =
+        z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, depth_fs_wgsl, <span class="tok-str">"depth_fs"</span>);
+
+    <span class="tok-kw">const</span> toon_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .none,
+        .less,
+        .back, <span class="tok-comment">// normal model pass</span>
+        .rgba8_unorm,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> toon_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{pos_normal_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = toon_combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(toon_blob);
+    <span class="tok-kw">const</span> toon_pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        toon_pl,
+        toon_vs_mod,
+        toon_fs_mod,
+        toon_blob,
+        <span class="tok-str">"cel_pipe"</span>,
+    );
+
+    <span class="tok-kw">const</span> hull_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .none,
+        .less,
+        .front, <span class="tok-comment">// THE inverted-hull trick: only the shell's far side draws</span>
+        .rgba8_unorm,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> hull_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{pos_normal_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = hull_combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(hull_blob);
+    <span class="tok-kw">const</span> hull_pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        hull_pl,
+        hull_vs_mod,
+        ink_fs_mod,
+        hull_blob,
+        <span class="tok-str">"hull_pipe"</span>,
+    );
+
+    <span class="tok-comment">// ---- uniforms (one object, three blocks) ----</span>
+    <span class="tok-kw">const</span> toon_vs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = <span class="tok-builtin">@sizeOf</span>(ToonVsUbo),
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> toon_fs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = <span class="tok-builtin">@sizeOf</span>(ToonFsUbo),
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> hull_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = <span class="tok-builtin">@sizeOf</span>(HullUbo),
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+
+    <span class="tok-kw">const</span> toon_g0_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, toon_g0_bgl, toon_vs_ubo, <span class="tok-builtin">@sizeOf</span>(ToonVsUbo), <span class="tok-str">"cel_g0_bg"</span>);
+    <span class="tok-kw">const</span> toon_g2_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, toon_g2_bgl, toon_fs_ubo, <span class="tok-builtin">@sizeOf</span>(ToonFsUbo), <span class="tok-str">"cel_g2_bg"</span>);
+    <span class="tok-kw">const</span> hull_g0_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, hull_g0_bgl, hull_ubo, <span class="tok-builtin">@sizeOf</span>(HullUbo), <span class="tok-str">"hull_g0_bg"</span>);
+
+    <span class="tok-comment">// Build-only intermediates consumed above - release them. createRenderPipeline is</span>
+    <span class="tok-comment">// direct/uncached, so the PIPELINES are example-owned and freed in deinit instead.</span>
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(toon_g0_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(toon_g2_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(hull_g0_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(empty_bgl);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(toon_pl);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(hull_pl);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(toon_vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(toon_fs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(hull_vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(ink_fs_mod);
+
+    <span class="tok-kw">const</span> ui_font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>);
+    s.* = .{
+        .gpa = gpa,
+        .toon_pipeline = toon_pipeline,
+        .hull_pipeline = hull_pipeline,
+        .vbo = vbo,
+        .ibo = ibo,
+        .vbo_bytes = verts.len * <span class="tok-builtin">@sizeOf</span>(MeshVertex),
+        .ibo_bytes = mesh.indices.len * <span class="tok-builtin">@sizeOf</span>(u32),
+        .icount = <span class="tok-builtin">@intCast</span>(mesh.indices.len),
+        .toon_vs_ubo = toon_vs_ubo,
+        .toon_g0_bg = toon_g0_bg,
+        .toon_fs_ubo = toon_fs_ubo,
+        .toon_g2_bg = toon_g2_bg,
+        .hull_ubo = hull_ubo,
+        .hull_g0_bg = hull_g0_bg,
+        .empty_bg = empty_bg,
+        .center = .{ (mn[<span class="tok-num">0</span>] + mx[<span class="tok-num">0</span>]) * <span class="tok-num">0.5</span>, <span class="tok-num">0</span>, (mn[<span class="tok-num">2</span>] + mx[<span class="tok-num">2</span>]) * <span class="tok-num">0.5</span> },
+        .min_y = mn[<span class="tok-num">1</span>],
+        .scale = <span class="tok-num">2.2</span> / <span class="tok-builtin">@max</span>(mx[<span class="tok-num">1</span>] - mn[<span class="tok-num">1</span>], <span class="tok-num">1.0e-4</span>),
+        .rt = .{},
+        .font = ui_font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, ui_font),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureTargets</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> backing: z.wgpu.SurfaceSize = z.wgpu.<span class="tok-fn">getSurfaceSize</span>(f.gpu.surface);
+    <span class="tok-kw">const</span> bw: u32 = <span class="tok-builtin">@max</span>(backing.width, <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> bh: u32 = <span class="tok-builtin">@max</span>(backing.height, <span class="tok-num">1</span>);
+    <span class="tok-kw">if</span> (s.rt.color != .invalid <span class="tok-kw">and</span> s.rt.width == bw <span class="tok-kw">and</span> s.rt.height == bh) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">if</span> (s.rt.color != .invalid) {
+        z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt);
+    }
+    s.rt = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(bw), <span class="tok-builtin">@intCast</span>(bh));
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(f: *z.Frame, s: *State, ui_wants_mouse: bool) void {
+    <span class="tok-kw">const</span> touches: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touches &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> a: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> b: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> dx: f32 = a[<span class="tok-num">0</span>] - b[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = a[<span class="tok-num">1</span>] - b[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (s.prev_pinch &gt; <span class="tok-num">0</span>) {
+            s.cam_dist = <span class="tok-fn">clamp</span>(s.cam_dist - (dist - s.prev_pinch) * <span class="tok-num">0.015</span>, <span class="tok-num">3.0</span>, <span class="tok-num">12.0</span>);
+        }
+        s.prev_pinch = dist;
+        <span class="tok-kw">return</span>;
+    }
+    s.prev_pinch = <span class="tok-num">0</span>;
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left) <span class="tok-kw">and</span> !ui_wants_mouse) {
+        <span class="tok-kw">if</span> (s.dragging) {
+            <span class="tok-kw">const</span> d: Vec2 = z.<span class="tok-fn">getMouseDelta</span>(f.input);
+            s.cam_yaw -= d[<span class="tok-num">0</span>] * <span class="tok-num">0.008</span>;
+            s.cam_pitch = <span class="tok-fn">clamp</span>(s.cam_pitch + d[<span class="tok-num">1</span>] * <span class="tok-num">0.008</span>, <span class="tok-num">0.05</span>, <span class="tok-num">1.4</span>);
+        }
+        s.dragging = true;
+    } <span class="tok-kw">else</span> {
+        s.dragging = false;
+    }
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        s.cam_dist = <span class="tok-fn">clamp</span>(s.cam_dist - wheel * <span class="tok-num">0.4</span>, <span class="tok-num">3.0</span>, <span class="tok-num">12.0</span>);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureTargets</span>(f, s);
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-comment">// OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing; uses</span>
+    <span class="tok-comment">// last-frame UI state = 1-frame lag, imperceptible).</span>
+
+    <span class="tok-comment">// ---- camera + the circling sun (bands sweep live) ----</span>
+    <span class="tok-kw">const</span> cam_target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> cp: f32 = <span class="tok-builtin">@cos</span>(s.cam_pitch);
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sin</span>(s.cam_pitch);
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-builtin">@cos</span>(s.cam_yaw);
+    <span class="tok-kw">const</span> sy: f32 = <span class="tok-builtin">@sin</span>(s.cam_yaw);
+    <span class="tok-kw">const</span> cam_eye: Vec = <span class="tok-fn">vec</span>(
+        cam_target[<span class="tok-num">0</span>] + s.cam_dist * cp * sy,
+        cam_target[<span class="tok-num">1</span>] + s.cam_dist * sp,
+        cam_target[<span class="tok-num">2</span>] + s.cam_dist * cp * cy,
+    );
+    <span class="tok-kw">const</span> cam_view: Mat = <span class="tok-fn">lookAtRh</span>(cam_eye, cam_target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> cam_proj: Mat = <span class="tok-fn">perspectiveFovRh</span>(<span class="tok-num">0.8</span>, vw / vh, <span class="tok-num">0.1</span>, <span class="tok-num">100.0</span>);
+    <span class="tok-kw">const</span> cam_vp: Mat = <span class="tok-fn">mulMat</span>(cam_proj, cam_view);
+
+    <span class="tok-comment">// raylib: one DIRECTIONAL light from (50,50,50) -&gt; origin (45 deg</span>
+    <span class="tok-comment">// elevation), spinning at 0.5 rad/s opposite the orbital camera.</span>
+    <span class="tok-kw">const</span> sun_angle: f32 = t * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> sun: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-builtin">@cos</span>(sun_angle), <span class="tok-num">1.0</span>, <span class="tok-builtin">@sin</span>(sun_angle) };
+
+    <span class="tok-comment">// ---- model: recentered, floor-seated, spinning ----</span>
+    <span class="tok-kw">const</span> spin: Mat = <span class="tok-fn">rotationY</span>(t * <span class="tok-num">0.5</span>);
+    <span class="tok-kw">const</span> center_it: Mat = <span class="tok-fn">translation</span>(-s.center[<span class="tok-num">0</span>], -s.min_y, -s.center[<span class="tok-num">2</span>]);
+    <span class="tok-kw">const</span> scale_it: Mat = <span class="tok-fn">scaling</span>(s.scale, s.scale, s.scale);
+    <span class="tok-kw">const</span> model: Mat = <span class="tok-fn">mulMat</span>(spin, <span class="tok-fn">mulMat</span>(scale_it, center_it));
+    <span class="tok-kw">const</span> mvp: Mat = <span class="tok-fn">mulMat</span>(cam_vp, model);
+
+    <span class="tok-kw">var</span> toon_vs_io: toon_vs.Io = undefined;
+    toon_vs_io.u = .{ .mvp = mvp, .model = model, .normal_matrix = spin };
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, s.toon_vs_ubo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">asBytes</span>(&amp;toon_vs_io.u));
+
+    <span class="tok-kw">var</span> toon_fs_io: toon_fs.Io = undefined;
+    toon_fs_io.u = .{
+        .base_color = bunny_albedo,
+        .light_dir = .{ sun[<span class="tok-num">0</span>], sun[<span class="tok-num">1</span>], sun[<span class="tok-num">2</span>], <span class="tok-num">0</span> },
+        .params = .{ <span class="tok-builtin">@round</span>(s.bands), <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    };
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, s.toon_fs_ubo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">asBytes</span>(&amp;toon_fs_io.u));
+
+    <span class="tok-kw">var</span> hull_io: hull_vs.Io = undefined;
+    <span class="tok-comment">// Slider is WORLD units; extrusion is MODEL-space pre-scale, so</span>
+    <span class="tok-comment">// convert (the raw value once inflated the hull ~14x into a blob).</span>
+    <span class="tok-kw">const</span> thickness_model: f32 = s.thickness / s.scale;
+    hull_io.u = .{ .mvp = mvp, .ink_color = ink, .params = .{ thickness_model, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } };
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, s.hull_ubo, <span class="tok-num">0</span>, std.mem.<span class="tok-fn">asBytes</span>(&amp;hull_io.u));
+
+    <span class="tok-kw">const</span> Backend: type = z.WgpuBackend;
+
+    <span class="tok-comment">// ---- one pass, two draws: hull (ink) first, toon over it ----</span>
+    z.<span class="tok-fn">beginTextureModeRaw</span>(f.gl, s.rt, bg_clear);
+    <span class="tok-kw">const</span> pa: *z.PassState = f.gl.pass;
+    z.render_pass.<span class="tok-fn">setVertexBuffer</span>(pa.pass, .{ .slot = <span class="tok-num">0</span>, .buffer = s.vbo, .offset = <span class="tok-num">0</span>, .size = s.vbo_bytes });
+    z.render_pass.<span class="tok-fn">setIndexBuffer</span>(pa.pass, .{ .buffer = s.ibo, .format = .uint32, .offset = <span class="tok-num">0</span>, .size = s.ibo_bytes });
+    <span class="tok-kw">if</span> (s.outline_on) {
+        Backend.<span class="tok-fn">setPipeline</span>(pa, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.hull_pipeline });
+        Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">0</span>, s.hull_g0_bg);
+        z.render_pass.<span class="tok-fn">drawIndexed</span>(pa.pass, .{
+            .index_count = s.icount,
+            .instance_count = <span class="tok-num">1</span>,
+            .first_index = <span class="tok-num">0</span>,
+            .base_vertex = <span class="tok-num">0</span>,
+            .first_instance = <span class="tok-num">0</span>,
+        });
+    }
+    Backend.<span class="tok-fn">setPipeline</span>(pa, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.toon_pipeline });
+    Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">0</span>, s.toon_g0_bg);
+    Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">1</span>, s.empty_bg);
+    Backend.<span class="tok-fn">setBindGroup</span>(pa, <span class="tok-num">2</span>, s.toon_g2_bg);
+    z.render_pass.<span class="tok-fn">drawIndexed</span>(pa.pass, .{
+        .index_count = s.icount,
+        .instance_count = <span class="tok-num">1</span>,
+        .first_index = <span class="tok-num">0</span>,
+        .base_vertex = <span class="tok-num">0</span>,
+        .first_instance = <span class="tok-num">0</span>,
+    });
+    z.<span class="tok-fn">endTextureModeRaw</span>(f.gl);
+
+    <span class="tok-kw">const</span> white: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> };
+    <span class="tok-comment">// SCREEN PASS: open once, composite, then UI.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearViewport</span>(f, bg_clear);
+    f.gl.<span class="tok-fn">texture</span>(.{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = vw, .height = vh }, s.rt.<span class="tok-fn">asTexture</span>(), .{ .tint = white });
+    <span class="tok-comment">// ---- UI: bands / ink / outline ----</span>
+    <span class="tok-kw">const</span> u: z.ui_real.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">const</span> panel_w: f32 = <span class="tok-builtin">@min</span>(<span class="tok-num">300</span>, vw - <span class="tok-num">16</span>);
+    u.<span class="tok-fn">setNextWindowPos</span>(.{ <span class="tok-num">8</span>, vh - <span class="tok-num">150</span> }, .{});
+    u.<span class="tok-fn">setNextWindowSize</span>(.{ panel_w, <span class="tok-num">142</span> }, .{});
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"cel"</span>, .{})) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"bands"</span>, &amp;s.bands, .{ .min = <span class="tok-num">2</span>, .max = <span class="tok-num">12</span>, .fmt = <span class="tok-str">"{d:.0}"</span> });
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"ink width"</span>, &amp;s.thickness, .{ .min = <span class="tok-num">0.0</span>, .max = <span class="tok-num">0.05</span> });
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"outline"</span>, &amp;s.outline_on);
+    }
+    <span class="tok-fn">handleInput</span>(f, s, u.<span class="tok-fn">wantCaptureMouse</span>());
+    s.ui_host.<span class="tok-fn">render</span>(f);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - cel shading + inverted-hull ink"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">540</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// Renders offscreen before the screen opens (tile-based-GPU safe); owns</span>
+    <span class="tok-comment">// its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+    .memory = .managed,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/cel_shading/native_verify.zig" data-lines="164"><figcaption><span>examples/cel_shading/native_verify.zig</span><span>164 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! native_verify - render the cel_shading example's ACTUAL look on the</span>
+<span class="tok-comment">//! CPU, no GPU required.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Both passes run the same `shaderMain`s the wasm app compiles to WGSL:</span>
+<span class="tok-comment">//! the inverted hull (`outline_hull_vs` + `depth_fs`, back faces only)</span>
+<span class="tok-comment">//! and the toon pass (`gbuffer_vs` + `cel_fs`, front faces only) - two</span>
+<span class="tok-comment">//! `rasterizeToTarget` draws into one buffer, exactly the GPU pass</span>
+<span class="tok-comment">//! shape.  Dumps `cel_verify.png` for eyeballing and asserts the three</span>
+<span class="tok-comment">//! tonal populations exist: paper-bright background, full-brightness top</span>
+<span class="tok-comment">//! band, and ink.  `zig build cel-shading-verify`.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> proxy = <span class="tok-builtin">@import</span>(<span class="tok-str">"bunny_proxy"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-kw">const</span> toon_vs = z.deferred_shaders.gbuffer_vs;
+<span class="tok-kw">const</span> toon_fs = z.toon_shaders.cel_fs;
+<span class="tok-kw">const</span> hull_vs = z.toon_shaders.outline_hull_vs;
+<span class="tok-kw">const</span> ink_fs = z.shadow_shaders.depth_fs;
+
+<span class="tok-kw">const</span> img_w: usize = <span class="tok-num">480</span>;
+<span class="tok-kw">const</span> img_h: usize = <span class="tok-num">360</span>;
+
+<span class="tok-kw">const</span> bunny_albedo: [<span class="tok-num">4</span>]f32 = .{ <span class="tok-num">0.95</span>, <span class="tok-num">0.62</span>, <span class="tok-num">0.35</span>, <span class="tok-num">1</span> };
+<span class="tok-kw">const</span> ink_color: [<span class="tok-num">4</span>]f32 = .{ <span class="tok-num">0.05</span>, <span class="tok-num">0.05</span>, <span class="tok-num">0.06</span>, <span class="tok-num">1</span> };
+<span class="tok-kw">const</span> bands: f32 = <span class="tok-num">4.0</span>;
+<span class="tok-kw">const</span> ink_world: f32 = <span class="tok-num">0.015</span>;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">const</span> gpa: Allocator = std.heap.page_allocator;
+    <span class="tok-kw">var</span> io_threaded: std.Io.Threaded = .<span class="tok-fn">init</span>(gpa, .{});
+    <span class="tok-kw">defer</span> io_threaded.<span class="tok-fn">deinit</span>();
+    <span class="tok-kw">const</span> io: std.Io = io_threaded.<span class="tok-fn">io</span>();
+
+    <span class="tok-comment">// ---- proxy bunny, measured + framed like the app ----</span>
+    <span class="tok-kw">var</span> mn: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">var</span> mx: [<span class="tok-num">3</span>]f32 = .{ -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">for</span> (proxy.positions) |p| {
+        <span class="tok-kw">var</span> a: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (a &lt; <span class="tok-num">3</span>) : (a += <span class="tok-num">1</span>) {
+            mn[a] = <span class="tok-builtin">@min</span>(mn[a], p[a]);
+            mx[a] = <span class="tok-builtin">@max</span>(mx[a], p[a]);
+        }
+    }
+    <span class="tok-kw">const</span> scale: f32 = <span class="tok-num">2.2</span> / <span class="tok-builtin">@max</span>(mx[<span class="tok-num">1</span>] - mn[<span class="tok-num">1</span>], <span class="tok-num">1.0e-4</span>);
+    <span class="tok-kw">const</span> center_it: Mat = <span class="tok-fn">translation</span>(-(mn[<span class="tok-num">0</span>] + mx[<span class="tok-num">0</span>]) * <span class="tok-num">0.5</span>, -mn[<span class="tok-num">1</span>], -(mn[<span class="tok-num">2</span>] + mx[<span class="tok-num">2</span>]) * <span class="tok-num">0.5</span>);
+    <span class="tok-kw">const</span> model: Mat = <span class="tok-fn">mulMat</span>(<span class="tok-fn">scaling</span>(scale, scale, scale), center_it);
+
+    <span class="tok-kw">const</span> cam_eye: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">3.2</span>, <span class="tok-num">2.6</span>, <span class="tok-num">4.2</span>);
+    <span class="tok-kw">const</span> view: Mat = <span class="tok-fn">lookAtRh</span>(cam_eye, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0</span>), <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> projection: Mat = <span class="tok-fn">perspectiveFovRh</span>(<span class="tok-num">0.8</span>, <span class="tok-fn">float</span>(img_w) / <span class="tok-fn">float</span>(img_h), <span class="tok-num">0.1</span>, <span class="tok-num">100.0</span>);
+    <span class="tok-kw">const</span> mvp: Mat = <span class="tok-fn">mulMat</span>(<span class="tok-fn">mulMat</span>(projection, view), model);
+
+    <span class="tok-comment">// Sun roughly camera-side (the photogenic frame - most bands visible).</span>
+    <span class="tok-kw">const</span> sun: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">0.55</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.75</span> };
+
+    <span class="tok-comment">// ---- vertex loops through the real shaders ----</span>
+    <span class="tok-kw">var</span> toon_outs: [proxy.vertex_count]toon_vs.Out = undefined;
+    <span class="tok-kw">var</span> hull_outs: [proxy.vertex_count]hull_vs.Out = undefined;
+    {
+        <span class="tok-kw">var</span> vio: toon_vs.Io = undefined;
+        vio.u = .{ .mvp = mvp, .model = model, .normal_matrix = zm.<span class="tok-fn">identity</span>() };
+        <span class="tok-kw">for</span> (proxy.positions, proxy.normals, &amp;toon_outs) |p, n, *out| {
+            vio.vertex_position = .{ p[<span class="tok-num">0</span>], p[<span class="tok-num">1</span>], p[<span class="tok-num">2</span>] };
+            vio.vertex_normal = .{ n[<span class="tok-num">0</span>], n[<span class="tok-num">1</span>], n[<span class="tok-num">2</span>] };
+            out.* = toon_vs.<span class="tok-fn">shaderMain</span>(vio);
+        }
+    }
+    {
+        <span class="tok-kw">var</span> hio: hull_vs.Io = undefined;
+        hio.u = .{ .mvp = mvp, .ink_color = ink_color, .params = .{ ink_world / scale, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } };
+        <span class="tok-kw">for</span> (proxy.positions, proxy.normals, &amp;hull_outs) |p, n, *out| {
+            hio.vertex_position = .{ p[<span class="tok-num">0</span>], p[<span class="tok-num">1</span>], p[<span class="tok-num">2</span>] };
+            hio.vertex_normal = .{ n[<span class="tok-num">0</span>], n[<span class="tok-num">1</span>], n[<span class="tok-num">2</span>] };
+            out.* = hull_vs.<span class="tok-fn">shaderMain</span>(hio);
+        }
+    }
+    <span class="tok-kw">var</span> indices: [proxy.indices.len]u32 = undefined;
+    <span class="tok-kw">for</span> (proxy.indices, &amp;indices) |i16v, *i32v| {
+        i32v.* = i16v;
+    }
+
+    <span class="tok-comment">// ---- the pass: clear paper, ink hull (back faces), toon (front) ----</span>
+    <span class="tok-kw">var</span> img: [img_w * img_h][<span class="tok-num">4</span>]u8 = <span class="tok-builtin">@splat</span>(.{ <span class="tok-num">245</span>, <span class="tok-num">245</span>, <span class="tok-num">246</span>, <span class="tok-num">255</span> });
+    <span class="tok-kw">var</span> depth: [img_w * img_h]f32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">1.0</span>);
+
+    <span class="tok-kw">const</span> connect_ink: <span class="tok-kw">fn</span> (hull_vs.Out, *ink_fs.Io) void = z.shader.<span class="tok-fn">autoConnect</span>(hull_vs.Out, ink_fs.Io);
+    <span class="tok-kw">const</span> ink_io: ink_fs.Io = undefined;
+    z.raster_shader.<span class="tok-fn">rasterizeToTarget</span>(
+        hull_vs,
+        ink_fs,
+        img_w,
+        img_h,
+        &amp;hull_outs,
+        &amp;indices,
+        ink_io,
+        connect_ink,
+        .{ .front_face = .cw, .depth_test = true }, <span class="tok-comment">// BACK faces only - the hull trick</span>
+        &amp;img,
+        &amp;depth,
+    );
+
+    <span class="tok-kw">const</span> connect_toon: <span class="tok-kw">fn</span> (toon_vs.Out, *toon_fs.Io) void = z.shader.<span class="tok-fn">autoConnect</span>(toon_vs.Out, toon_fs.Io);
+    <span class="tok-kw">var</span> toon_io: toon_fs.Io = undefined;
+    toon_io.u = .{
+        .base_color = bunny_albedo,
+        .light_dir = .{ sun[<span class="tok-num">0</span>], sun[<span class="tok-num">1</span>], sun[<span class="tok-num">2</span>], <span class="tok-num">0</span> },
+        .params = .{ bands, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    };
+    z.raster_shader.<span class="tok-fn">rasterizeToTarget</span>(
+        toon_vs,
+        toon_fs,
+        img_w,
+        img_h,
+        &amp;toon_outs,
+        &amp;indices,
+        toon_io,
+        connect_toon,
+        .{ .front_face = .ccw, .depth_test = true },
+        &amp;img,
+        &amp;depth,
+    );
+
+    <span class="tok-comment">// ---- tonal census: paper / top band / ink must all exist ----</span>
+    <span class="tok-kw">var</span> paper: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> bright_band: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> ink_px: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (img) |px| {
+        <span class="tok-kw">const</span> lum: f32 = <span class="tok-num">0.299</span> * <span class="tok-fn">float</span>(px[<span class="tok-num">0</span>]) + <span class="tok-num">0.587</span> * <span class="tok-fn">float</span>(px[<span class="tok-num">1</span>]) + <span class="tok-num">0.114</span> * <span class="tok-fn">float</span>(px[<span class="tok-num">2</span>]);
+        <span class="tok-kw">if</span> (lum &gt; <span class="tok-num">240</span>) {
+            paper += <span class="tok-num">1</span>;
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (lum &gt; <span class="tok-num">130</span> <span class="tok-kw">and</span> lum &lt; <span class="tok-num">200</span>) {
+            bright_band += <span class="tok-num">1</span>; <span class="tok-comment">// full-brightness orange ~ lum 170</span>
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (lum &lt; <span class="tok-num">25</span>) {
+            ink_px += <span class="tok-num">1</span>;
+        }
+    }
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"cel_verify: paper {d} px, top-band {d} px, ink {d} px (all must be &gt;0)\n"</span>, .{
+        paper,
+        bright_band,
+        ink_px,
+    });
+
+    <span class="tok-kw">const</span> png: []u8 = <span class="tok-kw">try</span> z.codecs.png.<span class="tok-fn">encode</span>(gpa, <span class="tok-builtin">@ptrCast</span>(&amp;img), img_w, img_h);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(png);
+    <span class="tok-kw">try</span> std.Io.Dir.<span class="tok-fn">cwd</span>().<span class="tok-fn">writeFile</span>(io, .{ .sub_path = <span class="tok-str">"cel_verify.png"</span>, .data = png });
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  wrote cel_verify.png\n"</span>, .{});
+
+    <span class="tok-kw">if</span> (paper == <span class="tok-num">0</span> <span class="tok-kw">or</span> bright_band == <span class="tok-num">0</span> <span class="tok-kw">or</span> ink_px == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.CelLookWrong;
+    }
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  OK\n"</span>, .{});
+}
+</code></pre></figure>
+</body>
+</html>

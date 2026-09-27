@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>launcher — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>launcher</h1>
+<figure class="code src-file" data-path="examples/launcher/launcher.zig" data-lines="181"><figcaption><span>examples/launcher/launcher.zig</span><span>181 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! launcher - the flagship multi-app switcher. Hosts many full example apps</span>
+<span class="tok-comment">//! (each self-contained: its own shaders/fonts/State, isolated leak-checking</span>
+<span class="tok-comment">//! allocator) and shows ONE at a time full-screen via z.Launcher. A switch pill</span>
+<span class="tok-comment">//! (&lt; prev, a dot per app, &gt; next) cycles between apps on tap.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Children are added with addDeferred (LAZY): only the shown app is initialized,</span>
+<span class="tok-comment">//! on the frame it's first switched to - so booting many apps (incl. a 6MB</span>
+<span class="tok-comment">//! helmet) stays light. The contract is uniform: a child draws its scene + its</span>
+<span class="tok-comment">//! own UI and NEVER calls endDrawing - the runner owns frame begin/end, and the</span>
+<span class="tok-comment">//! launcher composes this pill on top in the same frame. App.endDrawing asserts</span>
+<span class="tok-comment">//! if a child violates that (see Launcher.tickFullscreen).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Why fullscreen (not a placement rect): pushViewport remaps RENDERING but not</span>
+<span class="tok-comment">//! INPUT, so an offset child's own touch UI (physics orbit, showcase tabs) would</span>
+<span class="tok-comment">//! mis-hit. Fullscreen keeps each child's input space identical to standalone. On</span>
+<span class="tok-comment">//! a switch tap we change the index and SKIP the child that frame, so the tap</span>
+<span class="tok-comment">//! can't bleed into the incoming app.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> vec2 = zm.vec2;
+
+<span class="tok-comment">// The flagship roster. Order = switch order. A broad tour of the engine: 3D PBR,</span>
+<span class="tok-comment">// full UI, physics, robot dynamics with a live MPC planner, two CPU-vs-GPU</span>
+<span class="tok-comment">// side-by-sides, 2D/3D plots, two GPU fluids, a warp starfield, switchable 2D</span>
+<span class="tok-comment">// post-fx, and fractals.</span>
+<span class="tok-kw">const</span> flagships = [_]z.AppVtable{
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_helmet_sw"</span>).app), <span class="tok-comment">// CPU vs GPU PBR helmet</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_bone_socket"</span>).app), <span class="tok-comment">// rigged character, skeletal animation + socketed sword</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_shadowmap_sw"</span>).app), <span class="tok-comment">// CPU vs GPU vs comptime shadow map</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_decals"</span>).app), <span class="tok-comment">// projected decals onto geometry</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_deferred_render"</span>).app), <span class="tok-comment">// MRT G-buffer deferred rendering</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_cel_shading"</span>).app), <span class="tok-comment">// toon/cel shading</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_fog_rendering"</span>).app), <span class="tok-comment">// distance fog</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_hybrid_render"</span>).app), <span class="tok-comment">// raster cubes + raymarched metaballs</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_textures_background_scrolling"</span>).app), <span class="tok-comment">// parallax scrolling layers</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_ui_full_showcase"</span>).app), <span class="tok-comment">// full imgui-style UI</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_zimrphysics_demo"</span>).app), <span class="tok-comment">// Jolt physics scenes</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_zimrphysics2d_demo"</span>).app), <span class="tok-comment">// box2d 2D physics scenes</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_mpc_cartpole"</span>).app), <span class="tok-comment">// MPC: a cartpole planning its own swing-up</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_mandel_sidebyside"</span>).app), <span class="tok-comment">// CPU vs GPU mandelbrot</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_rt_sidebyside"</span>).app), <span class="tok-comment">// CPU vs GPU ray tracer</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_plot_demo"</span>).app), <span class="tok-comment">// 2D plotting</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_plot3d_demo"</span>).app), <span class="tok-comment">// 3D plotting</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_sph_fluid_2d"</span>).app), <span class="tok-comment">// GPU SPH fluid</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_fluid_sort"</span>).app), <span class="tok-comment">// GPU SPH fluid (sorted grid)</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_four_ways"</span>).app),
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_worker_png"</span>).app), <span class="tok-comment">// PNG encode on a Web Worker (off the main thread)</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_mandel_julia"</span>).app), <span class="tok-comment">// fractal explorer</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_waving_cubes"</span>).app), <span class="tok-comment">// animated HSV cube field</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_tic_tac_toe"</span>).app), <span class="tok-comment">// two-player tic tac toe, plain 2D shapes</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_langton_ant"</span>).app), <span class="tok-comment">// Langtons ant with pan/zoom + turn trail</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_snake"</span>).app), <span class="tok-comment">// snake: eat dots to grow, keyboard + swipe</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_fps_playground"</span>).app), <span class="tok-comment">// first-person physics: walk + jump on cubes</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_starfield"</span>).app), <span class="tok-comment">// warp-speed starfield</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_shader_effects"</span>).app), <span class="tok-comment">// switchable 2D post-fx</span>
+    <span class="tok-comment">// * A Go1 with a procedurally spliced arm: the torso weaves through three incommensurate</span>
+    <span class="tok-comment">// frequencies while the gripper holds a point that travels with the feet. Reports its own</span>
+    <span class="tok-comment">// attitude error, gripper drift, foot slip and friction-cone occupancy.</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_quadruped"</span>).app), <span class="tok-comment">// articulated robot: gimbal + contact readouts</span>
+    z.<span class="tok-fn">eraseApp</span>(<span class="tok-builtin">@import</span>(<span class="tok-str">"ex_gallery_all"</span>).app), <span class="tok-comment">// 2x2 grid of 4 mini-apps (launcher-in-launcher!)</span>
+};
+<span class="tok-kw">const</span> n_apps = flagships.len;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> std_options = z.std_options;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    launcher: z.Launcher,
+    ids: [n_apps]z.ChildId,
+    active: usize,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    _ = f;
+    <span class="tok-comment">// Build the Launcher straight into its final home and register children on</span>
+    <span class="tok-comment">// it there - no local `var launcher` that gets copied into the slot. `.ids`</span>
+    <span class="tok-comment">// is filled by the loop below (still exhaustive: the field is written here).</span>
+    s.* = .{ .launcher = z.Launcher.<span class="tok-fn">init</span>(gpa), .ids = undefined, .active = <span class="tok-num">0</span> };
+    <span class="tok-kw">inline</span> <span class="tok-kw">for</span> (flagships, <span class="tok-num">0</span>..) |vt, i| {
+        s.ids[i] = <span class="tok-kw">try</span> s.launcher.<span class="tok-fn">addDeferred</span>(vt); <span class="tok-comment">// lazy: init happens on first show</span>
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    _ = gpa;
+    s.launcher.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">const</span> zone_w: f32 = <span class="tok-num">42</span>; <span class="tok-comment">// width of each tap zone (prev on the left, next on the right)</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPill</span>(
+    f: *z.Frame,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    active: usize,
+) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> white: Color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> };
+    gl.<span class="tok-fn">rect</span>(.{ .x = x, .y = y, .width = w, .height = h }, .{ .color = .{ .r = <span class="tok-num">24</span>, .g = <span class="tok-num">26</span>, .b = <span class="tok-num">34</span>, .a = <span class="tok-num">225</span> } });
+
+    <span class="tok-kw">const</span> cy: f32 = y + h * <span class="tok-num">0.5</span>;
+
+    <span class="tok-comment">// &lt; prev chevron (apex left), left zone.</span>
+    gl.<span class="tok-fn">triangle</span>(<span class="tok-fn">vec2</span>(x + <span class="tok-num">18</span>, cy - <span class="tok-num">7</span>), <span class="tok-fn">vec2</span>(x + <span class="tok-num">18</span>, cy + <span class="tok-num">7</span>), <span class="tok-fn">vec2</span>(x + <span class="tok-num">8</span>, cy), .{ .color = white });
+    <span class="tok-comment">// &gt; next chevron (apex right), right zone.</span>
+    gl.<span class="tok-fn">triangle</span>(<span class="tok-fn">vec2</span>(x + w - <span class="tok-num">18</span>, cy - <span class="tok-num">7</span>), <span class="tok-fn">vec2</span>(x + w - <span class="tok-num">18</span>, cy + <span class="tok-num">7</span>), <span class="tok-fn">vec2</span>(x + w - <span class="tok-num">8</span>, cy), .{ .color = white });
+
+    <span class="tok-comment">// One dot per app between the chevrons; the active one is bright.</span>
+    <span class="tok-kw">const</span> spacing: f32 = <span class="tok-num">11</span>;
+    <span class="tok-kw">const</span> start_x: f32 = x + <span class="tok-num">44</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; n_apps) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> dx: f32 = start_x + spacing * <span class="tok-fn">float</span>(i);
+        <span class="tok-kw">const</span> col: Color = <span class="tok-kw">if</span> (i == active)
+            white
+        <span class="tok-kw">else</span>
+            .{ .r = <span class="tok-num">84</span>, .g = <span class="tok-num">90</span>, .b = <span class="tok-num">104</span>, .a = <span class="tok-num">255</span> };
+        gl.<span class="tok-fn">circle</span>(.{ dx, cy }, <span class="tok-num">3</span>, .{ .color = col, .segments = <span class="tok-num">12</span> });
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-comment">// Switch pill: &lt; [dot per app] &gt;. Centered, raised above the bottom edge so</span>
+    <span class="tok-comment">// it clears bottom-corner content (insets, logs).</span>
+    <span class="tok-kw">const</span> spacing: f32 = <span class="tok-num">11</span>;
+    <span class="tok-kw">const</span> n_f: f32 = <span class="tok-fn">float</span>(n_apps);
+    <span class="tok-kw">const</span> pill_w: f32 = <span class="tok-num">80</span> + spacing * (n_f - <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> pill_h: f32 = <span class="tok-num">34</span>;
+    <span class="tok-kw">const</span> px: f32 = (w - pill_w) * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> py: f32 = h - pill_h - <span class="tok-num">56</span>;
+
+    <span class="tok-comment">// Hit-test BEFORE ticking the child so a switch tap is consumed here and</span>
+    <span class="tok-comment">// can't reach the (incoming) app the same frame. Left zone = prev, right = next.</span>
+    <span class="tok-kw">const</span> m: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> in_y: bool = m[<span class="tok-num">1</span>] &gt;= py <span class="tok-kw">and</span> m[<span class="tok-num">1</span>] &lt;= py + pill_h;
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left) <span class="tok-kw">and</span> in_y) {
+        <span class="tok-kw">if</span> (m[<span class="tok-num">0</span>] &gt;= px <span class="tok-kw">and</span> m[<span class="tok-num">0</span>] &lt; px + zone_w) {
+            s.active = (s.active + n_apps - <span class="tok-num">1</span>) % n_apps;
+            <span class="tok-fn">drawPill</span>(f, px, py, pill_w, pill_h, s.active);
+            <span class="tok-kw">return</span>;
+        }
+        <span class="tok-kw">if</span> (m[<span class="tok-num">0</span>] &gt; px + pill_w - zone_w <span class="tok-kw">and</span> m[<span class="tok-num">0</span>] &lt;= px + pill_w) {
+            s.active = (s.active + <span class="tok-num">1</span>) % n_apps;
+            <span class="tok-fn">drawPill</span>(f, px, py, pill_w, pill_h, s.active);
+            <span class="tok-kw">return</span>;
+        }
+    }
+
+    s.launcher.<span class="tok-fn">tickFullscreen</span>(f, s.ids[s.active]);
+    <span class="tok-fn">drawPill</span>(f, px, py, pill_w, pill_h, s.active);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    <span class="tok-comment">// Multi-example host: it drives dozens of hosted example lifecycles, so a</span>
+    <span class="tok-comment">// single leak-tight deinit isn't meaningful - opt out of the managed gate.</span>
+    .memory = .managed,
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - launcher"</span>,
+            .width = <span class="tok-num">480</span>,
+            .height = <span class="tok-num">320</span>,
+            .scale_mode = .responsive,
+            <span class="tok-comment">// The 3D children (helmet, physics, plot3d, ...) need a depth</span>
+            <span class="tok-comment">// attachment; the launcher owns the frame, so its config governs.</span>
+            .depth_format = .depth24_plus,
+            .clear = .{ .r = <span class="tok-num">10.0</span> / <span class="tok-num">255.0</span>, .g = <span class="tok-num">12.0</span> / <span class="tok-num">255.0</span>, .b = <span class="tok-num">18.0</span> / <span class="tok-num">255.0</span>, .a = <span class="tok-num">1.0</span> },
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/launcher/kernels.zig" data-lines="54"><figcaption><span>examples/launcher/kernels.zig</span><span>54 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/launcher/kernels.zig - ONE kernel wasm for a page that bundles many examples.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A page carries exactly one `ZIMR_KERNEL_WASM`. The launcher carries a dozen examples, two</span>
+<span class="tok-comment">//! of which have job kernels - so its kernel wasm has to serve both at once.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It can, and cheaply, because the wasm exports are keyed by NAME (`zimr_job_encodePng`,</span>
+<span class="tok-comment">//! `zimr_job_mandel`) rather than by an index or a hash. A merged wasm exports a SUPERSET of</span>
+<span class="tok-comment">//! the names, so each example's `submit` finds its own kernel and nobody renumbers anything.</span>
+<span class="tok-comment">//! Had the design kept a hashed dispatch table, merging two registries would have meant</span>
+<span class="tok-comment">//! merging two id spaces - and this file could not exist.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The table below is written by hand rather than concatenated with `++`, and that is a</span>
+<span class="tok-comment">//! limitation of the Zig, not the design: every kernel carries its own header type in its</span>
+<span class="tok-comment">//! signature (`Size` for the encoder, `JobHeader(M)` for the kompute one), so `++` on two</span>
+<span class="tok-comment">//! kernel TABLES has no common element type. Tuples would concatenate - but this Zig</span>
+<span class="tok-comment">//! (0.17.0-dev.1282) has no `@Type`, no `std.meta.Tuple`, and `@Struct` with numeric field</span>
+<span class="tok-comment">//! names yields something that does not support indexing. Two entries are cheap to write out;</span>
+<span class="tok-comment">//! when the language grows the tuple back, this becomes `a.job_kernels ++ b.job_kernels`.</span>
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+
+<span class="tok-kw">const</span> jobs = z.jobs;
+
+<span class="tok-comment">/// The examples on the launcher that have job kernels.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `four_ways` is the interesting one: it is the only example with BOTH `compute_kernels` and</span>
+<span class="tok-comment">/// `job_kernels`, and for a long time it could not be here at all. Not because of anything to</span>
+<span class="tok-comment">/// do with jobs - because `wireComputeKernels` minted a FRESH `kompute` module per example.</span>
+<span class="tok-comment">/// One compute example per page hid that completely. Two of them on one page (which is what a</span>
+<span class="tok-comment">/// launcher IS) gave Zig two distinct modules rooted at the same `src/kompute.zig`, so it</span>
+<span class="tok-comment">/// renamed the second to `kompute0` and then refused the file for belonging to both. The error</span>
+<span class="tok-comment">/// it printed named `escape_kernel.zig`, which is the import that tripped over it - not the</span>
+<span class="tok-comment">/// cause. The build now shares one kompute module, and the cap is gone.</span>
+<span class="tok-kw">const</span> png = <span class="tok-builtin">@import</span>(<span class="tok-str">"k_worker_png"</span>);
+<span class="tok-kw">const</span> four = <span class="tok-builtin">@import</span>(<span class="tok-str">"k_four_ways"</span>);
+
+<span class="tok-comment">/// The merged table.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// `four_ways`' entry is DERIVED: `komputeKernel(module, "mandel")` builds the job wrapper and</span>
+<span class="tok-comment">/// its header type from the kompute module itself, so the same Zig function that runs on the</span>
+<span class="tok-comment">/// GPU as a compute shader runs here as a worker job, and neither spelling can drift from the</span>
+<span class="tok-comment">/// other.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> job_kernels = .{
+    .{ <span class="tok-str">"encodePng"</span>, png.encodePng },
+    .{ <span class="tok-str">"mandel"</span>, z.<span class="tok-fn">komputeKernel</span>(four.module, <span class="tok-str">"mandel"</span>) },
+};
+
+<span class="tok-comment">/// The bounds are the MAX over the members: one buffer serves every kernel on the page, so it</span>
+<span class="tok-comment">/// has to fit the largest input and the largest output any of them can present. A `max_input`</span>
+<span class="tok-comment">/// that is too small does not fail loudly at build time - it fails as `Error.InputTooLarge` on</span>
+<span class="tok-comment">/// a phone, which is exactly the kind of thing this should not be guessing at.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> registry = jobs.<span class="tok-fn">Registry</span>(job_kernels, .{
+    .max_input = <span class="tok-builtin">@max</span>(png.registry.max_input, four.registry.max_input),
+    .max_output = <span class="tok-builtin">@max</span>(png.registry.max_output, four.registry.max_output),
+});
+</code></pre></figure>
+</body>
+</html>

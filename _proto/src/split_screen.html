@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>split_screen — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>split_screen</h1>
+<figure class="code src-file" data-path="examples/split_screen/split_screen.zig" data-lines="227"><figcaption><span>examples/split_screen/split_screen.zig</span><span>227 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! split_screen - port of the GL `split_screen`: two players, one</span>
+<span class="tok-comment">//! world, two perspectives.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The original was the architecture test for the (GL-era) Scene renderer's</span>
+<span class="tok-comment">//! per-camera fog: two cameras orbiting inside two different fog spheres,</span>
+<span class="tok-comment">//! each rendered into its half of the canvas, picking up "its" fog with no</span>
+<span class="tok-comment">//! split-screen awareness in the renderer.  That Scene system dies with the</span>
+<span class="tok-comment">//! GL path; this port keeps the demo's ESSENCE on the wgpu idioms:</span>
+<span class="tok-comment">//!   - ONE world (immediate-3D primitives + the two zone spheres), drawn</span>
+<span class="tok-comment">//!     TWICE per frame with two cameras - each into its own RenderTexture</span>
+<span class="tok-comment">//!     (the helmet's RTT pattern), composited side by side.</span>
+<span class="tok-comment">//!   - Per-camera ATMOSPHERE computed in app code: whichever zone sphere a</span>
+<span class="tok-comment">//!     camera is inside tints that camera's half (a translucent overlay in</span>
+<span class="tok-comment">//!     the RTT's own 2D space).  Same story - one world, two views, two</span>
+<span class="tok-comment">//!     atmospheres - without renderer special-casing.</span>
+<span class="tok-comment">//!   - The engine learned `App.target_size` for this port: `beginMode3D`</span>
+<span class="tok-comment">//!     inside `beginTextureMode` now uses the RTT's aspect, so a half-width</span>
+<span class="tok-comment">//!     viewport renders undistorted.</span>
+<span class="tok-comment">//! The halves track the live canvas (backing size / 2 each), so rotation</span>
+<span class="tok-comment">//! and resize stay correct - the t1168 fullscreen rules.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> Camera3D = zm.Camera3D;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> length3 = zm.length3;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> pointVec = zm.pointVec;
+<span class="tok-kw">const</span> tau = zm.tau;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+<span class="tok-kw">const</span> c = z.colors;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// The two atmosphere zones: a blue one on the left of the world, an amber</span>
+<span class="tok-comment">// one on the right.  Each camera orbits INSIDE its zone, so by construction</span>
+<span class="tok-comment">// each half always shows that zone's tint (cross over and it would switch -</span>
+<span class="tok-comment">// same "exercise for the reader" as the original).</span>
+<span class="tok-kw">const</span> zone_blue_center: Vec = <span class="tok-fn">pointVec</span>(-<span class="tok-num">4</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>);
+<span class="tok-kw">const</span> zone_amber_center: Vec = <span class="tok-fn">pointVec</span>(<span class="tok-num">4</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>);
+<span class="tok-kw">const</span> zone_radius: f32 = <span class="tok-num">3.4</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    rt_left: z.RenderTexture = .{},
+    rt_right: z.RenderTexture = .{},
+    angle: f32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.rt_left.<span class="tok-fn">deinit</span>();
+    s.rt_right.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>) };
+}
+
+<span class="tok-comment">/// Keep each half's render texture at half the surface BACKING width x</span>
+<span class="tok-comment">/// full backing height (pixel-perfect at any orientation; recreated only</span>
+<span class="tok-comment">/// when the size actually changes).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureTargets</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> backing: z.wgpu.SurfaceSize = z.wgpu.<span class="tok-fn">getSurfaceSize</span>(f.gpu.surface);
+    <span class="tok-kw">const</span> half_w: u32 = <span class="tok-builtin">@max</span>(backing.width / <span class="tok-num">2</span>, <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> full_h: u32 = <span class="tok-builtin">@max</span>(backing.height, <span class="tok-num">1</span>);
+    <span class="tok-kw">if</span> (s.rt_left.color == .invalid <span class="tok-kw">or</span> s.rt_left.width != half_w <span class="tok-kw">or</span> s.rt_left.height != full_h) {
+        <span class="tok-kw">if</span> (s.rt_left.color != .invalid) {
+            z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt_left);
+            z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt_right);
+        }
+        s.rt_left = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(half_w), <span class="tok-builtin">@intCast</span>(full_h));
+        s.rt_right = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intCast</span>(half_w), <span class="tok-builtin">@intCast</span>(full_h));
+    }
+}
+
+<span class="tok-comment">/// Three orthogonal great circles approximating a wire sphere.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawZoneRings</span>(f: *z.Frame, center: Vec, radius: f32, color: Color) void {
+    <span class="tok-kw">const</span> segs: usize = <span class="tok-num">28</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; segs) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> a0: f32 = <span class="tok-fn">float</span>(i) / segs * tau;
+        <span class="tok-kw">const</span> a1: f32 = <span class="tok-fn">float</span>(i + <span class="tok-num">1</span>) / segs * tau;
+        <span class="tok-kw">const</span> c0: f32 = <span class="tok-builtin">@cos</span>(a0) * radius;
+        <span class="tok-kw">const</span> s0: f32 = <span class="tok-builtin">@sin</span>(a0) * radius;
+        <span class="tok-kw">const</span> c1: f32 = <span class="tok-builtin">@cos</span>(a1) * radius;
+        <span class="tok-kw">const</span> s1: f32 = <span class="tok-builtin">@sin</span>(a1) * radius;
+        <span class="tok-comment">// XZ ring (horizon), XY ring, YZ ring.</span>
+        z.<span class="tok-fn">drawLine3D</span>(f.gl, center + <span class="tok-fn">vec</span>(c0, <span class="tok-num">0</span>, s0), center + <span class="tok-fn">vec</span>(c1, <span class="tok-num">0</span>, s1), color);
+        z.<span class="tok-fn">drawLine3D</span>(f.gl, center + <span class="tok-fn">vec</span>(c0, s0, <span class="tok-num">0</span>), center + <span class="tok-fn">vec</span>(c1, s1, <span class="tok-num">0</span>), color);
+        z.<span class="tok-fn">drawLine3D</span>(f.gl, center + <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, c0, s0), center + <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, c1, s1), color);
+    }
+}
+
+<span class="tok-comment">/// The shared world - drawn identically for both cameras.  A ground grid,</span>
+<span class="tok-comment">/// a small scatter of primitives, and the two zone spheres as wireframes so</span>
+<span class="tok-comment">/// each player can SEE the atmosphere volumes.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawWorld</span>(f: *z.Frame) void {
+    z.<span class="tok-fn">drawGrid</span>(f.gl, <span class="tok-num">20</span>, <span class="tok-num">1.0</span>);
+
+    z.<span class="tok-fn">drawCube</span>(f.gl, <span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.6</span>, <span class="tok-num">0</span>), .{ .size = <span class="tok-fn">vec</span>(<span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>), .color = c.slate_400 });
+    z.<span class="tok-fn">drawCubeWires</span>(f.gl, <span class="tok-fn">pointVec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.6</span>, <span class="tok-num">0</span>), .{ .size = <span class="tok-fn">vec</span>(<span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>), .color = c.slate_200 });
+    z.<span class="tok-fn">drawSphere</span>(f.gl, <span class="tok-fn">pointVec</span>(-<span class="tok-num">2</span>, <span class="tok-num">0.7</span>, <span class="tok-num">2</span>), .{ .radius = <span class="tok-num">0.7</span>, .rings = <span class="tok-num">12</span>, .slices = <span class="tok-num">16</span>, .color = c.rose_400 });
+    z.<span class="tok-fn">drawSphere</span>(f.gl, <span class="tok-fn">pointVec</span>(<span class="tok-num">2</span>, <span class="tok-num">0.7</span>, -<span class="tok-num">2</span>), .{ .radius = <span class="tok-num">0.7</span>, .rings = <span class="tok-num">12</span>, .slices = <span class="tok-num">16</span>, .color = c.emerald_400 });
+    z.<span class="tok-fn">drawCylinderBetween</span>(f.gl, <span class="tok-fn">pointVec</span>(-<span class="tok-num">1.5</span>, <span class="tok-num">0</span>, -<span class="tok-num">2.5</span>), <span class="tok-fn">pointVec</span>(-<span class="tok-num">1.5</span>, <span class="tok-num">1.6</span>, -<span class="tok-num">2.5</span>), <span class="tok-num">0.4</span>, <span class="tok-num">0.4</span>, <span class="tok-num">14</span>, c.violet_400);
+    z.<span class="tok-fn">drawCylinderBetween</span>(f.gl, <span class="tok-fn">pointVec</span>(<span class="tok-num">1.5</span>, <span class="tok-num">0</span>, <span class="tok-num">2.5</span>), <span class="tok-fn">pointVec</span>(<span class="tok-num">1.5</span>, <span class="tok-num">2.0</span>, <span class="tok-num">2.5</span>), <span class="tok-num">0.5</span>, <span class="tok-num">0.0</span>, <span class="tok-num">14</span>, c.amber_500);
+
+    <span class="tok-comment">// The atmosphere volumes, visible from inside and out (three orthogonal</span>
+    <span class="tok-comment">// rings each - the wgpu immediate set has no drawSphereWires yet).</span>
+    <span class="tok-fn">drawZoneRings</span>(f, zone_blue_center, zone_radius, c.sky_300);
+    <span class="tok-fn">drawZoneRings</span>(f, zone_amber_center, zone_radius, c.amber_300);
+}
+
+<span class="tok-comment">/// Whichever zone sphere `pos` is inside picks the half's atmosphere tint</span>
+<span class="tok-comment">/// (alpha-blended overlay); outside both = no tint.  The original's</span>
+<span class="tok-comment">/// per-camera fog picker, reborn as twelve lines of app code.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">atmosphereTint</span>(pos: Vec) ?Color {
+    <span class="tok-kw">if</span> (<span class="tok-fn">length3</span>(pos - zone_blue_center) &lt; zone_radius) {
+        <span class="tok-kw">return</span> .{ .r = <span class="tok-num">70</span>, .g = <span class="tok-num">120</span>, .b = <span class="tok-num">220</span>, .a = <span class="tok-num">64</span> };
+    }
+    <span class="tok-kw">if</span> (<span class="tok-fn">length3</span>(pos - zone_amber_center) &lt; zone_radius) {
+        <span class="tok-kw">return</span> .{ .r = <span class="tok-num">230</span>, .g = <span class="tok-num">160</span>, .b = <span class="tok-num">40</span>, .a = <span class="tok-num">64</span> };
+    }
+    <span class="tok-kw">return</span> null;
+}
+
+<span class="tok-comment">/// Render the shared world from `cam` into `rt`, then overlay that</span>
+<span class="tok-comment">/// camera's atmosphere tint in the RTT's own 2D space.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">renderView</span>(f: *z.Frame, rt: z.RenderTexture, cam: Camera3D) void {
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, rt, .{ .r = <span class="tok-num">10</span>, .g = <span class="tok-num">12</span>, .b = <span class="tok-num">20</span>, .a = <span class="tok-num">255</span> });
+    z.<span class="tok-fn">beginMode3D</span>(f.gl, cam);
+    <span class="tok-fn">drawWorld</span>(f);
+    z.<span class="tok-fn">endMode3D</span>(f.gl);
+    <span class="tok-kw">if</span> (<span class="tok-fn">atmosphereTint</span>(cam.position)) |tint| {
+        <span class="tok-kw">const</span> rtw: f32 = <span class="tok-fn">float</span>(rt.width);
+        <span class="tok-kw">const</span> rth: f32 = <span class="tok-fn">float</span>(rt.height);
+        f.gl.<span class="tok-fn">rect</span>(.{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = rtw, .height = rth }, .{ .color = tint });
+    }
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureTargets</span>(f, s);
+    s.angle += f.time.delta_time * <span class="tok-num">24.0</span>;
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+
+    <span class="tok-comment">// OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing).</span>
+    <span class="tok-comment">// Each camera orbits INSIDE its own zone at radius 2, looking across</span>
+    <span class="tok-comment">// the world at the other zone's center - so each half frames the whole</span>
+    <span class="tok-comment">// scene from its side.</span>
+    <span class="tok-kw">const</span> rad: f32 = s.angle * pi / <span class="tok-num">180.0</span>;
+    <span class="tok-kw">const</span> cam_left: Camera3D = .{
+        .position = <span class="tok-fn">pointVec</span>(
+            zone_blue_center[<span class="tok-num">0</span>] + <span class="tok-builtin">@cos</span>(rad) * <span class="tok-num">2.0</span>,
+            <span class="tok-num">1.6</span>,
+            zone_blue_center[<span class="tok-num">2</span>] + <span class="tok-builtin">@sin</span>(rad) * <span class="tok-num">2.0</span>,
+        ),
+        .target = zone_amber_center,
+        .up = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>),
+        .fovy_deg = <span class="tok-num">55</span>,
+        .projection = <span class="tok-num">0</span>,
+    };
+    <span class="tok-kw">const</span> cam_right: Camera3D = .{
+        .position = <span class="tok-fn">pointVec</span>(
+            zone_amber_center[<span class="tok-num">0</span>] + <span class="tok-builtin">@cos</span>(-rad) * <span class="tok-num">2.0</span>,
+            <span class="tok-num">1.6</span>,
+            zone_amber_center[<span class="tok-num">2</span>] + <span class="tok-builtin">@sin</span>(-rad) * <span class="tok-num">2.0</span>,
+        ),
+        .target = zone_blue_center,
+        .up = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>),
+        .fovy_deg = <span class="tok-num">55</span>,
+        .projection = <span class="tok-num">0</span>,
+    };
+
+    <span class="tok-fn">renderView</span>(f, s.rt_left, cam_left);
+    <span class="tok-fn">renderView</span>(f, s.rt_right, cam_right);
+
+    <span class="tok-comment">// SCREEN PASS: open once, clear, then composite.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearViewport</span>(f, common.palette.bg);
+
+    <span class="tok-comment">// Composite the two halves + divider + labels.</span>
+    <span class="tok-kw">const</span> half: f32 = vw * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> white: Color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> };
+    f.gl.<span class="tok-fn">texture</span>(.{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = half, .height = vh }, s.rt_left.<span class="tok-fn">asTexture</span>(), .{ .tint = white });
+    f.gl.<span class="tok-fn">texture</span>(.{ .x = half, .y = <span class="tok-num">0</span>, .width = half, .height = vh }, s.rt_right.<span class="tok-fn">asTexture</span>(), .{ .tint = white });
+    f.gl.<span class="tok-fn">rect</span>(.{ .x = half - <span class="tok-num">1.5</span>, .y = <span class="tok-num">0</span>, .width = <span class="tok-num">3</span>, .height = vh }, .{ .color = white });
+
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"P1 - blue zone"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ vw - <span class="tok-num">188</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"P2 - amber zone"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"one world, two cameras, two render textures - per-camera atmosphere"</span>);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - split screen: two cameras, one world"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">540</span>,
+            .scale_mode = .responsive,
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// Offscreen render-textures drawn before the screen opens (tile-based-GPU</span>
+    <span class="tok-comment">// safe); owns its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+};
+</code></pre></figure>
+</body>
+</html>

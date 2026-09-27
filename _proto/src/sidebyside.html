@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>sidebyside — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>sidebyside</h1>
+<figure class="code src-file" data-path="examples/sidebyside/sidebyside.zig" data-lines="295"><figcaption><span>examples/sidebyside/sidebyside.zig</span><span>295 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/sidebyside/sidebyside.zig</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// THE FLAGSHIP: the same scene rendered two ways at once.</span>
+<span class="tok-comment">//   - LEFT of the divider:  a LOW-RES software rasterizer (raster) running</span>
+<span class="tok-comment">//     entirely on the CPU (wasm), its pixel buffer uploaded to the GPU and</span>
+<span class="tok-comment">//     blitted to screen.</span>
+<span class="tok-comment">//   - RIGHT of the divider: the SAME scene drawn at FULL resolution by the</span>
+<span class="tok-comment">//     WebGPU backend (WgpuGl).</span>
+<span class="tok-comment">//   - A vertical splitter follows the mouse X.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The whole point: the scene-drawing code is written ONCE as `fn(gl: anytype)`</span>
+<span class="tok-comment">// and runs unchanged on both backends - raster (software) and WgpuGl (GPU) both</span>
+<span class="tok-comment">// satisfy the same renderer trait (gl_iface). Move the splitter and you're</span>
+<span class="tok-comment">// looking at the exact same geometry, software on one side and hardware on the</span>
+<span class="tok-comment">// other, pixel-for-pixel.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// Build:      zig build wgpu-sidebyside</span>
+<span class="tok-comment">// Standalone: zig build wgpu-sidebyside-standalone</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> tau = zm.tau;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+
+<span class="tok-comment">// Fixed-function shader pair used by the CPU side's `ff_triangle` bridge</span>
+<span class="tok-comment">// (`ffBridge` below): the immediate-mode triangles render through this</span>
+<span class="tok-comment">// exact pair on `raster_shader.rasterizeTriangles` - the same shader the GPU</span>
+<span class="tok-comment">// side runs - so the two halves match through one rasteriser, no drift.</span>
+<span class="tok-kw">const</span> ff_vs = z.default_shapes.vs;
+<span class="tok-kw">const</span> ff_fs = z.default_shapes.fs;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> int = zm.int;
+
+<span class="tok-comment">// Full-canvas logical size (the GPU side renders at this; the design space).</span>
+<span class="tok-kw">const</span> width: u32 = <span class="tok-num">960</span>;
+<span class="tok-kw">const</span> height: u32 = <span class="tok-num">600</span>;
+
+<span class="tok-comment">// The software side renders at a LOWER resolution (this is the visible point of</span>
+<span class="tok-comment">// the comparison - software is cheaper at low res, hardware is crisp at full</span>
+<span class="tok-comment">// res). Upscaled with nearest filtering so the chunky pixels read clearly.</span>
+<span class="tok-kw">const</span> sw_w: u32 = width / <span class="tok-num">3</span>;
+<span class="tok-kw">const</span> sw_h: u32 = height / <span class="tok-num">3</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">// The software rasterizer + its CPU-&gt;GPU framebuffer bridge.</span>
+    sw: z.raster.Context,
+    sw_fb: z.CpuFramebuffer,
+
+    <span class="tok-comment">// Divider X in design pixels; follows the mouse.</span>
+    divider_x: f32,
+
+    t: f32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.sw.<span class="tok-fn">deinit</span>(gpa);
+    s.sw_fb.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">var</span> sw: z.raster.Context = <span class="tok-kw">try</span> z.raster.Context.<span class="tok-fn">init</span>(gpa, <span class="tok-builtin">@intCast</span>(sw_w), <span class="tok-builtin">@intCast</span>(sw_h));
+    <span class="tok-kw">const</span> sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+        f.gpu.device,
+        f.gpu.queue,
+        sw_w,
+        sw_h,
+        sw.<span class="tok-fn">colorBufferBytes</span>(),
+        <span class="tok-str">"sidebyside_sw"</span>,
+    );
+    s.* = .{
+        .sw = sw,
+        .sw_fb = sw_fb,
+        .divider_x = <span class="tok-fn">float</span>(width) * <span class="tok-num">0.5</span>,
+        .t = <span class="tok-num">0</span>,
+    };
+}
+
+<span class="tok-comment">/// Fixed-function `ff_triangle` hook (Phase 2 - one rasteriser): route</span>
+<span class="tok-comment">/// each immediate-mode triangle of the CPU side through the SAME</span>
+<span class="tok-comment">/// `default_shapes` pair + `raster_shader.rasterizeTriangles` the GPU side</span>
+<span class="tok-comment">/// runs.  raster has already transformed the positions to clip space, so</span>
+<span class="tok-comment">/// the VS is bypassed and `Out` is built directly (preserving the full</span>
+<span class="tok-comment">/// vec4).  This 2D scene is untextured (a white 1x1 -&gt; `frag_color` flows</span>
+<span class="tok-comment">/// straight through) with no depth and no cull; only blend varies, and it</span>
+<span class="tok-comment">/// follows the context so the alpha discs composite exactly as the</span>
+<span class="tok-comment">/// fixed-function `triangleKernel` path did.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ffBridge</span>(
+    ctx_opaque: *anyopaque,
+    v0: *<span class="tok-kw">const</span> z.raster.Vertex,
+    v1: *<span class="tok-kw">const</span> z.raster.Vertex,
+    v2: *<span class="tok-kw">const</span> z.raster.Vertex,
+) void {
+    <span class="tok-kw">const</span> ctx: *z.raster.Context = <span class="tok-builtin">@ptrCast</span>(<span class="tok-builtin">@alignCast</span>(ctx_opaque));
+    <span class="tok-kw">const</span> vs_outs: [<span class="tok-num">3</span>]ff_vs.Out = .{
+        .{ .position = v0.position, .frag_tex_coord = v0.texcoord, .frag_color = v0.color },
+        .{ .position = v1.position, .frag_tex_coord = v1.texcoord, .frag_color = v1.color },
+        .{ .position = v2.position, .frag_tex_coord = v2.texcoord, .frag_color = v2.color },
+    };
+    <span class="tok-kw">const</span> idx: [<span class="tok-num">3</span>]u32 = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span> };
+    <span class="tok-kw">const</span> white_px: [<span class="tok-num">4</span>]u8 = .{ <span class="tok-num">255</span>, <span class="tok-num">255</span>, <span class="tok-num">255</span>, <span class="tok-num">255</span> };
+    <span class="tok-kw">const</span> base_io: ff_fs.Io = .{
+        .frag_tex_coord = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .frag_color = .{ <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span> },
+        ._texture0 = .{ .pixels = &amp;white_px, .width = <span class="tok-num">1</span>, .height = <span class="tok-num">1</span> },
+    };
+    <span class="tok-kw">const</span> connect: <span class="tok-kw">fn</span> (ff_vs.Out, *ff_fs.Io) void = z.<span class="tok-fn">autoConnect</span>(ff_vs.Out, ff_fs.Io);
+    <span class="tok-comment">// This 2D scene has no depth and no cull; only blend varies (the</span>
+    <span class="tok-comment">// alpha discs).  Route through the shared runtime-opts core so the</span>
+    <span class="tok-comment">// composite matches the fixed-function path exactly - no opts logic</span>
+    <span class="tok-comment">// duplicated here.</span>
+    z.raster_shader.<span class="tok-fn">rasterizeWithRuntimeOpts</span>(
+        ff_vs,
+        ff_fs,
+        ctx,
+        &amp;vs_outs,
+        &amp;idx,
+        base_io,
+        connect,
+        false,
+        ctx.<span class="tok-fn">blendEnabled</span>(),
+        false,
+    );
+}
+
+<span class="tok-comment">/// Tiny HSV-&gt;RGB (h,s,v in 0..1) for cheerful palette cycling.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">hsv</span>(h: f32, s: f32, v: f32) [<span class="tok-num">3</span>]u8 {
+    <span class="tok-kw">const</span> i: f32 = <span class="tok-builtin">@floor</span>(h * <span class="tok-num">6.0</span>);
+    <span class="tok-kw">const</span> f: f32 = h * <span class="tok-num">6.0</span> - i;
+    <span class="tok-kw">const</span> p: f32 = v * (<span class="tok-num">1.0</span> - s);
+    <span class="tok-kw">const</span> q: f32 = v * (<span class="tok-num">1.0</span> - f * s);
+    <span class="tok-kw">const</span> tt: f32 = v * (<span class="tok-num">1.0</span> - (<span class="tok-num">1.0</span> - f) * s);
+    <span class="tok-kw">const</span> seg: i32 = <span class="tok-builtin">@mod</span>(<span class="tok-fn">int</span>(i32, i), <span class="tok-num">6</span>);
+    <span class="tok-kw">const</span> rgb: [<span class="tok-num">3</span>]f32 = <span class="tok-kw">switch</span> (seg) {
+        <span class="tok-num">0</span> =&gt; .{ v, tt, p },
+        <span class="tok-num">1</span> =&gt; .{ q, v, p },
+        <span class="tok-num">2</span> =&gt; .{ p, v, tt },
+        <span class="tok-num">3</span> =&gt; .{ p, q, v },
+        <span class="tok-num">4</span> =&gt; .{ tt, p, v },
+        <span class="tok-kw">else</span> =&gt; .{ v, p, q },
+    };
+    <span class="tok-kw">return</span> .{
+        <span class="tok-fn">int</span>(u8, rgb[<span class="tok-num">0</span>] * <span class="tok-num">255.0</span>),
+        <span class="tok-fn">int</span>(u8, rgb[<span class="tok-num">1</span>] * <span class="tok-num">255.0</span>),
+        <span class="tok-fn">int</span>(u8, rgb[<span class="tok-num">2</span>] * <span class="tok-num">255.0</span>),
+    };
+}
+
+<span class="tok-comment">/// Filled circle via a triangle fan - works on any `gl: anytype`.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">fillCircle</span>(
+    gl: <span class="tok-kw">anytype</span>,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    cr: u8,
+    cg: u8,
+    cb: u8,
+    ca: u8,
+) void {
+    <span class="tok-kw">const</span> segs: u32 = <span class="tok-num">24</span>;
+    gl.<span class="tok-fn">color4ub</span>(cr, cg, cb, ca);
+    gl.<span class="tok-fn">begin</span>(.triangles);
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; segs) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> a0: f32 = <span class="tok-fn">float</span>(i) * (tau / <span class="tok-fn">float</span>(segs));
+        <span class="tok-kw">const</span> a1: f32 = <span class="tok-fn">float</span>(i + <span class="tok-num">1</span>) * (tau / <span class="tok-fn">float</span>(segs));
+        gl.<span class="tok-fn">vertex2f</span>(cx, cy);
+        gl.<span class="tok-fn">vertex2f</span>(cx + r * <span class="tok-builtin">@cos</span>(a0), cy + r * <span class="tok-builtin">@sin</span>(a0));
+        gl.<span class="tok-fn">vertex2f</span>(cx + r * <span class="tok-builtin">@cos</span>(a1), cy + r * <span class="tok-builtin">@sin</span>(a1));
+    }
+    gl.<span class="tok-fn">end</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(gl: <span class="tok-kw">anytype</span>, t: f32) void {
+    gl.<span class="tok-fn">clearColor</span>(.{ .r = <span class="tok-num">12</span>, .g = <span class="tok-num">14</span>, .b = <span class="tok-num">22</span>, .a = <span class="tok-num">255</span> });
+    gl.<span class="tok-fn">clear</span>(.{ .color = true });
+
+    <span class="tok-comment">// Top-left 2D ortho over the full design space; both sides share it.</span>
+    gl.<span class="tok-fn">matrixMode</span>(.projection);
+    gl.<span class="tok-fn">loadIdentity</span>();
+    gl.<span class="tok-fn">ortho</span>(<span class="tok-num">0</span>, <span class="tok-fn">float</span>(width), <span class="tok-fn">float</span>(height), <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span>);
+    gl.<span class="tok-fn">matrixMode</span>(.modelview);
+    gl.<span class="tok-fn">loadIdentity</span>();
+    gl.<span class="tok-fn">enable</span>(.blend);
+
+    <span class="tok-kw">const</span> cx: f32 = <span class="tok-fn">float</span>(width) * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-fn">float</span>(height) * <span class="tok-num">0.5</span>;
+
+    <span class="tok-comment">// A ring of orbiting discs, each pulsing - drawn as filled triangle fans.</span>
+    <span class="tok-kw">const</span> n_orbit: u32 = <span class="tok-num">10</span>;
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; n_orbit) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> fi: f32 = <span class="tok-fn">float</span>(i);
+        <span class="tok-kw">const</span> ang: f32 = t * <span class="tok-num">0.5</span> + fi * (tau / <span class="tok-fn">float</span>(n_orbit));
+        <span class="tok-kw">const</span> orbit_r: f32 = <span class="tok-num">180.0</span> + <span class="tok-num">40.0</span> * <span class="tok-builtin">@sin</span>(t + fi);
+        <span class="tok-kw">const</span> px: f32 = cx + orbit_r * <span class="tok-builtin">@cos</span>(ang);
+        <span class="tok-kw">const</span> py: f32 = cy + orbit_r * <span class="tok-builtin">@sin</span>(ang);
+        <span class="tok-kw">const</span> rad: f32 = <span class="tok-num">18.0</span> + <span class="tok-num">10.0</span> * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">2.0</span> + fi * <span class="tok-num">1.3</span>);
+        <span class="tok-kw">const</span> hue: f32 = fi / <span class="tok-fn">float</span>(n_orbit);
+        <span class="tok-kw">const</span> col: [<span class="tok-num">3</span>]u8 = <span class="tok-fn">hsv</span>(hue, <span class="tok-num">0.7</span>, <span class="tok-num">1.0</span>);
+        <span class="tok-fn">fillCircle</span>(gl, px, py, rad, col[<span class="tok-num">0</span>], col[<span class="tok-num">1</span>], col[<span class="tok-num">2</span>], <span class="tok-num">255</span>);
+    }
+
+    <span class="tok-comment">// A rotating filled polygon in the center.</span>
+    <span class="tok-kw">const</span> sides: u32 = <span class="tok-num">6</span>;
+    <span class="tok-kw">const</span> poly_r: f32 = <span class="tok-num">90.0</span> + <span class="tok-num">20.0</span> * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">1.3</span>);
+    gl.<span class="tok-fn">color4ub</span>(<span class="tok-num">90</span>, <span class="tok-num">130</span>, <span class="tok-num">240</span>, <span class="tok-num">230</span>);
+    gl.<span class="tok-fn">begin</span>(.triangles);
+    <span class="tok-kw">var</span> k: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (k &lt; sides) : (k += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> a0: f32 = t * <span class="tok-num">0.8</span> + <span class="tok-fn">float</span>(k) * (tau / <span class="tok-fn">float</span>(sides));
+        <span class="tok-kw">const</span> a1: f32 = t * <span class="tok-num">0.8</span> + <span class="tok-fn">float</span>(k + <span class="tok-num">1</span>) * (tau / <span class="tok-fn">float</span>(sides));
+        gl.<span class="tok-fn">vertex2f</span>(cx, cy);
+        gl.<span class="tok-fn">vertex2f</span>(cx + poly_r * <span class="tok-builtin">@cos</span>(a0), cy + poly_r * <span class="tok-builtin">@sin</span>(a0));
+        gl.<span class="tok-fn">vertex2f</span>(cx + poly_r * <span class="tok-builtin">@cos</span>(a1), cy + poly_r * <span class="tok-builtin">@sin</span>(a1));
+    }
+    gl.<span class="tok-fn">end</span>();
+
+    gl.<span class="tok-fn">disable</span>(.blend);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.t = f.time.time;
+
+    <span class="tok-comment">// Splitter follows the mouse X (design pixels), clamped to the canvas.</span>
+    <span class="tok-kw">const</span> mouse: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    s.divider_x = <span class="tok-fn">clamp</span>(mouse[<span class="tok-num">0</span>], <span class="tok-num">0</span>, <span class="tok-fn">float</span>(width));
+
+    <span class="tok-comment">// ---- SOFTWARE SIDE: run the scene on the raster rasterizer (CPU) ----------</span>
+    <span class="tok-comment">// Same drawScene, but `gl` is the raster adapter. Renders into the CPU</span>
+    <span class="tok-comment">// framebuffer at low res, which we upload + blit on the left.</span>
+    {
+        s.sw.ff_triangle = ffBridge;
+        <span class="tok-kw">var</span> sw_gl: z.SwGl = z.SwGl.<span class="tok-fn">init</span>(&amp;s.sw);
+        <span class="tok-fn">drawScene</span>(&amp;sw_gl, s.t);
+        s.sw_fb.<span class="tok-fn">update</span>(f.gpu.queue, s.sw.<span class="tok-fn">colorBufferBytes</span>());
+    }
+
+    <span class="tok-comment">// ---- GPU SIDE: run the SAME scene on WgpuGl, full resolution ------------</span>
+    <span class="tok-fn">drawScene</span>(f.gl, s.t);
+    <span class="tok-comment">// Commit the GPU scene NOW - before the blit binds the framebuffer texture.</span>
+    <span class="tok-comment">// (The shapes batch defers draws; if we let the scene stay staged until the</span>
+    <span class="tok-comment">// blit's bindTexture swaps the material bind group, the scene's draw would</span>
+    <span class="tok-comment">// sample the framebuffer instead of its vertex colors -&gt; a black right half.)</span>
+    f.gl.<span class="tok-fn">flushBeforeMaterialSwap</span>();
+
+    <span class="tok-comment">// Composite the software image over the LEFT of the divider.</span>
+    <span class="tok-kw">const</span> w_f: f32 = <span class="tok-fn">float</span>(width);
+    <span class="tok-kw">const</span> h_f: f32 = <span class="tok-fn">float</span>(height);
+    <span class="tok-kw">if</span> (s.divider_x &gt; <span class="tok-num">0</span>) {
+        z.<span class="tok-fn">beginScissorMode</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, s.divider_x, h_f);
+        s.sw_fb.<span class="tok-fn">present</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, w_f, h_f);
+        z.<span class="tok-fn">endScissorMode</span>(f.gl);
+    }
+
+    <span class="tok-comment">// The divider bar.</span>
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = s.divider_x - <span class="tok-num">1.5</span>, .y = <span class="tok-num">0</span>, .width = <span class="tok-num">3</span>, .height = h_f },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } },
+    );
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">// ---- The shared scene: written ONCE, runs on raster AND WgpuGl ---------------</span>
+<span class="tok-comment">// `gl: anytype` - the only requirement is that gl satisfies the renderer trait.</span>
+<span class="tok-comment">// A 2D scene (no depth buffer needed): a field of orbiting, pulsing rings +</span>
+<span class="tok-comment">// a rotating polygon. Identical geometry on both backends; across the splitter</span>
+<span class="tok-comment">// you see the SAME shapes, software-rasterized (chunky) on the left and</span>
+<span class="tok-comment">// GPU-rasterized (crisp) on the right.</span>
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - CPU | GPU side-by-side"</span>,
+            .width = width,
+            .height = height,
+            .scale_mode = .fit,
+            <span class="tok-comment">// No window depth attachment: the WgpuGl path draws everything</span>
+            <span class="tok-comment">// through the 2D "shapes" pipeline, which has no depth-stencil state</span>
+            <span class="tok-comment">// - a depth attachment on the pass would mismatch it (GPU</span>
+            <span class="tok-comment">// validation error). The cube's gl.enable(.depth_test) is a no-op on</span>
+            <span class="tok-comment">// the GPU side; faces are drawn in array order. (A future depth-aware</span>
+            <span class="tok-comment">// WgpuGl 3D path can re-enable this.)</span>
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

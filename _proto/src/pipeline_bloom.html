@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>pipeline_bloom — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>pipeline_bloom</h1>
+<figure class="code src-file" data-path="examples/pipeline_bloom/pipeline_bloom.zig" data-lines="318"><figcaption><span>examples/pipeline_bloom/pipeline_bloom.zig</span><span>318 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! pipeline_bloom - a full multi-pass BLOOM effect, now entirely on the typed</span>
+<span class="tok-comment">//! shader interface (no inline WGSL, no override constants). Five effect passes</span>
+<span class="tok-comment">//! across three render textures:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   scene  -&gt; rt_scene         (a field of orbiting, pulsing glowing orbs)</span>
+<span class="tok-comment">//!   bright -&gt; rt_a             (keep only pixels above a luminance threshold)</span>
+<span class="tok-comment">//!   blurH  -&gt; rt_b, blurV -&gt; rt_a   (separable Gaussian, x4 for a wider glow)</span>
+<span class="tok-comment">//!   composite: rt_scene + rt_a -&gt; backbuffer (add the blurred highlights back)</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Every effect pass is a fullscreen shader authored in pure Zig</span>
+<span class="tok-comment">//! (`examples/bloom_*.zig`) and compiled to WGSL by the build. Each pass's</span>
+<span class="tok-comment">//! per-pass configuration - the bright threshold, the blur direction, the</span>
+<span class="tok-comment">//! composite intensity - is a PER-PASS UBO rather than a WGSL `override`</span>
+<span class="tok-comment">//! constant. That's the clean fit here (each value is set once at load) and it</span>
+<span class="tok-comment">//! needs no spec-constant authoring. The two blur directions are two separate</span>
+<span class="tok-comment">//! LoadedShaders with their `dir` baked in at load, which also sidesteps the</span>
+<span class="tok-comment">//! "can't update a UBO between draws in one command buffer" hazard.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The scene itself is drawn with the immediate 2D path (radial-gradient</span>
+<span class="tok-comment">//! circles straight into rt_scene) - bright glowing cores on near-black, which</span>
+<span class="tok-comment">//! is what bloom actually wants: small very-bright regions against darkness.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Build:  zig build pipeline-bloom</span>
+<span class="tok-comment">//! Device: zig build pipeline-bloom-standalone -Dmode=release</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// The scene is a field of glowing orbs drawn straight into rt_scene with the</span>
+<span class="tok-comment">// immediate 2D path (drawCircleGradient - a bright core fading to black, which</span>
+<span class="tok-comment">// is exactly the shape of a light source). No scene shader / vertex buffer: the</span>
+<span class="tok-comment">// engine's built-in 2D shape shader draws it, and the bloom chain does the rest.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// WHY ORBS, NOT THE OLD GRADIENT TRIANGLE: bloom keeps only pixels whose</span>
+<span class="tok-comment">// LUMINANCE clears `bright_thresh`, so it pops only where the scene has small,</span>
+<span class="tok-comment">// very bright regions against darkness. A flat mid-bright triangle sits just</span>
+<span class="tok-comment">// over the threshold everywhere and blooms as a dull uniform smear. Bright</span>
+<span class="tok-comment">// cores on black give crisp, glowing halos - the whole point of the effect.</span>
+
+<span class="tok-comment">// Effect passes - the bloom shaders (examples/bloom_*.zig), wired into this</span>
+<span class="tok-comment">// example via the `.shaders` build list. The typed `_io` schemas are imported</span>
+<span class="tok-comment">// directly; the `.wgsl` bodies are build artifacts embedded by basename.</span>
+<span class="tok-kw">const</span> fullscreen_vs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_fullscreen_vs_io.zig"</span>);
+<span class="tok-kw">const</span> bright_fs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_bright_fs_io.zig"</span>);
+<span class="tok-kw">const</span> blur_fs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_blur_fs_io.zig"</span>);
+<span class="tok-kw">const</span> composite_fs_io = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_composite_fs_io.zig"</span>);
+<span class="tok-kw">const</span> fullscreen_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bloom_fullscreen_vs.wgsl"</span>);
+<span class="tok-kw">const</span> bright_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bloom_bright_fs.wgsl"</span>);
+<span class="tok-kw">const</span> blur_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bloom_blur_fs.wgsl"</span>);
+<span class="tok-kw">const</span> composite_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bloom_composite_fs.wgsl"</span>);
+
+<span class="tok-kw">const</span> rt_size: i32 = <span class="tok-num">512</span>;
+<span class="tok-kw">const</span> rt_sizef: f32 = <span class="tok-num">512.0</span>;
+<span class="tok-kw">const</span> blur_iters: usize = <span class="tok-num">2</span>;
+<span class="tok-kw">const</span> bright_thresh: f32 = <span class="tok-num">0.20</span>;
+<span class="tok-kw">const</span> blur_texel: f32 = <span class="tok-num">2.0</span> / <span class="tok-num">512.0</span>;
+<span class="tok-kw">const</span> composite_intensity: f32 = <span class="tok-num">4.0</span>;
+
+<span class="tok-kw">const</span> BrightSchema = z.shader.<span class="tok-fn">MaterialSchema</span>(fullscreen_vs_io, bright_fs_io);
+<span class="tok-kw">const</span> BlurSchema = z.shader.<span class="tok-fn">MaterialSchema</span>(fullscreen_vs_io, blur_fs_io);
+<span class="tok-kw">const</span> CompositeSchema = z.shader.<span class="tok-fn">MaterialSchema</span>(fullscreen_vs_io, composite_fs_io);
+
+<span class="tok-comment">/// One glowing orb: an orbit (radius + angular speed + phase), a core colour</span>
+<span class="tok-comment">/// with a WHITE-HOT centre, and a base radius that pulses. Colours are chosen</span>
+<span class="tok-comment">/// BRIGHT and high-luminance (not pure saturated hues, which have low luminance</span>
+<span class="tok-comment">/// and would barely clear the bright-pass threshold) so each orb blooms hard.</span>
+<span class="tok-kw">const</span> Orb = <span class="tok-kw">struct</span> {
+    orbit: f32, <span class="tok-comment">// orbit radius as a fraction of the RT half-size</span>
+    speed: f32, <span class="tok-comment">// radians/sec around the centre</span>
+    phase: f32, <span class="tok-comment">// starting angle</span>
+    pulse: f32, <span class="tok-comment">// radians/sec of the size/brightness pulse</span>
+    radius: f32, <span class="tok-comment">// base radius in RT pixels</span>
+    color: Vec, <span class="tok-comment">// {r,g,b,_} in 0..1 - the halo tint</span>
+};
+
+<span class="tok-kw">const</span> orbs = [_]Orb{
+    .{ .orbit = <span class="tok-num">0.00</span>, .speed = <span class="tok-num">0.0</span>, .phase = <span class="tok-num">0.0</span>, .pulse = <span class="tok-num">1.3</span>, .radius = <span class="tok-num">56</span>, .color = .{ <span class="tok-num">1.0</span>, <span class="tok-num">0.95</span>, <span class="tok-num">0.85</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.42</span>, .speed = <span class="tok-num">0.55</span>, .phase = <span class="tok-num">0.0</span>, .pulse = <span class="tok-num">2.1</span>, .radius = <span class="tok-num">11</span>, .color = .{ <span class="tok-num">1.0</span>, <span class="tok-num">0.4</span>, <span class="tok-num">0.7</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.42</span>, .speed = <span class="tok-num">0.55</span>, .phase = <span class="tok-num">2.09</span>, .pulse = <span class="tok-num">1.7</span>, .radius = <span class="tok-num">44</span>, .color = .{ <span class="tok-num">0.4</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.9</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.42</span>, .speed = <span class="tok-num">0.55</span>, .phase = <span class="tok-num">4.19</span>, .pulse = <span class="tok-num">2.4</span>, .radius = <span class="tok-num">14</span>, .color = .{ <span class="tok-num">1.0</span>, <span class="tok-num">0.85</span>, <span class="tok-num">0.35</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.66</span>, .speed = -<span class="tok-num">0.35</span>, .phase = <span class="tok-num">1.0</span>, .pulse = <span class="tok-num">1.9</span>, .radius = <span class="tok-num">50</span>, .color = .{ <span class="tok-num">0.55</span>, <span class="tok-num">0.75</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.66</span>, .speed = -<span class="tok-num">0.35</span>, .phase = <span class="tok-num">3.1</span>, .pulse = <span class="tok-num">2.6</span>, .radius = <span class="tok-num">20</span>, .color = .{ <span class="tok-num">0.7</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.66</span>, .speed = -<span class="tok-num">0.35</span>, .phase = <span class="tok-num">5.2</span>, .pulse = <span class="tok-num">1.5</span>, .radius = <span class="tok-num">34</span>, .color = .{ <span class="tok-num">1.0</span>, <span class="tok-num">0.6</span>, <span class="tok-num">0.4</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.84</span>, .speed = <span class="tok-num">0.8</span>, .phase = <span class="tok-num">0.5</span>, .pulse = <span class="tok-num">3.0</span>, .radius = <span class="tok-num">9</span>, .color = .{ <span class="tok-num">0.95</span>, <span class="tok-num">0.7</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1</span> } },
+    .{ .orbit = <span class="tok-num">0.84</span>, .speed = <span class="tok-num">0.8</span>, .phase = <span class="tok-num">3.6</span>, .pulse = <span class="tok-num">2.2</span>, .radius = <span class="tok-num">40</span>, .color = .{ <span class="tok-num">0.6</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1</span> } },
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    rt_scene: z.RenderTexture,
+    rt_a: z.RenderTexture,
+    rt_b: z.RenderTexture,
+    bright: z.shader.<span class="tok-fn">LoadedShader</span>(BrightSchema),
+    blur_h: z.shader.<span class="tok-fn">LoadedShader</span>(BlurSchema),
+    blur_v: z.shader.<span class="tok-fn">LoadedShader</span>(BlurSchema),
+    composite: z.shader.<span class="tok-fn">LoadedShader</span>(CompositeSchema),
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.bright.<span class="tok-fn">deinit</span>();
+    s.blur_h.<span class="tok-fn">deinit</span>();
+    s.blur_v.<span class="tok-fn">deinit</span>();
+    s.composite.<span class="tok-fn">deinit</span>();
+    s.rt_scene.<span class="tok-fn">deinit</span>();
+    s.rt_a.<span class="tok-fn">deinit</span>();
+    s.rt_b.<span class="tok-fn">deinit</span>();
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-comment">// Three render textures (rgba8_unorm, no depth) - the scene, and the two</span>
+    <span class="tok-comment">// ping-pong blur buffers.</span>
+    <span class="tok-kw">const</span> rt_scene: z.RenderTexture = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, rt_size, rt_size);
+    <span class="tok-kw">const</span> rt_a: z.RenderTexture = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, rt_size, rt_size);
+    <span class="tok-kw">const</span> rt_b: z.RenderTexture = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, rt_size, rt_size);
+
+    <span class="tok-comment">// Bright pass: rt_scene -&gt; rt_a. Keeps luminance above `thresh`.</span>
+    <span class="tok-kw">const</span> bright: z.shader.<span class="tok-fn">LoadedShader</span>(BrightSchema) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(fullscreen_vs_io, bright_fs_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = fullscreen_vs_wgsl,
+        .fs_wgsl_source = bright_fs_wgsl,
+        .textures = .{ .src = rt_scene.<span class="tok-fn">asTexture</span>() },
+        .initial_ubo = .{ .params = .{ bright_thresh, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+        .color_format = .rgba8_unorm,
+        .depth_state = .none,
+        .label = <span class="tok-str">"bloom_bright"</span>,
+    });
+
+    <span class="tok-comment">// Separable blur: TWO shaders sharing one FS, direction baked into each</span>
+    <span class="tok-comment">// one's UBO (so no mid-frame UBO update is needed). blur_h reads rt_a and</span>
+    <span class="tok-comment">// writes rt_b; blur_v reads rt_b and writes rt_a. Both source textures are</span>
+    <span class="tok-comment">// fixed, so the ping-pong is just the alternating render targets.</span>
+    <span class="tok-kw">const</span> blur_h: z.shader.<span class="tok-fn">LoadedShader</span>(BlurSchema) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(fullscreen_vs_io, blur_fs_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = fullscreen_vs_wgsl,
+        .fs_wgsl_source = blur_fs_wgsl,
+        .textures = .{ .src = rt_a.<span class="tok-fn">asTexture</span>() },
+        .initial_ubo = .{ .dir = .{ blur_texel, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+        .color_format = .rgba8_unorm,
+        .depth_state = .none,
+        .label = <span class="tok-str">"bloom_blur_h"</span>,
+    });
+    <span class="tok-kw">const</span> blur_v: z.shader.<span class="tok-fn">LoadedShader</span>(BlurSchema) = <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(fullscreen_vs_io, blur_fs_io, .{
+        .f = f.gpu,
+        .gpa = gpa,
+        .vs_wgsl_source = fullscreen_vs_wgsl,
+        .fs_wgsl_source = blur_fs_wgsl,
+        .textures = .{ .src = rt_b.<span class="tok-fn">asTexture</span>() },
+        .initial_ubo = .{ .dir = .{ <span class="tok-num">0</span>, blur_texel, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+        .color_format = .rgba8_unorm,
+        .depth_state = .none,
+        .label = <span class="tok-str">"bloom_blur_v"</span>,
+    });
+
+    <span class="tok-comment">// Composite: rt_scene + rt_a -&gt; backbuffer. Two textures, bound by schema</span>
+    <span class="tok-comment">// field name. Targets the backbuffer, so no explicit color_format.</span>
+    <span class="tok-kw">const</span> composite: z.shader.<span class="tok-fn">LoadedShader</span>(CompositeSchema) =
+        <span class="tok-kw">try</span> z.shader.<span class="tok-fn">loadShaderVF</span>(fullscreen_vs_io, composite_fs_io, .{
+            .f = f.gpu,
+            .gpa = gpa,
+            .vs_wgsl_source = fullscreen_vs_wgsl,
+            .fs_wgsl_source = composite_fs_wgsl,
+            .textures = .{ .scene = rt_scene.<span class="tok-fn">asTexture</span>(), .bloom = rt_a.<span class="tok-fn">asTexture</span>() },
+            .initial_ubo = .{ .params = .{ composite_intensity, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+            .depth_state = .none,
+            .label = <span class="tok-str">"bloom_composite"</span>,
+        });
+
+    s.* = .{
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>),
+        .rt_scene = rt_scene,
+        .rt_a = rt_a,
+        .rt_b = rt_b,
+        .bright = bright,
+        .blur_h = blur_h,
+        .blur_v = blur_v,
+        .composite = composite,
+    };
+}
+
+<span class="tok-comment">/// Draw the glowing-orb scene into rt_scene. Each orb is a radial gradient</span>
+<span class="tok-comment">/// (bright core -&gt; transparent edge) so it reads as a soft light source, with a</span>
+<span class="tok-comment">/// small white-hot centre that clears the bright-pass threshold cleanly. The</span>
+<span class="tok-comment">/// orbs orbit the centre and pulse in size/brightness.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> bg: zm.Color = .{ .r = <span class="tok-num">4</span>, .g = <span class="tok-num">5</span>, .b = <span class="tok-num">10</span>, .a = <span class="tok-num">255</span> };
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_scene, bg);
+    <span class="tok-kw">const</span> cx: f32 = rt_sizef * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> cy: f32 = rt_sizef * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> half: f32 = rt_sizef * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+    <span class="tok-kw">for</span> (orbs) |orb| {
+        <span class="tok-kw">const</span> ang: f32 = orb.phase + t * orb.speed;
+        <span class="tok-kw">const</span> ox: f32 = cx + <span class="tok-builtin">@cos</span>(ang) * orb.orbit * half * <span class="tok-num">0.82</span>;
+        <span class="tok-kw">const</span> oy: f32 = cy + <span class="tok-builtin">@sin</span>(ang) * orb.orbit * half * <span class="tok-num">0.82</span>;
+        <span class="tok-comment">// Pulse: 0.72..1.0 on size, 0.75..1.0 on brightness.</span>
+        <span class="tok-kw">const</span> p: f32 = <span class="tok-num">0.5</span> + <span class="tok-num">0.5</span> * <span class="tok-builtin">@sin</span>(t * orb.pulse + orb.phase);
+        <span class="tok-kw">const</span> rad: f32 = orb.radius * (<span class="tok-num">0.72</span> + <span class="tok-num">0.28</span> * p);
+        <span class="tok-kw">const</span> bright: f32 = <span class="tok-num">1.15</span> + <span class="tok-num">0.35</span> * p;
+        <span class="tok-kw">const</span> inner: zm.Color = <span class="tok-fn">colorScaled</span>(orb.color, bright);
+        <span class="tok-kw">const</span> edge: zm.Color = .{ .r = inner.r, .g = inner.g, .b = inner.b, .a = <span class="tok-num">0</span> };
+        <span class="tok-comment">// Soft coloured halo (large, faded) then the bright core, then a</span>
+        <span class="tok-comment">// white-hot centre that guarantees a clean threshold hit.</span>
+        f.gl.<span class="tok-fn">circleGradient</span>(.{ ox, oy }, rad * <span class="tok-num">3.2</span>, <span class="tok-fn">dim</span>(inner, <span class="tok-num">0.9</span>), edge);
+        f.gl.<span class="tok-fn">circleGradient</span>(.{ ox, oy }, rad, inner, edge);
+        f.gl.<span class="tok-fn">circleGradient</span>(.{ ox, oy }, rad * <span class="tok-num">0.75</span>, <span class="tok-fn">whiteHot</span>(bright), edge);
+    }
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+}
+
+<span class="tok-comment">/// A 0..1 float colour scaled by `k`, as an 8-bit Color (clamped).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">colorScaled</span>(c: Vec, k: f32) zm.Color {
+    <span class="tok-kw">return</span> .{
+        .r = <span class="tok-fn">chan</span>(c[<span class="tok-num">0</span>] * k),
+        .g = <span class="tok-fn">chan</span>(c[<span class="tok-num">1</span>] * k),
+        .b = <span class="tok-fn">chan</span>(c[<span class="tok-num">2</span>] * k),
+        .a = <span class="tok-num">255</span>,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">dim</span>(c: zm.Color, k: f32) zm.Color {
+    <span class="tok-kw">return</span> .{
+        .r = <span class="tok-fn">chan</span>(<span class="tok-fn">cf</span>(c.r) * k),
+        .g = <span class="tok-fn">chan</span>(<span class="tok-fn">cf</span>(c.g) * k),
+        .b = <span class="tok-fn">chan</span>(<span class="tok-fn">cf</span>(c.b) * k),
+        .a = c.a,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">whiteHot</span>(k: f32) zm.Color {
+    <span class="tok-kw">const</span> v: u8 = <span class="tok-fn">chan</span>(k);
+    <span class="tok-kw">return</span> .{ .r = v, .g = v, .b = v, .a = <span class="tok-num">255</span> };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">cf</span>(v: u8) f32 {
+    <span class="tok-kw">return</span> <span class="tok-fn">float</span>(v) / <span class="tok-num">255.0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">chan</span>(v: f32) u8 {
+    <span class="tok-kw">const</span> clamped: f32 = <span class="tok-fn">clamp</span>(v, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+    <span class="tok-kw">return</span> <span class="tok-builtin">@trunc</span>(clamped * <span class="tok-num">255.0</span>);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> black: zm.Color = .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> };
+
+    <span class="tok-comment">// Re-push the per-pass UBOs EVERY frame. Setting them only via `initial_ubo`</span>
+    <span class="tok-comment">// left them correct for exactly one frame, then they read as zero (intensity</span>
+    <span class="tok-comment">// 0 -&gt; no bloom -&gt; "bright for 1 frame then dark"). Pushing each frame keeps</span>
+    <span class="tok-comment">// threshold / intensity / blur direction live.</span>
+    s.bright.<span class="tok-fn">pushUbo</span>(f.gpu.queue, .{ .params = .{ bright_thresh, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } });
+    s.blur_h.<span class="tok-fn">pushUbo</span>(f.gpu.queue, .{ .dir = .{ blur_texel, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } });
+    s.blur_v.<span class="tok-fn">pushUbo</span>(f.gpu.queue, .{ .dir = .{ <span class="tok-num">0</span>, blur_texel, <span class="tok-num">0</span>, <span class="tok-num">0</span> } });
+    s.composite.<span class="tok-fn">pushUbo</span>(f.gpu.queue, .{ .params = .{ composite_intensity, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } });
+
+    <span class="tok-comment">// 1) Scene: the glowing orbs -&gt; rt_scene.</span>
+    <span class="tok-fn">drawScene</span>(f, s);
+
+    <span class="tok-comment">// 2) Bright-pass: rt_scene -&gt; rt_a.</span>
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_a, black);
+    z.<span class="tok-fn">drawFullscreenShader</span>(f.gl, BrightSchema, &amp;s.bright);
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+
+    <span class="tok-comment">// 3) Separable blur, ping-ponging rt_a &lt;-&gt; rt_b.</span>
+    <span class="tok-kw">var</span> iter: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (iter &lt; blur_iters) : (iter += <span class="tok-num">1</span>) {
+        z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_b, black);
+        z.<span class="tok-fn">drawFullscreenShader</span>(f.gl, BlurSchema, &amp;s.blur_h);
+        z.<span class="tok-fn">endTextureMode</span>(f.gl);
+        z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt_a, black);
+        z.<span class="tok-fn">drawFullscreenShader</span>(f.gl, BlurSchema, &amp;s.blur_v);
+        z.<span class="tok-fn">endTextureMode</span>(f.gl);
+    }
+
+    <span class="tok-comment">// ---- SCREEN PASS: open once, composite to the backbuffer + caption. ----</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+
+    <span class="tok-comment">// 4) Composite scene + blurred highlights -&gt; backbuffer.</span>
+    z.<span class="tok-fn">drawFullscreenShader</span>(f.gl, CompositeSchema, &amp;s.composite);
+
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, <span class="tok-str">"pipeline_bloom: glowing orbs -&gt; bright -&gt; separable blur -&gt; composite (typed)"</span>);
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    <span class="tok-comment">// Transient GPU-technique demo: pipeline setup creates layouts and shader</span>
+    <span class="tok-comment">// modules that aren't retained in State, so a leak-tight deinit isn't</span>
+    <span class="tok-comment">// practical. Opt out of the managed leak gate rather than fake teardown.</span>
+    .memory = .managed,
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - pipeline bloom"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+            .clear = .{ .r = <span class="tok-num">0.0</span>, .g = <span class="tok-num">0.0</span>, .b = <span class="tok-num">0.0</span>, .a = <span class="tok-num">1.0</span> },
+        },
+    },
+    .init = initState,
+    <span class="tok-comment">// .memory left default (arena): init builds a compute pipeline / multi-pass</span>
+    <span class="tok-comment">// chain (mipmap or bloom) whose intermediate handles aren't kept in State,</span>
+    <span class="tok-comment">// so a full managed teardown needs added State fields - deferred.</span>
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// Scene + bright + blur passes render offscreen before the screen opens</span>
+    <span class="tok-comment">// (tile-based-GPU safe); owns its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_blur_fs.zig" data-lines="57"><figcaption><span>examples/bloom_blur_fs.zig</span><span>57 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_blur_fs.zig - bloom separable-Gaussian blur FS body.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A 5-tap Gaussian along the per-pass `dir` (already scaled by texel size in</span>
+<span class="tok-comment">//! the UBO): centre tap plus two symmetric pairs at the standard linear-</span>
+<span class="tok-comment">//! sampling offsets. The same compiled shader runs both the horizontal and</span>
+<span class="tok-comment">//! vertical passes - only the UBO's `dir` differs. Schema in</span>
+<span class="tok-comment">//! `bloom_blur_fs_io.zig`.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_blur_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_externs.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-comment">// 5-tap Gaussian: centre weight + two symmetric pairs, with the standard</span>
+<span class="tok-comment">// linear-sampled offsets that fetch two texels per tap.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// NORMALIZED so w0 + 2*w1 + 2*w2 == 1.0. These are the inner three weights of a</span>
+<span class="tok-comment">// 9-tap Gaussian; used as-is (a 5-tap) they summed to ~0.859, so every blur pass</span>
+<span class="tok-comment">// lost ~14% brightness - compounding to a much dimmer bloom across the x4 passes.</span>
+<span class="tok-comment">// Dividing each by that 0.859 sum restores an energy-preserving blur.</span>
+<span class="tok-kw">const</span> w0: f32 = <span class="tok-num">0.264150</span>;
+<span class="tok-kw">const</span> w1: f32 = <span class="tok-num">0.226413</span>;
+<span class="tok-kw">const</span> w2: f32 = <span class="tok-num">0.141508</span>;
+<span class="tok-kw">const</span> o1: f32 = <span class="tok-num">1.3846153</span>;
+<span class="tok-kw">const</span> o2: f32 = <span class="tok-num">3.2307692</span>;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> uv: Vec2 = io_in.v_uv;
+    <span class="tok-kw">const</span> d: Vec = io_in.u.dir;
+    <span class="tok-kw">const</span> s1: Vec2 = .{ d[<span class="tok-num">0</span>] * o1, d[<span class="tok-num">1</span>] * o1 };
+    <span class="tok-kw">const</span> s2: Vec2 = .{ d[<span class="tok-num">0</span>] * o2, d[<span class="tok-num">1</span>] * o2 };
+
+    <span class="tok-comment">// All samples happen here at shaderMain's top (uniform control flow, and the</span>
+    <span class="tok-comment">// linter requires samples out of helpers), then are weighted and summed.</span>
+    <span class="tok-kw">const</span> c0: Vec = io_in.<span class="tok-fn">src</span>(uv);
+    <span class="tok-kw">const</span> cp1: Vec = io_in.<span class="tok-fn">src</span>(.{ uv[<span class="tok-num">0</span>] + s1[<span class="tok-num">0</span>], uv[<span class="tok-num">1</span>] + s1[<span class="tok-num">1</span>] });
+    <span class="tok-kw">const</span> cm1: Vec = io_in.<span class="tok-fn">src</span>(.{ uv[<span class="tok-num">0</span>] - s1[<span class="tok-num">0</span>], uv[<span class="tok-num">1</span>] - s1[<span class="tok-num">1</span>] });
+    <span class="tok-kw">const</span> cp2: Vec = io_in.<span class="tok-fn">src</span>(.{ uv[<span class="tok-num">0</span>] + s2[<span class="tok-num">0</span>], uv[<span class="tok-num">1</span>] + s2[<span class="tok-num">1</span>] });
+    <span class="tok-kw">const</span> cm2: Vec = io_in.<span class="tok-fn">src</span>(.{ uv[<span class="tok-num">0</span>] - s2[<span class="tok-num">0</span>], uv[<span class="tok-num">1</span>] - s2[<span class="tok-num">1</span>] });
+
+    out.final_color = .{
+        c0[<span class="tok-num">0</span>] * w0 + (cp1[<span class="tok-num">0</span>] + cm1[<span class="tok-num">0</span>]) * w1 + (cp2[<span class="tok-num">0</span>] + cm2[<span class="tok-num">0</span>]) * w2,
+        c0[<span class="tok-num">1</span>] * w0 + (cp1[<span class="tok-num">1</span>] + cm1[<span class="tok-num">1</span>]) * w1 + (cp2[<span class="tok-num">1</span>] + cm2[<span class="tok-num">1</span>]) * w2,
+        c0[<span class="tok-num">2</span>] * w0 + (cp1[<span class="tok-num">2</span>] + cm1[<span class="tok-num">2</span>]) * w1 + (cp2[<span class="tok-num">2</span>] + cm2[<span class="tok-num">2</span>]) * w2,
+        <span class="tok-num">1.0</span>,
+    };
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_blur_fs_io.zig" data-lines="43"><figcaption><span>examples/bloom_blur_fs_io.zig</span><span>43 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_blur_fs_io.zig - typed interface for the bloom separable-</span>
+<span class="tok-comment">//! Gaussian blur pass. ONE shader serves both the horizontal and vertical</span>
+<span class="tok-comment">//! passes: the blur direction (and texel size) is a per-pass UBO value rather</span>
+<span class="tok-comment">//! than an override constant, so the same compiled shader is reused for both</span>
+<span class="tok-comment">//! directions by writing a different `dir` - no spec-constant authoring needed.</span>
+<span class="tok-comment">//! Body in `bloom_blur_fs.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Layout: a post-process pass has no material group, so everything lives in</span>
+<span class="tok-comment">//! group 0 - the per-pass UBO at binding 0, the source texture + sampler pinned</span>
+<span class="tok-comment">//! just after it at bindings 1 and 2. `ubo_group = 0` keeps the UBO in the same</span>
+<span class="tok-comment">//! group as the pinned texture so the whole pass is one bind group.</span>
+
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+
+<span class="tok-comment">/// Pin the UBO to group 0 (post passes have no material group; the source</span>
+<span class="tok-comment">/// texture shares group 0 too).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> ubo_group: u32 = <span class="tok-num">0</span>;
+
+<span class="tok-comment">/// Interpolated screen UV from the shared fullscreen VS (structural varying).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    v_uv: Vec2,
+};
+
+<span class="tok-comment">/// group(0) binding(0): the per-pass blur direction scaled by texel size.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// {dir_x * texel, dir_y * texel, 0, 0} - the horizontal pass writes</span>
+    <span class="tok-comment">/// {texel, 0, ..}, the vertical pass writes {0, texel, ..}.</span>
+    dir: Vec,
+};
+
+<span class="tok-comment">/// The source texture to blur, pinned to group 0 right after the UBO (texture</span>
+<span class="tok-comment">/// @binding 1, sampler @binding 2).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+    src: shader.<span class="tok-fn">Sampler2D</span>(.albedo, .{ .pinned = .{ .group = <span class="tok-num">0</span>, .binding = <span class="tok-num">1</span> } }),
+};
+
+<span class="tok-comment">/// Stage output - the blurred colour.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    final_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_bright_fs.zig" data-lines="30"><figcaption><span>examples/bloom_bright_fs.zig</span><span>30 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_bright_fs.zig - bloom bright-pass FS body.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Keeps only the part of each pixel brighter than `thresh`, remapped so the</span>
+<span class="tok-comment">//! threshold maps to black and white stays white (a soft knee). Feeds the blur</span>
+<span class="tok-comment">//! passes. Schema in `bloom_bright_fs_io.zig`.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_bright_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_externs.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> t: Vec = io_in.<span class="tok-fn">src</span>(io_in.v_uv);
+    <span class="tok-kw">const</span> c: Vec3 = .{ t[<span class="tok-num">0</span>], t[<span class="tok-num">1</span>], t[<span class="tok-num">2</span>] };
+    <span class="tok-kw">const</span> lum: f32 = c[<span class="tok-num">0</span>] * <span class="tok-num">0.299</span> + c[<span class="tok-num">1</span>] * <span class="tok-num">0.587</span> + c[<span class="tok-num">2</span>] * <span class="tok-num">0.114</span>;
+    <span class="tok-kw">const</span> thresh: f32 = io_in.u.params[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> keep: f32 = <span class="tok-builtin">@max</span>(lum - thresh, <span class="tok-num">0.0</span>) / <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span> - thresh, <span class="tok-num">0.001</span>);
+    out.final_color = .{ c[<span class="tok-num">0</span>] * keep, c[<span class="tok-num">1</span>] * keep, c[<span class="tok-num">2</span>] * keep, <span class="tok-num">1.0</span> };
+
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_bright_fs_io.zig" data-lines="41"><figcaption><span>examples/bloom_bright_fs_io.zig</span><span>41 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_bright_fs_io.zig - typed interface for the bloom</span>
+<span class="tok-comment">//! bright-pass fragment shader. Reads the scene render texture and keeps only</span>
+<span class="tok-comment">//! the luminance above `thresh`, remapped so the threshold maps to black. Body</span>
+<span class="tok-comment">//! in `bloom_bright_fs.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Layout note: a post-process pass has no material group, so everything lives</span>
+<span class="tok-comment">//! in group 0. The per-pass UBO takes binding 0 (the codegen's fixed UBO slot);</span>
+<span class="tok-comment">//! the source texture + sampler are PINNED just after it at bindings 1 and 2.</span>
+<span class="tok-comment">//! `ubo_group = 0` keeps the UBO in the same group as the pinned texture so the</span>
+<span class="tok-comment">//! whole pass is one bind group.</span>
+
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+
+<span class="tok-comment">/// Pin the UBO to group 0 (post passes have no material group; the source</span>
+<span class="tok-comment">/// texture shares group 0 too).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> ubo_group: u32 = <span class="tok-num">0</span>;
+
+<span class="tok-comment">/// Interpolated screen UV from the shared fullscreen VS (structural varying).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    v_uv: Vec2,
+};
+
+<span class="tok-comment">/// group(0) binding(0): the single per-pass scalar, padded to a vec4 (std140).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// {thresh, 0, 0, 0} - luminance below `thresh` is discarded.</span>
+    params: Vec,
+};
+
+<span class="tok-comment">/// The scene texture, pinned to group 0 right after the UBO (texture @binding 1,</span>
+<span class="tok-comment">/// sampler @binding 2).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+    src: shader.<span class="tok-fn">Sampler2D</span>(.albedo, .{ .pinned = .{ .group = <span class="tok-num">0</span>, .binding = <span class="tok-num">1</span> } }),
+};
+
+<span class="tok-comment">/// Stage output - the bright-pass colour.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    final_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_composite_fs.zig" data-lines="33"><figcaption><span>examples/bloom_composite_fs.zig</span><span>33 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_composite_fs.zig - bloom composite FS body.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Adds the blurred bloom highlights back onto the original scene, scaled by</span>
+<span class="tok-comment">//! `intensity`. The final tone-mapping-free combine that produces the glow.</span>
+<span class="tok-comment">//! Schema in `bloom_composite_fs_io.zig`.</span>
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_composite_fs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(shader_externs.Ubo);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> uv = io_in.v_uv;
+    <span class="tok-kw">const</span> s: Vec = io_in.<span class="tok-fn">scene</span>(uv);
+    <span class="tok-kw">const</span> b: Vec = io_in.<span class="tok-fn">bloom</span>(uv);
+    <span class="tok-kw">const</span> intensity: f32 = io_in.u.params[<span class="tok-num">0</span>];
+
+    out.final_color = .{
+        s[<span class="tok-num">0</span>] + b[<span class="tok-num">0</span>] * intensity,
+        s[<span class="tok-num">1</span>] + b[<span class="tok-num">1</span>] * intensity,
+        s[<span class="tok-num">2</span>] + b[<span class="tok-num">2</span>] * intensity,
+        <span class="tok-num">1.0</span>,
+    };
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_composite_fs_io.zig" data-lines="47"><figcaption><span>examples/bloom_composite_fs_io.zig</span><span>47 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_composite_fs_io.zig - typed interface for the bloom</span>
+<span class="tok-comment">//! composite pass: adds the blurred highlights back onto the original scene,</span>
+<span class="tok-comment">//! scaled by `intensity`. Body in `bloom_composite_fs.zig`.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Layout: two source textures + one sampler, all in group 0 (post passes have</span>
+<span class="tok-comment">//! no material group). The per-pass UBO takes binding 0; the scene texture is</span>
+<span class="tok-comment">//! pinned at binding 1, the bloom texture at binding 2, and they SHARE one</span>
+<span class="tok-comment">//! sampler pinned at binding 3. `ubo_group = 0` keeps everything in one bind</span>
+<span class="tok-comment">//! group.</span>
+
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+
+<span class="tok-comment">/// Pin the UBO to group 0 (post passes have no material group).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> ubo_group: u32 = <span class="tok-num">0</span>;
+
+<span class="tok-comment">/// Interpolated screen UV from the shared fullscreen VS (structural varying).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Inputs = <span class="tok-kw">struct</span> {
+    v_uv: Vec2,
+};
+
+<span class="tok-comment">/// group(0) binding(0): the per-pass composite scalar, padded to a vec4.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Ubo = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// {intensity, 0, 0, 0} - how strongly the blurred bloom is added back.</span>
+    params: Vec,
+};
+
+<span class="tok-comment">/// Two source textures pinned into group 0 after the UBO: the original scene at</span>
+<span class="tok-comment">/// binding 1, the blurred bloom at binding 2. Each `Sampler2D` is a texture +</span>
+<span class="tok-comment">/// its own sampler, so scene owns bindings (1,2)-hmm - see note below.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// NOTE: each `Sampler2D` field emits BOTH a texture and a sampler binding, so</span>
+<span class="tok-comment">/// pinning the texture also fixes its sampler at the next slot. Scene pinned to</span>
+<span class="tok-comment">/// (tex 1, sampler 2), bloom pinned to (tex 3, sampler 4). This differs from the</span>
+<span class="tok-comment">/// old hand-written WGSL (which shared one sampler) but is layout-equivalent -</span>
+<span class="tok-comment">/// the host binds the same sampler handle to both slots.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Samplers = <span class="tok-kw">struct</span> {
+    scene: shader.<span class="tok-fn">Sampler2D</span>(.albedo, .{ .pinned = .{ .group = <span class="tok-num">0</span>, .binding = <span class="tok-num">1</span> } }),
+    bloom: shader.<span class="tok-fn">Sampler2D</span>(.emission, .{ .pinned = .{ .group = <span class="tok-num">0</span>, .binding = <span class="tok-num">3</span> } }),
+};
+
+<span class="tok-comment">/// Stage output - the final composited colour.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    final_color: Vec,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_fullscreen_vs.zig" data-lines="29"><figcaption><span>examples/bloom_fullscreen_vs.zig</span><span>29 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_fullscreen_vs.zig - shared fullscreen-triangle VS body.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Emits the standard oversized covering triangle - NDC corners (-1,-1),</span>
+<span class="tok-comment">//! (3,-1), (-1,3) - and derives a [0,1] y-down screen UV for the fragment</span>
+<span class="tok-comment">//! stage. Reused by every bloom effect pass (bright, blur, composite). Schema</span>
+<span class="tok-comment">//! in `bloom_fullscreen_vs_io.zig`.</span>
+
+<span class="tok-kw">const</span> shader_externs = <span class="tok-builtin">@import</span>(<span class="tok-str">"bloom_fullscreen_vs_externs"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Io = shader_externs.<span class="tok-fn">IoT</span>(void);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Out = shader_externs.Out;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">shaderMain</span>(io_in: Io) Out {
+    <span class="tok-kw">var</span> out: Out = undefined;
+
+    <span class="tok-kw">const</span> vi: u32 = io_in.<span class="tok-fn">vertex_index</span>();
+    <span class="tok-kw">const</span> cx: f32 = <span class="tok-kw">if</span> (vi == <span class="tok-num">1</span>) <span class="tok-num">3.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-kw">if</span> (vi == <span class="tok-num">2</span>) <span class="tok-num">3.0</span> <span class="tok-kw">else</span> -<span class="tok-num">1.0</span>;
+
+    out.position = .{ cx, cy, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span> };
+    <span class="tok-comment">// NDC (-1..1, y-up) -&gt; UV (0..1, y-down).</span>
+    out.v_uv = .{ (cx + <span class="tok-num">1.0</span>) * <span class="tok-num">0.5</span>, <span class="tok-num">1.0</span> - (cy + <span class="tok-num">1.0</span>) * <span class="tok-num">0.5</span> };
+
+    <span class="tok-kw">return</span> out;
+}
+
+<span class="tok-kw">comptime</span> {
+    _ = shader_externs.<span class="tok-fn">installSpirvEntry</span>(shaderMain);
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/bloom_fullscreen_vs_io.zig" data-lines="23"><figcaption><span>examples/bloom_fullscreen_vs_io.zig</span><span>23 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! examples/bloom_fullscreen_vs_io.zig - typed interface for the shared</span>
+<span class="tok-comment">//! fullscreen-triangle vertex shader used by every bloom effect pass. Emits a</span>
+<span class="tok-comment">//! single oversized triangle covering the viewport from `vertex_index`, with no</span>
+<span class="tok-comment">//! vertex buffer and no uniforms. Body in `bloom_fullscreen_vs.zig`.</span>
+
+<span class="tok-kw">const</span> shader = <span class="tok-builtin">@import</span>(<span class="tok-str">"shader_interface"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+
+<span class="tok-comment">/// No vertex buffer - the triangle comes from `vertex_index`. Empty `Attributes`</span>
+<span class="tok-comment">/// marks the vertex stage. (There is no UBO; the effect passes are configured</span>
+<span class="tok-comment">/// entirely from the fragment stage.)</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Attributes = <span class="tok-kw">struct</span> {};
+
+<span class="tok-comment">/// The only builtin the body reads.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Builtins = <span class="tok-kw">struct</span> {
+    vertex_index: shader.<span class="tok-fn">Builtin</span>(.vertex_index),
+};
+
+<span class="tok-comment">/// Outputs to the FS - the screen UV varying (structural match with each FS's Inputs).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Outputs = <span class="tok-kw">struct</span> {
+    v_uv: Vec2,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ui_tables_demo — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>ui_tables_demo</h1>
+<figure class="code src-file" data-path="examples/ui_tables_demo/ui_tables_demo.zig" data-lines="347"><figcaption><span>examples/ui_tables_demo/ui_tables_demo.zig</span><span>347 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/ui_tables_demo.zig - Phase 1d capstone.</span>
+<span class="tok-comment">// Consolidates every table feature added across Phase 1a-d:</span>
+<span class="tok-comment">// - Layout: fixed + stretch columns (1a)</span>
+<span class="tok-comment">// - Headers + click-to-sort, multi-column shift-click (1b)</span>
+<span class="tok-comment">// - Scrolling inside a fixed height + sticky header (1c)</span>
+<span class="tok-comment">// - Alternating row backgrounds + per-row tint override (1d)</span>
+<span class="tok-comment">// The scenario: a CI build dashboard.  100 synthetic builds</span>
+<span class="tok-comment">// with name / status / duration / queue.  Failed builds get a</span>
+<span class="tok-comment">// red tint via tableSetRowBgColor; running builds get amber.</span>
+<span class="tok-comment">// Click headers to sort, shift-click to add tie-breakers.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> ui = z.ui_real;
+
+<span class="tok-kw">const</span> screen_w: i32 = <span class="tok-num">980</span>;
+<span class="tok-kw">const</span> screen_h: i32 = <span class="tok-num">680</span>;
+
+<span class="tok-kw">const</span> BuildStatus = <span class="tok-kw">enum</span> {
+    queued,
+    running,
+    passed,
+    failed,
+    cancelled,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">label</span>(self: BuildStatus) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .queued =&gt; <span class="tok-str">"queued"</span>,
+            .running =&gt; <span class="tok-str">"running"</span>,
+            .passed =&gt; <span class="tok-str">"passed"</span>,
+            .failed =&gt; <span class="tok-str">"failed"</span>,
+            .cancelled =&gt; <span class="tok-str">"cancelled"</span>,
+        };
+    }
+    <span class="tok-kw">fn</span> <span class="tok-fn">rank</span>(self: BuildStatus) i32 {
+        <span class="tok-comment">// Sort order: running &gt; queued &gt; failed &gt; passed &gt; cancelled.</span>
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .running =&gt; <span class="tok-num">0</span>,
+            .queued =&gt; <span class="tok-num">1</span>,
+            .failed =&gt; <span class="tok-num">2</span>,
+            .passed =&gt; <span class="tok-num">3</span>,
+            .cancelled =&gt; <span class="tok-num">4</span>,
+        };
+    }
+};
+
+<span class="tok-kw">const</span> Build = <span class="tok-kw">struct</span> {
+    id: u32,
+    name_buf: [<span class="tok-num">24</span>]u8,
+    name_len: usize,
+    status: BuildStatus,
+    duration_s: i32,
+    queue: u32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">name</span>(self: *<span class="tok-kw">const</span> Build) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">return</span> self.name_buf[<span class="tok-num">0</span>..self.name_len];
+    }
+};
+
+<span class="tok-kw">const</span> n_builds: usize = <span class="tok-num">100</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    ui_host: z.UiHost,
+    font: z.Font,
+
+    builds: [n_builds]Build = undefined,
+    initialized: bool = false,
+
+    striped: bool = true,
+    highlight_failures: bool = true,
+    show_borders: bool = true,
+    <span class="tok-comment">// P8.2 (turn 407): granular border flags exposed as</span>
+    <span class="tok-comment">// per-edge toggles.  Default to true to match the legacy</span>
+    <span class="tok-comment">// "borders draws everything" behaviour; the demo flips them</span>
+    <span class="tok-comment">// so users can see the effect interactively.</span>
+    borders_inner_h: bool = true,
+    borders_outer_h: bool = true,
+    borders_inner_v: bool = true,
+    borders_outer_v: bool = true,
+    <span class="tok-comment">// P8.3 (turn 408): padding-suppression flags.  Default false</span>
+    <span class="tok-comment">// (legacy padding behaviour); the demo's checkboxes flip them.</span>
+    no_pad_outer_x: bool = false,
+    no_pad_inner_x: bool = false,
+    <span class="tok-comment">// P8.4 (turn 412): sizing-mode selector for the second table</span>
+    <span class="tok-comment">// below.  Default `.stretch_same` matches pre-P8.4 behavior.</span>
+    sizing_mode_idx: i32 = <span class="tok-num">0</span>,
+    table_height: f32 = <span class="tok-num">380</span>,
+};
+
+<span class="tok-comment">/// Names paired with `TableSizing` values, in the order the radio</span>
+<span class="tok-comment">/// group displays them.  Index from `State.sizing_mode_idx`.</span>
+<span class="tok-kw">const</span> sizing_modes: [<span class="tok-num">4</span>]<span class="tok-kw">struct</span> { label: []<span class="tok-kw">const</span> u8, mode: ui.TableSizing } = .{
+    .{ .label = <span class="tok-str">"stretch_same"</span>, .mode = .stretch_same },
+    .{ .label = <span class="tok-str">"stretch_prop"</span>, .mode = .stretch_prop },
+    .{ .label = <span class="tok-str">"fixed_fit"</span>, .mode = .fixed_fit },
+    .{ .label = <span class="tok-str">"fixed_same"</span>, .mode = .fixed_same },
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>), <span class="tok-num">22</span>);
+    s.* = .{ .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font), .font = font };
+    <span class="tok-kw">var</span> rng: std.Random.DefaultPrng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0xc1c1eaf</span>);
+    <span class="tok-kw">const</span> r: std.Random = rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">const</span> branch_names: [<span class="tok-num">16</span>][]<span class="tok-kw">const</span> u8 = .{
+        <span class="tok-str">"main"</span>,      <span class="tok-str">"feature/x"</span>,    <span class="tok-str">"bugfix/123"</span>, <span class="tok-str">"release-1.4"</span>,
+        <span class="tok-str">"refactor"</span>,  <span class="tok-str">"feature/auth"</span>, <span class="tok-str">"deps-bump"</span>,  <span class="tok-str">"ci-tune"</span>,
+        <span class="tok-str">"docs"</span>,      <span class="tok-str">"release-1.5"</span>,  <span class="tok-str">"hotfix"</span>,     <span class="tok-str">"feature/ui"</span>,
+        <span class="tok-str">"perf-pass"</span>, <span class="tok-str">"feature/db"</span>,   <span class="tok-str">"wip"</span>,        <span class="tok-str">"exp/gpu"</span>,
+    };
+    <span class="tok-kw">for</span> (&amp;s.builds, <span class="tok-num">0</span>..) |*b, i| {
+        b.id = <span class="tok-builtin">@intCast</span>(i + <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> branch_name: []<span class="tok-kw">const</span> u8 = branch_names[i % branch_names.len];
+        <span class="tok-kw">const</span> written: []u8 = <span class="tok-fn">bufPrint</span>(&amp;b.name_buf, <span class="tok-str">"{s}#{d}"</span>, .{ branch_name, b.id }) <span class="tok-kw">catch</span> b.name_buf[<span class="tok-num">0</span>..<span class="tok-num">0</span>];
+        b.name_len = written.len;
+        <span class="tok-kw">const</span> status_roll: u8 = r.<span class="tok-fn">intRangeAtMost</span>(u8, <span class="tok-num">0</span>, <span class="tok-num">99</span>);
+        b.status = <span class="tok-kw">if</span> (status_roll &lt; <span class="tok-num">60</span>)
+            BuildStatus.passed
+        <span class="tok-kw">else</span> <span class="tok-kw">if</span> (status_roll &lt; <span class="tok-num">80</span>)
+            BuildStatus.failed
+        <span class="tok-kw">else</span> <span class="tok-kw">if</span> (status_roll &lt; <span class="tok-num">90</span>)
+            BuildStatus.running
+        <span class="tok-kw">else</span> <span class="tok-kw">if</span> (status_roll &lt; <span class="tok-num">97</span>)
+            BuildStatus.queued
+        <span class="tok-kw">else</span>
+            BuildStatus.cancelled;
+        b.duration_s = <span class="tok-kw">if</span> (b.status == .queued) <span class="tok-num">0</span> <span class="tok-kw">else</span> r.<span class="tok-fn">intRangeAtMost</span>(i32, <span class="tok-num">15</span>, <span class="tok-num">1800</span>);
+        b.queue = r.<span class="tok-fn">intRangeAtMost</span>(u32, <span class="tok-num">1</span>, <span class="tok-num">4</span>);
+    }
+    s.initialized = true;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">sortBuilds</span>(
+    specs: *<span class="tok-kw">const</span> ui.TableSortSpecs,
+    a: Build,
+    b: Build,
+) bool {
+    <span class="tok-kw">for</span> (specs.<span class="tok-fn">items</span>()) |spec| {
+        <span class="tok-kw">const</span> ord: i32 = <span class="tok-kw">switch</span> (spec.column_index) {
+            <span class="tok-num">0</span> =&gt; <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(a.id)) - <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(b.id)),
+            <span class="tok-num">1</span> =&gt; <span class="tok-kw">switch</span> (std.mem.<span class="tok-fn">order</span>(u8, a.<span class="tok-fn">name</span>(), b.<span class="tok-fn">name</span>())) {
+                .lt =&gt; -<span class="tok-num">1</span>,
+                .gt =&gt; <span class="tok-num">1</span>,
+                .eq =&gt; <span class="tok-num">0</span>,
+            },
+            <span class="tok-num">2</span> =&gt; a.status.<span class="tok-fn">rank</span>() - b.status.<span class="tok-fn">rank</span>(),
+            <span class="tok-num">3</span> =&gt; a.duration_s - b.duration_s,
+            <span class="tok-num">4</span> =&gt; <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(a.queue)) - <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(b.queue)),
+            <span class="tok-kw">else</span> =&gt; <span class="tok-num">0</span>,
+        };
+        <span class="tok-kw">if</span> (ord != <span class="tok-num">0</span>) {
+            <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (spec.direction) {
+                .ascending =&gt; ord &lt; <span class="tok-num">0</span>,
+                .descending =&gt; ord &gt; <span class="tok-num">0</span>,
+            };
+        }
+    }
+    <span class="tok-kw">return</span> false;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"Tables - full showcase"</span>, .{
+        .initial_pos = .{ <span class="tok-num">20</span>, <span class="tok-num">20</span> },
+        .initial_size = .{ <span class="tok-num">940</span>, <span class="tok-num">640</span> },
+    })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"CI build dashboard.  {d} builds.  All table features: layout + sort + scroll + tints."</span>, .{n_builds});
+        u.<span class="tok-fn">separator</span>();
+
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"striped rows"</span>, &amp;s.striped);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"highlight failures/running"</span>, &amp;s.highlight_failures);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"borders"</span>, &amp;s.show_borders);
+        <span class="tok-comment">// P8.2 demo (turn 407): granular border toggles.  Each</span>
+        <span class="tok-comment">// checkbox flips one of the four `borders_*` sub-flags.</span>
+        <span class="tok-comment">// The master `borders` checkbox above AND-gates them all.</span>
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"Border edges:"</span>, .{});
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"inner H"</span>, &amp;s.borders_inner_h);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"outer H"</span>, &amp;s.borders_outer_h);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"inner V"</span>, &amp;s.borders_inner_v);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"outer V"</span>, &amp;s.borders_outer_v);
+        <span class="tok-comment">// P8.3 demo (turn 408): no_pad_outer_x / no_pad_inner_x</span>
+        <span class="tok-comment">// toggles.  Watch column 0's content slide flush against</span>
+        <span class="tok-comment">// the outer-left edge when outer-X is checked; watch</span>
+        <span class="tok-comment">// columns 1..N-1 tighten up against their dividers when</span>
+        <span class="tok-comment">// inner-X is checked.</span>
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"No-pad X:"</span>, .{});
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"outer X"</span>, &amp;s.no_pad_outer_x);
+        u.<span class="tok-fn">sameLine</span>(.{});
+        _ = u.<span class="tok-fn">checkbox</span>(<span class="tok-str">"inner X"</span>, &amp;s.no_pad_inner_x);
+        _ = u.<span class="tok-fn">slider</span>(<span class="tok-str">"table height"</span>, &amp;s.table_height, .{ .min = <span class="tok-num">200</span>, .max = <span class="tok-num">540</span>, .fmt = <span class="tok-str">"{d:.0}"</span> });
+
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTable</span>(<span class="tok-str">"builds"</span>, <span class="tok-num">5</span>, .{
+            .borders = s.show_borders,
+            .borders_inner_h = s.borders_inner_h,
+            .borders_outer_h = s.borders_outer_h,
+            .borders_inner_v = s.borders_inner_v,
+            .borders_outer_v = s.borders_outer_v,
+            .no_pad_outer_x = s.no_pad_outer_x,
+            .no_pad_inner_x = s.no_pad_inner_x,
+            .outer_height = s.table_height,
+            .freeze_rows = <span class="tok-num">1</span>,
+            .row_bg = s.striped,
+        })) {
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Build"</span>, .{ .sizing = .fixed, .width = <span class="tok-num">70</span> });
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Name"</span>, .{ .sizing = .stretch });
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Status"</span>, .{ .sizing = .fixed, .width = <span class="tok-num">100</span> });
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Duration"</span>, .{ .sizing = .fixed, .width = <span class="tok-num">100</span> });
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Queue"</span>, .{ .sizing = .fixed, .width = <span class="tok-num">80</span> });
+
+            u.<span class="tok-fn">tableHeadersRow</span>();
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">tableGetSortSpecs</span>()) |specs| {
+                std.mem.<span class="tok-fn">sort</span>(Build, &amp;s.builds, specs, sortBuilds);
+            }
+
+            <span class="tok-kw">for</span> (s.builds) |b| {
+                u.<span class="tok-fn">tableNextRow</span>();
+                <span class="tok-kw">if</span> (s.highlight_failures) {
+                    <span class="tok-kw">switch</span> (b.status) {
+                        .failed =&gt; u.<span class="tok-fn">tableSetRowBgColor</span>(.{ .r = <span class="tok-num">220</span>, .g = <span class="tok-num">60</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">50</span> }),
+                        .running =&gt; u.<span class="tok-fn">tableSetRowBgColor</span>(.{ .r = <span class="tok-num">240</span>, .g = <span class="tok-num">180</span>, .b = <span class="tok-num">40</span>, .a = <span class="tok-num">60</span> }),
+                        <span class="tok-kw">else</span> =&gt; {},
+                    }
+                }
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"#{d}"</span>, .{b.id});
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{b.<span class="tok-fn">name</span>()});
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                <span class="tok-comment">// P8.1 demo (turn 406): per-cell bg color via</span>
+                <span class="tok-comment">// tableSetCellBgColor.  Highlights ONLY the Status</span>
+                <span class="tok-comment">// column based on the build's current state; the</span>
+                <span class="tok-comment">// cell bg paints OVER the row bg (more specific</span>
+                <span class="tok-comment">// override wins) but UNDER the cell text.  Effect:</span>
+                <span class="tok-comment">// a colored chip behind the status label, regardless</span>
+                <span class="tok-comment">// of the row's overall highlight.</span>
+                <span class="tok-kw">if</span> (s.highlight_failures) {
+                    <span class="tok-kw">switch</span> (b.status) {
+                        .failed =&gt; u.<span class="tok-fn">tableSetCellBgColor</span>(.{ .r = <span class="tok-num">200</span>, .g = <span class="tok-num">40</span>, .b = <span class="tok-num">40</span>, .a = <span class="tok-num">120</span> }),
+                        .running =&gt; u.<span class="tok-fn">tableSetCellBgColor</span>(.{ .r = <span class="tok-num">220</span>, .g = <span class="tok-num">160</span>, .b = <span class="tok-num">30</span>, .a = <span class="tok-num">140</span> }),
+                        .passed =&gt; u.<span class="tok-fn">tableSetCellBgColor</span>(.{ .r = <span class="tok-num">40</span>, .g = <span class="tok-num">160</span>, .b = <span class="tok-num">80</span>, .a = <span class="tok-num">90</span> }),
+                        <span class="tok-kw">else</span> =&gt; {},
+                    }
+                }
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{b.status.<span class="tok-fn">label</span>()});
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                <span class="tok-kw">if</span> (b.duration_s == <span class="tok-num">0</span>) {
+                    u.<span class="tok-fn">text</span>(<span class="tok-str">"--"</span>, .{});
+                } <span class="tok-kw">else</span> {
+                    <span class="tok-kw">const</span> m: i32 = <span class="tok-builtin">@divTrunc</span>(b.duration_s, <span class="tok-num">60</span>);
+                    <span class="tok-kw">const</span> sec: i32 = <span class="tok-builtin">@mod</span>(b.duration_s, <span class="tok-num">60</span>);
+                    u.<span class="tok-fn">text</span>(<span class="tok-str">"{d}m{d:0&gt;2}s"</span>, .{ m, sec });
+                }
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"q{d}"</span>, .{b.queue});
+            }
+            u.<span class="tok-fn">endTable</span>();
+        }
+
+        u.<span class="tok-fn">separator</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"Try: shift-click 'Status' then 'Duration' to group failures by length."</span>, .{});
+
+        <span class="tok-comment">// ---- P8.4 sizing-mode showcase (turn 412) -------------------</span>
+        <span class="tok-comment">// A small second table next to a mode selector so each of</span>
+        <span class="tok-comment">// the four `TableSizing` policies can be flipped through</span>
+        <span class="tok-comment">// and the layout change observed.  Three columns with</span>
+        <span class="tok-comment">// intentionally different content widths so the mode</span>
+        <span class="tok-comment">// differences pop:</span>
+        <span class="tok-comment">//   - "Id" (narrow numbers)</span>
+        <span class="tok-comment">//   - "Description" (long varied text)</span>
+        <span class="tok-comment">//   - "Tag" (short labels)</span>
+        u.<span class="tok-fn">separator</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"P8.4 sizing modes: each policy in TableSizing controls how unspecified columns size themselves."</span>, .{});
+        <span class="tok-kw">for</span> (sizing_modes, <span class="tok-num">0</span>..) |sm, i| {
+            <span class="tok-kw">if</span> (i &gt; <span class="tok-num">0</span>) {
+                u.<span class="tok-fn">sameLine</span>(.{});
+            }
+            <span class="tok-comment">// selectable() acts as a single-select radio chip.</span>
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">selectable</span>(sm.label, s.sizing_mode_idx == <span class="tok-builtin">@as</span>(i32, <span class="tok-builtin">@intCast</span>(i)), .{})) {
+                s.sizing_mode_idx = <span class="tok-builtin">@intCast</span>(i);
+            }
+        }
+        <span class="tok-kw">const</span> active_mode: ui.TableSizing = sizing_modes[<span class="tok-builtin">@intCast</span>(s.sizing_mode_idx)].mode;
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTable</span>(<span class="tok-str">"sizing_demo"</span>, <span class="tok-num">3</span>, .{
+            .sizing = active_mode,
+            .row_bg = true,
+            .outer_height = <span class="tok-num">140</span>,
+        })) {
+            <span class="tok-comment">// No per-column `sizing` override - every column inherits</span>
+            <span class="tok-comment">// from the table's policy.  Switching the mode above</span>
+            <span class="tok-comment">// shows how the same data lays out under each policy.</span>
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Id"</span>, .{});
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Description"</span>, .{});
+            u.<span class="tok-fn">tableSetupColumn</span>(<span class="tok-str">"Tag"</span>, .{});
+            u.<span class="tok-fn">tableHeadersRow</span>();
+            <span class="tok-kw">const</span> rows: [<span class="tok-num">4</span>]<span class="tok-kw">struct</span> { id: []<span class="tok-kw">const</span> u8, desc: []<span class="tok-kw">const</span> u8, tag: []<span class="tok-kw">const</span> u8 } = .{
+                .{ .id = <span class="tok-str">"1"</span>, .desc = <span class="tok-str">"short"</span>, .tag = <span class="tok-str">"A"</span> },
+                .{ .id = <span class="tok-str">"12"</span>, .desc = <span class="tok-str">"medium length"</span>, .tag = <span class="tok-str">"BB"</span> },
+                .{ .id = <span class="tok-str">"123"</span>, .desc = <span class="tok-str">"a noticeably longer description for this row"</span>, .tag = <span class="tok-str">"CCC"</span> },
+                .{ .id = <span class="tok-str">"1234"</span>, .desc = <span class="tok-str">"tiny"</span>, .tag = <span class="tok-str">"DDDD"</span> },
+            };
+            <span class="tok-kw">for</span> (rows) |row| {
+                u.<span class="tok-fn">tableNextRow</span>();
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{row.id});
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{row.desc});
+                _ = u.<span class="tok-fn">tableNextColumn</span>();
+                u.<span class="tok-fn">text</span>(<span class="tok-str">"{s}"</span>, .{row.tag});
+            }
+            u.<span class="tok-fn">endTable</span>();
+        }
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - UI tables demo"</span>,
+            .width = screen_w,
+            .height = screen_h,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>tic_tac_toe — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>tic_tac_toe</h1>
+<figure class="code src-file" data-path="examples/tic_tac_toe/tic_tac_toe.zig" data-lines="270"><figcaption><span>examples/tic_tac_toe/tic_tac_toe.zig</span><span>270 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! tic_tac_toe - two players share the screen and tap a cell to claim it. X is drawn</span>
+<span class="tok-comment">//! as two crossing bars, O as a ring (a filled disc with a background-coloured disc</span>
+<span class="tok-comment">//! punched out of it), the board as four bars. Nothing here but 2D shapes: no</span>
+<span class="tok-comment">//! textures, no font work beyond the caption, no AI. Tap anywhere once somebody has</span>
+<span class="tok-comment">//! won (or the board fills) to start a new game.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">/// What one square holds. An enum makes the three states the only three states --</span>
+<span class="tok-comment">/// you cannot store a 4 by accident -- and each carries its own draw colour.</span>
+<span class="tok-kw">const</span> Cell = <span class="tok-kw">enum</span> {
+    empty,
+    x,
+    o,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">color</span>(self: Cell) Color {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .empty =&gt; bg_col,
+            .x =&gt; x_col,
+            .o =&gt; o_col,
+        };
+    }
+
+    <span class="tok-comment">/// The other player. `.empty` has no opponent, so this is only called on x/o.</span>
+    <span class="tok-kw">fn</span> <span class="tok-fn">other</span>(self: Cell) Cell {
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self) {
+            .x =&gt; .o,
+            .o =&gt; .x,
+            .empty =&gt; .empty,
+        };
+    }
+};
+
+<span class="tok-comment">/// Board geometry for the CURRENT window: a square centred in whatever space we</span>
+<span class="tok-comment">/// get, sized off the shorter side so it fits portrait phones and wide desktops</span>
+<span class="tok-comment">/// alike. Recomputed every frame -- nothing about the layout is baked in.</span>
+<span class="tok-kw">const</span> Layout = <span class="tok-kw">struct</span> {
+    x: f32,
+    y: f32,
+    cell: f32,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">of</span>(f: *z.Frame) Layout {
+        <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+        <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+        <span class="tok-kw">const</span> side: f32 = <span class="tok-builtin">@min</span>(w, h) * <span class="tok-num">0.78</span>;
+        <span class="tok-kw">return</span> .{
+            .x = (w - side) / <span class="tok-num">2.0</span>,
+            .y = (h - side) / <span class="tok-num">2.0</span>,
+            .cell = side / <span class="tok-num">3.0</span>,
+        };
+    }
+};
+
+<span class="tok-kw">const</span> bg_col: Color = .{ .r = <span class="tok-num">20</span>, .g = <span class="tok-num">24</span>, .b = <span class="tok-num">34</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> grid_col: Color = .{ .r = <span class="tok-num">90</span>, .g = <span class="tok-num">100</span>, .b = <span class="tok-num">120</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> x_col: Color = .{ .r = <span class="tok-num">236</span>, .g = <span class="tok-num">72</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> o_col: Color = .{ .r = <span class="tok-num">90</span>, .g = <span class="tok-num">190</span>, .b = <span class="tok-num">235</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> win_col: Color = .{ .r = <span class="tok-num">250</span>, .g = <span class="tok-num">204</span>, .b = <span class="tok-num">60</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-comment">/// The eight ways to make three in a row, as board indices.</span>
+<span class="tok-kw">const</span> win_lines = [<span class="tok-num">8</span>][<span class="tok-num">3</span>]usize{
+    .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span> }, .{ <span class="tok-num">3</span>, <span class="tok-num">4</span>, <span class="tok-num">5</span> }, .{ <span class="tok-num">6</span>, <span class="tok-num">7</span>, <span class="tok-num">8</span> }, <span class="tok-comment">// rows</span>
+    .{ <span class="tok-num">0</span>, <span class="tok-num">3</span>, <span class="tok-num">6</span> }, .{ <span class="tok-num">1</span>, <span class="tok-num">4</span>, <span class="tok-num">7</span> }, .{ <span class="tok-num">2</span>, <span class="tok-num">5</span>, <span class="tok-num">8</span> }, <span class="tok-comment">// columns</span>
+    .{ <span class="tok-num">0</span>, <span class="tok-num">4</span>, <span class="tok-num">8</span> }, .{ <span class="tok-num">2</span>, <span class="tok-num">4</span>, <span class="tok-num">6</span> }, <span class="tok-comment">// diagonals</span>
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    board: [<span class="tok-num">9</span>]Cell = <span class="tok-builtin">@splat</span>(.empty),
+    turn: Cell = .x,
+    <span class="tok-comment">/// The winning triple's index into win_lines, set once someone wins.</span>
+    win_line: ?usize = null,
+    full: bool = false,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">winner</span>(self: State) ?Cell {
+        <span class="tok-kw">if</span> (self.win_line) |li| {
+            <span class="tok-kw">return</span> self.board[win_lines[li][<span class="tok-num">0</span>]];
+        }
+        <span class="tok-kw">return</span> null;
+    }
+
+    <span class="tok-comment">/// The one line of text shown along the bottom, for whatever the game is doing.</span>
+    <span class="tok-kw">fn</span> <span class="tok-fn">status</span>(self: State) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">if</span> (self.<span class="tok-fn">winner</span>()) |w| {
+            <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (w) {
+                .x =&gt; <span class="tok-str">"X wins - tap to play again"</span>,
+                .o =&gt; <span class="tok-str">"O wins - tap to play again"</span>,
+                .empty =&gt; <span class="tok-kw">unreachable</span>,
+            };
+        }
+        <span class="tok-kw">if</span> (self.full) {
+            <span class="tok-kw">return</span> <span class="tok-str">"draw - tap to play again"</span>;
+        }
+        <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (self.turn) {
+            .x =&gt; <span class="tok-str">"tic tac toe - X to play"</span>,
+            .o =&gt; <span class="tok-str">"tic tac toe - O to play"</span>,
+            .empty =&gt; <span class="tok-kw">unreachable</span>,
+        };
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">24</span>) };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">reset</span>(s: *State) void {
+    s.board = <span class="tok-builtin">@splat</span>(.empty);
+    s.turn = .x;
+    s.win_line = null;
+    s.full = false;
+}
+
+<span class="tok-comment">/// Which cell the point falls in, or null when it is outside the board.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">cellAt</span>(lay: Layout, p: Vec2) ?usize {
+    <span class="tok-kw">const</span> side: f32 = lay.cell * <span class="tok-num">3.0</span>;
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; lay.x <span class="tok-kw">or</span> p[<span class="tok-num">0</span>] &gt;= lay.x + side) {
+        <span class="tok-kw">return</span> null;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &lt; lay.y <span class="tok-kw">or</span> p[<span class="tok-num">1</span>] &gt;= lay.y + side) {
+        <span class="tok-kw">return</span> null;
+    }
+    <span class="tok-comment">// Plain comparisons rather than a float-&gt;int cast: only three bands each way.</span>
+    <span class="tok-kw">const</span> fx: f32 = (p[<span class="tok-num">0</span>] - lay.x) / lay.cell;
+    <span class="tok-kw">const</span> fy: f32 = (p[<span class="tok-num">1</span>] - lay.y) / lay.cell;
+    <span class="tok-kw">const</span> col: usize = <span class="tok-kw">if</span> (fx &lt; <span class="tok-num">1.0</span>) <span class="tok-num">0</span> <span class="tok-kw">else</span> <span class="tok-kw">if</span> (fx &lt; <span class="tok-num">2.0</span>) <span class="tok-num">1</span> <span class="tok-kw">else</span> <span class="tok-num">2</span>;
+    <span class="tok-kw">const</span> row: usize = <span class="tok-kw">if</span> (fy &lt; <span class="tok-num">1.0</span>) <span class="tok-num">0</span> <span class="tok-kw">else</span> <span class="tok-kw">if</span> (fy &lt; <span class="tok-num">2.0</span>) <span class="tok-num">1</span> <span class="tok-kw">else</span> <span class="tok-num">2</span>;
+    <span class="tok-kw">return</span> row * <span class="tok-num">3</span> + col;
+}
+
+<span class="tok-comment">/// Marks the winning line, or the full board, if either just happened.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">scoreBoard</span>(s: *State) void {
+    <span class="tok-kw">for</span> (win_lines, <span class="tok-num">0</span>..) |line, i| {
+        <span class="tok-kw">const</span> a: Cell = s.board[line[<span class="tok-num">0</span>]];
+        <span class="tok-kw">if</span> (a == .empty) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">if</span> (a == s.board[line[<span class="tok-num">1</span>]] <span class="tok-kw">and</span> a == s.board[line[<span class="tok-num">2</span>]]) {
+            s.win_line = i;
+            <span class="tok-kw">return</span>;
+        }
+    }
+    <span class="tok-kw">for</span> (s.board) |cell| {
+        <span class="tok-kw">if</span> (cell == .empty) {
+            <span class="tok-kw">return</span>;
+        }
+    }
+    s.full = true;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">cellCenter</span>(lay: Layout, i: usize) Vec2 {
+    <span class="tok-kw">const</span> col: f32 = <span class="tok-builtin">@floatFromInt</span>(i % <span class="tok-num">3</span>);
+    <span class="tok-kw">const</span> row: f32 = <span class="tok-builtin">@floatFromInt</span>(i / <span class="tok-num">3</span>);
+    <span class="tok-kw">return</span> .{
+        lay.x + (col + <span class="tok-num">0.5</span>) * lay.cell,
+        lay.y + (row + <span class="tok-num">0.5</span>) * lay.cell,
+    };
+}
+
+<span class="tok-comment">/// A bar between two points, drawn as a rotated rectangle via the line helper.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawX</span>(
+    gl: *z.WgpuGl,
+    c: Vec2,
+    r: f32,
+    t: f32,
+) void {
+    gl.<span class="tok-fn">line</span>(.{ c[<span class="tok-num">0</span>] - r, c[<span class="tok-num">1</span>] - r }, .{ c[<span class="tok-num">0</span>] + r, c[<span class="tok-num">1</span>] + r }, .{ .color = x_col, .thickness = t });
+    gl.<span class="tok-fn">line</span>(.{ c[<span class="tok-num">0</span>] - r, c[<span class="tok-num">1</span>] + r }, .{ c[<span class="tok-num">0</span>] + r, c[<span class="tok-num">1</span>] - r }, .{ .color = x_col, .thickness = t });
+}
+
+<span class="tok-comment">/// A ring: a filled disc with a background-coloured disc punched out of it.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawO</span>(
+    gl: *z.WgpuGl,
+    c: Vec2,
+    r: f32,
+    t: f32,
+) void {
+    gl.<span class="tok-fn">circle</span>(c, r, .{ .color = o_col, .segments = <span class="tok-num">48</span> });
+    gl.<span class="tok-fn">circle</span>(c, r - t, .{ .color = bg_col, .segments = <span class="tok-num">48</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> lay: Layout = Layout.<span class="tok-fn">of</span>(f);
+    <span class="tok-kw">const</span> thick: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">3.0</span>, lay.cell * <span class="tok-num">0.09</span>);
+    <span class="tok-kw">const</span> over: bool = s.<span class="tok-fn">winner</span>() != null <span class="tok-kw">or</span> s.full;
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left)) {
+        <span class="tok-kw">const</span> mp: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+        <span class="tok-kw">if</span> (over) {
+            <span class="tok-fn">reset</span>(s);
+        } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (<span class="tok-fn">cellAt</span>(lay, mp)) |i| {
+            <span class="tok-kw">if</span> (s.board[i] == .empty) {
+                s.board[i] = s.turn;
+                s.turn = s.turn.<span class="tok-fn">other</span>();
+                <span class="tok-fn">scoreBoard</span>(s);
+            }
+        }
+    }
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = f.window.<span class="tok-fn">widthf</span>(), .height = f.window.<span class="tok-fn">heightf</span>() },
+        .{ .color = bg_col },
+    );
+
+    <span class="tok-comment">// Board: two vertical bars and two horizontal bars.</span>
+    <span class="tok-kw">var</span> k: usize = <span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (k &lt; <span class="tok-num">3</span>) : (k += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> off: f32 = <span class="tok-fn">float</span>(k) * lay.cell;
+        <span class="tok-kw">const</span> side: f32 = lay.cell * <span class="tok-num">3.0</span>;
+        f.gl.<span class="tok-fn">line</span>(
+            .{ lay.x + off, lay.y },
+            .{ lay.x + off, lay.y + side },
+            .{ .color = grid_col, .thickness = thick * <span class="tok-num">0.5</span> },
+        );
+        f.gl.<span class="tok-fn">line</span>(
+            .{ lay.x, lay.y + off },
+            .{ lay.x + side, lay.y + off },
+            .{ .color = grid_col, .thickness = thick * <span class="tok-num">0.5</span> },
+        );
+    }
+
+    <span class="tok-kw">for</span> (s.board, <span class="tok-num">0</span>..) |cell, i| {
+        <span class="tok-kw">const</span> c: Vec2 = <span class="tok-fn">cellCenter</span>(lay, i);
+        <span class="tok-kw">switch</span> (cell) {
+            .empty =&gt; {},
+            .x =&gt; <span class="tok-fn">drawX</span>(f.gl, c, lay.cell * <span class="tok-num">0.28</span>, thick),
+            .o =&gt; <span class="tok-fn">drawO</span>(f.gl, c, lay.cell * <span class="tok-num">0.30</span>, thick),
+        }
+    }
+
+    <span class="tok-comment">// Strike through the winning triple.</span>
+    <span class="tok-kw">if</span> (s.win_line) |li| {
+        <span class="tok-kw">const</span> line: [<span class="tok-num">3</span>]usize = win_lines[li];
+        f.gl.<span class="tok-fn">line</span>(
+            <span class="tok-fn">cellCenter</span>(lay, line[<span class="tok-num">0</span>]),
+            <span class="tok-fn">cellCenter</span>(lay, line[<span class="tok-num">2</span>]),
+            .{ .color = win_col, .thickness = thick },
+        );
+    }
+
+    common.<span class="tok-fn">caption</span>(f.gl, s.font, s.<span class="tok-fn">status</span>());
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - tic tac toe"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

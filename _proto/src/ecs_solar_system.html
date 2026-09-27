@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ecs_solar_system — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>ecs_solar_system</h1>
+<figure class="code src-file" data-path="examples/ecs_solar_system/ecs_solar_system.zig" data-lines="445"><figcaption><span>examples/ecs_solar_system/ecs_solar_system.zig</span><span>445 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! ecs_solar_system - port of the GL `ecs_solar_system` onto WebGPU.</span>
+<span class="tok-comment">//! Same ECS exercise, drawn with the wgpu draw API (drawCircle).</span>
+<span class="tok-comment">// A 2D solar system that exercises most of the ecs.zig API in one</span>
+<span class="tok-comment">// place.  What's wired up:</span>
+<span class="tok-comment">//   - Multiple component types: Position, Orbit, Velocity, Visual,</span>
+<span class="tok-comment">//     Lifetime, ShipTarget.  Different combinations form distinct</span>
+<span class="tok-comment">//     archetypes; the iterators below filter by which ones each</span>
+<span class="tok-comment">//     pass needs.</span>
+<span class="tok-comment">//   - Node tree (the parent/child API).  Sun is the root.  Planets</span>
+<span class="tok-comment">//     are children of the sun; moons are children of planets.</span>
+<span class="tok-comment">//     Each frame we walk the tree pre-order so a parent's world</span>
+<span class="tok-comment">//     position is set before its children read it for orbit math.</span>
+<span class="tok-comment">//   - Tag classification.  StarKind / PlanetKind / MoonKind /</span>
+<span class="tok-comment">//     ShipKind are zero-sized marker types.  We `Tag.init(K)` to</span>
+<span class="tok-comment">//     build the runtime classifier and use it for filtering.</span>
+<span class="tok-comment">//   - CmdBuf deferred mutation.  Ships spawn from reserved</span>
+<span class="tok-comment">//     entities popped off the buffer's reserve.  Expired ships</span>
+<span class="tok-comment">//     queue themselves for destruction during a forEach pass.</span>
+<span class="tok-comment">//     Both happen safely while the iterator is in flight; the</span>
+<span class="tok-comment">//     replay happens at end-of-frame via `Node.Exec.immediate`.</span>
+<span class="tok-comment">//   - Mixed-shape forEach.  Some passes take `(*Pos, *const</span>
+<span class="tok-comment">//     Velocity)`, some take `(Entity, *Lifetime)` so they can</span>
+<span class="tok-comment">//     queue self-destruction, some take `(*Orbit, *Pos)` for the</span>
+<span class="tok-comment">//     orbital integrator.</span>
+<span class="tok-comment">// Visually: a sun at center, four planets orbiting at staggered</span>
+<span class="tok-comment">// radii and speeds, two moons on alternating planets, and bursts</span>
+<span class="tok-comment">// of ships shooting out from the sun toward random target planets</span>
+<span class="tok-comment">// every half second.  Ships fade after five seconds of flight.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> ecs = z.ecs;
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Components</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// World-space position.  Computed every frame from each body's</span>
+<span class="tok-comment">/// Orbit and its parent's Position; ships integrate it directly</span>
+<span class="tok-comment">/// from Velocity.</span>
+<span class="tok-kw">const</span> Pos = Vec2;
+
+<span class="tok-comment">/// 2D orbit parameters around the entity's tree-parent.  Sun has</span>
+<span class="tok-comment">/// none (it's the root and stays put); every other body has one.</span>
+<span class="tok-kw">const</span> Orbit = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// Distance from parent's center, in pixels.</span>
+    radius: f32,
+    <span class="tok-comment">/// Angular velocity, radians per second.</span>
+    omega: f32,
+    <span class="tok-comment">/// Current angle, advanced each frame.</span>
+    theta: f32,
+};
+
+<span class="tok-comment">/// Linear velocity in pixels/sec.  Ships only.</span>
+<span class="tok-kw">const</span> Velocity = Vec2;
+
+<span class="tok-comment">/// What it looks like.  Color + on-screen radius; renderer turns</span>
+<span class="tok-comment">/// these straight into `drawCircle` calls.</span>
+<span class="tok-kw">const</span> Visual = <span class="tok-kw">struct</span> { color: Color, radius: f32 };
+
+<span class="tok-comment">/// Time before this entity self-destructs.  Ships only.</span>
+<span class="tok-kw">const</span> Lifetime = <span class="tok-kw">struct</span> { remaining: f32 };
+
+<span class="tok-comment">/// Typed entity reference.  Demonstrates that `Entity` can be a</span>
+<span class="tok-comment">/// component field - caller looks up the target via</span>
+<span class="tok-comment">/// `target.get(es, Pos)` etc., generation tag catches dangling.</span>
+<span class="tok-kw">const</span> ShipTarget = <span class="tok-kw">struct</span> { planet: ecs.Entity };
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Tag marker types (zero-sized; only their identity matters)</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> StarKind = <span class="tok-kw">struct</span> {};
+<span class="tok-kw">const</span> PlanetKind = <span class="tok-kw">struct</span> {};
+<span class="tok-kw">const</span> MoonKind = <span class="tok-kw">struct</span> {};
+<span class="tok-kw">const</span> ShipKind = <span class="tok-kw">struct</span> {};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// State</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// Stashed allocator for ecs.Node.Exec.immediate (allocates arch buffers).</span>
+    gpa: Allocator,
+    es: ecs.Registry,
+    tree: ecs.Node.Tree,
+    cb: ecs.CmdBuf,
+    rng: std.Random.DefaultPrng,
+    spawn_timer: f32 = <span class="tok-num">0.0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.cb.<span class="tok-fn">deinit</span>(gpa, &amp;s.es);
+    s.es.<span class="tok-fn">deinit</span>(gpa);
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Init: build the static parts of the world</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, _: *z.Frame, s: *State) !void {
+    <span class="tok-kw">var</span> es: ecs.Registry = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(.{
+        .gpa = gpa,
+        .cap = .{
+            .entities = <span class="tok-num">1024</span>,
+            .arches = <span class="tok-num">32</span>,
+            .chunks = <span class="tok-num">64</span>,
+            .chunk = <span class="tok-num">4096</span>,
+        },
+    });
+    <span class="tok-kw">errdefer</span> es.<span class="tok-fn">deinit</span>(gpa);
+
+    <span class="tok-kw">var</span> tree: ecs.Node.Tree = .empty;
+
+    <span class="tok-comment">// The sun: root of the tree.  No Orbit; its Position is just</span>
+    <span class="tok-comment">// the center of the canvas.</span>
+    <span class="tok-kw">const</span> sun: ecs.Entity = <span class="tok-kw">try</span> ecs.Entity.<span class="tok-fn">reserveImmediateOrErr</span>(&amp;es);
+    _ = <span class="tok-kw">try</span> sun.<span class="tok-fn">changeArchImmediateOrErr</span>(&amp;es, gpa, <span class="tok-kw">struct</span> {
+        pos: Pos,
+        vis: Visual,
+        tag: ecs.Tag,
+        node: ecs.Node,
+    }, .{
+        .add = .{
+            .pos = .{ <span class="tok-num">400</span>, <span class="tok-num">300</span> },
+            .vis = .{ .color = z.colors.amber_400, .radius = <span class="tok-num">28</span> },
+            .tag = .<span class="tok-fn">init</span>(StarKind),
+            .node = .{},
+        },
+    });
+    <span class="tok-kw">const</span> sun_node: *ecs.Node = sun.<span class="tok-fn">get</span>(&amp;es, ecs.Node).?;
+    <span class="tok-kw">if</span> (sun_node.<span class="tok-fn">uninitialized</span>(&amp;es, &amp;tree)) {
+        sun_node.<span class="tok-fn">init</span>(&amp;es, &amp;tree);
+    }
+
+    <span class="tok-comment">// Four planets at different radii and speeds, spaced evenly</span>
+    <span class="tok-comment">// around the sun's starting circle.</span>
+    <span class="tok-kw">const</span> planets = [_]<span class="tok-kw">struct</span> {
+        r: f32,
+        omega: f32,
+        color: Color,
+        radius: f32,
+    }{
+        .{ .r = <span class="tok-num">70</span>, .omega = <span class="tok-num">1.4</span>, .color = z.colors.red_400, .radius = <span class="tok-num">6</span> },
+        .{ .r = <span class="tok-num">120</span>, .omega = <span class="tok-num">0.9</span>, .color = z.colors.green_400, .radius = <span class="tok-num">9</span> },
+        .{ .r = <span class="tok-num">190</span>, .omega = <span class="tok-num">0.55</span>, .color = z.colors.sky_400, .radius = <span class="tok-num">13</span> },
+        .{ .r = <span class="tok-num">250</span>, .omega = <span class="tok-num">0.32</span>, .color = z.colors.pink_500, .radius = <span class="tok-num">11</span> },
+    };
+    <span class="tok-kw">for</span> (planets, <span class="tok-num">0</span>..) |p, i| {
+        <span class="tok-kw">const</span> planet: ecs.Entity = <span class="tok-kw">try</span> ecs.Entity.<span class="tok-fn">reserveImmediateOrErr</span>(&amp;es);
+        <span class="tok-kw">const</span> theta: f32 = <span class="tok-fn">float</span>(i) * pi * <span class="tok-num">0.5</span>;
+        _ = <span class="tok-kw">try</span> planet.<span class="tok-fn">changeArchImmediateOrErr</span>(&amp;es, gpa, <span class="tok-kw">struct</span> {
+            pos: Pos,
+            orbit: Orbit,
+            vis: Visual,
+            tag: ecs.Tag,
+            node: ecs.Node,
+        }, .{
+            .add = .{
+                .pos = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }, <span class="tok-comment">// overwritten on first frame</span>
+                .orbit = .{ .radius = p.r, .omega = p.omega, .theta = theta },
+                .vis = .{ .color = p.color, .radius = p.radius },
+                .tag = .<span class="tok-fn">init</span>(PlanetKind),
+                .node = .{},
+            },
+        });
+        <span class="tok-kw">const</span> pl_node: *ecs.Node = planet.<span class="tok-fn">get</span>(&amp;es, ecs.Node).?;
+        <span class="tok-kw">if</span> (pl_node.<span class="tok-fn">uninitialized</span>(&amp;es, &amp;tree)) {
+            pl_node.<span class="tok-fn">init</span>(&amp;es, &amp;tree);
+        }
+        pl_node.<span class="tok-fn">setParentImmediate</span>(&amp;es, &amp;tree, sun_node);
+
+        <span class="tok-comment">// Every other planet gets a moon.</span>
+        <span class="tok-kw">if</span> (i % <span class="tok-num">2</span> == <span class="tok-num">0</span>) {
+            <span class="tok-kw">const</span> moon: ecs.Entity = <span class="tok-kw">try</span> ecs.Entity.<span class="tok-fn">reserveImmediateOrErr</span>(&amp;es);
+            _ = <span class="tok-kw">try</span> moon.<span class="tok-fn">changeArchImmediateOrErr</span>(&amp;es, gpa, <span class="tok-kw">struct</span> {
+                pos: Pos,
+                orbit: Orbit,
+                vis: Visual,
+                tag: ecs.Tag,
+                node: ecs.Node,
+            }, .{
+                .add = .{
+                    .pos = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+                    .orbit = .{ .radius = p.radius * <span class="tok-num">2.5</span> + <span class="tok-num">4</span>, .omega = <span class="tok-num">4.5</span>, .theta = <span class="tok-num">0</span> },
+                    .vis = .{ .color = z.colors.slate_300, .radius = <span class="tok-num">2.5</span> },
+                    .tag = .<span class="tok-fn">init</span>(MoonKind),
+                    .node = .{},
+                },
+            });
+            <span class="tok-kw">const</span> moon_node: *ecs.Node = moon.<span class="tok-fn">get</span>(&amp;es, ecs.Node).?;
+            <span class="tok-kw">if</span> (moon_node.<span class="tok-fn">uninitialized</span>(&amp;es, &amp;tree)) {
+                moon_node.<span class="tok-fn">init</span>(&amp;es, &amp;tree);
+            }
+            moon_node.<span class="tok-fn">setParentImmediate</span>(&amp;es, &amp;tree, pl_node);
+        }
+    }
+
+    <span class="tok-kw">var</span> cb: ecs.CmdBuf = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(.{
+        .name = <span class="tok-str">"solar-cb"</span>,
+        .gpa = gpa,
+        .es = &amp;es,
+        .cap = .{ .cmds = <span class="tok-num">1024</span> },
+    });
+    <span class="tok-kw">errdefer</span> cb.<span class="tok-fn">deinit</span>(gpa, &amp;es);
+
+    s.* = .{
+        .gpa = gpa,
+        .es = es,
+        .tree = tree,
+        .cb = cb,
+        .rng = .<span class="tok-fn">init</span>(<span class="tok-num">0xC0FFEE</span>),
+    };
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Per-frame update</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// Advance Orbit angles by `dt`.  Visits every entity with an</span>
+<span class="tok-comment">/// Orbit component - planets and moons in this scene.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">advanceOrbit</span>(ctx: <span class="tok-kw">struct</span> { dt: f32 }, o: *Orbit) void {
+    o.theta += o.omega * ctx.dt;
+}
+
+<span class="tok-comment">/// Set this entity's world Pos from its parent's Pos plus its</span>
+<span class="tok-comment">/// Orbit offset.  The sun (no Orbit) keeps its initial value;</span>
+<span class="tok-comment">/// ships (no Node) are skipped because we drive this from the</span>
+<span class="tok-comment">/// tree iterator, not forEach.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">recomputePos</span>(es: *ecs.Registry, view: ecs.Node.View) void {
+    <span class="tok-kw">const</span> orbit: *<span class="tok-kw">const</span> Orbit = view.entity.<span class="tok-fn">get</span>(es, Orbit) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+    <span class="tok-kw">const</span> pos: *Pos = view.entity.<span class="tok-fn">get</span>(es, Pos) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+
+    <span class="tok-kw">const</span> parent_view: ecs.Node.View = view.<span class="tok-fn">getParent</span>(es) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+    <span class="tok-kw">const</span> parent_pos: *<span class="tok-kw">const</span> Pos = parent_view.entity.<span class="tok-fn">get</span>(es, Pos) <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+
+    pos[<span class="tok-num">0</span>] = parent_pos[<span class="tok-num">0</span>] + orbit.radius * <span class="tok-builtin">@cos</span>(orbit.theta);
+    pos[<span class="tok-num">1</span>] = parent_pos[<span class="tok-num">1</span>] + orbit.radius * <span class="tok-builtin">@sin</span>(orbit.theta);
+}
+
+<span class="tok-comment">/// Move ships, count down their lifetimes.  Filter shape - the</span>
+<span class="tok-comment">/// View's required components are Velocity AND Lifetime, so we</span>
+<span class="tok-comment">/// only visit ships.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">integrateShip</span>(
+    ctx: <span class="tok-kw">struct</span> { dt: f32 },
+    p: *Pos,
+    v: *<span class="tok-kw">const</span> Velocity,
+    l: *Lifetime,
+) void {
+    p[<span class="tok-num">0</span>] += v[<span class="tok-num">0</span>] * ctx.dt;
+    p[<span class="tok-num">1</span>] += v[<span class="tok-num">1</span>] * ctx.dt;
+    l.remaining -= ctx.dt;
+}
+
+<span class="tok-comment">/// Every ~0.5s, snapshot the current planet positions, pick one</span>
+<span class="tok-comment">/// at random, and queue a ship aimed at it from the sun.  This</span>
+<span class="tok-comment">/// touches a few corners of the API:</span>
+<span class="tok-comment">///   - `es.iterator(View)` - manual iteration with a custom view</span>
+<span class="tok-comment">///     for filtering by Tag value.</span>
+<span class="tok-comment">///   - `tag.eql(.init(K))` - comparing tag identity by marker type.</span>
+<span class="tok-comment">///   - `Entity.reserve(cb)` - pop a pre-reserved handle for the</span>
+<span class="tok-comment">///     new ship; spends one slot from `cb.reserved`.</span>
+<span class="tok-comment">///   - `entity.add(cb, T, val)` - buffered component add (six in</span>
+<span class="tok-comment">///     a row, all coalesce into one batch under the same handle).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">spawnShipsTick</span>(
+    es: *ecs.Registry,
+    cb: *ecs.CmdBuf,
+    rng: *std.Random.DefaultPrng,
+    dt: f32,
+    timer: *f32,
+) void {
+    timer.* += dt;
+    <span class="tok-kw">if</span> (timer.* &lt; <span class="tok-num">0.5</span>) {
+        <span class="tok-kw">return</span>;
+    }
+    timer.* = <span class="tok-num">0</span>;
+
+    <span class="tok-comment">// Snapshot planet handles + their current world positions.</span>
+    <span class="tok-comment">// Manual iterator (rather than forEach) so we can use the</span>
+    <span class="tok-comment">// result OUTSIDE the loop body - forEach's update fn doesn't</span>
+    <span class="tok-comment">// get to outlive the iteration.</span>
+    <span class="tok-kw">var</span> planet_count: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> planets_buf: [<span class="tok-num">16</span>]ecs.Entity = undefined;
+    <span class="tok-kw">var</span> planet_pos_buf: [<span class="tok-num">16</span>]Pos = undefined;
+    {
+        <span class="tok-kw">var</span> iter = es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+            e: ecs.Entity,
+            p: *<span class="tok-kw">const</span> Pos,
+            t: *<span class="tok-kw">const</span> ecs.Tag,
+        });
+        <span class="tok-kw">while</span> (iter.<span class="tok-fn">next</span>(es)) |view| {
+            <span class="tok-kw">if</span> (view.t.<span class="tok-fn">eql</span>(ecs.Tag.<span class="tok-fn">init</span>(PlanetKind))) {
+                <span class="tok-kw">if</span> (planet_count &lt; planets_buf.len) {
+                    planets_buf[planet_count] = view.e;
+                    planet_pos_buf[planet_count] = view.p.*;
+                    planet_count += <span class="tok-num">1</span>;
+                }
+            }
+        }
+    }
+    <span class="tok-kw">if</span> (planet_count == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-comment">// Find the sun - one shot through the iterator.</span>
+    <span class="tok-kw">var</span> sun_pos: ?Pos = null;
+    {
+        <span class="tok-kw">var</span> iter = es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+            p: *<span class="tok-kw">const</span> Pos,
+            t: *<span class="tok-kw">const</span> ecs.Tag,
+        });
+        <span class="tok-kw">while</span> (iter.<span class="tok-fn">next</span>(es)) |view| {
+            <span class="tok-kw">if</span> (view.t.<span class="tok-fn">eql</span>(ecs.Tag.<span class="tok-fn">init</span>(StarKind))) {
+                sun_pos = view.p.*;
+                <span class="tok-kw">break</span>;
+            }
+        }
+    }
+    <span class="tok-kw">const</span> sp: Pos = sun_pos <span class="tok-kw">orelse</span> <span class="tok-kw">return</span>;
+
+    <span class="tok-kw">const</span> idx: u32 = rng.<span class="tok-fn">random</span>().<span class="tok-fn">uintLessThan</span>(u32, planet_count);
+    <span class="tok-kw">const</span> target: ecs.Entity = planets_buf[idx];
+    <span class="tok-kw">const</span> tp: Pos = planet_pos_buf[idx];
+
+    <span class="tok-kw">const</span> dx: f32 = tp[<span class="tok-num">0</span>] - sp[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> dy: f32 = tp[<span class="tok-num">1</span>] - sp[<span class="tok-num">1</span>];
+    <span class="tok-kw">const</span> len: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+    <span class="tok-kw">if</span> (len &lt; <span class="tok-num">0.01</span>) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> speed: f32 = <span class="tok-num">90.0</span>;
+    <span class="tok-kw">const</span> vx: f32 = dx / len * speed;
+    <span class="tok-kw">const</span> vy: f32 = dy / len * speed;
+
+    <span class="tok-comment">// Reserve a fresh handle from the command buffer's pool, then</span>
+    <span class="tok-comment">// queue the component-add commands.  Six adds for one entity</span>
+    <span class="tok-comment">// - the encoder coalesces them into a single batch keyed off</span>
+    <span class="tok-comment">// the bound entity.</span>
+    <span class="tok-kw">const</span> ship: ecs.Entity = ecs.Entity.<span class="tok-fn">reserve</span>(cb);
+    _ = ship.<span class="tok-fn">add</span>(cb, Pos, .{ sp[<span class="tok-num">0</span>], sp[<span class="tok-num">1</span>] });
+    _ = ship.<span class="tok-fn">add</span>(cb, Velocity, .{ vx, vy });
+    _ = ship.<span class="tok-fn">add</span>(cb, Visual, .{ .color = z.colors.amber_200, .radius = <span class="tok-num">1.5</span> });
+    _ = ship.<span class="tok-fn">add</span>(cb, Lifetime, .{ .remaining = <span class="tok-num">5.0</span> });
+    _ = ship.<span class="tok-fn">add</span>(cb, ecs.Tag, ecs.Tag.<span class="tok-fn">init</span>(ShipKind));
+    _ = ship.<span class="tok-fn">add</span>(cb, ShipTarget, .{ .planet = target });
+}
+
+<span class="tok-comment">/// Self-destruct expired ships through the command buffer.  The</span>
+<span class="tok-comment">/// `Entity` parameter in the View shape is what makes this</span>
+<span class="tok-comment">/// possible - `forEach` hands us the handle, we pass it to</span>
+<span class="tok-comment">/// `destroy(cb)` for replay at flush time.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">destroyExpired</span>(
+    cb: *ecs.CmdBuf,
+    e: ecs.Entity,
+    l: *<span class="tok-kw">const</span> Lifetime,
+) void {
+    <span class="tok-kw">if</span> (l.remaining &lt;= <span class="tok-num">0</span>) {
+        e.<span class="tok-fn">destroy</span>(cb);
+    }
+}
+
+<span class="tok-comment">/// Render circles at every Visual.  Stars + planets + moons +</span>
+<span class="tok-comment">/// ships all match (everyone has Pos + Visual).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">renderEntity</span>(
+    ctx: <span class="tok-kw">struct</span> { gl: *z.WgpuGl },
+    p: *<span class="tok-kw">const</span> Pos,
+    v: *<span class="tok-kw">const</span> Visual,
+) void {
+    ctx.gl.<span class="tok-fn">circle</span>(p.*, v.radius, .{ .color = v.color, .segments = <span class="tok-num">16</span> });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    z.<span class="tok-fn">clearViewport</span>(f, z.colors.slate_950);
+
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+
+    <span class="tok-comment">// 1. Advance every Orbit's angle.  Visits planets and moons</span>
+    <span class="tok-comment">//    (everything with an Orbit); skips the sun + ships.</span>
+    s.es.<span class="tok-fn">forEach</span>(advanceOrbit, .{ .dt = dt });
+
+    <span class="tok-comment">// 2. Walk the Node tree pre-order so each body's world Pos is</span>
+    <span class="tok-comment">//    derived from its parent's Pos before its children read it.</span>
+    <span class="tok-comment">//    `forEach` doesn't give us parent context - the tree</span>
+    <span class="tok-comment">//    iterator does.</span>
+    <span class="tok-kw">var</span> roots: <span class="tok-builtin">@TypeOf</span>(s.tree.<span class="tok-fn">childIterator</span>(.{})) = s.tree.<span class="tok-fn">childIterator</span>(.{});
+    <span class="tok-kw">while</span> (roots.<span class="tok-fn">next</span>(&amp;s.es)) |root| {
+        <span class="tok-kw">var</span> pre: <span class="tok-builtin">@TypeOf</span>(root.node.<span class="tok-fn">preOrderIterator</span>(&amp;s.es, .{ .include_root = true })) = root.node.<span class="tok-fn">preOrderIterator</span>(
+            &amp;s.es,
+            .{ .include_root = true },
+        );
+        <span class="tok-kw">while</span> (pre.<span class="tok-fn">next</span>(&amp;s.es)) |view| {
+            <span class="tok-fn">recomputePos</span>(&amp;s.es, view);
+        }
+    }
+
+    <span class="tok-comment">// 3. Integrate ship motion + decay lifetime.  The view filters</span>
+    <span class="tok-comment">//    to entities with Velocity AND Lifetime - ships only.</span>
+    s.es.<span class="tok-fn">forEach</span>(integrateShip, .{ .dt = dt });
+
+    <span class="tok-comment">// 4. Spawn new ships every ~0.5s, aimed at a random planet.</span>
+    <span class="tok-fn">spawnShipsTick</span>(&amp;s.es, &amp;s.cb, &amp;s.rng, dt, &amp;s.spawn_timer);
+
+    <span class="tok-comment">// 5. Queue expired ships for destruction.  `destroy` is</span>
+    <span class="tok-comment">//    buffered, safe to call mid-iteration.</span>
+    s.es.<span class="tok-fn">forEach</span>(destroyExpired, &amp;s.cb);
+
+    <span class="tok-comment">// 6. Flush.  Node.Exec applies arch changes AND the tree</span>
+    <span class="tok-comment">//    bookkeeping (auto-init of new node components, cleanup</span>
+    <span class="tok-comment">//    of removed ones).  Since ships have no node, this just</span>
+    <span class="tok-comment">//    runs the queued spawn/destroy ops for them.</span>
+    ecs.Node.Exec.<span class="tok-fn">immediate</span>(&amp;s.es, s.gpa, &amp;s.cb, &amp;s.tree);
+
+    <span class="tok-comment">// 7. Render every Visual-carrying entity in chunk order.</span>
+    s.es.<span class="tok-fn">forEach</span>(renderEntity, .{ .gl = f.gl });
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Systems</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Ship spawning</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - ECS solar system"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

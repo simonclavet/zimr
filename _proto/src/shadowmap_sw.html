@@ -1,0 +1,1677 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>shadowmap_sw — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>shadowmap_sw</h1>
+<figure class="code src-file" data-path="examples/shadowmap_sw/shadowmap_sw.zig" data-lines="800"><figcaption><span>examples/shadowmap_sw/shadowmap_sw.zig</span><span>800 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! shadowmap_sw - ONE shadow-map shader source, THREE renderers, live.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   - LEFT  (CPU): the software rasterizer runs `depth_vs/fs` +</span>
+<span class="tok-comment">//!     `lit_shadow_vs/fs` - the actual engine shader FILES - as plain Zig,</span>
+<span class="tok-comment">//!     two passes per frame (light-view depth into an rgba8 map, then the</span>
+<span class="tok-comment">//!     lit pass sampling it through a nearest `TextureRef`).</span>
+<span class="tok-comment">//!   - RIGHT (GPU): the SAME four files, compiled shadermath -&gt; SPIR-V -&gt;</span>
+<span class="tok-comment">//!     WGSL at build time, run as two WebGPU passes (rgba16_float shadow</span>
+<span class="tok-comment">//!     RTT + the lit pipeline sampling it).</span>
+<span class="tok-comment">//!   - CORNER (COMPTIME): the Zig COMPILER evaluates the same two passes</span>
+<span class="tok-comment">//!     over a build-baked decimated bunny proxy (`scene.bakeCorner`) and the</span>
+<span class="tok-comment">//!     result ships in the binary as a const - a shadow-mapped still no</span>
+<span class="tok-comment">//!     runtime ever rendered.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Everything the renderers agree on - geometry, staging, the orbiting</span>
+<span class="tok-comment">//! light, spin animation, uniform-block builders, the software passes -</span>
+<span class="tok-comment">//! lives in `scene.zig`.  This file is only the plumbing each backend</span>
+<span class="tok-comment">//! needs: GPU pipelines/buffers/bind groups on one side, two</span>
+<span class="tok-comment">//! `raster.Context`s on the other, and the helmet-style split-screen</span>
+<span class="tok-comment">//! composite (drag the divider; drag empty space to orbit; pinch/wheel to</span>
+<span class="tok-comment">//! zoom).  The scene animates - objects spin, the light circles - so every</span>
+<span class="tok-comment">//! varying and uniform is exercised live on both halves, while the corner</span>
+<span class="tok-comment">//! stays frozen at `scene.corner_time`.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> scene = <span class="tok-builtin">@import</span>(<span class="tok-str">"scene.zig"</span>);
+
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Vec2i = zm.Vec2i;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-kw">const</span> shadow = scene.shadow;
+
+<span class="tok-comment">// The app-bridge instance: the one sanctioned wasm entry-point handle.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">const</span> depth_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"depth_vs.wgsl"</span>);
+<span class="tok-kw">const</span> depth_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"depth_fs.wgsl"</span>);
+<span class="tok-kw">const</span> lit_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"lit_shadow_vs.wgsl"</span>);
+<span class="tok-kw">const</span> lit_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"lit_shadow_fs.wgsl"</span>);
+<span class="tok-kw">const</span> bunny_obj = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bunny.obj"</span>);
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// ---- Uniform block types: taken FROM the shader Io schemas, so the GPU</span>
+<span class="tok-comment">//      buffers and the software `shaderMain` calls cannot drift. ----</span>
+<span class="tok-kw">const</span> DepthUbo = <span class="tok-builtin">@FieldType</span>(shadow.depth_vs.Io, <span class="tok-str">"u"</span>);
+<span class="tok-kw">const</span> LitVsUbo = <span class="tok-builtin">@FieldType</span>(shadow.lit_vs.Io, <span class="tok-str">"u"</span>);
+<span class="tok-kw">const</span> LitFsUbo = <span class="tok-builtin">@FieldType</span>(shadow.lit_fs.Io, <span class="tok-str">"u"</span>);
+
+<span class="tok-kw">const</span> shadow_rt_size: i32 = <span class="tok-num">1024</span>; <span class="tok-comment">// GPU shadow map (rgba16_float)</span>
+<span class="tok-kw">const</span> cpu_shadow_res: usize = <span class="tok-num">144</span>; <span class="tok-comment">// CPU shadow map (rgba8 Context)</span>
+<span class="tok-kw">const</span> cpu_pixel_budget: f32 = <span class="tok-num">24_000</span>; <span class="tok-comment">// CPU lit image, shaped to the canvas</span>
+
+<span class="tok-comment">// ---- The comptime corner: baked by the compiler at these dimensions. ----</span>
+<span class="tok-kw">const</span> corner_sm: usize = <span class="tok-num">64</span>;
+<span class="tok-kw">const</span> corner_w: usize = <span class="tok-num">96</span>;
+<span class="tok-kw">const</span> corner_h: usize = <span class="tok-num">72</span>;
+<span class="tok-kw">const</span> corner: scene.<span class="tok-fn">CornerBake</span>(corner_sm, corner_w, corner_h) = blk: {
+    <span class="tok-builtin">@setEvalBranchQuota</span>(<span class="tok-num">2_000_000_000</span>);
+    <span class="tok-kw">break</span> :blk scene.<span class="tok-fn">bakeCorner</span>(corner_sm, corner_w, corner_h);
+};
+
+<span class="tok-comment">// One drawable object on the GPU: geometry buffers + a private set of the</span>
+<span class="tok-comment">// three uniform blocks (depth / lit-VS / lit-FS) and their bind groups.  The</span>
+<span class="tok-comment">// two cubes share buffers but carry their own uniforms - same on the CPU,</span>
+<span class="tok-comment">// where the "uniforms" are just the Io structs passed per draw.</span>
+<span class="tok-kw">const</span> Obj = <span class="tok-kw">struct</span> {
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    vbo_bytes: u64,
+    ibo_bytes: u64,
+    icount: u32,
+
+    depth_ubo: z.wgpu.BufferHandle,
+    depth_bg: z.wgpu.BindGroupHandle,
+    lit_vs_ubo: z.wgpu.BufferHandle,
+    lit_g0_bg: z.wgpu.BindGroupHandle,
+    lit_fs_ubo: z.wgpu.BufferHandle,
+    lit_g2_bg: z.wgpu.BindGroupHandle,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+
+    <span class="tok-comment">// ---- GPU half ----</span>
+    depth_pipeline: z.wgpu.RenderPipelineHandle,
+    lit_pipeline: z.wgpu.RenderPipelineHandle,
+    shadow_rt: z.RenderTexture, <span class="tok-comment">// light-view depth (rgba16_float, fixed size)</span>
+    lit_g1_bg: z.wgpu.BindGroupHandle, <span class="tok-comment">// shared shadow-map sampler</span>
+    floor_vbo: z.wgpu.BufferHandle,
+    floor_ibo: z.wgpu.BufferHandle,
+    cube_vbo: z.wgpu.BufferHandle,
+    cube_ibo: z.wgpu.BufferHandle,
+    bunny_vbo: z.wgpu.BufferHandle,
+    bunny_ibo: z.wgpu.BufferHandle,
+    shadow_sampler: z.wgpu.SamplerHandle,
+    rt: z.RenderTexture, <span class="tok-comment">// camera-view target at canvas size</span>
+    objs: [scene.objects.len]Obj,
+
+    <span class="tok-comment">// ---- CPU half: the same bunny mesh kept on the CPU + two Contexts ----</span>
+    bunny_verts: []scene.SceneVertex,
+    bunny_indices: []u32,
+    bunny_frame: scene.BunnyFrame,
+    depth_outs: []shadow.depth_vs.Out,
+    lit_outs: []shadow.lit_vs.Out,
+    sm_ctx: z.raster.Context, <span class="tok-comment">// pass 1 target (cpu_shadow_res^2)</span>
+    sw: z.raster.Context, <span class="tok-comment">// pass 2 target (canvas-shaped)</span>
+    sw_fb: z.CpuFramebuffer,
+
+    <span class="tok-comment">// ---- shared ----</span>
+    font: z.Font,
+    cam_yaw: f32 = <span class="tok-num">0.7</span>,
+    cam_pitch: f32 = <span class="tok-num">0.42</span>,
+    cam_dist: f32 = <span class="tok-num">12.0</span>,
+    dragging: bool = false,
+    prev_pinch: f32 = <span class="tok-num">0</span>,
+    divider_frac: f32 = <span class="tok-num">0.5</span>,
+    last_mouse: Vec2 = .{ -<span class="tok-num">1</span>, -<span class="tok-num">1</span> },
+    corner_fb: z.CpuFramebuffer, <span class="tok-comment">// the comptime bake, uploaded once</span>
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    gpa.<span class="tok-fn">free</span>(s.bunny_verts);
+    gpa.<span class="tok-fn">free</span>(s.bunny_indices);
+    gpa.<span class="tok-fn">free</span>(s.depth_outs);
+    gpa.<span class="tok-fn">free</span>(s.lit_outs);
+    s.sm_ctx.<span class="tok-fn">deinit</span>(gpa);
+    s.sw.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">for</span> (&amp;s.objs) |*o| {
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(o.depth_ubo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(o.lit_vs_ubo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(o.lit_fs_ubo);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(o.depth_bg);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(o.lit_g0_bg);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(o.lit_g2_bg);
+    }
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.floor_vbo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.floor_ibo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.cube_vbo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.cube_ibo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.bunny_vbo);
+    z.wgpu.<span class="tok-fn">destroyBuffer</span>(s.bunny_ibo);
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.lit_g1_bg);
+    z.wgpu.<span class="tok-fn">destroySampler</span>(s.shadow_sampler);
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.depth_pipeline);
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.lit_pipeline);
+    s.shadow_rt.<span class="tok-fn">deinit</span>();
+    s.rt.<span class="tok-fn">deinit</span>();
+    s.sw_fb.<span class="tok-fn">deinit</span>();
+    s.corner_fb.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformLayout</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    min_size: u64,
+    vis: z.wgpu.ShaderStage,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupLayoutHandle {
+    <span class="tok-kw">const</span> entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+        .{ .binding = <span class="tok-num">0</span>, .visibility = vis, .resource = .{ .uniform_buffer = .{ .min_size = min_size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, blob, label);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformBindGroup</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    bgl: z.wgpu.BindGroupLayoutHandle,
+    buffer: z.wgpu.BufferHandle,
+    size: u64,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupHandle {
+    <span class="tok-kw">const</span> entries = [_]z.gpu.BindGroupEntry{
+        .{ .binding = <span class="tok-num">0</span>, .resource = .{ .buffer = .{ .handle = buffer, .size = size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroup</span>(device, bgl, blob, label);
+}
+
+<span class="tok-kw">const</span> Bgls = <span class="tok-kw">struct</span> {
+    depth_g0: z.wgpu.BindGroupLayoutHandle,
+    lit_g0: z.wgpu.BindGroupLayoutHandle,
+    lit_g2: z.wgpu.BindGroupLayoutHandle,
+};
+
+<span class="tok-comment">/// Per-object GPU state: three uniform buffers + bind groups over shared</span>
+<span class="tok-comment">/// geometry buffers.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">makeObj</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    bgls: Bgls,
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    vbo_bytes: u64,
+    ibo_bytes: u64,
+    icount: u32,
+) !Obj {
+    <span class="tok-kw">const</span> depth_sz: u64 = z.shader.<span class="tok-fn">wireSizeOf</span>(DepthUbo);
+    <span class="tok-kw">const</span> lit_vs_sz: u64 = z.shader.<span class="tok-fn">wireSizeOf</span>(LitVsUbo);
+    <span class="tok-kw">const</span> lit_fs_sz: u64 = z.shader.<span class="tok-fn">wireSizeOf</span>(LitFsUbo);
+    <span class="tok-kw">const</span> depth_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = depth_sz,
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> lit_vs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = lit_vs_sz,
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> lit_fs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = lit_fs_sz,
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">return</span> .{
+        .vbo = vbo,
+        .ibo = ibo,
+        .vbo_bytes = vbo_bytes,
+        .ibo_bytes = ibo_bytes,
+        .icount = icount,
+        .depth_ubo = depth_ubo,
+        .depth_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, bgls.depth_g0, depth_ubo, depth_sz, <span class="tok-str">"smsw_depth_bg"</span>),
+        .lit_vs_ubo = lit_vs_ubo,
+        .lit_g0_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, bgls.lit_g0, lit_vs_ubo, lit_vs_sz, <span class="tok-str">"smsw_g0_bg"</span>),
+        .lit_fs_ubo = lit_fs_ubo,
+        .lit_g2_bg = <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, bgls.lit_g2, lit_fs_ubo, lit_fs_sz, <span class="tok-str">"smsw_g2_bg"</span>),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> device: z.wgpu.DeviceHandle = f.gpu.device;
+    <span class="tok-kw">const</span> queue: z.wgpu.QueueHandle = f.gpu.queue;
+
+    <span class="tok-comment">// ---- The bunny, parsed ONCE: the same vertex array is uploaded to the</span>
+    <span class="tok-comment">//      GPU and kept on the CPU (the corner uses its baked proxy). ----</span>
+    <span class="tok-kw">var</span> bunny_data: z.codecs.obj.Data = <span class="tok-kw">try</span> z.codecs.obj.<span class="tok-fn">parse</span>(gpa, bunny_obj);
+    <span class="tok-kw">defer</span> bunny_data.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">const</span> bunny_mesh: z.codecs.obj.Mesh = <span class="tok-kw">try</span> bunny_data.<span class="tok-fn">toMesh</span>(gpa);
+    <span class="tok-kw">defer</span> bunny_mesh.<span class="tok-fn">deinit</span>(gpa);
+
+    <span class="tok-kw">const</span> bvc: usize = bunny_mesh.<span class="tok-fn">vertexCount</span>();
+    <span class="tok-kw">const</span> bunny_verts: []scene.SceneVertex = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(scene.SceneVertex, bvc);
+    <span class="tok-kw">var</span> mn: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">var</span> mx: [<span class="tok-num">3</span>]f32 = .{ -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">for</span> (bunny_verts, <span class="tok-num">0</span>..) |*sv, i| {
+        <span class="tok-kw">const</span> p: [<span class="tok-num">3</span>]f32 = .{
+            bunny_mesh.positions[i * <span class="tok-num">3</span> + <span class="tok-num">0</span>],
+            bunny_mesh.positions[i * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+            bunny_mesh.positions[i * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+        };
+        sv.* = .{ .position = p, .normal = .{
+            bunny_mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">0</span>],
+            bunny_mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+            bunny_mesh.normals[i * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+        } };
+        <span class="tok-kw">var</span> a: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (a &lt; <span class="tok-num">3</span>) : (a += <span class="tok-num">1</span>) {
+            mn[a] = <span class="tok-builtin">@min</span>(mn[a], p[a]);
+            mx[a] = <span class="tok-builtin">@max</span>(mx[a], p[a]);
+        }
+    }
+    <span class="tok-kw">const</span> bunny_indices: []u32 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">dupe</span>(u32, bunny_mesh.indices);
+
+    <span class="tok-comment">// ---- GPU geometry buffers (floor + unit cube + bunny) ----</span>
+    <span class="tok-kw">const</span> floor_vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(scene.floor_verts[<span class="tok-num">0</span>..]),
+        .{ .vertex = true, .copy_dst = true },
+        <span class="tok-str">"smsw_floor_vbo"</span>,
+    );
+    <span class="tok-kw">const</span> floor_ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(scene.floor_indices[<span class="tok-num">0</span>..]),
+        .{ .index = true, .copy_dst = true },
+        <span class="tok-str">"smsw_floor_ibo"</span>,
+    );
+    <span class="tok-kw">const</span> cube_vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(scene.cube_verts[<span class="tok-num">0</span>..]),
+        .{ .vertex = true, .copy_dst = true },
+        <span class="tok-str">"smsw_cube_vbo"</span>,
+    );
+    <span class="tok-kw">const</span> cube_ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(scene.cube_indices[<span class="tok-num">0</span>..]),
+        .{ .index = true, .copy_dst = true },
+        <span class="tok-str">"smsw_cube_ibo"</span>,
+    );
+    <span class="tok-kw">const</span> bunny_vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(bunny_verts),
+        .{ .vertex = true, .copy_dst = true },
+        <span class="tok-str">"smsw_bunny_vbo"</span>,
+    );
+    <span class="tok-kw">const</span> bunny_ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(bunny_indices),
+        .{ .index = true, .copy_dst = true },
+        <span class="tok-str">"smsw_bunny_ibo"</span>,
+    );
+
+    <span class="tok-comment">// ---- GPU shadow map: rgba16_float + NEAREST sampler (linear filtering</span>
+    <span class="tok-comment">//      would blend depths across silhouettes and corrupt the compare) ----</span>
+    <span class="tok-kw">const</span> shadow_rt: z.RenderTexture = z.RenderTexture.<span class="tok-fn">create</span>(device, .{
+        .width = <span class="tok-builtin">@intCast</span>(shadow_rt_size),
+        .height = <span class="tok-builtin">@intCast</span>(shadow_rt_size),
+        .format = .rgba16_float,
+        .with_depth = true,
+        .depth_format = .depth24_plus,
+        .label = <span class="tok-str">"smsw_shadow_rt"</span>,
+    });
+    <span class="tok-kw">const</span> shadow_sampler: z.wgpu.SamplerHandle = z.wgpu.<span class="tok-fn">createSampler</span>(device, .{
+        .mag_filter_linear = false,
+        .min_filter_linear = false,
+        .address_mode = .clamp_to_edge,
+    });
+
+    <span class="tok-comment">// ---- Vertex layouts: the depth pass reads position only ----</span>
+    <span class="tok-kw">const</span> pos_only_layout = z.gpu.VertexBufferLayout{
+        .array_stride = <span class="tok-builtin">@sizeOf</span>(scene.SceneVertex),
+        .step_mode = .vertex,
+        .attributes = &amp;.{
+            .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+        },
+    };
+    <span class="tok-kw">const</span> pos_normal_layout = z.gpu.VertexBufferLayout{
+        .array_stride = <span class="tok-builtin">@sizeOf</span>(scene.SceneVertex),
+        .step_mode = .vertex,
+        .attributes = &amp;.{
+            .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+            .{ .format = .float32x3, .offset = <span class="tok-num">12</span>, .shader_location = <span class="tok-num">1</span> },
+        },
+    };
+
+    <span class="tok-comment">// ---- Bind-group layouts + the shared shadow-sampler group ----</span>
+    <span class="tok-kw">const</span> bgls: Bgls = .{
+        .depth_g0 = <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, z.shader.<span class="tok-fn">wireSizeOf</span>(DepthUbo), .{ .vertex = true }, <span class="tok-str">"smsw_depth_g0"</span>),
+        .lit_g0 = <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, z.shader.<span class="tok-fn">wireSizeOf</span>(LitVsUbo), .{ .vertex = true }, <span class="tok-str">"smsw_lit_g0"</span>),
+        .lit_g2 = <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, z.shader.<span class="tok-fn">wireSizeOf</span>(LitFsUbo), .{ .fragment = true }, <span class="tok-str">"smsw_lit_g2"</span>),
+    };
+    <span class="tok-kw">const</span> shadow_tex: z.WgpuTexture = shadow_rt.<span class="tok-fn">asTexture</span>();
+    <span class="tok-kw">const</span> g1_layout_entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+        .{ .binding = <span class="tok-num">0</span>, .visibility = .{ .fragment = true }, .resource = .{ .texture = .{} } },
+        .{ .binding = <span class="tok-num">1</span>, .visibility = .{ .fragment = true }, .resource = .{ .sampler = .{} } },
+    };
+    <span class="tok-kw">const</span> g1_layout_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;g1_layout_entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(g1_layout_blob);
+    <span class="tok-kw">const</span> lit_g1_bgl: z.wgpu.BindGroupLayoutHandle =
+        z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, g1_layout_blob, <span class="tok-str">"smsw_lit_g1"</span>);
+    <span class="tok-kw">const</span> g1_entries = [_]z.gpu.BindGroupEntry{
+        .{ .binding = <span class="tok-num">0</span>, .resource = .{ .texture_view = shadow_tex.view } },
+        .{ .binding = <span class="tok-num">1</span>, .resource = .{ .sampler = shadow_sampler } },
+    };
+    <span class="tok-kw">const</span> g1_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;g1_entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(g1_blob);
+    <span class="tok-kw">const</span> lit_g1_bg: z.wgpu.BindGroupHandle = z.wgpu.<span class="tok-fn">createBindGroup</span>(device, lit_g1_bgl, g1_blob, <span class="tok-str">"smsw_lit_g1_bg"</span>);
+
+    <span class="tok-comment">// ---- Depth pass pipeline (targets the rgba16_float shadow RTT) ----</span>
+    <span class="tok-kw">const</span> depth_bgls: [<span class="tok-num">1</span>]z.wgpu.BindGroupLayoutHandle = .{bgls.depth_g0};
+    <span class="tok-kw">const</span> depth_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(device, depth_bgls[<span class="tok-num">0</span>..], <span class="tok-str">"smsw_depth_pl"</span>);
+    <span class="tok-kw">const</span> depth_vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, depth_vs_wgsl, <span class="tok-str">"depth_vs"</span>);
+    <span class="tok-kw">const</span> depth_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, depth_fs_wgsl, <span class="tok-str">"depth_fs"</span>);
+    <span class="tok-kw">const</span> depth_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .none,
+        .less,
+        .none,
+        .rgba16_float,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> depth_pipe_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{pos_only_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = depth_combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(depth_pipe_blob);
+    <span class="tok-kw">const</span> depth_pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        depth_pl,
+        depth_vs_mod,
+        depth_fs_mod,
+        depth_pipe_blob,
+        <span class="tok-str">"smsw_depth_pipe"</span>,
+    );
+
+    <span class="tok-comment">// ---- Lit pass pipeline (targets the rgba8 camera-view RTT) ----</span>
+    <span class="tok-kw">const</span> lit_bgls: [<span class="tok-num">3</span>]z.wgpu.BindGroupLayoutHandle = .{ bgls.lit_g0, lit_g1_bgl, bgls.lit_g2 };
+    <span class="tok-kw">const</span> lit_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(device, lit_bgls[<span class="tok-num">0</span>..], <span class="tok-str">"smsw_lit_pl"</span>);
+    <span class="tok-kw">const</span> lit_vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, lit_vs_wgsl, <span class="tok-str">"lit_shadow_vs"</span>);
+    <span class="tok-kw">const</span> lit_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, lit_fs_wgsl, <span class="tok-str">"lit_shadow_fs"</span>);
+    <span class="tok-comment">// Cull .none: the winding of every caster matches the GPU shadowmap</span>
+    <span class="tok-comment">// example, whose back faces are depth-occluded anyway.</span>
+    <span class="tok-kw">const</span> lit_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .alpha,
+        .less,
+        .none,
+        .rgba8_unorm,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> lit_pipe_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{pos_normal_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = lit_combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(lit_pipe_blob);
+    <span class="tok-kw">const</span> lit_pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        lit_pl,
+        lit_vs_mod,
+        lit_fs_mod,
+        lit_pipe_blob,
+        <span class="tok-str">"smsw_lit_pipe"</span>,
+    );
+
+    <span class="tok-comment">// ---- Per-object GPU state, in `scene.objects` order ----</span>
+    <span class="tok-kw">var</span> objs: [scene.objects.len]Obj = undefined;
+    <span class="tok-kw">for</span> (scene.objects, &amp;objs) |o, *slot| {
+        <span class="tok-kw">switch</span> (o) {
+            .floor =&gt; {
+                slot.* = <span class="tok-kw">try</span> <span class="tok-fn">makeObj</span>(
+                    gpa,
+                    device,
+                    bgls,
+                    floor_vbo,
+                    floor_ibo,
+                    <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(scene.floor_verts)),
+                    <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(scene.floor_indices)),
+                    scene.floor_indices.len,
+                );
+            },
+            .pillar, .receiver =&gt; {
+                slot.* = <span class="tok-kw">try</span> <span class="tok-fn">makeObj</span>(
+                    gpa,
+                    device,
+                    bgls,
+                    cube_vbo,
+                    cube_ibo,
+                    <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(scene.cube_verts)),
+                    <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(scene.cube_indices)),
+                    scene.cube_indices.len,
+                );
+            },
+            .bunny =&gt; {
+                slot.* = <span class="tok-kw">try</span> <span class="tok-fn">makeObj</span>(
+                    gpa,
+                    device,
+                    bgls,
+                    bunny_vbo,
+                    bunny_ibo,
+                    bunny_verts.len * <span class="tok-builtin">@sizeOf</span>(scene.SceneVertex),
+                    bunny_indices.len * <span class="tok-builtin">@sizeOf</span>(u32),
+                    <span class="tok-builtin">@intCast</span>(bunny_indices.len),
+                );
+            },
+        }
+    }
+
+    <span class="tok-comment">// ---- CPU half: two Contexts + shared VS-out scratch (bunny-sized) ----</span>
+    <span class="tok-kw">const</span> sm_ctx: z.raster.Context = <span class="tok-kw">try</span> z.raster.Context.<span class="tok-fn">init</span>(gpa, cpu_shadow_res, cpu_shadow_res);
+    <span class="tok-kw">const</span> sw: z.raster.Context = <span class="tok-kw">try</span> z.raster.Context.<span class="tok-fn">init</span>(gpa, <span class="tok-num">220</span>, <span class="tok-num">124</span>);
+    <span class="tok-kw">const</span> sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.<span class="tok-fn">init</span>(device, queue, <span class="tok-num">220</span>, <span class="tok-num">124</span>, sw.<span class="tok-fn">colorBufferBytes</span>(), <span class="tok-str">"smsw_cpu"</span>);
+
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(bgls.depth_g0);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(bgls.lit_g0);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(bgls.lit_g2);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(lit_g1_bgl);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(depth_pl);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(lit_pl);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(depth_vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(depth_fs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(lit_vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(lit_fs_mod);
+
+    s.* = .{
+        .gpa = gpa,
+        .depth_pipeline = depth_pipeline,
+        .lit_pipeline = lit_pipeline,
+        .shadow_rt = shadow_rt,
+        .lit_g1_bg = lit_g1_bg,
+        .floor_vbo = floor_vbo,
+        .floor_ibo = floor_ibo,
+        .cube_vbo = cube_vbo,
+        .cube_ibo = cube_ibo,
+        .bunny_vbo = bunny_vbo,
+        .bunny_ibo = bunny_ibo,
+        .shadow_sampler = shadow_sampler,
+        .rt = .{},
+        .objs = objs,
+        .bunny_verts = bunny_verts,
+        .bunny_indices = bunny_indices,
+        .bunny_frame = scene.<span class="tok-fn">bunnyFrame</span>(mn, mx),
+        .depth_outs = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(shadow.depth_vs.Out, bvc),
+        .lit_outs = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(shadow.lit_vs.Out, bvc),
+        .sm_ctx = sm_ctx,
+        .sw = sw,
+        .sw_fb = sw_fb,
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>),
+        .corner_fb = z.CpuFramebuffer.<span class="tok-fn">init</span>(device, queue, corner_w, corner_h, &amp;corner.image, <span class="tok-str">"smsw_corner"</span>),
+    };
+}
+
+<span class="tok-comment">/// Keep both halves' targets matched to the LIVE canvas (helmet pattern):</span>
+<span class="tok-comment">/// the GPU camera-view RTT at the surface's backing size, the CPU lit</span>
+<span class="tok-comment">/// buffer at `cpu_pixel_budget` pixels shaped to the canvas aspect.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ensureTargets</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> backing: z.wgpu.SurfaceSize = z.wgpu.<span class="tok-fn">getSurfaceSize</span>(f.gpu.surface);
+    <span class="tok-kw">const</span> bw: i32 = <span class="tok-builtin">@intCast</span>(<span class="tok-builtin">@max</span>(backing.width, <span class="tok-num">1</span>));
+    <span class="tok-kw">const</span> bh: i32 = <span class="tok-builtin">@intCast</span>(<span class="tok-builtin">@max</span>(backing.height, <span class="tok-num">1</span>));
+    <span class="tok-kw">if</span> (s.rt.color == .invalid <span class="tok-kw">or</span> s.rt.width != backing.width <span class="tok-kw">or</span> s.rt.height != backing.height) {
+        <span class="tok-kw">if</span> (s.rt.color != .invalid) {
+            z.<span class="tok-fn">unloadRenderTexture</span>(f.gl, &amp;s.rt);
+        }
+        s.rt = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, bw, bh);
+    }
+
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> aspect: f32 = vw / vh;
+    <span class="tok-kw">const</span> want_w: i32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@round</span>(<span class="tok-builtin">@sqrt</span>(cpu_pixel_budget * aspect)), <span class="tok-num">16</span>));
+    <span class="tok-kw">const</span> want_h: i32 = <span class="tok-builtin">@trunc</span>(<span class="tok-builtin">@max</span>(<span class="tok-builtin">@round</span>(<span class="tok-fn">float</span>(want_w) / aspect), <span class="tok-num">16</span>));
+    <span class="tok-kw">const</span> dims: Vec2i = s.sw.<span class="tok-fn">colorBufferDims</span>();
+    <span class="tok-kw">if</span> (dims[<span class="tok-num">0</span>] != want_w <span class="tok-kw">or</span> dims[<span class="tok-num">1</span>] != want_h) {
+        s.sw.<span class="tok-fn">resize</span>(s.gpa, want_w, want_h) <span class="tok-kw">catch</span> <span class="tok-kw">return</span>;
+        s.sw_fb.<span class="tok-fn">resize</span>(f.gl, <span class="tok-builtin">@intCast</span>(want_w), <span class="tok-builtin">@intCast</span>(want_h), s.sw.<span class="tok-fn">colorBufferBytes</span>(), <span class="tok-str">"smsw_cpu"</span>);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> touches: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touches &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> a: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> b: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> dx: f32 = a[<span class="tok-num">0</span>] - b[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = a[<span class="tok-num">1</span>] - b[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (s.prev_pinch &gt; <span class="tok-num">0</span>) {
+            s.cam_dist = <span class="tok-fn">clamp</span>(s.cam_dist - (dist - s.prev_pinch) * <span class="tok-num">0.02</span>, <span class="tok-num">6.0</span>, <span class="tok-num">24.0</span>);
+        }
+        s.prev_pinch = dist;
+        <span class="tok-kw">return</span>;
+    }
+    s.prev_pinch = <span class="tok-num">0</span>;
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left)) {
+        <span class="tok-kw">if</span> (s.dragging) {
+            <span class="tok-kw">const</span> d: Vec2 = z.<span class="tok-fn">getMouseDelta</span>(f.input);
+            s.cam_yaw -= d[<span class="tok-num">0</span>] * <span class="tok-num">0.008</span>;
+            s.cam_pitch = <span class="tok-fn">clamp</span>(s.cam_pitch + d[<span class="tok-num">1</span>] * <span class="tok-num">0.008</span>, <span class="tok-num">0.08</span>, <span class="tok-num">1.45</span>);
+        }
+        s.dragging = true;
+    } <span class="tok-kw">else</span> {
+        s.dragging = false;
+    }
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        s.cam_dist = <span class="tok-fn">clamp</span>(s.cam_dist - wheel * <span class="tok-num">0.6</span>, <span class="tok-num">6.0</span>, <span class="tok-num">24.0</span>);
+    }
+}
+
+<span class="tok-comment">/// GPU per-object uniforms - built by the SAME `scene` Ubo builders the</span>
+<span class="tok-comment">/// software targets pass into `shaderMain`, uploaded verbatim.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">writeObjUniforms</span>(
+    f: *z.Frame,
+    s: *State,
+    t: f32,
+    cam_vp: Mat,
+    rig: scene.LightRig,
+) void {
+    <span class="tok-kw">for</span> (scene.objects, &amp;s.objs) |o, *obj| {
+        <span class="tok-kw">const</span> model: Mat = scene.<span class="tok-fn">modelMatrix</span>(o, t, s.bunny_frame);
+        <span class="tok-kw">const</span> depth_io: shadow.depth_vs.Io = scene.<span class="tok-fn">depthUbo</span>(model, rig.vp);
+        <span class="tok-kw">const</span> depth_bytes: [z.shader.<span class="tok-fn">wireSizeOf</span>(DepthUbo)]u8 = z.shader.<span class="tok-fn">wireOf</span>(DepthUbo, &amp;depth_io.u);
+        z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, obj.depth_ubo, <span class="tok-num">0</span>, &amp;depth_bytes);
+        <span class="tok-kw">const</span> lit_vs_io: shadow.lit_vs.Io = scene.<span class="tok-fn">litVsUbo</span>(model, cam_vp, rig.vp, scene.<span class="tok-fn">normalMatrix</span>(o, t));
+        <span class="tok-kw">const</span> lit_vs_bytes: [z.shader.<span class="tok-fn">wireSizeOf</span>(LitVsUbo)]u8 = z.shader.<span class="tok-fn">wireOf</span>(LitVsUbo, &amp;lit_vs_io.u);
+        z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, obj.lit_vs_ubo, <span class="tok-num">0</span>, &amp;lit_vs_bytes);
+        <span class="tok-comment">// GPU map is rgba16_float -&gt; the Ubo's default (fine) bias.</span>
+        <span class="tok-kw">const</span> lit_fs_io: shadow.lit_fs.Io = scene.<span class="tok-fn">litFsUbo</span>(o, rig.to_light, .{ <span class="tok-num">0.0025</span>, <span class="tok-num">0.0008</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> });
+        <span class="tok-kw">const</span> lit_fs_bytes: [z.shader.<span class="tok-fn">wireSizeOf</span>(LitFsUbo)]u8 = z.shader.<span class="tok-fn">wireOf</span>(LitFsUbo, &amp;lit_fs_io.u);
+        z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(f.gpu.queue, obj.lit_fs_ubo, <span class="tok-num">0</span>, &amp;lit_fs_bytes);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawMesh</span>(rps: *z.PassState, obj: *<span class="tok-kw">const</span> Obj) void {
+    z.render_pass.<span class="tok-fn">setVertexBuffer</span>(rps.pass, .{ .slot = <span class="tok-num">0</span>, .buffer = obj.vbo, .offset = <span class="tok-num">0</span>, .size = obj.vbo_bytes });
+    z.render_pass.<span class="tok-fn">setIndexBuffer</span>(rps.pass, .{
+        .buffer = obj.ibo,
+        .format = .uint32,
+        .offset = <span class="tok-num">0</span>,
+        .size = obj.ibo_bytes,
+    });
+    z.render_pass.<span class="tok-fn">drawIndexed</span>(rps.pass, .{
+        .index_count = obj.icount,
+        .instance_count = <span class="tok-num">1</span>,
+        .first_index = <span class="tok-num">0</span>,
+        .base_vertex = <span class="tok-num">0</span>,
+        .first_instance = <span class="tok-num">0</span>,
+    });
+}
+
+<span class="tok-comment">/// The CPU frame: the same two passes as the GPU, per-object draws through</span>
+<span class="tok-comment">/// the same shader files, over two software Contexts.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">renderCpu</span>(s: *State, t: f32, cam_vp: Mat, rig: scene.LightRig) void {
+    <span class="tok-comment">// ---- PASS 1: light-view depth into the rgba8 shadow map ----</span>
+    s.sm_ctx.<span class="tok-fn">clearColor</span>(.{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }); <span class="tok-comment">// far</span>
+    s.sm_ctx.<span class="tok-fn">clearDepth</span>(<span class="tok-num">1.0</span>);
+    s.sm_ctx.<span class="tok-fn">clear</span>(.{ .color = true, .depth = true });
+    <span class="tok-kw">for</span> (scene.objects) |o| {
+        <span class="tok-kw">const</span> g: scene.Geometry = <span class="tok-fn">geometryOf</span>(s, o);
+        <span class="tok-kw">const</span> io: shadow.depth_vs.Io = scene.<span class="tok-fn">depthUbo</span>(scene.<span class="tok-fn">modelMatrix</span>(o, t, s.bunny_frame), rig.vp);
+        scene.<span class="tok-fn">drawDepth</span>(&amp;s.sm_ctx, g.verts, g.indices, io, s.depth_outs);
+    }
+
+    <span class="tok-comment">// ---- PASS 2: lit + shadow-tested, sampling pass 1 (nearest) ----</span>
+    s.sw.<span class="tok-fn">clearColor</span>(.{ .r = <span class="tok-num">12</span>, .g = <span class="tok-num">12</span>, .b = <span class="tok-num">28</span>, .a = <span class="tok-num">255</span> });
+    s.sw.<span class="tok-fn">clearDepth</span>(<span class="tok-num">1.0</span>);
+    s.sw.<span class="tok-fn">clear</span>(.{ .color = true, .depth = true });
+    <span class="tok-kw">for</span> (scene.objects) |o| {
+        <span class="tok-kw">const</span> g: scene.Geometry = <span class="tok-fn">geometryOf</span>(s, o);
+        <span class="tok-kw">const</span> vs_io: shadow.lit_vs.Io = scene.<span class="tok-fn">litVsUbo</span>(
+            scene.<span class="tok-fn">modelMatrix</span>(o, t, s.bunny_frame),
+            cam_vp,
+            rig.vp,
+            scene.<span class="tok-fn">normalMatrix</span>(o, t),
+        );
+        <span class="tok-kw">var</span> fs_io: shadow.lit_fs.Io = scene.<span class="tok-fn">litFsUbo</span>(o, rig.to_light, scene.soft_bias);
+        fs_io._shadow_map = .{
+            .pixels = s.sm_ctx.<span class="tok-fn">colorBufferBytes</span>(),
+            .width = cpu_shadow_res,
+            .height = cpu_shadow_res,
+            .linear = false, <span class="tok-comment">// nearest - depth comparisons must not blend texels</span>
+        };
+        scene.<span class="tok-fn">drawLit</span>(&amp;s.sw, g.verts, g.indices, vs_io, fs_io, s.lit_outs);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">geometryOf</span>(s: *State, o: scene.Object) scene.Geometry {
+    <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (o) {
+        .floor =&gt; .{ .verts = &amp;scene.floor_verts, .indices = &amp;scene.floor_indices },
+        .pillar, .receiver =&gt; .{ .verts = &amp;scene.cube_verts, .indices = &amp;scene.cube_indices },
+        .bunny =&gt; .{ .verts = s.bunny_verts, .indices = s.bunny_indices },
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-fn">ensureTargets</span>(f, s);
+    <span class="tok-fn">handleInput</span>(f, s);
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+    <span class="tok-kw">const</span> vw: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">widthf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-kw">const</span> vh: f32 = <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1</span>);
+    <span class="tok-comment">// OFFSCREEN FIRST (tile-based-GPU safe; app owns begin/endDrawing).</span>
+
+    <span class="tok-comment">// ---- The shared frame inputs: orbiting light + orbit camera ----</span>
+    <span class="tok-kw">const</span> rig: scene.LightRig = scene.<span class="tok-fn">lightRig</span>(t);
+    <span class="tok-kw">const</span> cam_target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> cp: f32 = <span class="tok-builtin">@cos</span>(s.cam_pitch);
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sin</span>(s.cam_pitch);
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-builtin">@cos</span>(s.cam_yaw);
+    <span class="tok-kw">const</span> sy: f32 = <span class="tok-builtin">@sin</span>(s.cam_yaw);
+    <span class="tok-kw">const</span> cam_eye: Vec = <span class="tok-fn">vec</span>(
+        cam_target[<span class="tok-num">0</span>] + s.cam_dist * cp * sy,
+        cam_target[<span class="tok-num">1</span>] + s.cam_dist * sp,
+        cam_target[<span class="tok-num">2</span>] + s.cam_dist * cp * cy,
+    );
+    <span class="tok-kw">const</span> cam_view: Mat = <span class="tok-fn">lookAtRh</span>(cam_eye, cam_target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> cam_proj: Mat = <span class="tok-fn">perspectiveFovRh</span>(<span class="tok-num">0.8</span>, vw / <span class="tok-builtin">@max</span>(vh, <span class="tok-num">1.0</span>), <span class="tok-num">0.1</span>, <span class="tok-num">100.0</span>);
+    <span class="tok-kw">const</span> cam_vp: Mat = <span class="tok-fn">mulMat</span>(cam_proj, cam_view);
+
+    <span class="tok-comment">// ---- CPU: two software passes through the engine shaders ----</span>
+    <span class="tok-fn">renderCpu</span>(s, t, cam_vp, rig);
+    s.sw_fb.<span class="tok-fn">update</span>(f.gpu.queue, s.sw.<span class="tok-fn">colorBufferBytes</span>());
+
+    <span class="tok-comment">// ---- GPU: the same two passes through the same files (as WGSL) ----</span>
+    <span class="tok-fn">writeObjUniforms</span>(f, s, t, cam_vp, rig);
+    <span class="tok-kw">const</span> Backend: type = z.WgpuBackend;
+
+    <span class="tok-comment">// PASS 1: shadow map (light's eye -&gt; rgba16_float RTT). Raw pass: our own</span>
+    <span class="tok-comment">// pipeline, so beginTextureMode must not bind the rgba8 2D pipeline here.</span>
+    z.<span class="tok-fn">beginTextureModeRaw</span>(f.gl, s.shadow_rt, .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> p1: *z.PassState = f.gl.pass;
+    Backend.<span class="tok-fn">setPipeline</span>(p1, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.depth_pipeline });
+    <span class="tok-kw">for</span> (&amp;s.objs) |*obj| {
+        Backend.<span class="tok-fn">setBindGroup</span>(p1, <span class="tok-num">0</span>, obj.depth_bg);
+        <span class="tok-fn">drawMesh</span>(p1, obj);
+    }
+    z.<span class="tok-fn">endTextureModeRaw</span>(f.gl);
+
+    <span class="tok-comment">// PASS 2: lit scene (camera -&gt; canvas-sized rgba8 RTT), sampling pass 1.</span>
+    z.<span class="tok-fn">beginTextureModeRaw</span>(f.gl, s.rt, .{ .r = <span class="tok-num">12</span>, .g = <span class="tok-num">12</span>, .b = <span class="tok-num">28</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> p2: *z.PassState = f.gl.pass;
+    Backend.<span class="tok-fn">setPipeline</span>(p2, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.lit_pipeline });
+    Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">1</span>, s.lit_g1_bg);
+    <span class="tok-kw">for</span> (&amp;s.objs) |*obj| {
+        Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">0</span>, obj.lit_g0_bg);
+        Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">2</span>, obj.lit_g2_bg);
+        <span class="tok-fn">drawMesh</span>(p2, obj);
+    }
+    z.<span class="tok-fn">endTextureModeRaw</span>(f.gl);
+
+    <span class="tok-comment">// ---- Composite (helmet-style): GPU full-surface, CPU left of the</span>
+    <span class="tok-comment">//      divider, comptime corner inset bottom-right ----</span>
+    <span class="tok-comment">// SCREEN PASS: open once, composite the GPU result + CPU/comptime insets.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">8</span>, .g = <span class="tok-num">9</span>, .b = <span class="tok-num">14</span>, .a = <span class="tok-num">255</span> });
+    f.gl.<span class="tok-fn">texture</span>(
+        .{ .x = <span class="tok-num">0</span>, .y = <span class="tok-num">0</span>, .width = vw, .height = vh },
+        s.rt.<span class="tok-fn">asTexture</span>(),
+        .{ .tint = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } },
+    );
+    <span class="tok-kw">const</span> m: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> is_first_zero: bool = s.last_mouse[<span class="tok-num">0</span>] &lt; <span class="tok-num">0</span> <span class="tok-kw">and</span> m[<span class="tok-num">0</span>] == <span class="tok-num">0</span> <span class="tok-kw">and</span> m[<span class="tok-num">1</span>] == <span class="tok-num">0</span>;
+    <span class="tok-kw">if</span> (!is_first_zero <span class="tok-kw">and</span> (m[<span class="tok-num">0</span>] != s.last_mouse[<span class="tok-num">0</span>] <span class="tok-kw">or</span> m[<span class="tok-num">1</span>] != s.last_mouse[<span class="tok-num">1</span>])) {
+        s.last_mouse = m;
+        s.divider_frac = <span class="tok-fn">clamp</span>(m[<span class="tok-num">0</span>] / vw, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+    }
+    <span class="tok-kw">const</span> divider_x: f32 = s.divider_frac * vw;
+    z.<span class="tok-fn">beginScissorMode</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, divider_x, vh);
+    s.sw_fb.<span class="tok-fn">present</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, vw, vh);
+    z.<span class="tok-fn">endScissorMode</span>(f.gl);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = divider_x - <span class="tok-num">1.5</span>, .y = <span class="tok-num">0</span>, .width = <span class="tok-num">3</span>, .height = vh },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> } },
+    );
+
+    f.gl.<span class="tok-fn">text</span>(
+        .{ <span class="tok-num">16</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"CPU lit_shadow_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ vw - <span class="tok-num">210</span>, <span class="tok-num">14</span> },
+        <span class="tok-str">"GPU lit_shadow_fs"</span>,
+        .{ .size = <span class="tok-num">22</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+
+    <span class="tok-comment">// The comptime corner: baked by the compiler, frozen at scene.corner_time.</span>
+    <span class="tok-kw">const</span> inset_h: f32 = <span class="tok-fn">clamp</span>(<span class="tok-builtin">@min</span>(vw, vh) * <span class="tok-num">0.26</span>, <span class="tok-num">72</span>, <span class="tok-num">160</span>);
+    <span class="tok-kw">const</span> inset_w: f32 = inset_h * (<span class="tok-fn">float</span>(corner_w) / <span class="tok-fn">float</span>(corner_h));
+    <span class="tok-kw">const</span> ix: f32 = vw - inset_w - <span class="tok-num">12</span>;
+    <span class="tok-kw">const</span> iy: f32 = vh - inset_h - <span class="tok-num">12</span>;
+    s.corner_fb.<span class="tok-fn">present</span>(f.gl, ix, iy, inset_w, inset_h);
+    f.gl.<span class="tok-fn">rect</span>(
+        .{ .x = ix - <span class="tok-num">1</span>, .y = iy - <span class="tok-num">1</span>, .width = inset_w + <span class="tok-num">2</span>, .height = inset_h + <span class="tok-num">2</span> },
+        .{ .color = .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> }, .outline = <span class="tok-num">1.0</span> },
+    );
+    f.gl.<span class="tok-fn">text</span>(
+        .{ ix - <span class="tok-num">60</span>, iy - <span class="tok-num">22</span> },
+        <span class="tok-str">"comptime lit_shadow_fs"</span>,
+        .{ .size = <span class="tok-num">16</span>, .color = .{ .r = <span class="tok-num">235</span>, .g = <span class="tok-num">235</span>, .b = <span class="tok-num">245</span>, .a = <span class="tok-num">255</span> }, .font = &amp;s.font },
+    );
+
+    <span class="tok-comment">// NB: no explicit endDrawing - the runner closes the frame (idempotent),</span>
+    <span class="tok-comment">// which lets the launcher overlay its switch pill on this app's frame.</span>
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - one shadow shader: CPU | GPU | comptime"</span>,
+            .width = <span class="tok-num">960</span>,
+            .height = <span class="tok-num">540</span>,
+            .scale_mode = .responsive,
+            <span class="tok-comment">// 2D pipelines carry depth so loadRenderTexture attaches a depth</span>
+            <span class="tok-comment">// buffer the raw lit pass can test against.</span>
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// CPU/GPU/comptime shadow targets rendered offscreen before the screen opens</span>
+    <span class="tok-comment">// (tile-based-GPU safe); owns its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+    .memory = .managed,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/shadowmap_sw/native_verify.zig" data-lines="114"><figcaption><span>examples/shadowmap_sw/native_verify.zig</span><span>114 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! native_verify - the shadow-map side-by-side's NATIVE gate.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Builds `scene.bakeCorner` twice from the SAME function:</span>
+<span class="tok-comment">//!   1. at COMPTIME (the const below) - building this exe IS the corner's</span>
+<span class="tok-comment">//!      compile-time-budget gate, and exactly what the wasm app embeds;</span>
+<span class="tok-comment">//!   2. at RUNTIME in `main` - instant, and byte-compared against (1), a</span>
+<span class="tok-comment">//!      differential that pins the compiler's evaluation of the whole</span>
+<span class="tok-comment">//!      two-pass render to the runtime evaluation of the same code.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! It then sanity-checks the images (a real shadow map was written; the lit</span>
+<span class="tok-comment">//! image contains both lit and shadowed regions) and dumps them as PNGs for</span>
+<span class="tok-comment">//! eyeball verification: `zig build shadowmap-sw-verify`.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> scene = <span class="tok-builtin">@import</span>(<span class="tok-str">"scene.zig"</span>);
+<span class="tok-kw">const</span> bunny_proxy = <span class="tok-builtin">@import</span>(<span class="tok-str">"bunny_proxy"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> float = zm.float;
+
+<span class="tok-kw">const</span> sm_res: usize = <span class="tok-num">8</span>;
+<span class="tok-kw">const</span> img_w: usize = <span class="tok-num">8</span>;
+<span class="tok-kw">const</span> img_h: usize = <span class="tok-num">8</span>;
+
+<span class="tok-comment">/// The comptime bake - the same dimensions the wasm app's corner uses.</span>
+<span class="tok-kw">const</span> baked: scene.<span class="tok-fn">CornerBake</span>(sm_res, img_w, img_h) = blk: {
+    <span class="tok-builtin">@setEvalBranchQuota</span>(<span class="tok-num">2_000_000_000</span>);
+    <span class="tok-kw">break</span> :blk scene.<span class="tok-fn">bakeCorner</span>(sm_res, img_w, img_h);
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">luminance</span>(c0: u8, c1: u8, c2: u8) f32 {
+    <span class="tok-kw">return</span> <span class="tok-num">0.299</span> * <span class="tok-fn">float</span>(c0) + <span class="tok-num">0.587</span> * <span class="tok-fn">float</span>(c1) + <span class="tok-num">0.114</span> * <span class="tok-fn">float</span>(c2);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">const</span> gpa: Allocator = std.heap.page_allocator;
+    <span class="tok-kw">var</span> io_threaded: std.Io.Threaded = .<span class="tok-fn">init</span>(gpa, .{});
+    <span class="tok-kw">defer</span> io_threaded.<span class="tok-fn">deinit</span>();
+    <span class="tok-kw">const</span> io: std.Io = io_threaded.<span class="tok-fn">io</span>();
+
+    <span class="tok-comment">// ---- runtime evaluation of the SAME bake function ----</span>
+    <span class="tok-kw">const</span> live: scene.<span class="tok-fn">CornerBake</span>(sm_res, img_w, img_h) = scene.<span class="tok-fn">bakeCorner</span>(sm_res, img_w, img_h);
+
+    <span class="tok-comment">// ---- differential: comptime vs runtime, byte for byte ----</span>
+    <span class="tok-kw">var</span> sm_diff: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (baked.shadow_map, live.shadow_map) |a, b| {
+        <span class="tok-kw">if</span> (a != b) {
+            sm_diff += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">var</span> img_diff: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (baked.image, live.image) |a, b| {
+        <span class="tok-kw">if</span> (a != b) {
+            img_diff += <span class="tok-num">1</span>;
+        }
+    }
+
+    <span class="tok-comment">// ---- image sanity: geometry reached the map; shadows + light exist ----</span>
+    <span class="tok-kw">var</span> min_red: u8 = <span class="tok-num">255</span>;
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; sm_res * sm_res) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">if</span> (baked.shadow_map[i * <span class="tok-num">4</span>] &lt; min_red) {
+            min_red = baked.shadow_map[i * <span class="tok-num">4</span>];
+        }
+    }
+    <span class="tok-kw">var</span> shadow_px: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> lit_px: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> j: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (j &lt; img_w * img_h) : (j += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> l: f32 = <span class="tok-fn">luminance</span>(baked.image[j * <span class="tok-num">4</span>], baked.image[j * <span class="tok-num">4</span> + <span class="tok-num">1</span>], baked.image[j * <span class="tok-num">4</span> + <span class="tok-num">2</span>]);
+        <span class="tok-kw">if</span> (l &gt;= <span class="tok-num">25</span> <span class="tok-kw">and</span> l &lt;= <span class="tok-num">85</span>) {
+            shadow_px += <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">if</span> (l &gt;= <span class="tok-num">120</span> <span class="tok-kw">and</span> l &lt;= <span class="tok-num">215</span>) {
+            lit_px += <span class="tok-num">1</span>;
+        }
+    }
+
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"shadowmap_sw corner: comptime bake vs runtime render of scene.bakeCorner\n"</span>, .{});
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  proxy {d} verts / {d} tris; shadow map {d}x{d}; image {d}x{d}\n"</span>, .{
+        bunny_proxy.vertex_count,
+        bunny_proxy.indices.len / <span class="tok-num">3</span>,
+        sm_res,
+        sm_res,
+        img_w,
+        img_h,
+    });
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  differential: shadow-map bytes differing {d}, image bytes differing {d}\n"</span>, .{
+        sm_diff,
+        img_diff,
+    });
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  shadow-map min red {d} (want &lt;240); lit-band {d} px, shadow-band {d} px (want &gt;0)\n"</span>, .{
+        min_red,
+        lit_px,
+        shadow_px,
+    });
+
+    <span class="tok-kw">const</span> lit_png: []u8 = <span class="tok-kw">try</span> z.codecs.png.<span class="tok-fn">encode</span>(gpa, &amp;baked.image, img_w, img_h);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(lit_png);
+    <span class="tok-kw">const</span> sm_png: []u8 = <span class="tok-kw">try</span> z.codecs.png.<span class="tok-fn">encode</span>(gpa, &amp;baked.shadow_map, sm_res, sm_res);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(sm_png);
+    <span class="tok-kw">try</span> std.Io.Dir.<span class="tok-fn">cwd</span>().<span class="tok-fn">writeFile</span>(io, .{ .sub_path = <span class="tok-str">"corner_lit.png"</span>, .data = lit_png });
+    <span class="tok-kw">try</span> std.Io.Dir.<span class="tok-fn">cwd</span>().<span class="tok-fn">writeFile</span>(io, .{ .sub_path = <span class="tok-str">"corner_shadowmap.png"</span>, .data = sm_png });
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  wrote corner_lit.png + corner_shadowmap.png\n"</span>, .{});
+
+    <span class="tok-kw">if</span> (sm_diff != <span class="tok-num">0</span> <span class="tok-kw">or</span> img_diff != <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.ComptimeRuntimeMismatch;
+    }
+    <span class="tok-kw">if</span> (min_red &gt;= <span class="tok-num">240</span> <span class="tok-kw">or</span> shadow_px == <span class="tok-num">0</span> <span class="tok-kw">or</span> lit_px == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-kw">error</span>.CornerLooksWrong;
+    }
+    std.debug.<span class="tok-fn">print</span>(<span class="tok-str">"  OK\n"</span>, .{});
+}
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/shadowmap_sw/scene.zig" data-lines="481"><figcaption><span>examples/shadowmap_sw/scene.zig</span><span>481 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! scene.zig - THE shared scene of the shadow-map side-by-side.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Everything the three renderers must agree on lives in this one file:</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//!   * the GEOMETRY (floor quad, unit cube, and the bunny's placement frame),</span>
+<span class="tok-comment">//!   * the ANIMATION (orbiting light, spinning objects - pure functions of t),</span>
+<span class="tok-comment">//!   * the UNIFORM BLOCKS (built with the engine shaders' own `Ubo` types, so</span>
+<span class="tok-comment">//!     every backend reads bit-identical uniform layouts), and</span>
+<span class="tok-comment">//!   * the SOFTWARE TWO-PASS RENDER (vertex loops + per-object draws through</span>
+<span class="tok-comment">//!     the REAL engine shaders `depth_vs/fs` + `lit_shadow_vs/fs`).</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The GPU half of the app consumes the same geometry/animation/Ubo builders</span>
+<span class="tok-comment">//! and runs the same four shader FILES via their WGSL build artifacts.  The</span>
+<span class="tok-comment">//! CPU half calls `drawDepth`/`drawLit` per object over a `raster.Context`.</span>
+<span class="tok-comment">//! The comptime corner calls `bakeCorner`, whose per-object draws go through</span>
+<span class="tok-comment">//! `rasterizeToTarget` - same clear-once-draw-N pass shape, evaluated by the</span>
+<span class="tok-comment">//! Zig compiler.  One scene, one animation, one shader source; three</span>
+<span class="tok-comment">//! executors.</span>
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> proxy = <span class="tok-builtin">@import</span>(<span class="tok-str">"bunny_proxy"</span>);
+
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec3 = zm.Vec3;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> normalize3 = zm.normalize3;
+<span class="tok-kw">const</span> orthographicRh = zm.orthographicRh;
+<span class="tok-kw">const</span> rotationY = zm.rotationY;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-comment">/// The engine shadow-shader quartet - the SAME four files the GPU compiles</span>
+<span class="tok-comment">/// to WGSL, imported as callable Zig for the software targets.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> shadow = z.shadow_shaders;
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Geometry - position + normal, stride 24; shared verbatim with the GPU</span>
+<span class="tok-comment">// vertex buffers (the app uploads these very arrays).</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> SceneVertex = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    position: [<span class="tok-num">3</span>]f32,
+    normal: [<span class="tok-num">3</span>]f32,
+};
+
+<span class="tok-kw">const</span> up_n: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> floor_half: f32 = <span class="tok-num">4.0</span>;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> floor_verts = [_]SceneVertex{
+    .{ .position = .{ -floor_half, <span class="tok-num">0</span>, -floor_half }, .normal = up_n },
+    .{ .position = .{ floor_half, <span class="tok-num">0</span>, -floor_half }, .normal = up_n },
+    .{ .position = .{ floor_half, <span class="tok-num">0</span>, floor_half }, .normal = up_n },
+    .{ .position = .{ -floor_half, <span class="tok-num">0</span>, floor_half }, .normal = up_n },
+};
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> floor_indices = [_]u32{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">0</span>, <span class="tok-num">2</span>, <span class="tok-num">3</span> };
+
+<span class="tok-comment">/// Unit-ish cube (half-extent `cs`) with FLAT per-face normals - shadow</span>
+<span class="tok-comment">/// mapping wants honest face normals.  Placements scale it per axis.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> cs: f32 = <span class="tok-num">0.7</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> cube_verts = [_]SceneVertex{
+    .{ .position = .{ -cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ cs, cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -cs, cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ -cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ -cs, cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ cs, cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ cs, -cs, cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, -cs, -cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, cs, -cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, cs, cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, -cs, -cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, -cs, cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, cs, cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, cs, -cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, cs, cs }, .normal = up_n },
+    .{ .position = .{ cs, cs, cs }, .normal = up_n },
+    .{ .position = .{ cs, cs, -cs }, .normal = up_n },
+    .{ .position = .{ -cs, cs, -cs }, .normal = up_n },
+    .{ .position = .{ -cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+};
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> cube_indices = [_]u32{
+    <span class="tok-num">0</span>,  <span class="tok-num">1</span>,  <span class="tok-num">2</span>,  <span class="tok-num">0</span>,  <span class="tok-num">2</span>,  <span class="tok-num">3</span>,
+    <span class="tok-num">4</span>,  <span class="tok-num">5</span>,  <span class="tok-num">6</span>,  <span class="tok-num">4</span>,  <span class="tok-num">6</span>,  <span class="tok-num">7</span>,
+    <span class="tok-num">8</span>,  <span class="tok-num">9</span>,  <span class="tok-num">10</span>, <span class="tok-num">8</span>,  <span class="tok-num">10</span>, <span class="tok-num">11</span>,
+    <span class="tok-num">12</span>, <span class="tok-num">13</span>, <span class="tok-num">14</span>, <span class="tok-num">12</span>, <span class="tok-num">14</span>, <span class="tok-num">15</span>,
+    <span class="tok-num">16</span>, <span class="tok-num">17</span>, <span class="tok-num">18</span>, <span class="tok-num">16</span>, <span class="tok-num">18</span>, <span class="tok-num">19</span>,
+    <span class="tok-num">20</span>, <span class="tok-num">21</span>, <span class="tok-num">22</span>, <span class="tok-num">20</span>, <span class="tok-num">22</span>, <span class="tok-num">23</span>,
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Staging + animation - pure functions of time, shared by all three</span>
+<span class="tok-comment">// renderers (the corner freezes them at `corner_time`).</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// The four drawables. The two cubes share the cube buffers; each object</span>
+<span class="tok-comment">/// gets its own model matrix + color + (on the GPU) uniform buffers.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Object = <span class="tok-kw">enum</span> { floor, pillar, receiver, bunny };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> objects = [_]Object{ .floor, .pillar, .receiver, .bunny };
+
+<span class="tok-comment">/// Tall slim pillar beside the bunny: as the light orbits behind it, its</span>
+<span class="tok-comment">/// shadow stripe sweeps ACROSS the bunny.  Low wide receiver on the other</span>
+<span class="tok-comment">/// side: the bunny's silhouette lands on it half an orbit later.  The</span>
+<span class="tok-comment">/// bunny's own ears self-shadow its back at grazing light angles.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> pillar_center: Vec3 = .{ <span class="tok-num">2.2</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.3</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> pillar_half: Vec3 = .{ <span class="tok-num">0.22</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0.22</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> receiver_center: Vec3 = .{ -<span class="tok-num">2.3</span>, <span class="tok-num">0.5</span>, -<span class="tok-num">0.5</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> receiver_half: Vec3 = .{ <span class="tok-num">0.5</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.5</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> bunny_spot: Vec3 = .{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.2</span> };
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> bunny_target_height: f32 = <span class="tok-num">2.0</span>;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">baseColor</span>(o: Object) [<span class="tok-num">4</span>]f32 {
+    <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (o) {
+        .floor =&gt; .{ <span class="tok-num">0.80</span>, <span class="tok-num">0.80</span>, <span class="tok-num">0.86</span>, <span class="tok-num">1.0</span> },
+        .pillar =&gt; .{ <span class="tok-num">0.55</span>, <span class="tok-num">0.70</span>, <span class="tok-num">0.88</span>, <span class="tok-num">1.0</span> },
+        .receiver =&gt; .{ <span class="tok-num">0.62</span>, <span class="tok-num">0.84</span>, <span class="tok-num">0.62</span>, <span class="tok-num">1.0</span> },
+        .bunny =&gt; .{ <span class="tok-num">0.87</span>, <span class="tok-num">0.72</span>, <span class="tok-num">0.53</span>, <span class="tok-num">1.0</span> },
+    };
+}
+
+<span class="tok-comment">/// The bunny's normalization frame - computed from whichever bunny mesh a</span>
+<span class="tok-comment">/// backend renders (the FULL 69k-tri OBJ live, the baked proxy at comptime),</span>
+<span class="tok-comment">/// so the same placement math seats both identically.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> BunnyFrame = <span class="tok-kw">struct</span> {
+    cx: f32,
+    min_y: f32,
+    cz: f32,
+    scale: f32,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">bunnyFrame</span>(mn: [<span class="tok-num">3</span>]f32, mx: [<span class="tok-num">3</span>]f32) BunnyFrame {
+    <span class="tok-kw">return</span> .{
+        .cx = (mn[<span class="tok-num">0</span>] + mx[<span class="tok-num">0</span>]) * <span class="tok-num">0.5</span>,
+        .min_y = mn[<span class="tok-num">1</span>],
+        .cz = (mn[<span class="tok-num">2</span>] + mx[<span class="tok-num">2</span>]) * <span class="tok-num">0.5</span>,
+        .scale = bunny_target_height / <span class="tok-builtin">@max</span>(mx[<span class="tok-num">1</span>] - mn[<span class="tok-num">1</span>], <span class="tok-num">1.0e-4</span>),
+    };
+}
+
+<span class="tok-comment">/// Per-object spin about Y (the "rotation" varyings tour: every object's</span>
+<span class="tok-comment">/// normal matrix is live).  The floor stays put.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">spinAngle</span>(o: Object, t: f32) f32 {
+    <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (o) {
+        .floor =&gt; <span class="tok-num">0.0</span>,
+        .pillar =&gt; t * <span class="tok-num">0.9</span>,
+        .receiver =&gt; -t * <span class="tok-num">0.7</span>,
+        .bunny =&gt; t * <span class="tok-num">0.6</span>,
+    };
+}
+
+<span class="tok-comment">/// Model matrix: place o spin o scale (cubes scale the unit cube to their</span>
+<span class="tok-comment">/// half-extents; the bunny additionally re-centers its mesh frame first).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">modelMatrix</span>(o: Object, t: f32, bunny: BunnyFrame) Mat {
+    <span class="tok-kw">const</span> spin: Mat = <span class="tok-fn">rotationY</span>(<span class="tok-fn">spinAngle</span>(o, t));
+    <span class="tok-kw">switch</span> (o) {
+        .floor =&gt; <span class="tok-kw">return</span> <span class="tok-fn">identity</span>(),
+        .pillar, .receiver =&gt; {
+            <span class="tok-kw">const</span> c: Vec3 = <span class="tok-kw">if</span> (o == .pillar) pillar_center <span class="tok-kw">else</span> receiver_center;
+            <span class="tok-kw">const</span> h: Vec3 = <span class="tok-kw">if</span> (o == .pillar) pillar_half <span class="tok-kw">else</span> receiver_half;
+            <span class="tok-kw">const</span> scale_it: Mat = <span class="tok-fn">scaling</span>(h[<span class="tok-num">0</span>] / cs, h[<span class="tok-num">1</span>] / cs, h[<span class="tok-num">2</span>] / cs);
+            <span class="tok-kw">const</span> place_it: Mat = <span class="tok-fn">translation</span>(c[<span class="tok-num">0</span>], c[<span class="tok-num">1</span>], c[<span class="tok-num">2</span>]);
+            <span class="tok-kw">return</span> <span class="tok-fn">mulMat</span>(place_it, <span class="tok-fn">mulMat</span>(spin, scale_it));
+        },
+        .bunny =&gt; {
+            <span class="tok-kw">const</span> center_it: Mat = <span class="tok-fn">translation</span>(-bunny.cx, -bunny.min_y, -bunny.cz);
+            <span class="tok-kw">const</span> scale_it: Mat = <span class="tok-fn">scaling</span>(bunny.scale, bunny.scale, bunny.scale);
+            <span class="tok-kw">const</span> place_it: Mat = <span class="tok-fn">translation</span>(bunny_spot[<span class="tok-num">0</span>], bunny_spot[<span class="tok-num">1</span>], bunny_spot[<span class="tok-num">2</span>]);
+            <span class="tok-kw">return</span> <span class="tok-fn">mulMat</span>(place_it, <span class="tok-fn">mulMat</span>(spin, <span class="tok-fn">mulMat</span>(scale_it, center_it)));
+        },
+    }
+}
+
+<span class="tok-comment">/// Normal matrix - the spin rotation alone.  Correct here even for the</span>
+<span class="tok-comment">/// non-uniformly scaled cubes: their face normals are axis-aligned, and a</span>
+<span class="tok-comment">/// diagonal scale preserves axis directions, so only the rotation matters.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">normalMatrix</span>(o: Object, t: f32) Mat {
+    <span class="tok-kw">return</span> <span class="tok-fn">rotationY</span>(<span class="tok-fn">spinAngle</span>(o, t));
+}
+
+<span class="tok-comment">/// The directional light ORBITS the scene: shadows sweep continuously,</span>
+<span class="tok-comment">/// the pillar stripe crosses the bunny once per revolution, the bunny's</span>
+<span class="tok-comment">/// silhouette walks across the receiver and floor, and the bunny's ears</span>
+<span class="tok-comment">/// self-shadow at grazing angles.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> light_orbit_radius: f32 = <span class="tok-num">7.0</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> light_height: f32 = <span class="tok-num">6.5</span>;
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> light_speed: f32 = <span class="tok-num">0.45</span>;
+<span class="tok-kw">const</span> light_target: Vec = .{ <span class="tok-num">0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> };
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> LightRig = <span class="tok-kw">struct</span> {
+    vp: Mat,
+    to_light: Vec,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">lightRig</span>(t: f32) LightRig {
+    <span class="tok-kw">const</span> a: f32 = t * light_speed + <span class="tok-num">0.35</span>;
+    <span class="tok-kw">const</span> eye: Vec = <span class="tok-fn">vec</span>(
+        light_target[<span class="tok-num">0</span>] + light_orbit_radius * <span class="tok-builtin">@cos</span>(a),
+        light_height,
+        light_target[<span class="tok-num">2</span>] + light_orbit_radius * <span class="tok-builtin">@sin</span>(a),
+    );
+    <span class="tok-kw">const</span> view: Mat = <span class="tok-fn">lookAtRh</span>(eye, light_target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> projection: Mat = <span class="tok-fn">orthographicRh</span>(<span class="tok-num">13.0</span>, <span class="tok-num">13.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">20.0</span>);
+    <span class="tok-kw">return</span> .{ .vp = <span class="tok-fn">mulMat</span>(projection, view), .to_light = <span class="tok-fn">normalize3</span>(eye - light_target) };
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Uniform blocks - built with the SHADERS' OWN Ubo types, so all three</span>
+<span class="tok-comment">// backends read bit-identical layouts (the GPU uploads these structs</span>
+<span class="tok-comment">// verbatim; the software targets pass them straight into `shaderMain`).</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// 8-bit shadow-map bias for the SOFTWARE targets (their map is rgba8 -</span>
+<span class="tok-comment">/// 256 depth levels - so the compare needs ~8x the slack of the GPU's</span>
+<span class="tok-comment">/// rgba16_float map, whose bias is the Ubo default).  Same shader; the</span>
+<span class="tok-comment">/// precision difference is data.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> soft_bias: Vec = .{ <span class="tok-num">0.018</span>, <span class="tok-num">0.010</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">depthUbo</span>(model: Mat, light_vp: Mat) shadow.depth_vs.Io {
+    <span class="tok-kw">var</span> io: shadow.depth_vs.Io = undefined;
+    io.u = .{ .mvp = <span class="tok-fn">mulMat</span>(light_vp, model), .params = .{ <span class="tok-num">1.0</span>, <span class="tok-num">20.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span> }, .mode = <span class="tok-num">0</span> };
+    <span class="tok-kw">return</span> io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">litVsUbo</span>(
+    model: Mat,
+    cam_vp: Mat,
+    light_vp: Mat,
+    normal_mat: Mat,
+) shadow.lit_vs.Io {
+    <span class="tok-kw">var</span> io: shadow.lit_vs.Io = undefined;
+    io.u = .{
+        .mvp = <span class="tok-fn">mulMat</span>(cam_vp, model),
+        .light_vp = <span class="tok-fn">mulMat</span>(light_vp, model),
+        .normal_matrix = normal_mat,
+    };
+    <span class="tok-kw">return</span> io;
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">litFsUbo</span>(o: Object, to_light: Vec, bias: Vec) shadow.lit_fs.Io {
+    <span class="tok-kw">var</span> io: shadow.lit_fs.Io = undefined;
+    io.u = .{
+        .light_dir = .{ to_light[<span class="tok-num">0</span>], to_light[<span class="tok-num">1</span>], to_light[<span class="tok-num">2</span>], <span class="tok-num">0.0</span> },
+        .base_color = <span class="tok-fn">baseColor</span>(o),
+        .params = bias,
+    };
+    <span class="tok-kw">return</span> io;
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Software passes - the vertex loops + per-object draws every software</span>
+<span class="tok-comment">// target shares.  `drawDepth`/`drawLit` render one object into a runtime</span>
+<span class="tok-comment">// `raster.Context` (the live CPU half); `bakeCorner` runs the SAME loops</span>
+<span class="tok-comment">// through `rasterizeToTarget` so the whole two-pass render happens at</span>
+<span class="tok-comment">// comptime.  Both are "clear once, draw N objects" - a GPU pass in shape.</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">runDepthVs</span>(
+    verts: []<span class="tok-kw">const</span> SceneVertex,
+    base_io: shadow.depth_vs.Io,
+    outs: []shadow.depth_vs.Out,
+) void {
+    <span class="tok-kw">var</span> io: shadow.depth_vs.Io = base_io;
+    <span class="tok-kw">for</span> (verts, outs) |v, *out| {
+        io.vertex_position = .{ v.position[<span class="tok-num">0</span>], v.position[<span class="tok-num">1</span>], v.position[<span class="tok-num">2</span>] };
+        out.* = shadow.depth_vs.<span class="tok-fn">shaderMain</span>(io);
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">runLitVs</span>(
+    verts: []<span class="tok-kw">const</span> SceneVertex,
+    base_io: shadow.lit_vs.Io,
+    outs: []shadow.lit_vs.Out,
+) void {
+    <span class="tok-kw">var</span> io: shadow.lit_vs.Io = base_io;
+    <span class="tok-kw">for</span> (verts, outs) |v, *out| {
+        io.vertex_position = .{ v.position[<span class="tok-num">0</span>], v.position[<span class="tok-num">1</span>], v.position[<span class="tok-num">2</span>] };
+        io.vertex_normal = .{ v.normal[<span class="tok-num">0</span>], v.normal[<span class="tok-num">1</span>], v.normal[<span class="tok-num">2</span>] };
+        out.* = shadow.lit_vs.<span class="tok-fn">shaderMain</span>(io);
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> connect_depth: <span class="tok-kw">fn</span> (shadow.depth_vs.Out, *shadow.depth_fs.Io) void =
+    z.shader.<span class="tok-fn">autoConnect</span>(shadow.depth_vs.Out, shadow.depth_fs.Io);
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> connect_lit: <span class="tok-kw">fn</span> (shadow.lit_vs.Out, *shadow.lit_fs.Io) void =
+    z.shader.<span class="tok-fn">autoConnect</span>(shadow.lit_vs.Out, shadow.lit_fs.Io);
+
+<span class="tok-comment">/// Draw one object into the light-view depth pass (runtime Context sink).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">drawDepth</span>(
+    ctx: *z.raster.Context,
+    verts: []<span class="tok-kw">const</span> SceneVertex,
+    indices: []<span class="tok-kw">const</span> u32,
+    io: shadow.depth_vs.Io,
+    outs: []shadow.depth_vs.Out,
+) void {
+    <span class="tok-fn">runDepthVs</span>(verts, io, outs[<span class="tok-num">0</span>..verts.len]);
+    <span class="tok-kw">const</span> fs_io: shadow.depth_fs.Io = undefined;
+    z.raster_shader.<span class="tok-fn">rasterizeTriangles</span>(
+        shadow.depth_vs,
+        shadow.depth_fs,
+        ctx,
+        outs[<span class="tok-num">0</span>..verts.len],
+        indices,
+        fs_io,
+        connect_depth,
+        .{ .front_face = .none, .depth_test = true },
+    );
+}
+
+<span class="tok-comment">/// Draw one object into the lit pass, sampling `shadow_map` (runtime sink).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">drawLit</span>(
+    ctx: *z.raster.Context,
+    verts: []<span class="tok-kw">const</span> SceneVertex,
+    indices: []<span class="tok-kw">const</span> u32,
+    vs_io: shadow.lit_vs.Io,
+    fs_io_in: shadow.lit_fs.Io,
+    outs: []shadow.lit_vs.Out,
+) void {
+    <span class="tok-fn">runLitVs</span>(verts, vs_io, outs[<span class="tok-num">0</span>..verts.len]);
+    z.raster_shader.<span class="tok-fn">rasterizeTriangles</span>(
+        shadow.lit_vs,
+        shadow.lit_fs,
+        ctx,
+        outs[<span class="tok-num">0</span>..verts.len],
+        indices,
+        fs_io_in,
+        connect_lit,
+        .{ .front_face = .none, .depth_test = true },
+    );
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// The comptime corner - the whole two-pass shadow render as a pure function</span>
+<span class="tok-comment">// the COMPILER evaluates.  Same placements, same animation functions (frozen</span>
+<span class="tok-comment">// at `corner_time`), same Ubo builders, same engine shaders; the bunny is the</span>
+<span class="tok-comment">// build-baked decimated proxy (`mesh_bake` OBJ path) because 69k triangles</span>
+<span class="tok-comment">// is past any sane comptime budget while ~700 reads as THE bunny at inset</span>
+<span class="tok-comment">// size.  Runtime-callable too - `native_verify.zig` uses that to pin the</span>
+<span class="tok-comment">// comptime bake byte-for-byte against a runtime evaluation of this very</span>
+<span class="tok-comment">// function.</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> corner_time: f32 = <span class="tok-num">3.6</span>;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">CornerBake</span>(<span class="tok-kw">comptime</span> sm_res: usize, <span class="tok-kw">comptime</span> w: usize, <span class="tok-kw">comptime</span> h: usize) type {
+    <span class="tok-kw">return</span> <span class="tok-kw">struct</span> {
+        shadow_map: [sm_res * sm_res * <span class="tok-num">4</span>]u8,
+        image: [w * h * <span class="tok-num">4</span>]u8,
+    };
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">bakeCorner</span>(
+    <span class="tok-kw">comptime</span> sm_res: usize,
+    <span class="tok-kw">comptime</span> w: usize,
+    <span class="tok-kw">comptime</span> h: usize,
+) <span class="tok-fn">CornerBake</span>(sm_res, w, h) {
+    <span class="tok-comment">// ---- the proxy bunny, flattened + measured (u16 -&gt; u32, [N][3] -&gt; flat) --</span>
+    <span class="tok-kw">var</span> bunny_verts: [proxy.vertex_count]SceneVertex = undefined;
+    <span class="tok-kw">var</span> mn: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">var</span> mx: [<span class="tok-num">3</span>]f32 = .{ -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">for</span> (proxy.positions, proxy.normals, &amp;bunny_verts) |p, n, *sv| {
+        sv.* = .{ .position = p, .normal = n };
+        <span class="tok-kw">var</span> a: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (a &lt; <span class="tok-num">3</span>) : (a += <span class="tok-num">1</span>) {
+            mn[a] = <span class="tok-builtin">@min</span>(mn[a], p[a]);
+            mx[a] = <span class="tok-builtin">@max</span>(mx[a], p[a]);
+        }
+    }
+    <span class="tok-kw">var</span> bunny_idx: [proxy.indices.len]u32 = undefined;
+    <span class="tok-kw">for</span> (proxy.indices, &amp;bunny_idx) |i16v, *i32v| {
+        i32v.* = i16v;
+    }
+    <span class="tok-kw">const</span> bunny: BunnyFrame = <span class="tok-fn">bunnyFrame</span>(mn, mx);
+
+    <span class="tok-kw">const</span> t: f32 = corner_time;
+    <span class="tok-kw">const</span> rig: LightRig = <span class="tok-fn">lightRig</span>(t);
+
+    <span class="tok-comment">// Frozen corner camera (the live halves orbit; the corner is a still).</span>
+    <span class="tok-kw">const</span> cam_eye: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">6.4</span>, <span class="tok-num">4.6</span>, <span class="tok-num">8.0</span>);
+    <span class="tok-kw">const</span> cam_view: Mat = <span class="tok-fn">lookAtRh</span>(cam_eye, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0</span>), <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> cam_proj: Mat = zm.<span class="tok-fn">perspectiveFovRh</span>(<span class="tok-num">0.8</span>, <span class="tok-fn">float</span>(w) / <span class="tok-fn">float</span>(h), <span class="tok-num">0.1</span>, <span class="tok-num">100.0</span>);
+    <span class="tok-kw">const</span> cam_vp: Mat = <span class="tok-fn">mulMat</span>(cam_proj, cam_view);
+
+    <span class="tok-kw">var</span> outs: [proxy.vertex_count]shadow.depth_vs.Out = undefined;
+    <span class="tok-kw">var</span> lit_outs: [proxy.vertex_count]shadow.lit_vs.Out = undefined;
+
+    <span class="tok-kw">var</span> bake: <span class="tok-fn">CornerBake</span>(sm_res, w, h) = undefined;
+
+    <span class="tok-comment">// ---- PASS 1: light-view depth, one draw per object into one target ----</span>
+    {
+        <span class="tok-kw">var</span> img: [sm_res * sm_res][<span class="tok-num">4</span>]u8 = <span class="tok-builtin">@splat</span>(.{ <span class="tok-num">255</span>, <span class="tok-num">255</span>, <span class="tok-num">255</span>, <span class="tok-num">255</span> }); <span class="tok-comment">// clear = far</span>
+        <span class="tok-kw">var</span> depth: [sm_res * sm_res]f32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">1.0</span>);
+        <span class="tok-kw">for</span> (objects) |o| {
+            <span class="tok-kw">const</span> g: Geometry = <span class="tok-fn">geometryOf</span>(o, &amp;bunny_verts, &amp;bunny_idx);
+            <span class="tok-kw">const</span> io: shadow.depth_vs.Io = <span class="tok-fn">depthUbo</span>(<span class="tok-fn">modelMatrix</span>(o, t, bunny), rig.vp);
+            <span class="tok-fn">runDepthVs</span>(g.verts, io, outs[<span class="tok-num">0</span>..g.verts.len]);
+            <span class="tok-kw">const</span> fs_io: shadow.depth_fs.Io = undefined;
+            z.raster_shader.<span class="tok-fn">rasterizeToTarget</span>(
+                shadow.depth_vs,
+                shadow.depth_fs,
+                sm_res,
+                sm_res,
+                outs[<span class="tok-num">0</span>..g.verts.len],
+                g.indices,
+                fs_io,
+                connect_depth,
+                .{ .front_face = .none, .depth_test = true },
+                &amp;img,
+                &amp;depth,
+            );
+        }
+        bake.shadow_map = <span class="tok-builtin">@bitCast</span>(img);
+    }
+
+    <span class="tok-comment">// ---- PASS 2: lit + shadow-tested, sampling pass 1 through the same</span>
+    <span class="tok-comment">//      nearest-filtered `TextureRef` the live CPU half binds ----</span>
+    {
+        <span class="tok-kw">var</span> img: [w * h][<span class="tok-num">4</span>]u8 = <span class="tok-builtin">@splat</span>(.{ <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">28</span>, <span class="tok-num">255</span> }); <span class="tok-comment">// clear = dark sky</span>
+        <span class="tok-kw">var</span> depth: [w * h]f32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">1.0</span>);
+        <span class="tok-kw">for</span> (objects) |o| {
+            <span class="tok-kw">const</span> g: Geometry = <span class="tok-fn">geometryOf</span>(o, &amp;bunny_verts, &amp;bunny_idx);
+            <span class="tok-kw">const</span> vs_io: shadow.lit_vs.Io = <span class="tok-fn">litVsUbo</span>(
+                <span class="tok-fn">modelMatrix</span>(o, t, bunny),
+                cam_vp,
+                rig.vp,
+                <span class="tok-fn">normalMatrix</span>(o, t),
+            );
+            <span class="tok-kw">var</span> fs_io: shadow.lit_fs.Io = <span class="tok-fn">litFsUbo</span>(o, rig.to_light, soft_bias);
+            fs_io._shadow_map = .{
+                .pixels = &amp;bake.shadow_map,
+                .width = sm_res,
+                .height = sm_res,
+                .linear = false, <span class="tok-comment">// nearest - depth comparisons must not blend texels</span>
+            };
+            <span class="tok-fn">runLitVs</span>(g.verts, vs_io, lit_outs[<span class="tok-num">0</span>..g.verts.len]);
+            z.raster_shader.<span class="tok-fn">rasterizeToTarget</span>(
+                shadow.lit_vs,
+                shadow.lit_fs,
+                w,
+                h,
+                lit_outs[<span class="tok-num">0</span>..g.verts.len],
+                g.indices,
+                fs_io,
+                connect_lit,
+                .{ .front_face = .none, .depth_test = true },
+                &amp;img,
+                &amp;depth,
+            );
+        }
+        bake.image = <span class="tok-builtin">@bitCast</span>(img);
+    }
+    <span class="tok-kw">return</span> bake;
+}
+
+<span class="tok-comment">/// One object's geometry - a named pair so every renderer's object loop</span>
+<span class="tok-comment">/// reads the same way.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Geometry = <span class="tok-kw">struct</span> {
+    verts: []<span class="tok-kw">const</span> SceneVertex,
+    indices: []<span class="tok-kw">const</span> u32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">geometryOf</span>(
+    o: Object,
+    bunny_verts: []<span class="tok-kw">const</span> SceneVertex,
+    bunny_idx: []<span class="tok-kw">const</span> u32,
+) Geometry {
+    <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (o) {
+        .floor =&gt; .{ .verts = &amp;floor_verts, .indices = &amp;floor_indices },
+        .pillar, .receiver =&gt; .{ .verts = &amp;cube_verts, .indices = &amp;cube_indices },
+        .bunny =&gt; .{ .verts = bunny_verts, .indices = bunny_idx },
+    };
+}
+</code></pre></figure>
+</body>
+</html>

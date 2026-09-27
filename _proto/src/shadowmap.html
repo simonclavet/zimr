@@ -1,0 +1,1058 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>shadowmap — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>shadowmap</h1>
+<figure class="code src-file" data-path="examples/shadowmap/shadowmap.zig" data-lines="778"><figcaption><span>examples/shadowmap/shadowmap.zig</span><span>778 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/shadowmap/shadowmap.zig</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// shaders_shadowmap_rendering - the full two-pass shadow map. A floor, a</span>
+<span class="tok-comment">// handful of boxes and a slowly rotating Stanford bunny are lit by one</span>
+<span class="tok-comment">// directional light that casts real shadows, computed with classic shadow</span>
+<span class="tok-comment">// mapping:</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">//   PASS 1 (light's eye)  : render every caster from the light's ORTHOGRAPHIC</span>
+<span class="tok-comment">//                           point of view with the depth shader (mode 0, raw</span>
+<span class="tok-comment">//                           ndc*0.5+0.5) into a sampleable render texture -</span>
+<span class="tok-comment">//                           the "shadow map" (closest depth to the light).</span>
+<span class="tok-comment">//   PASS 2 (camera)       : render the scene from an orbiting perspective</span>
+<span class="tok-comment">//                           camera with `lit_shadow`, which projects each</span>
+<span class="tok-comment">//                           fragment into light space, samples the shadow</span>
+<span class="tok-comment">//                           map, and darkens fragments the light can't see.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// The static geometry (floor + boxes) is baked into one buffer drawn with an</span>
+<span class="tok-comment">// identity model. The bunny is a second object with its own buffers and a</span>
+<span class="tok-comment">// per-frame model matrix (spin about Y); `lit_shadow_vs` now carries a</span>
+<span class="tok-comment">// normal matrix so the bunny shades correctly as it turns. Two manual</span>
+<span class="tok-comment">// pipelines (depth + lit_shadow); the RTT round-trip uses the engine's</span>
+<span class="tok-comment">// `beginTextureMode`/`endTextureMode`. No inline WGSL - both shader pairs are</span>
+<span class="tok-comment">// authored in Zig (shadermath) and embedded as build artifacts.</span>
+<span class="tok-comment">//</span>
+<span class="tok-comment">// CANNOT be verified in the sandbox (no GPU); Simon verifies in the browser.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> Mat = zm.Mat;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> identity = zm.identity;
+<span class="tok-kw">const</span> lookAtRh = zm.lookAtRh;
+<span class="tok-kw">const</span> mulMat = zm.mulMat;
+<span class="tok-kw">const</span> normalize3 = zm.normalize3;
+<span class="tok-kw">const</span> orthographicRh = zm.orthographicRh;
+<span class="tok-kw">const</span> perspectiveFovRh = zm.perspectiveFovRh;
+<span class="tok-kw">const</span> rotationY = zm.rotationY;
+<span class="tok-kw">const</span> scaling = zm.scaling;
+<span class="tok-kw">const</span> translation = zm.translation;
+<span class="tok-kw">const</span> vec = zm.vec;
+
+<span class="tok-comment">// The app-bridge instance: the one sanctioned wasm entry-point handle.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Scene geometry. `SceneVertex` (position + normal, stride 24) is shared by</span>
+<span class="tok-comment">// every object and by both pipelines.</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> SceneVertex = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    position: [<span class="tok-num">3</span>]f32,
+    normal: [<span class="tok-num">3</span>]f32,
+};
+
+<span class="tok-kw">const</span> up_n: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span> };
+<span class="tok-kw">const</span> floor_half: f32 = <span class="tok-num">4.0</span>;
+
+<span class="tok-kw">const</span> floor_verts = [_]SceneVertex{
+    .{ .position = .{ -floor_half, <span class="tok-num">0</span>, -floor_half }, .normal = up_n },
+    .{ .position = .{ floor_half, <span class="tok-num">0</span>, -floor_half }, .normal = up_n },
+    .{ .position = .{ floor_half, <span class="tok-num">0</span>, floor_half }, .normal = up_n },
+    .{ .position = .{ -floor_half, <span class="tok-num">0</span>, floor_half }, .normal = up_n },
+};
+<span class="tok-kw">const</span> floor_indices = [_]u16{ <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">0</span>, <span class="tok-num">2</span>, <span class="tok-num">3</span> };
+
+<span class="tok-comment">// Unit-ish cube (half-extent `cs`); box placements scale it by `half / cs`.</span>
+<span class="tok-kw">const</span> cs: f32 = <span class="tok-num">0.7</span>;
+<span class="tok-kw">const</span> cube_verts = [_]SceneVertex{
+    .{ .position = .{ -cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ cs, cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ -cs, cs, cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span> } },
+    .{ .position = .{ cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ -cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ -cs, cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ cs, cs, -cs }, .normal = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span> } },
+    .{ .position = .{ cs, -cs, cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, -cs, -cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, cs, -cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, cs, cs }, .normal = .{ <span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, -cs, -cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, -cs, cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, cs, cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, cs, -cs }, .normal = .{ -<span class="tok-num">1</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, cs, cs }, .normal = up_n },
+    .{ .position = .{ cs, cs, cs }, .normal = up_n },
+    .{ .position = .{ cs, cs, -cs }, .normal = up_n },
+    .{ .position = .{ -cs, cs, -cs }, .normal = up_n },
+    .{ .position = .{ -cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, -cs, -cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+    .{ .position = .{ -cs, -cs, cs }, .normal = .{ <span class="tok-num">0</span>, -<span class="tok-num">1</span>, <span class="tok-num">0</span> } },
+};
+<span class="tok-kw">const</span> cube_face_indices = [_]u16{
+    <span class="tok-num">0</span>,  <span class="tok-num">1</span>,  <span class="tok-num">2</span>,  <span class="tok-num">0</span>,  <span class="tok-num">2</span>,  <span class="tok-num">3</span>,
+    <span class="tok-num">4</span>,  <span class="tok-num">5</span>,  <span class="tok-num">6</span>,  <span class="tok-num">4</span>,  <span class="tok-num">6</span>,  <span class="tok-num">7</span>,
+    <span class="tok-num">8</span>,  <span class="tok-num">9</span>,  <span class="tok-num">10</span>, <span class="tok-num">8</span>,  <span class="tok-num">10</span>, <span class="tok-num">11</span>,
+    <span class="tok-num">12</span>, <span class="tok-num">13</span>, <span class="tok-num">14</span>, <span class="tok-num">12</span>, <span class="tok-num">14</span>, <span class="tok-num">15</span>,
+    <span class="tok-num">16</span>, <span class="tok-num">17</span>, <span class="tok-num">18</span>, <span class="tok-num">16</span>, <span class="tok-num">18</span>, <span class="tok-num">19</span>,
+    <span class="tok-num">20</span>, <span class="tok-num">21</span>, <span class="tok-num">22</span>, <span class="tok-num">20</span>, <span class="tok-num">22</span>, <span class="tok-num">23</span>,
+};
+
+<span class="tok-kw">const</span> CubePlace = <span class="tok-kw">struct</span> { center: [<span class="tok-num">3</span>]f32, half: f32 };
+<span class="tok-kw">const</span> cubes = [_]CubePlace{
+    .{ .center = .{ <span class="tok-num">2.3</span>, <span class="tok-num">0.9</span>, <span class="tok-num">1.4</span> }, .half = <span class="tok-num">0.9</span> },
+    .{ .center = .{ <span class="tok-num">0.7</span>, <span class="tok-num">1.7</span>, -<span class="tok-num">2.3</span> }, .half = <span class="tok-num">0.6</span> },
+    .{ .center = .{ <span class="tok-num">2.7</span>, <span class="tok-num">0.55</span>, -<span class="tok-num">2.5</span> }, .half = <span class="tok-num">0.55</span> },
+    .{ .center = .{ -<span class="tok-num">2.7</span>, <span class="tok-num">1.15</span>, -<span class="tok-num">0.8</span> }, .half = <span class="tok-num">0.7</span> },
+};
+
+<span class="tok-kw">const</span> static_vcount: usize = floor_verts.len + cubes.len * cube_verts.len;
+<span class="tok-kw">const</span> static_icount: usize = floor_indices.len + cubes.len * cube_face_indices.len;
+
+<span class="tok-comment">// ---- Host mirrors of the shader uniform blocks -----------------------------</span>
+
+<span class="tok-comment">// depth_vs_io.Ubo (96 bytes) - light/depth pass.</span>
+<span class="tok-kw">const</span> DepthUbo = <span class="tok-kw">struct</span> {
+    mvp: [<span class="tok-num">4</span>]Vec,
+    params: Vec,
+    mode: i32,
+    pad0: i32 = <span class="tok-num">0</span>,
+    pad1: i32 = <span class="tok-num">0</span>,
+    pad2: i32 = <span class="tok-num">0</span>,
+};
+<span class="tok-comment">// lit_shadow_vs_io.Ubo (192 bytes) - group 0.</span>
+<span class="tok-kw">const</span> LitVsUbo = <span class="tok-kw">struct</span> {
+    mvp: [<span class="tok-num">4</span>]Vec,
+    light_vp: [<span class="tok-num">4</span>]Vec,
+    normal_matrix: [<span class="tok-num">4</span>]Vec,
+};
+<span class="tok-comment">// lit_shadow_fs_io.Ubo (32 bytes) - group 2.</span>
+<span class="tok-kw">const</span> LitFsUbo = <span class="tok-kw">struct</span> {
+    light_dir: Vec,
+    base_color: Vec,
+    <span class="tok-comment">/// {bias_slope, bias_min, 0, 0} - f16-map bias (see lit_shadow_fs_io).</span>
+    params: Vec,
+};
+
+<span class="tok-kw">const</span> depth_ubo_bytes: u64 = z.shader.<span class="tok-fn">wireSizeOf</span>(DepthUbo);
+<span class="tok-kw">const</span> lit_vs_bytes: u64 = z.shader.<span class="tok-fn">wireSizeOf</span>(LitVsUbo);
+<span class="tok-kw">const</span> lit_fs_bytes: u64 = z.shader.<span class="tok-fn">wireSizeOf</span>(LitFsUbo);
+
+<span class="tok-kw">const</span> depth_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"depth_vs.wgsl"</span>);
+<span class="tok-kw">const</span> depth_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"depth_fs.wgsl"</span>);
+<span class="tok-kw">const</span> lit_vs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"lit_shadow_vs.wgsl"</span>);
+<span class="tok-kw">const</span> lit_fs_wgsl = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"lit_shadow_fs.wgsl"</span>);
+<span class="tok-kw">const</span> bunny_obj = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"bunny.obj"</span>);
+
+<span class="tok-kw">const</span> rt_size: i32 = <span class="tok-num">1024</span>;
+
+<span class="tok-comment">// One drawable object: its geometry buffers plus a private set of the three</span>
+<span class="tok-comment">// uniform blocks (depth / lit-VS / lit-FS) and their bind groups. The shadow</span>
+<span class="tok-comment">// sampler bind group (group 1 of the lit pass) is shared, not per-object.</span>
+<span class="tok-kw">const</span> Obj = <span class="tok-kw">struct</span> {
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    vbo_bytes: u64,
+    ibo_bytes: u64,
+    icount: u32,
+
+    depth_ubo: z.wgpu.BufferHandle,
+    depth_bg: z.wgpu.BindGroupHandle,
+    lit_vs_ubo: z.wgpu.BufferHandle,
+    lit_g0_bg: z.wgpu.BindGroupHandle,
+    lit_fs_ubo: z.wgpu.BufferHandle,
+    lit_g2_bg: z.wgpu.BindGroupHandle,
+
+    base_color: [<span class="tok-num">4</span>]f32,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    rt: z.RenderTexture,
+
+    <span class="tok-comment">// Interactive orbit camera (same behavior as damaged_helmet): drag to</span>
+    <span class="tok-comment">// orbit, wheel / pinch to zoom. The light stays fixed so the shadows are</span>
+    <span class="tok-comment">// stable while the camera moves around them.</span>
+    yaw: f32 = <span class="tok-num">0.7</span>,
+    pitch: f32 = <span class="tok-num">0.45</span>,
+    distance: f32 = <span class="tok-num">13.0</span>,
+    dragging: bool = false,
+    prev_pinch: f32 = <span class="tok-num">0.0</span>,
+
+    depth_pipeline: z.wgpu.RenderPipelineHandle,
+    lit_pipeline: z.wgpu.RenderPipelineHandle,
+    lit_g1_bg: z.wgpu.BindGroupHandle, <span class="tok-comment">// shared shadow-map sampler (group 1)</span>
+    shadow_sampler: z.wgpu.SamplerHandle, <span class="tok-comment">// comparison sampler bound in lit_g1_bg</span>
+
+    static_obj: Obj, <span class="tok-comment">// floor + boxes, identity model</span>
+    bunny: Obj, <span class="tok-comment">// spinning caster, per-frame model matrix</span>
+
+    <span class="tok-comment">// Bunny placement: base-centered at load, spun about Y, scaled, seated.</span>
+    bunny_cx: f32,
+    bunny_cz: f32,
+    bunny_min_y: f32,
+    bunny_scale: f32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    _ = gpa;
+    <span class="tok-comment">// Two objects, each: vbo + ibo + three UBOs + three bind groups. Distinct</span>
+    <span class="tok-comment">// meshes, so no shared-handle double-free.</span>
+    <span class="tok-kw">for</span> ([_]*<span class="tok-kw">const</span> Obj{ &amp;s.static_obj, &amp;s.bunny }) |obj| {
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(obj.vbo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(obj.ibo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(obj.depth_ubo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(obj.lit_vs_ubo);
+        z.wgpu.<span class="tok-fn">destroyBuffer</span>(obj.lit_fs_ubo);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(obj.depth_bg);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(obj.lit_g0_bg);
+        z.wgpu.<span class="tok-fn">destroyBindGroup</span>(obj.lit_g2_bg);
+    }
+    z.wgpu.<span class="tok-fn">destroyBindGroup</span>(s.lit_g1_bg);
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.depth_pipeline);
+    z.wgpu.<span class="tok-fn">destroyRenderPipeline</span>(s.lit_pipeline);
+    z.wgpu.<span class="tok-fn">destroySampler</span>(s.shadow_sampler);
+    s.rt.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformLayout</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    min_size: u64,
+    vis: z.wgpu.ShaderStage,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupLayoutHandle {
+    <span class="tok-kw">const</span> entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+        .{ .binding = <span class="tok-num">0</span>, .visibility = vis, .resource = .{ .uniform_buffer = .{ .min_size = min_size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, blob, label);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">uniformBindGroup</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    bgl: z.wgpu.BindGroupLayoutHandle,
+    buffer: z.wgpu.BufferHandle,
+    size: u64,
+    label: []<span class="tok-kw">const</span> u8,
+) !z.wgpu.BindGroupHandle {
+    <span class="tok-kw">const</span> entries = [_]z.gpu.BindGroupEntry{
+        .{ .binding = <span class="tok-num">0</span>, .resource = .{ .buffer = .{ .handle = buffer, .size = size } } },
+    };
+    <span class="tok-kw">const</span> blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(blob);
+    <span class="tok-kw">return</span> z.wgpu.<span class="tok-fn">createBindGroup</span>(device, bgl, blob, label);
+}
+
+<span class="tok-comment">// Create the three per-object uniform buffers + bind groups. Geometry buffers</span>
+<span class="tok-comment">// and base color are supplied by the caller.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">makeObj</span>(
+    gpa: Allocator,
+    device: z.wgpu.DeviceHandle,
+    depth_bgl: z.wgpu.BindGroupLayoutHandle,
+    lit_g0_bgl: z.wgpu.BindGroupLayoutHandle,
+    lit_g2_bgl: z.wgpu.BindGroupLayoutHandle,
+    vbo: z.wgpu.BufferHandle,
+    ibo: z.wgpu.BufferHandle,
+    vbo_bytes: u64,
+    ibo_bytes: u64,
+    icount: u32,
+    base_color: [<span class="tok-num">4</span>]f32,
+) !Obj {
+    <span class="tok-kw">const</span> depth_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = depth_ubo_bytes,
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> depth_bg: z.wgpu.BindGroupHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, depth_bgl, depth_ubo, depth_ubo_bytes, <span class="tok-str">"sm_obj_depth_bg"</span>);
+
+    <span class="tok-kw">const</span> lit_vs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = lit_vs_bytes,
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> lit_g0_bg: z.wgpu.BindGroupHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, lit_g0_bgl, lit_vs_ubo, lit_vs_bytes, <span class="tok-str">"sm_obj_g0_bg"</span>);
+
+    <span class="tok-kw">const</span> lit_fs_ubo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBuffer</span>(device, .{
+        .size = lit_fs_bytes,
+        .usage = .{ .uniform = true, .copy_dst = true },
+    });
+    <span class="tok-kw">const</span> lit_g2_bg: z.wgpu.BindGroupHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformBindGroup</span>(gpa, device, lit_g2_bgl, lit_fs_ubo, lit_fs_bytes, <span class="tok-str">"sm_obj_g2_bg"</span>);
+
+    <span class="tok-kw">return</span> .{
+        .vbo = vbo,
+        .ibo = ibo,
+        .vbo_bytes = vbo_bytes,
+        .ibo_bytes = ibo_bytes,
+        .icount = icount,
+        .depth_ubo = depth_ubo,
+        .depth_bg = depth_bg,
+        .lit_vs_ubo = lit_vs_ubo,
+        .lit_g0_bg = lit_g0_bg,
+        .lit_fs_ubo = lit_fs_ubo,
+        .lit_g2_bg = lit_g2_bg,
+        .base_color = base_color,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> device: z.wgpu.DeviceHandle = f.gpu.device;
+    <span class="tok-kw">const</span> queue: z.wgpu.QueueHandle = f.gpu.queue;
+    <span class="tok-kw">const</span> back_fmt: z.wgpu.TextureFormat = f.gpu.backbuffer_format;
+    f.gpu.depth_format = .depth24_plus;
+
+    <span class="tok-comment">// ---- Static geometry: floor + boxes into one world-space buffer ----</span>
+    <span class="tok-kw">var</span> sverts: [static_vcount]SceneVertex = undefined;
+    <span class="tok-kw">var</span> sidxs: [static_icount]u16 = undefined;
+    <span class="tok-kw">var</span> vw: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> iw: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (floor_verts) |v| {
+        sverts[vw] = v;
+        vw += <span class="tok-num">1</span>;
+    }
+    <span class="tok-kw">for</span> (floor_indices) |fi| {
+        sidxs[iw] = fi;
+        iw += <span class="tok-num">1</span>;
+    }
+    <span class="tok-kw">for</span> (cubes) |c| {
+        <span class="tok-kw">const</span> base: u16 = <span class="tok-builtin">@intCast</span>(vw);
+        <span class="tok-kw">const</span> sfac: f32 = c.half / cs;
+        <span class="tok-kw">for</span> (cube_verts) |v| {
+            sverts[vw] = .{
+                .position = .{
+                    v.position[<span class="tok-num">0</span>] * sfac + c.center[<span class="tok-num">0</span>],
+                    v.position[<span class="tok-num">1</span>] * sfac + c.center[<span class="tok-num">1</span>],
+                    v.position[<span class="tok-num">2</span>] * sfac + c.center[<span class="tok-num">2</span>],
+                },
+                .normal = v.normal,
+            };
+            vw += <span class="tok-num">1</span>;
+        }
+        <span class="tok-kw">for</span> (cube_face_indices) |fi| {
+            sidxs[iw] = base + fi;
+            iw += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">const</span> static_vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(sverts[<span class="tok-num">0</span>..]),
+        .{ .vertex = true, .copy_dst = true },
+        <span class="tok-str">"sm_static_vbo"</span>,
+    );
+    <span class="tok-kw">const</span> static_ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(sidxs[<span class="tok-num">0</span>..]),
+        .{ .index = true, .copy_dst = true },
+        <span class="tok-str">"sm_static_ibo"</span>,
+    );
+
+    <span class="tok-comment">// ---- Bunny: parse OBJ, de-index + synthesize smooth normals, upload ----</span>
+    <span class="tok-kw">var</span> bunny_data: z.codecs.obj.Data = <span class="tok-kw">try</span> z.codecs.obj.<span class="tok-fn">parse</span>(gpa, bunny_obj);
+    <span class="tok-kw">defer</span> bunny_data.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">const</span> bunny_mesh: z.codecs.obj.Mesh = <span class="tok-kw">try</span> bunny_data.<span class="tok-fn">toMesh</span>(gpa);
+    <span class="tok-kw">defer</span> bunny_mesh.<span class="tok-fn">deinit</span>(gpa);
+
+    <span class="tok-kw">const</span> bvc: usize = bunny_mesh.<span class="tok-fn">vertexCount</span>();
+    <span class="tok-kw">const</span> bic: usize = bunny_mesh.indices.len;
+    <span class="tok-kw">const</span> bverts: []SceneVertex = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(SceneVertex, bvc);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(bverts);
+
+    <span class="tok-kw">var</span> mn: [<span class="tok-num">3</span>]f32 = .{ <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span>, <span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">var</span> mx: [<span class="tok-num">3</span>]f32 = .{ -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span>, -<span class="tok-num">1.0e30</span> };
+    <span class="tok-kw">var</span> vi: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (vi &lt; bvc) : (vi += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> p: [<span class="tok-num">3</span>]f32 = .{
+            bunny_mesh.positions[vi * <span class="tok-num">3</span> + <span class="tok-num">0</span>],
+            bunny_mesh.positions[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+            bunny_mesh.positions[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+        };
+        bverts[vi] = .{
+            .position = p,
+            .normal = .{
+                bunny_mesh.normals[vi * <span class="tok-num">3</span> + <span class="tok-num">0</span>],
+                bunny_mesh.normals[vi * <span class="tok-num">3</span> + <span class="tok-num">1</span>],
+                bunny_mesh.normals[vi * <span class="tok-num">3</span> + <span class="tok-num">2</span>],
+            },
+        };
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k &lt; <span class="tok-num">3</span>) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">if</span> (p[k] &lt; mn[k]) {
+                mn[k] = p[k];
+            }
+            <span class="tok-kw">if</span> (p[k] &gt; mx[k]) {
+                mx[k] = p[k];
+            }
+        }
+    }
+    <span class="tok-kw">const</span> bidx: []u16 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(u16, bic);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(bidx);
+    <span class="tok-kw">var</span> ii: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (ii &lt; bic) : (ii += <span class="tok-num">1</span>) {
+        bidx[ii] = <span class="tok-builtin">@intCast</span>(bunny_mesh.indices[ii]);
+    }
+    <span class="tok-kw">const</span> bunny_vbo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(bverts),
+        .{ .vertex = true, .copy_dst = true },
+        <span class="tok-str">"sm_bunny_vbo"</span>,
+    );
+    <span class="tok-comment">// 208,353 indices * 2 bytes == 2 mod 4 -&gt; createBufferInit pads the write.</span>
+    <span class="tok-kw">const</span> bunny_ibo: z.wgpu.BufferHandle = z.wgpu.<span class="tok-fn">createBufferInit</span>(
+        device,
+        queue,
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(bidx),
+        .{ .index = true, .copy_dst = true },
+        <span class="tok-str">"sm_bunny_ibo"</span>,
+    );
+
+    <span class="tok-kw">const</span> bunny_height: f32 = <span class="tok-builtin">@max</span>(mx[<span class="tok-num">1</span>] - mn[<span class="tok-num">1</span>], <span class="tok-num">1.0e-4</span>);
+
+    <span class="tok-comment">// ---- Render texture (shadow map): rgba16-FLOAT color + depth24plus.</span>
+    <span class="tok-comment">// A float color target stores the light-view depth at ~16-bit precision</span>
+    <span class="tok-comment">// (vs 256 levels for rgba8), which is what lets the shadow bias drop low</span>
+    <span class="tok-comment">// enough to avoid both acne and peter-panning. Sampled with a NEAREST</span>
+    <span class="tok-comment">// sampler below - linear filtering would blend depths across silhouette</span>
+    <span class="tok-comment">// edges and corrupt the comparison.</span>
+    <span class="tok-kw">const</span> rt: z.RenderTexture = z.RenderTexture.<span class="tok-fn">create</span>(device, .{
+        .width = <span class="tok-builtin">@intCast</span>(rt_size),
+        .height = <span class="tok-builtin">@intCast</span>(rt_size),
+        .format = .rgba16_float,
+        .with_depth = true,
+        .depth_format = .depth24_plus,
+        .label = <span class="tok-str">"sm_shadow_rt"</span>,
+    });
+    <span class="tok-kw">const</span> shadow_sampler: z.wgpu.SamplerHandle = z.wgpu.<span class="tok-fn">createSampler</span>(device, .{
+        .mag_filter_linear = false,
+        .min_filter_linear = false,
+        .address_mode = .clamp_to_edge,
+    });
+
+    <span class="tok-comment">// ---- Vertex layouts (shared stride; depth reads position only) ----</span>
+    <span class="tok-kw">const</span> pos_only_layout = z.gpu.VertexBufferLayout{
+        .array_stride = <span class="tok-builtin">@sizeOf</span>(SceneVertex),
+        .step_mode = .vertex,
+        .attributes = &amp;.{
+            .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+        },
+    };
+    <span class="tok-kw">const</span> pos_normal_layout = z.gpu.VertexBufferLayout{
+        .array_stride = <span class="tok-builtin">@sizeOf</span>(SceneVertex),
+        .step_mode = .vertex,
+        .attributes = &amp;.{
+            .{ .format = .float32x3, .offset = <span class="tok-num">0</span>, .shader_location = <span class="tok-num">0</span> },
+            .{ .format = .float32x3, .offset = <span class="tok-num">12</span>, .shader_location = <span class="tok-num">1</span> },
+        },
+    };
+
+    <span class="tok-comment">// ---- Shared bind-group layouts ----</span>
+    <span class="tok-kw">const</span> depth_g0_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, depth_ubo_bytes, .{ .vertex = true }, <span class="tok-str">"sm_depth_g0"</span>);
+    <span class="tok-kw">const</span> lit_g0_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, lit_vs_bytes, .{ .vertex = true }, <span class="tok-str">"sm_lit_g0"</span>);
+    <span class="tok-kw">const</span> lit_g2_bgl: z.wgpu.BindGroupLayoutHandle =
+        <span class="tok-kw">try</span> <span class="tok-fn">uniformLayout</span>(gpa, device, lit_fs_bytes, .{ .fragment = true }, <span class="tok-str">"sm_lit_g2"</span>);
+
+    <span class="tok-kw">const</span> shadow_tex: z.WgpuTexture = rt.<span class="tok-fn">asTexture</span>();
+    <span class="tok-kw">const</span> g1_layout_entries = [_]z.shader_introspect.BindGroupLayoutEntry{
+        .{ .binding = <span class="tok-num">0</span>, .visibility = .{ .fragment = true }, .resource = .{ .texture = .{} } },
+        .{ .binding = <span class="tok-num">1</span>, .visibility = .{ .fragment = true }, .resource = .{ .sampler = .{} } },
+    };
+    <span class="tok-kw">const</span> g1_layout_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupLayoutEntries</span>(gpa, &amp;g1_layout_entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(g1_layout_blob);
+    <span class="tok-kw">const</span> lit_g1_bgl: z.wgpu.BindGroupLayoutHandle = z.wgpu.<span class="tok-fn">createBindGroupLayout</span>(device, g1_layout_blob, <span class="tok-str">"sm_lit_g1"</span>);
+    <span class="tok-kw">const</span> g1_entries = [_]z.gpu.BindGroupEntry{
+        .{ .binding = <span class="tok-num">0</span>, .resource = .{ .texture_view = shadow_tex.view } },
+        .{ .binding = <span class="tok-num">1</span>, .resource = .{ .sampler = shadow_sampler } },
+    };
+    <span class="tok-kw">const</span> g1_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeBindGroupEntries</span>(gpa, &amp;g1_entries);
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(g1_blob);
+    <span class="tok-kw">const</span> lit_g1_bg: z.wgpu.BindGroupHandle = z.wgpu.<span class="tok-fn">createBindGroup</span>(device, lit_g1_bgl, g1_blob, <span class="tok-str">"sm_lit_g1_bg"</span>);
+
+    <span class="tok-comment">// ---- Depth / light pass pipeline ----</span>
+    <span class="tok-kw">const</span> depth_bgls: [<span class="tok-num">1</span>]z.wgpu.BindGroupLayoutHandle = .{depth_g0_bgl};
+    <span class="tok-kw">const</span> depth_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(device, depth_bgls[<span class="tok-num">0</span>..], <span class="tok-str">"sm_depth_pl"</span>);
+    <span class="tok-kw">const</span> depth_vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, depth_vs_wgsl, <span class="tok-str">"depth_vs"</span>);
+    <span class="tok-kw">const</span> depth_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, depth_fs_wgsl, <span class="tok-str">"depth_fs"</span>);
+    <span class="tok-kw">const</span> depth_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .none,
+        .less,
+        .none,
+        .rgba16_float,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> depth_pipe_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{pos_only_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = depth_combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(depth_pipe_blob);
+    <span class="tok-kw">const</span> depth_pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        depth_pl,
+        depth_vs_mod,
+        depth_fs_mod,
+        depth_pipe_blob,
+        <span class="tok-str">"sm_depth_pipe"</span>,
+    );
+
+    <span class="tok-comment">// ---- Main lit_shadow pass pipeline ----</span>
+    <span class="tok-kw">const</span> lit_bgls: [<span class="tok-num">3</span>]z.wgpu.BindGroupLayoutHandle = .{ lit_g0_bgl, lit_g1_bgl, lit_g2_bgl };
+    <span class="tok-kw">const</span> lit_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.<span class="tok-fn">createPipelineLayout</span>(device, lit_bgls[<span class="tok-num">0</span>..], <span class="tok-str">"sm_lit_pl"</span>);
+    <span class="tok-kw">const</span> lit_vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, lit_vs_wgsl, <span class="tok-str">"lit_shadow_vs"</span>);
+    <span class="tok-kw">const</span> lit_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.<span class="tok-fn">createShaderModuleWgsl</span>(device, lit_fs_wgsl, <span class="tok-str">"lit_shadow_fs"</span>);
+    <span class="tok-comment">// Cull .none until the winding of every caster is device-confirmed; back</span>
+    <span class="tok-comment">// faces are depth-occluded anyway. Tighten to .back once verified clean.</span>
+    <span class="tok-kw">const</span> lit_combo: z.gpu.StateCombo = z.gpu.StateCombo.<span class="tok-fn">fromParts</span>(
+        .triangle_list,
+        .alpha,
+        .less,
+        .none,
+        back_fmt,
+        .depth24_plus,
+        <span class="tok-num">1</span>,
+    );
+    <span class="tok-kw">const</span> lit_pipe_blob: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">try</span> z.gpu.<span class="tok-fn">encodeRenderPipelineDescriptor</span>(gpa, .{
+        .vertex_buffer_layouts = &amp;.{pos_normal_layout},
+        .vs_entry_point = <span class="tok-str">"entry"</span>,
+        .fs_entry_point = <span class="tok-str">"entry"</span>,
+        .state = lit_combo,
+    });
+    <span class="tok-kw">defer</span> gpa.<span class="tok-fn">free</span>(lit_pipe_blob);
+    <span class="tok-kw">const</span> lit_pipeline: z.wgpu.RenderPipelineHandle = z.wgpu.<span class="tok-fn">createRenderPipeline</span>(
+        device,
+        lit_pl,
+        lit_vs_mod,
+        lit_fs_mod,
+        lit_pipe_blob,
+        <span class="tok-str">"sm_lit_pipe"</span>,
+    );
+
+    <span class="tok-kw">const</span> static_obj: Obj = <span class="tok-kw">try</span> <span class="tok-fn">makeObj</span>(
+        gpa,
+        device,
+        depth_g0_bgl,
+        lit_g0_bgl,
+        lit_g2_bgl,
+        static_vbo,
+        static_ibo,
+        <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(sverts)),
+        <span class="tok-builtin">@sizeOf</span>(<span class="tok-builtin">@TypeOf</span>(sidxs)),
+        <span class="tok-builtin">@intCast</span>(static_icount),
+        .{ <span class="tok-num">0.82</span>, <span class="tok-num">0.82</span>, <span class="tok-num">0.88</span>, <span class="tok-num">1.0</span> },
+    );
+    <span class="tok-kw">const</span> bunny: Obj = <span class="tok-kw">try</span> <span class="tok-fn">makeObj</span>(
+        gpa,
+        device,
+        depth_g0_bgl,
+        lit_g0_bgl,
+        lit_g2_bgl,
+        bunny_vbo,
+        bunny_ibo,
+        bvc * <span class="tok-builtin">@sizeOf</span>(SceneVertex),
+        bic * <span class="tok-builtin">@sizeOf</span>(u16),
+        <span class="tok-builtin">@intCast</span>(bic),
+        .{ <span class="tok-num">0.86</span>, <span class="tok-num">0.72</span>, <span class="tok-num">0.52</span>, <span class="tok-num">1.0</span> },
+    );
+
+    s.* = .{
+        .rt = rt,
+        .depth_pipeline = depth_pipeline,
+        .lit_pipeline = lit_pipeline,
+        .lit_g1_bg = lit_g1_bg,
+        .shadow_sampler = shadow_sampler,
+        .static_obj = static_obj,
+        .bunny = bunny,
+        .bunny_cx = (mn[<span class="tok-num">0</span>] + mx[<span class="tok-num">0</span>]) * <span class="tok-num">0.5</span>,
+        .bunny_cz = (mn[<span class="tok-num">2</span>] + mx[<span class="tok-num">2</span>]) * <span class="tok-num">0.5</span>,
+        .bunny_min_y = mn[<span class="tok-num">1</span>],
+        .bunny_scale = <span class="tok-num">2.8</span> / bunny_height,
+    };
+
+    <span class="tok-comment">// Build-only intermediates: the pipelines + bind groups have internalized</span>
+    <span class="tok-comment">// these layouts/modules, so they can be released now.</span>
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(depth_vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(depth_fs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(lit_vs_mod);
+    z.wgpu.<span class="tok-fn">destroyShaderModule</span>(lit_fs_mod);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(depth_pl);
+    z.wgpu.<span class="tok-fn">destroyPipelineLayout</span>(lit_pl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(depth_g0_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(lit_g0_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(lit_g2_bgl);
+    z.wgpu.<span class="tok-fn">destroyBindGroupLayout</span>(lit_g1_bgl);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawMesh</span>(rps: *z.PassState, obj: *<span class="tok-kw">const</span> Obj) void {
+    z.render_pass.<span class="tok-fn">setVertexBuffer</span>(rps.pass, .{
+        .slot = <span class="tok-num">0</span>,
+        .buffer = obj.vbo,
+        .offset = <span class="tok-num">0</span>,
+        .size = obj.vbo_bytes,
+    });
+    z.render_pass.<span class="tok-fn">setIndexBuffer</span>(rps.pass, .{
+        .buffer = obj.ibo,
+        .format = .uint16,
+        .offset = <span class="tok-num">0</span>,
+        .size = obj.ibo_bytes,
+    });
+    z.render_pass.<span class="tok-fn">drawIndexed</span>(rps.pass, .{
+        .index_count = obj.icount,
+        .instance_count = <span class="tok-num">1</span>,
+        .first_index = <span class="tok-num">0</span>,
+        .base_vertex = <span class="tok-num">0</span>,
+        .first_instance = <span class="tok-num">0</span>,
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">writeObjUniforms</span>(
+    gf: *z.GpuFrame,
+    obj: *<span class="tok-kw">const</span> Obj,
+    model: Mat,
+    normal_matrix: Mat,
+    cam_vp: Mat,
+    light_vp: Mat,
+    to_light: Vec,
+) void {
+    <span class="tok-kw">const</span> depth_ubo: DepthUbo = .{
+        .mvp = <span class="tok-fn">mulMat</span>(light_vp, model),
+        .params = .{ <span class="tok-num">1.0</span>, <span class="tok-num">20.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span> },
+        .mode = <span class="tok-num">0</span>,
+    };
+    <span class="tok-kw">const</span> depth_bytes: [z.shader.<span class="tok-fn">wireSizeOf</span>(DepthUbo)]u8 = z.shader.<span class="tok-fn">wireOf</span>(DepthUbo, &amp;depth_ubo);
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(gf.queue, obj.depth_ubo, <span class="tok-num">0</span>, &amp;depth_bytes);
+
+    <span class="tok-kw">const</span> lit_vs: LitVsUbo = .{
+        .mvp = <span class="tok-fn">mulMat</span>(cam_vp, model),
+        .light_vp = <span class="tok-fn">mulMat</span>(light_vp, model),
+        .normal_matrix = normal_matrix,
+    };
+    <span class="tok-kw">const</span> lit_vs_data: [z.shader.<span class="tok-fn">wireSizeOf</span>(LitVsUbo)]u8 = z.shader.<span class="tok-fn">wireOf</span>(LitVsUbo, &amp;lit_vs);
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(gf.queue, obj.lit_vs_ubo, <span class="tok-num">0</span>, &amp;lit_vs_data);
+
+    <span class="tok-kw">const</span> lit_fs: LitFsUbo = .{
+        .light_dir = .{ to_light[<span class="tok-num">0</span>], to_light[<span class="tok-num">1</span>], to_light[<span class="tok-num">2</span>], <span class="tok-num">0.0</span> },
+        .base_color = obj.base_color,
+        .params = .{ <span class="tok-num">0.0025</span>, <span class="tok-num">0.0008</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    };
+    <span class="tok-kw">const</span> lit_fs_data: [z.shader.<span class="tok-fn">wireSizeOf</span>(LitFsUbo)]u8 = z.shader.<span class="tok-fn">wireOf</span>(LitFsUbo, &amp;lit_fs);
+    z.wgpu.<span class="tok-fn">queueWriteBuffer</span>(gf.queue, obj.lit_fs_ubo, <span class="tok-num">0</span>, &amp;lit_fs_data);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gf: *z.GpuFrame = f.gpu;
+    <span class="tok-kw">const</span> Backend: type = z.WgpuBackend;
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+
+    <span class="tok-comment">// Light target (kept at the verified framing so the shadow map is stable).</span>
+    <span class="tok-kw">const</span> target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0</span>);
+
+    <span class="tok-comment">// Fixed directional light (stable shadow) + orthographic frustum.</span>
+    <span class="tok-kw">const</span> light_pos: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">5.0</span>, <span class="tok-num">7.0</span>, <span class="tok-num">4.0</span>);
+    <span class="tok-kw">const</span> light_view: Mat = <span class="tok-fn">lookAtRh</span>(light_pos, target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> light_proj: Mat = <span class="tok-fn">orthographicRh</span>(<span class="tok-num">13.0</span>, <span class="tok-num">13.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">20.0</span>);
+    <span class="tok-kw">const</span> light_vp: Mat = <span class="tok-fn">mulMat</span>(light_proj, light_view);
+    <span class="tok-kw">const</span> to_light: Vec = <span class="tok-fn">normalize3</span>(light_pos - target);
+
+    <span class="tok-comment">// ---- Interactive orbit camera (same behavior as damaged_helmet):</span>
+    <span class="tok-comment">// pinch / wheel to zoom, one-finger / mouse drag to orbit.</span>
+    <span class="tok-kw">const</span> touches: i32 = z.<span class="tok-fn">getTouchPointCount</span>(f.input);
+    <span class="tok-kw">if</span> (touches &gt;= <span class="tok-num">2</span>) {
+        <span class="tok-kw">const</span> a: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">0</span>);
+        <span class="tok-kw">const</span> b: Vec2 = z.<span class="tok-fn">getTouchPosition</span>(f.input, <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> dx: f32 = a[<span class="tok-num">0</span>] - b[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = a[<span class="tok-num">1</span>] - b[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> dist: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (s.prev_pinch &gt; <span class="tok-num">0</span>) {
+            s.distance = <span class="tok-fn">clamp</span>(s.distance - (dist - s.prev_pinch) * <span class="tok-num">0.02</span>, <span class="tok-num">5.0</span>, <span class="tok-num">26.0</span>);
+        }
+        s.prev_pinch = dist;
+    } <span class="tok-kw">else</span> {
+        s.prev_pinch = <span class="tok-num">0</span>;
+    }
+    <span class="tok-kw">if</span> (touches &lt; <span class="tok-num">2</span> <span class="tok-kw">and</span> z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left)) {
+        <span class="tok-kw">if</span> (s.dragging) {
+            <span class="tok-kw">const</span> d: Vec2 = z.<span class="tok-fn">getMouseDelta</span>(f.input);
+            s.yaw -= d[<span class="tok-num">0</span>] * <span class="tok-num">0.008</span>;
+            s.pitch = <span class="tok-fn">clamp</span>(s.pitch + d[<span class="tok-num">1</span>] * <span class="tok-num">0.008</span>, <span class="tok-num">0.1</span>, <span class="tok-num">1.45</span>);
+        }
+        s.dragging = true;
+    } <span class="tok-kw">else</span> {
+        s.dragging = false;
+    }
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span>) {
+        s.distance = <span class="tok-fn">clamp</span>(s.distance - wheel * <span class="tok-num">0.6</span>, <span class="tok-num">5.0</span>, <span class="tok-num">26.0</span>);
+    }
+
+    <span class="tok-kw">const</span> cam_target: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> cp: f32 = <span class="tok-builtin">@cos</span>(s.pitch);
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sin</span>(s.pitch);
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-builtin">@cos</span>(s.yaw);
+    <span class="tok-kw">const</span> sy: f32 = <span class="tok-builtin">@sin</span>(s.yaw);
+    <span class="tok-kw">const</span> cam_eye: Vec = <span class="tok-fn">vec</span>(
+        cam_target[<span class="tok-num">0</span>] + s.distance * cp * sy,
+        cam_target[<span class="tok-num">1</span>] + s.distance * sp,
+        cam_target[<span class="tok-num">2</span>] + s.distance * cp * cy,
+    );
+    <span class="tok-kw">const</span> cam_view: Mat = <span class="tok-fn">lookAtRh</span>(cam_eye, cam_target, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> aspect: f32 = f.window.<span class="tok-fn">widthf</span>() / <span class="tok-builtin">@max</span>(f.window.<span class="tok-fn">heightf</span>(), <span class="tok-num">1.0</span>);
+    <span class="tok-kw">const</span> cam_proj: Mat = <span class="tok-fn">perspectiveFovRh</span>(<span class="tok-num">0.8</span>, aspect, <span class="tok-num">0.1</span>, <span class="tok-num">100.0</span>);
+    <span class="tok-kw">const</span> cam_vp: Mat = <span class="tok-fn">mulMat</span>(cam_proj, cam_view);
+
+    <span class="tok-comment">// ---- Object model matrices ----</span>
+    <span class="tok-kw">const</span> id: Mat = <span class="tok-fn">identity</span>();
+
+    <span class="tok-comment">// Bunny: base-center -&gt; spin about Y -&gt; scale -&gt; seat on the floor.</span>
+    <span class="tok-kw">const</span> spin: Mat = <span class="tok-fn">rotationY</span>(t * <span class="tok-num">0.6</span>);
+    <span class="tok-kw">const</span> bunny_spot: Vec = <span class="tok-fn">vec</span>(-<span class="tok-num">1.4</span>, <span class="tok-num">0.0</span>, <span class="tok-num">1.7</span>);
+    <span class="tok-kw">const</span> center_it: Mat = <span class="tok-fn">translation</span>(-s.bunny_cx, -s.bunny_min_y, -s.bunny_cz);
+    <span class="tok-kw">const</span> scale_it: Mat = <span class="tok-fn">scaling</span>(s.bunny_scale, s.bunny_scale, s.bunny_scale);
+    <span class="tok-kw">const</span> place_it: Mat = <span class="tok-fn">translation</span>(bunny_spot[<span class="tok-num">0</span>], bunny_spot[<span class="tok-num">1</span>], bunny_spot[<span class="tok-num">2</span>]);
+    <span class="tok-kw">const</span> bunny_model: Mat = <span class="tok-fn">mulMat</span>(place_it, <span class="tok-fn">mulMat</span>(scale_it, <span class="tok-fn">mulMat</span>(spin, center_it)));
+
+    <span class="tok-fn">writeObjUniforms</span>(gf, &amp;s.static_obj, id, id, cam_vp, light_vp, to_light);
+    <span class="tok-fn">writeObjUniforms</span>(gf, &amp;s.bunny, bunny_model, spin, cam_vp, light_vp, to_light);
+
+    <span class="tok-comment">// ============ PASS 1: shadow map (light's eye -&gt; RTT) ============</span>
+    <span class="tok-comment">// Raw offscreen pass: the shadow map is rgba16_float and we draw it with</span>
+    <span class="tok-comment">// our own depth pipeline, so we must NOT let beginTextureMode bind the 2D</span>
+    <span class="tok-comment">// (rgba8) pipeline into this pass - that is an attachment-format mismatch.</span>
+    z.<span class="tok-fn">beginTextureModeRaw</span>(f.gl, s.rt, .{ .r = <span class="tok-num">255</span>, .g = <span class="tok-num">255</span>, .b = <span class="tok-num">255</span>, .a = <span class="tok-num">255</span> });
+    <span class="tok-kw">const</span> p1: *z.PassState = f.gl.pass;
+    Backend.<span class="tok-fn">setPipeline</span>(p1, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.depth_pipeline });
+    Backend.<span class="tok-fn">setBindGroup</span>(p1, <span class="tok-num">0</span>, s.static_obj.depth_bg);
+    <span class="tok-fn">drawMesh</span>(p1, &amp;s.static_obj);
+    Backend.<span class="tok-fn">setBindGroup</span>(p1, <span class="tok-num">0</span>, s.bunny.depth_bg);
+    <span class="tok-fn">drawMesh</span>(p1, &amp;s.bunny);
+    z.<span class="tok-fn">endTextureModeRaw</span>(f.gl);
+
+    <span class="tok-comment">// ============ SCREEN: open the frame, PASS 2 renders the lit scene into it ======</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+
+    <span class="tok-comment">// ============ PASS 2: lit scene + shadow (camera -&gt; screen) ======</span>
+    <span class="tok-kw">const</span> p2: *z.PassState = f.gl.pass;
+    p2.queue = gf.queue;
+    Backend.<span class="tok-fn">setPipeline</span>(p2, z.shader.<span class="tok-fn">RenderPipeline</span>(void, void){ .gpu_handle = s.lit_pipeline });
+    Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">1</span>, s.lit_g1_bg);
+    Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">0</span>, s.static_obj.lit_g0_bg);
+    Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">2</span>, s.static_obj.lit_g2_bg);
+    <span class="tok-fn">drawMesh</span>(p2, &amp;s.static_obj);
+    Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">0</span>, s.bunny.lit_g0_bg);
+    Backend.<span class="tok-fn">setBindGroup</span>(p2, <span class="tok-num">2</span>, s.bunny.lit_g2_bg);
+    <span class="tok-fn">drawMesh</span>(p2, &amp;s.bunny);
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - shadow map"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">600</span>,
+            .scale_mode = .responsive,
+            .clear = .{ .r = <span class="tok-num">0.10</span>, .g = <span class="tok-num">0.11</span>, .b = <span class="tok-num">0.14</span>, .a = <span class="tok-num">1.0</span> },
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+    <span class="tok-comment">// Shadow-map depth pass runs offscreen before the screen opens (tile-based-GPU</span>
+    <span class="tok-comment">// safe); owns its own begin/endDrawing.</span>
+    .manages_own_frame = true,
+};
+</code></pre></figure>
+</body>
+</html>

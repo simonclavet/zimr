@@ -1,0 +1,1862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>zimr — webgpu ports tutorial</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body>
+<div class="blog-container">
+<h1 class="title">zimr — webgpu ports</h1>
+<h2 class="subtitle">a code tour of ten examples ported to the pure-Zig wasm32-wasi + WebGPU backend, on the road to retiring WebGL.</h2>
+
+<nav class="toc">
+<strong>contents</strong>
+<ol>
+<li><a href="#patterns">shared patterns</a></li>
+<li><a href="#compute-smoke">wgpu_compute_smoke — CPU/GPU compute</a></li>
+<li><a href="#compute-particles">wgpu_compute_particles — compute toggle + zero-copy</a></li>
+<li><a href="#double-pendulum">wgpu_double_pendulum — chaos + CPU trail</a></li>
+<li><a href="#starfield">wgpu_starfield — perspective streaks</a></li>
+<li><a href="#kaleidoscope">wgpu_kaleidoscope — symmetry + 2D camera</a></li>
+<li><a href="#particles">wgpu_simple_particles — 3-type emitter</a></li>
+<li><a href="#sine-cosine">wgpu_math_sine_cosine — new line primitives</a></li>
+<li><a href="#bezier">wgpu_lines_bezier — cubic bezier</a></li>
+<li><a href="#camera2d">wgpu_camera2d — pan / zoom / rotate</a></li>
+<li><a href="#boids">wgpu_ecs_boids — ECS flocking (has a bug!)</a></li>
+</ol>
+</nav>
+
+<h3 id="patterns">Shared patterns</h3>
+<p>Every example lives in <code>examples/wgpu_&lt;name&gt;/</code> as <code>wgpu_&lt;name&gt;.zig</code> + an <code>index.html</code>, and is registered with a single helper call in <code>build.zig</code> — one of the system improvements made during this batch, collapsing ~55 lines of per-example boilerplate (module, reactor exe, JS bundle, index install, build step, and the self-contained standalone) into one line:</p>
+<pre><code class="zig">_ = <span class="tok-fn">addWgpuExample</span>(
+    b, wasm_target, optimize,
+    zimr_mod, zimrmath_mod, shader_interface_mod, buildaux_exe,
+    <span class="tok-str">"double_pendulum"</span>,            <span class="tok-comment">// dir: examples/wgpu_double_pendulum/</span>
+    <span class="tok-str">"zimr - WebGPU - double pendulum"</span>,
+);</code></pre>
+<p>The app shape is the same everywhere: a global <code>zimr_app</code>, a <code>main</code> that hands the runtime a <code>State</code> type plus <code>initState</code> / <code>update</code> callbacks. <code>initState</code> builds and returns the state; <code>update</code> runs once per frame between <code>beginDrawing</code> and <code>endDrawing</code>.</p>
+<pre><code class="zig"><span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{ .title = <span class="tok-str">"..."</span>, .width = <span class="tok-num">800</span>, .height = <span class="tok-num">450</span>, .scale_mode = .responsive },
+    }, State, initState, update);
+}</code></pre>
+<p><strong>Scale mode <code>.responsive</code></strong> means the 2D ortho tracks the live canvas size 1:1 with CSS pixels (no non-uniform stretch). The rule: lay out against the live viewport — <code>f.window.widthf()</code> / <code>f.window.heightf()</code> — never a hardcoded design size. One sharp edge: <code>f.window</code> reads <strong>0 at <code>initState</code></strong> (the canvas isn't sized yet), so anything that spawns/positions relative to the viewport must defer to the first real frame.</p>
+<p>To view an example, <code>zig build wgpu-&lt;name&gt;-standalone</code> produces a single self-contained <code>.html</code> (wasm base64-inlined, JS inlined) via a native build step — no Python, works offline.</p>
+<p>Two of these examples lean on <strong>line primitives</strong> added to the wgpu renderer during this batch — <code>drawSplineLinear</code>, <code>drawLineDashed</code>, and <code>drawCircleSectorLines</code> — each implemented over the existing <code>drawLineEx</code>. They unblocked the whole math/lines cluster at once.</p>
+<h3 id="compute-smoke">1 · wgpu_compute_smoke</h3>
+<p>The simplest <code>z.Compute</code> demo: one kernel, written once, that runs on either the CPU or the GPU. The kernel is authored in the <strong>kompute</strong> DSL — plain Zig that doubles as a WGSL compute shader. <code>z.Compute(M)</code> wraps it: <code>initGpu</code> builds the storage buffer + pipeline; <code>upload</code> / <code>run</code> / <code>readLatest</code> drive it; the same kernel also runs as a CPU loop. This demo doubles <code>[1,2,3,4,5]</code> on the GPU and verifies the result.</p>
+<h4>double_it.zig — the kernel (kompute DSL)</h4>
+<details class="src-fold"><summary><code>const k</code><span class="faint"> · 36 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! double_it.zig — the simplest compute kernel: out[i] = in[i] * 2, written in</span>
+<span class="tok-comment">//! the kompute DSL form. The author writes only config + Buffers + Params + the</span>
+<span class="tok-comment">//! kernel fn; `kompute` generates the g-namespace (extern storage/uniform on GPU,</span>
+<span class="tok-comment">//! plain var on CPU), the Ctx type, and the spirv_kernel entry.</span>
+<span class="tok-kw">const</span> k = <span class="tok-builtin">@import</span>(<span class="tok-str">"kompute"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = <span class="tok-num">1024</span>, .workgroup = <span class="tok-num">64</span> };
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    data: [config.max]f32,
+};
+<span class="tok-comment">// Params is a uniform: keep it 16-byte sized with scalar pads (an array pad like</span>
+<span class="tok-comment">// [3]u32 would emit array&lt;u32,3&gt; with stride 4, which WGSL rejects in `uniform`).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    count: u32,
+    _pad0: u32 = <span class="tok-num">0</span>,
+    _pad1: u32 = <span class="tok-num">0</span>,
+    _pad2: u32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> g = k.<span class="tok-fn">Globals</span>(<span class="tok-builtin">@This</span>());
+<span class="tok-kw">const</span> b = &amp;g.B;
+
+<span class="tok-comment">/// The kernel. Identical on CPU and GPU; buffers reached via module-level `b`.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">double</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    b.data[c.id] = b.data[c.id] * <span class="tok-num">2.0</span>;
+}
+
+<span class="tok-kw">comptime</span> {
+    k.<span class="tok-fn">installKernel</span>(<span class="tok-builtin">@This</span>(), <span class="tok-str">"double"</span>);
+}
+</code></pre></details>
+<h4>wgpu_compute_smoke.zig — the host</h4>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 120 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_compute_smoke — the GPU compute round-trip, now driven by `z.Compute(M)`</span>
+<span class="tok-comment">//! instead of hand-wired wgpu calls. Uploads [0,1,2,...,N-1], runs the `double_it`</span>
+<span class="tok-comment">//! kernel (out[i] = in[i]*2) on the GPU, reads it back, draws it as bars (a correct</span>
+<span class="tok-comment">//! run = a doubled ascending staircase). Also runs a CPU-backend self-check at</span>
+<span class="tok-comment">//! startup over the SAME kernel, demonstrating the runtime CPU/GPU toggle.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> double_it = <span class="tok-builtin">@import</span>(<span class="tok-str">"double_it.zig"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> std_options = z.std_options;
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-comment">// The compiled WGSL of double_it.zig (built by addComputeImport + spv2wgsl).</span>
+<span class="tok-kw">const</span> DOUBLE_WGSL = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"double_it_wgsl"</span>);
+
+<span class="tok-kw">const</span> N: u32 = <span class="tok-num">64</span>; <span class="tok-comment">// particles processed (the dispatch count)</span>
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    pipe: z.<span class="tok-fn">Compute</span>(double_it),
+    cpu_ok: bool = false,
+    dispatched: bool = false,
+    result: [N]f32 = <span class="tok-builtin">@splat</span>(<span class="tok-num">0</span>),
+    have_result: bool = false,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - compute smoke (z.Compute)"</span>,
+            .width = <span class="tok-num">640</span>,
+            .height = <span class="tok-num">360</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+
+    <span class="tok-comment">// CPU-backend self-check: run the SAME kernel on the CPU and verify doubling.</span>
+    <span class="tok-kw">var</span> cpu: z.<span class="tok-fn">Compute</span>(double_it) = z.<span class="tok-fn">Compute</span>(double_it).<span class="tok-fn">initCpu</span>();
+    cpu.count = <span class="tok-num">5</span>;
+    cpu.params = .{ .count = <span class="tok-num">5</span> };
+    <span class="tok-kw">const</span> probe = [_]f32{ <span class="tok-num">1</span>, <span class="tok-num">2</span>, <span class="tok-num">3</span>, <span class="tok-num">4</span>, <span class="tok-num">5</span> };
+    cpu.<span class="tok-fn">upload</span>(.data, &amp;probe);
+    cpu.<span class="tok-fn">run</span>(<span class="tok-str">"double"</span>);
+    <span class="tok-kw">const</span> cpu_out: []<span class="tok-kw">const</span> f32 = cpu.<span class="tok-fn">readLatest</span>(.data).?;
+    <span class="tok-kw">const</span> cpu_ok: bool = cpu_out.len == <span class="tok-num">5</span> <span class="tok-kw">and</span> cpu_out[<span class="tok-num">0</span>] == <span class="tok-num">2.0</span> <span class="tok-kw">and</span> cpu_out[<span class="tok-num">1</span>] == <span class="tok-num">4.0</span> <span class="tok-kw">and</span> cpu_out[<span class="tok-num">4</span>] == <span class="tok-num">10.0</span>;
+
+    <span class="tok-comment">// GPU-backend round-trip via z.Compute (storage/uniform/staging/pipeline derived</span>
+    <span class="tok-comment">// from the kernel's schema; the minBindingSize footgun cannot recur).</span>
+    <span class="tok-kw">var</span> pipe: z.<span class="tok-fn">Compute</span>(double_it) = <span class="tok-kw">try</span> z.<span class="tok-fn">Compute</span>(double_it).<span class="tok-fn">initGpu</span>(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        DOUBLE_WGSL,
+        <span class="tok-str">"double"</span>,
+    );
+    pipe.count = N;
+    pipe.params = .{ .count = N };
+    <span class="tok-kw">var</span> input: [N]f32 = undefined;
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; N) : (i += <span class="tok-num">1</span>) {
+        input[i] = <span class="tok-builtin">@floatFromInt</span>(i);
+    }
+    pipe.<span class="tok-fn">upload</span>(.data, input[<span class="tok-num">0</span>..]);
+
+    <span class="tok-kw">return</span> .{ .font = font, .pipe = pipe, .cpu_ok = cpu_ok };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// One-shot dispatch (the kernel doubles in place, so running it once is enough).</span>
+    <span class="tok-kw">if</span> (!s.dispatched) {
+        s.dispatched = true;
+        s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"double"</span>);
+    }
+    <span class="tok-comment">// Frame-delayed readback: returns last frame's mapped data, never stalls.</span>
+    <span class="tok-kw">if</span> (s.pipe.<span class="tok-fn">readLatest</span>(.data)) |out| {
+        <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (i &lt; N <span class="tok-kw">and</span> i &lt; out.len) : (i += <span class="tok-num">1</span>) {
+            s.result[i] = out[i];
+        }
+        s.have_result = true;
+    }
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, z.colors.slate_900);
+
+    <span class="tok-kw">const</span> sw: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> sh: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> bar_w: f32 = sw / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(N));
+    <span class="tok-kw">const</span> max_val: f32 = <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>((N - <span class="tok-num">1</span>) * <span class="tok-num">2</span>));
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; N) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> v: f32 = s.result[i];
+        <span class="tok-kw">const</span> h: f32 = (v / max_val) * (sh * <span class="tok-num">0.8</span>);
+        <span class="tok-kw">const</span> x: f32 = <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(i)) * bar_w;
+        <span class="tok-kw">const</span> hue: f32 = <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(i)) / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(N)) * <span class="tok-num">300.0</span>;
+        <span class="tok-kw">const</span> col: z.colors.Color = z.<span class="tok-fn">colorFromHSV</span>(hue, <span class="tok-num">0.7</span>, <span class="tok-num">0.95</span>);
+        z.<span class="tok-fn">drawRectangle</span>(f.gl, x, sh - h, bar_w - <span class="tok-num">1</span>, h, col);
+    }
+
+    <span class="tok-kw">const</span> status: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.have_result)
+        <span class="tok-str">"GPU via z.Compute: out[i] = i*2 (doubled staircase)"</span>
+    <span class="tok-kw">else</span>
+        <span class="tok-str">"dispatching..."</span>;
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, status, <span class="tok-num">10</span>, <span class="tok-num">10</span>, <span class="tok-num">18</span>, z.colors.slate_100);
+    <span class="tok-kw">const</span> cpu_msg: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.cpu_ok)
+        <span class="tok-str">"CPU backend self-check: OK (1,2,3,4,5 -&gt; 2,4,6,8,10)"</span>
+    <span class="tok-kw">else</span>
+        <span class="tok-str">"CPU backend self-check: FAIL"</span>;
+    <span class="tok-kw">const</span> cpu_col: z.colors.Color = z.<span class="tok-fn">colorFromHSV</span>(<span class="tok-kw">if</span> (s.cpu_ok) <span class="tok-num">120.0</span> <span class="tok-kw">else</span> <span class="tok-num">0.0</span>, <span class="tok-num">0.7</span>, <span class="tok-num">0.95</span>);
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, cpu_msg, <span class="tok-num">10</span>, <span class="tok-num">32</span>, <span class="tok-num">14</span>, cpu_col);
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="compute-particles">2 · wgpu_compute_particles</h3>
+<p>A particle sim that flips its <em>compute</em> backend live — GPU dispatch vs. CPU loop — every few seconds, carrying the full sim state across the flip. The GPU path is <strong>zero-copy</strong>: <code>z.DrawPoints</code> reads each particle's position straight from the storage buffer the kernel wrote (a vertex shader indexing <code>positions[instance_index]</code>), so nothing reads back to the CPU. The CPU path computes in host memory, then uploads its result into that same buffer and draws it the same way. (Currently capped at 8192 particles — a larger count tripped the wasm stack via a 1&nbsp;MB inline readback mirror inside <code>Compute</code>; the fix is to heap-allocate that mirror.)</p>
+<h4>particle_step.zig — the kernel (gravity + unit-box bounce)</h4>
+<details class="src-fold"><summary><code>const k</code><span class="faint"> · 63 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! particle_step.zig — one compute kernel: advance a particle under gravity and</span>
+<span class="tok-comment">//! bounce it off the unit-box walls. Pure GATHER (each id writes only its own</span>
+<span class="tok-comment">//! pos/vel), so it's identical on CPU and GPU and trivially parallel. Positions</span>
+<span class="tok-comment">//! live in [0,1]^2; the host maps them to the screen. Written once in the kompute</span>
+<span class="tok-comment">//! DSL; `z.Compute(@This())` runs it on either backend.</span>
+<span class="tok-kw">const</span> k = <span class="tok-builtin">@import</span>(<span class="tok-str">"kompute"</span>);
+<span class="tok-kw">const</span> zm = k.math;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> config = k.Config{ .max = <span class="tok-num">8192</span>, .workgroup = <span class="tok-num">64</span> };
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Buffers = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    pos: [config.max]zm.Vec2,
+    vel: [config.max]zm.Vec2,
+};
+
+<span class="tok-comment">// 16-byte uniform: u32 + 3×f32 (scalar fields — an array pad would break the</span>
+<span class="tok-comment">// uniform layout; see the gpu-compute tutorial).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Params = <span class="tok-kw">extern</span> <span class="tok-kw">struct</span> {
+    count: u32,
+    dt: f32,
+    gravity: f32,
+    damping: f32,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> g = k.<span class="tok-fn">Globals</span>(<span class="tok-builtin">@This</span>());
+<span class="tok-kw">const</span> b = &amp;g.B;
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">step</span>(c: k.<span class="tok-fn">Ctx</span>(<span class="tok-builtin">@This</span>())) void {
+    <span class="tok-kw">if</span> (c.id &gt;= c.params.count) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> id: u32 = c.id;
+    <span class="tok-kw">var</span> v: zm.Vec2 = b.vel[id];
+    v[<span class="tok-num">1</span>] = v[<span class="tok-num">1</span>] + c.params.gravity * c.params.dt; <span class="tok-comment">// gravity pulls +y (down on screen)</span>
+    <span class="tok-kw">var</span> p: zm.Vec2 = b.pos[id] + v * zm.<span class="tok-fn">splat2</span>(c.params.dt);
+
+    <span class="tok-comment">// Bounce off the unit box, losing energy by `damping`.</span>
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; <span class="tok-num">0.0</span>) {
+        p[<span class="tok-num">0</span>] = <span class="tok-num">0.0</span>;
+        v[<span class="tok-num">0</span>] = -v[<span class="tok-num">0</span>] * c.params.damping;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt; <span class="tok-num">1.0</span>) {
+        p[<span class="tok-num">0</span>] = <span class="tok-num">1.0</span>;
+        v[<span class="tok-num">0</span>] = -v[<span class="tok-num">0</span>] * c.params.damping;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &lt; <span class="tok-num">0.0</span>) {
+        p[<span class="tok-num">1</span>] = <span class="tok-num">0.0</span>;
+        v[<span class="tok-num">1</span>] = -v[<span class="tok-num">1</span>] * c.params.damping;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &gt; <span class="tok-num">1.0</span>) {
+        p[<span class="tok-num">1</span>] = <span class="tok-num">1.0</span>;
+        v[<span class="tok-num">1</span>] = -v[<span class="tok-num">1</span>] * c.params.damping;
+    }
+
+    b.pos[id] = p;
+    b.vel[id] = v;
+}
+
+<span class="tok-kw">comptime</span> {
+    k.<span class="tok-fn">installKernel</span>(<span class="tok-builtin">@This</span>(), <span class="tok-str">"step"</span>);
+}
+</code></pre></details>
+<h4>wgpu_compute_particles.zig — the host (CPU/GPU toggle)</h4>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 163 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_compute_particles — 65536 particles driven by `z.Compute`, demonstrating the</span>
+<span class="tok-comment">//! CPU/GPU compute toggle on the zero-copy render path. The SAME kernel auto-flips</span>
+<span class="tok-comment">//! between a GPU dispatch and a CPU loop every few seconds, with the live state carried</span>
+<span class="tok-comment">//! across the flip so the sim never resets. Both backends render through `z.DrawPoints`:</span>
+<span class="tok-comment">//! the GPU path is zero-copy (the kernel writes the very buffer the vertex shader reads)</span>
+<span class="tok-comment">//! and the CPU path copies its result into that buffer, then draws the same way.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+<span class="tok-kw">const</span> particle_step = <span class="tok-builtin">@import</span>(<span class="tok-str">"particle_step.zig"</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> std_options = z.std_options;
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> STEP_WGSL = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"particle_step_wgsl"</span>);
+
+<span class="tok-kw">const</span> N: u32 = <span class="tok-num">8192</span>;
+<span class="tok-kw">const</span> SCREEN_W: f32 = <span class="tok-num">720.0</span>;
+<span class="tok-kw">const</span> SCREEN_H: f32 = <span class="tok-num">720.0</span>;
+<span class="tok-kw">const</span> FLIP_FRAMES: u32 = <span class="tok-num">300</span>; <span class="tok-comment">// auto-toggle the compute backend on this cadence</span>
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - compute particles"</span>,
+            .width = <span class="tok-num">720</span>,
+            .height = <span class="tok-num">720</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    pipe: z.<span class="tok-fn">Compute</span>(particle_step),
+    dp: z.DrawPoints,
+    transfer_pos: []zm.Vec2,
+    transfer_vel: []zm.Vec2,
+    cpu_ok: bool = false,
+    frame: u32 = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">spawn</span>(
+    pipe: *z.<span class="tok-fn">Compute</span>(particle_step),
+    scratch: []zm.Vec2,
+    rng: std.Random,
+) void {
+    <span class="tok-kw">var</span> i: u32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; N) : (i += <span class="tok-num">1</span>) {
+        scratch[i] = .{ <span class="tok-num">0.1</span> + rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">0.8</span>, rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">0.4</span> };
+    }
+    pipe.<span class="tok-fn">upload</span>(.pos, scratch[<span class="tok-num">0</span>..N]);
+    i = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; N) : (i += <span class="tok-num">1</span>) {
+        scratch[i] = .{ (rng.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * <span class="tok-num">0.2</span>, (rng.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>) * <span class="tok-num">0.1</span> };
+    }
+    pipe.<span class="tok-fn">upload</span>(.vel, scratch[<span class="tok-num">0</span>..N]);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+
+    <span class="tok-comment">// CPU-backend self-check: a particle at rest must fall after one step.</span>
+    <span class="tok-kw">var</span> cpu: z.<span class="tok-fn">Compute</span>(particle_step) = z.<span class="tok-fn">Compute</span>(particle_step).<span class="tok-fn">initCpu</span>();
+    cpu.count = <span class="tok-num">1</span>;
+    cpu.params = .{ .count = <span class="tok-num">1</span>, .dt = <span class="tok-num">0.1</span>, .gravity = <span class="tok-num">10.0</span>, .damping = <span class="tok-num">0.5</span> };
+    <span class="tok-kw">const</span> one_pos = [_]zm.Vec2{.{ <span class="tok-num">0.5</span>, <span class="tok-num">0.5</span> }};
+    <span class="tok-kw">const</span> one_vel = [_]zm.Vec2{.{ <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span> }};
+    cpu.<span class="tok-fn">upload</span>(.pos, &amp;one_pos);
+    cpu.<span class="tok-fn">upload</span>(.vel, &amp;one_vel);
+    cpu.<span class="tok-fn">run</span>(<span class="tok-str">"step"</span>);
+    <span class="tok-kw">const</span> cpu_pos: []<span class="tok-kw">const</span> zm.Vec2 = cpu.<span class="tok-fn">readLatest</span>(.pos).?;
+    <span class="tok-kw">const</span> cpu_ok: bool = cpu_pos[<span class="tok-num">0</span>][<span class="tok-num">1</span>] &gt; <span class="tok-num">0.5</span>;
+
+    <span class="tok-comment">// GPU backend: a single pipe whose `.backend` we flip live. initGpu also wires the</span>
+    <span class="tok-comment">// CPU path (the kernel's module globals always exist), so one pipe runs both.</span>
+    <span class="tok-kw">var</span> pipe: z.<span class="tok-fn">Compute</span>(particle_step) = <span class="tok-kw">try</span> z.<span class="tok-fn">Compute</span>(particle_step).<span class="tok-fn">initGpu</span>(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        STEP_WGSL,
+        <span class="tok-str">"step"</span>,
+    );
+    pipe.count = N;
+    pipe.params = .{ .count = N, .dt = <span class="tok-num">1.0</span> / <span class="tok-num">60.0</span>, .gravity = <span class="tok-num">1.5</span>, .damping = <span class="tok-num">0.6</span> };
+
+    <span class="tok-kw">const</span> transfer_pos: []zm.Vec2 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(zm.Vec2, N);
+    <span class="tok-kw">const</span> transfer_vel: []zm.Vec2 = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(zm.Vec2, N);
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0x5eed</span>);
+    <span class="tok-fn">spawn</span>(&amp;pipe, transfer_pos, prng.<span class="tok-fn">random</span>()); <span class="tok-comment">// reuse transfer_pos as spawn scratch</span>
+
+    <span class="tok-kw">const</span> dp: z.DrawPoints = <span class="tok-kw">try</span> z.DrawPoints.<span class="tok-fn">init</span>(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        f.gpu.backbuffer_format,
+        pipe.<span class="tok-fn">storageBuffer</span>().?,
+        <span class="tok-builtin">@sizeOf</span>(particle_step.Buffers),
+    );
+
+    <span class="tok-kw">return</span> .{
+        .font = font,
+        .pipe = pipe,
+        .dp = dp,
+        .transfer_pos = transfer_pos,
+        .transfer_vel = transfer_vel,
+        .cpu_ok = cpu_ok,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame += <span class="tok-num">1</span>;
+
+    <span class="tok-comment">// Auto-flip the compute backend, carrying the live state across so the sim</span>
+    <span class="tok-comment">// continues seamlessly (one GPU readback per flip, not per frame).</span>
+    <span class="tok-kw">if</span> (s.frame % FLIP_FRAMES == <span class="tok-num">0</span>) {
+        <span class="tok-kw">if</span> (s.pipe.<span class="tok-fn">readLatest</span>(.pos)) |pos| {
+            <span class="tok-builtin">@memcpy</span>(s.transfer_pos[<span class="tok-num">0</span>..pos.len], pos);
+        }
+        <span class="tok-kw">if</span> (s.pipe.<span class="tok-fn">readLatest</span>(.vel)) |vel| {
+            <span class="tok-builtin">@memcpy</span>(s.transfer_vel[<span class="tok-num">0</span>..vel.len], vel);
+        }
+        s.pipe.backend = <span class="tok-kw">if</span> (s.pipe.backend == .gpu) .cpu <span class="tok-kw">else</span> .gpu;
+        s.pipe.<span class="tok-fn">upload</span>(.pos, s.transfer_pos[<span class="tok-num">0</span>..N]);
+        s.pipe.<span class="tok-fn">upload</span>(.vel, s.transfer_vel[<span class="tok-num">0</span>..N]);
+    }
+
+    s.pipe.<span class="tok-fn">run</span>(<span class="tok-str">"step"</span>); <span class="tok-comment">// GPU dispatch or CPU loop, per s.pipe.backend</span>
+
+    <span class="tok-comment">// CPU result lives in host memory — copy it into the buffer DrawPoints renders.</span>
+    <span class="tok-comment">// (The GPU path skips this: the kernel already wrote that buffer in place.)</span>
+    <span class="tok-kw">if</span> (s.pipe.backend == .cpu) {
+        <span class="tok-kw">if</span> (s.pipe.<span class="tok-fn">readLatest</span>(.pos)) |pos| {
+            s.dp.<span class="tok-fn">uploadPositions</span>(std.mem.<span class="tok-fn">sliceAsBytes</span>(pos[<span class="tok-num">0</span>..N]));
+        }
+    }
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, z.colors.slate_900);
+    s.dp.<span class="tok-fn">draw</span>(f.gl, N, SCREEN_W, SCREEN_H, .{ .size_px = <span class="tok-num">2.0</span> });
+
+    <span class="tok-kw">const</span> is_gpu: bool = s.pipe.backend == .gpu;
+    <span class="tok-kw">const</span> backend_name: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (is_gpu) <span class="tok-str">"GPU compute"</span> <span class="tok-kw">else</span> <span class="tok-str">"CPU compute"</span>;
+    <span class="tok-kw">const</span> render_note: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (is_gpu) <span class="tok-str">"zero-copy"</span> <span class="tok-kw">else</span> <span class="tok-str">"host upload"</span>;
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">112</span>]u8 = undefined;
+    <span class="tok-kw">const</span> hud: []<span class="tok-kw">const</span> u8 = std.fmt.<span class="tok-fn">bufPrint</span>(
+        &amp;buf,
+        <span class="tok-str">"backend: {s} | {d} particles | {s} render (auto-toggle)"</span>,
+        .{ backend_name, N, render_note },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">"particles"</span>;
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, hud, <span class="tok-num">10</span>, <span class="tok-num">10</span>, <span class="tok-num">18</span>, z.colors.slate_100);
+    <span class="tok-kw">const</span> cpu_msg: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">if</span> (s.cpu_ok)
+        <span class="tok-str">"same kernel runs on both backends (CPU self-check: OK)"</span>
+    <span class="tok-kw">else</span>
+        <span class="tok-str">"CPU backend self-check: FAIL"</span>;
+    <span class="tok-kw">const</span> cpu_col: z.colors.Color = z.<span class="tok-fn">colorFromHSV</span>(<span class="tok-kw">if</span> (s.cpu_ok) <span class="tok-num">120.0</span> <span class="tok-kw">else</span> <span class="tok-num">0.0</span>, <span class="tok-num">0.7</span>, <span class="tok-num">0.95</span>);
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, cpu_msg, <span class="tok-num">10</span>, <span class="tok-num">32</span>, <span class="tok-num">14</span>, cpu_col);
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="double-pendulum">3 · wgpu_double_pendulum</h3>
+<p>The classic chaotic double pendulum. Two pendulums start 1e-3&nbsp;rad apart in θ₂ and diverge into completely different paths — sensitive dependence on initial conditions. The physics is the standard Lagrangian solution (both rods as point masses) integrated with velocity-Verlet substeps. Each leaves a fading trail held in a <strong>CPU ring buffer</strong> of recent tip positions (the GL original used a render texture, which the wgpu backend doesn't expose yet). Note the layout is derived from the live viewport every frame, and the render scale is decoupled from the physics units.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 199 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_double_pendulum — the classic chaotic double pendulum, ported to WebGPU.</span>
+<span class="tok-comment">//! Two pendulums start 1e-3 rad apart in θ₂; identical at first, they diverge into</span>
+<span class="tok-comment">//! completely different trajectories — the canonical demo of sensitive dependence on</span>
+<span class="tok-comment">//! initial conditions. Each leaves a fading trail: a CPU ring buffer of recent rod-2</span>
+<span class="tok-comment">//! tip positions drawn as alpha-graded segments. (The GL original used a render</span>
+<span class="tok-comment">//! texture; the wgpu backend doesn't expose render textures yet, so the ring buffer</span>
+<span class="tok-comment">//! stands in.)</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Scale mode is `.responsive` (fill the canvas the host gives us, any aspect), so the</span>
+<span class="tok-comment">//! layout is derived from the LIVE viewport (`f.window.widthf()/heightf()`) every</span>
+<span class="tok-comment">//! frame — never a hardcoded design size. The render scale is decoupled from the</span>
+<span class="tok-comment">//! physics units, so the dynamics are identical regardless of canvas size.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+
+<span class="tok-kw">const</span> simulation_steps: i32 = <span class="tok-num">30</span>;
+<span class="tok-kw">const</span> length_scaler: f32 = <span class="tok-num">0.1</span>;
+<span class="tok-kw">const</span> trail_len: usize = <span class="tok-num">360</span>;
+
+<span class="tok-comment">// Physics parameters (dynamics units — render scale is separate, see Layout).</span>
+<span class="tok-kw">const</span> l1: f32 = <span class="tok-num">15.0</span>;
+<span class="tok-kw">const</span> l2: f32 = <span class="tok-num">15.0</span>;
+<span class="tok-kw">const</span> m1: f32 = <span class="tok-num">0.2</span>;
+<span class="tok-kw">const</span> m2: f32 = <span class="tok-num">0.1</span>;
+<span class="tok-kw">const</span> gravity: f32 = <span class="tok-num">9.81</span>;
+
+<span class="tok-kw">const</span> Pendulum = <span class="tok-kw">struct</span> {
+    theta1: f32,
+    theta2: f32,
+    w1: f32 = <span class="tok-num">0</span>,
+    w2: f32 = <span class="tok-num">0</span>,
+    color: z.colors.Color,
+    trail: [trail_len]z.Vec2 = <span class="tok-builtin">@splat</span>(z.Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }),
+    trail_n: usize = <span class="tok-num">0</span>,
+    head: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    a: Pendulum,
+    b: Pendulum,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-comment">// Render layout derived from the live viewport. `min(w,h)` sizes the rods so the</span>
+<span class="tok-comment">// full circular swing always fits on-screen, whatever the canvas aspect.</span>
+<span class="tok-kw">const</span> Layout = <span class="tok-kw">struct</span> {
+    ox: f32,
+    oy: f32,
+    rod_px: f32,
+    bob1: f32,
+    bob2: f32,
+    rod_thick: f32,
+    trail_thick: f32,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">computeLayout</span>(f: *z.Frame) Layout {
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> m: f32 = <span class="tok-builtin">@min</span>(w, h);
+    <span class="tok-kw">return</span> .{
+        .ox = w * <span class="tok-num">0.5</span>,
+        .oy = h * <span class="tok-num">0.42</span>,
+        .rod_px = m * <span class="tok-num">0.19</span>,
+        .bob1 = m * <span class="tok-num">0.020</span> + <span class="tok-num">3.0</span>,
+        .bob2 = m * <span class="tok-num">0.014</span> + <span class="tok-num">3.0</span>,
+        .rod_thick = m * <span class="tok-num">0.016</span> + <span class="tok-num">1.0</span>,
+        .trail_thick = <span class="tok-builtin">@max</span>(<span class="tok-num">1.5</span>, m * <span class="tok-num">0.004</span>),
+    };
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            <span class="tok-comment">// 800x450 is the preferred-size hint (used as the design size on native /</span>
+            <span class="tok-comment">// .fit); under .responsive we fill whatever rectangle the host gives.</span>
+            .title = <span class="tok-str">"zimr - WebGPU - double pendulum"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+    <span class="tok-kw">const</span> theta1_0: f32 = zm.<span class="tok-fn">radFromDeg</span>(<span class="tok-num">170.0</span>);
+    <span class="tok-kw">return</span> .{
+        .font = font,
+        .a = .{ .theta1 = theta1_0, .theta2 = <span class="tok-num">0.0</span>, .color = c.<span class="tok-fn">init</span>(<span class="tok-num">90</span>, <span class="tok-num">210</span>, <span class="tok-num">235</span>, <span class="tok-num">255</span>) },
+        .b = .{ .theta1 = theta1_0, .theta2 = <span class="tok-num">1.0e-3</span>, .color = c.<span class="tok-fn">init</span>(<span class="tok-num">230</span>, <span class="tok-num">110</span>, <span class="tok-num">210</span>, <span class="tok-num">255</span>) },
+    };
+}
+
+<span class="tok-comment">/// Advance one pendulum by `dt` using `simulation_steps` velocity-Verlet substeps.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">stepPendulum</span>(p: *Pendulum, dt: f32) void {
+    <span class="tok-kw">const</span> step: f32 = dt / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(simulation_steps));
+    <span class="tok-kw">const</span> step2: f32 = step * step;
+    <span class="tok-kw">const</span> big_l1: f32 = l1 * length_scaler;
+    <span class="tok-kw">const</span> big_l2: f32 = l2 * length_scaler;
+    <span class="tok-kw">const</span> total_m: f32 = m1 + m2;
+    <span class="tok-kw">var</span> i: i32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; simulation_steps) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> delta: f32 = p.theta1 - p.theta2;
+        <span class="tok-kw">const</span> sin_d: f32 = <span class="tok-builtin">@sin</span>(delta);
+        <span class="tok-kw">const</span> cos_d: f32 = <span class="tok-builtin">@cos</span>(delta);
+        <span class="tok-kw">const</span> cos_2d: f32 = <span class="tok-builtin">@cos</span>(<span class="tok-num">2.0</span> * delta);
+        <span class="tok-kw">const</span> ww1: f32 = p.w1 * p.w1;
+        <span class="tok-kw">const</span> ww2: f32 = p.w2 * p.w2;
+        <span class="tok-kw">const</span> a1_num: f32 = -gravity * (<span class="tok-num">2.0</span> * m1 + m2) * <span class="tok-builtin">@sin</span>(p.theta1) -
+            m2 * gravity * <span class="tok-builtin">@sin</span>(p.theta1 - <span class="tok-num">2.0</span> * p.theta2) -
+            <span class="tok-num">2.0</span> * sin_d * m2 * (ww2 * big_l2 + ww1 * big_l1 * cos_d);
+        <span class="tok-kw">const</span> denom: f32 = <span class="tok-num">2.0</span> * m1 + m2 - m2 * cos_2d;
+        <span class="tok-kw">const</span> a1: f32 = a1_num / (big_l1 * denom);
+        <span class="tok-kw">const</span> a2_num: f32 = <span class="tok-num">2.0</span> * sin_d * (ww1 * big_l1 * total_m +
+            gravity * total_m * <span class="tok-builtin">@cos</span>(p.theta1) +
+            ww2 * big_l2 * m2 * cos_d);
+        <span class="tok-kw">const</span> a2: f32 = a2_num / (big_l2 * denom);
+        p.theta1 += p.w1 * step + <span class="tok-num">0.5</span> * a1 * step2;
+        p.theta2 += p.w2 * step + <span class="tok-num">0.5</span> * a2 * step2;
+        p.w1 += a1 * step;
+        p.w2 += a2 * step;
+    }
+}
+
+<span class="tok-comment">/// Push the current rod-2 tip into the pendulum's ring-buffer trail.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">pushTrail</span>(p: *Pendulum, tip: z.Vec2) void {
+    p.trail[p.head] = tip;
+    p.head = (p.head + <span class="tok-num">1</span>) % trail_len;
+    <span class="tok-kw">if</span> (p.trail_n &lt; trail_len) {
+        p.trail_n += <span class="tok-num">1</span>;
+    }
+}
+
+<span class="tok-comment">/// Rod-2 tip in screen space for pendulum `p` under layout `lay`.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">tipOf</span>(lay: Layout, p: *<span class="tok-kw">const</span> Pendulum) z.Vec2 {
+    <span class="tok-kw">const</span> jx: f32 = lay.ox + lay.rod_px * <span class="tok-builtin">@sin</span>(p.theta1);
+    <span class="tok-kw">const</span> jy: f32 = lay.oy + lay.rod_px * <span class="tok-builtin">@cos</span>(p.theta1);
+    <span class="tok-kw">return</span> .{ jx + lay.rod_px * <span class="tok-builtin">@sin</span>(p.theta2), jy + lay.rod_px * <span class="tok-builtin">@cos</span>(p.theta2) };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawPendulum</span>(
+    gl: <span class="tok-kw">anytype</span>,
+    lay: Layout,
+    p: *<span class="tok-kw">const</span> Pendulum,
+) void {
+    <span class="tok-kw">const</span> o: z.Vec2 = .{ lay.ox, lay.oy };
+    <span class="tok-kw">const</span> jx: f32 = lay.ox + lay.rod_px * <span class="tok-builtin">@sin</span>(p.theta1);
+    <span class="tok-kw">const</span> jy: f32 = lay.oy + lay.rod_px * <span class="tok-builtin">@cos</span>(p.theta1);
+    <span class="tok-kw">const</span> joint: z.Vec2 = .{ jx, jy };
+    <span class="tok-kw">const</span> tip: z.Vec2 = .{ jx + lay.rod_px * <span class="tok-builtin">@sin</span>(p.theta2), jy + lay.rod_px * <span class="tok-builtin">@cos</span>(p.theta2) };
+
+    <span class="tok-comment">// Trail: oldest -&gt; newest, alpha graded so newer segments are brighter.</span>
+    <span class="tok-kw">if</span> (p.trail_n &gt; <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> start: usize = (p.head + trail_len - p.trail_n) % trail_len;
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k + <span class="tok-num">1</span> &lt; p.trail_n) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> idx_a: usize = (start + k) % trail_len;
+            <span class="tok-kw">const</span> idx_b: usize = (start + k + <span class="tok-num">1</span>) % trail_len;
+            <span class="tok-kw">const</span> num: f32 = <span class="tok-builtin">@floatFromInt</span>(k + <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> den: f32 = <span class="tok-builtin">@floatFromInt</span>(p.trail_n);
+            z.<span class="tok-fn">drawLineThick</span>(gl, p.trail[idx_a], p.trail[idx_b], lay.trail_thick, p.color.<span class="tok-fn">fade</span>(num / den));
+        }
+    }
+
+    <span class="tok-comment">// Rods + bobs.</span>
+    z.<span class="tok-fn">drawLineThick</span>(gl, o, joint, lay.rod_thick, p.color.<span class="tok-fn">fade</span>(<span class="tok-num">0.85</span>));
+    z.<span class="tok-fn">drawLineThick</span>(gl, joint, tip, lay.rod_thick, p.color.<span class="tok-fn">fade</span>(<span class="tok-num">0.85</span>));
+    z.<span class="tok-fn">drawCircleV</span>(gl, joint, lay.bob1, p.color);
+    z.<span class="tok-fn">drawCircleV</span>(gl, tip, lay.bob2, p.color);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+
+    <span class="tok-fn">stepPendulum</span>(&amp;s.a, dt);
+    <span class="tok-fn">stepPendulum</span>(&amp;s.b, dt);
+
+    <span class="tok-kw">const</span> lay: Layout = <span class="tok-fn">computeLayout</span>(f);
+    <span class="tok-fn">pushTrail</span>(&amp;s.a, <span class="tok-fn">tipOf</span>(lay, &amp;s.a));
+    <span class="tok-fn">pushTrail</span>(&amp;s.b, <span class="tok-fn">tipOf</span>(lay, &amp;s.b));
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">10</span>, <span class="tok-num">12</span>, <span class="tok-num">20</span>, <span class="tok-num">255</span>));
+    <span class="tok-fn">drawPendulum</span>(f.gl, lay, &amp;s.a);
+    <span class="tok-fn">drawPendulum</span>(f.gl, lay, &amp;s.b);
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"double pendulum: two starts 1e-3 rad apart"</span>, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">18</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">228</span>, <span class="tok-num">232</span>, <span class="tok-num">240</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"identical, then chaos"</span>, <span class="tok-num">12</span>, <span class="tok-num">34</span>, <span class="tok-num">14</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">138</span>, <span class="tok-num">147</span>, <span class="tok-num">168</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="starfield">4 · wgpu_starfield</h3>
+<p>A fly-through-space starfield. Each star is a point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a short streak (<code>drawLineEx</code>) from where it was a moment ago to where it is now — the warp-speed look. Closer stars are brighter and thicker; stars that pass the camera respawn at the back.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 113 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_starfield — a fly-through-space starfield ported to WebGPU. Stars stream</span>
+<span class="tok-comment">//! outward from the screen centre as motion streaks (the "warp speed" look): each is a</span>
+<span class="tok-comment">//! point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a</span>
+<span class="tok-comment">//! short line from where it was a moment ago to where it is now. Closer stars are</span>
+<span class="tok-comment">//! brighter and thicker. Self-running (no input), viewport-relative under `.responsive`</span>
+<span class="tok-comment">//! so it fills the canvas at any aspect.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+
+<span class="tok-kw">const</span> num_stars: usize = <span class="tok-num">700</span>;
+<span class="tok-kw">const</span> speed: f32 = <span class="tok-num">0.55</span>;
+<span class="tok-kw">const</span> trail_age: f32 = <span class="tok-num">0.06</span>; <span class="tok-comment">// bigger = longer streaks</span>
+
+<span class="tok-kw">const</span> Star = <span class="tok-kw">struct</span> { x: f32, y: f32, z: f32 };
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    stars: [num_stars]Star = undefined,
+    rng: std.Random.DefaultPrng,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - starfield"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">randf</span>(
+    rand: std.Random,
+    low: f32,
+    high: f32,
+) f32 {
+    <span class="tok-kw">return</span> low + rand.<span class="tok-fn">float</span>(f32) * (high - low);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">respawn</span>(
+    star: *Star,
+    rand: std.Random,
+    hw: f32,
+    hh: f32,
+) void {
+    star.x = <span class="tok-fn">randf</span>(rand, -hw, hw);
+    star.y = <span class="tok-fn">randf</span>(rand, -hh, hh);
+    star.z = <span class="tok-num">1.0</span>;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+    <span class="tok-kw">var</span> s: State = .{ .font = font, .rng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0x57a4f00d</span>) };
+    <span class="tok-kw">const</span> rand: std.Random = s.rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">const</span> hw: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, f.window.<span class="tok-fn">widthf</span>() * <span class="tok-num">0.5</span>);
+    <span class="tok-kw">const</span> hh: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, f.window.<span class="tok-fn">heightf</span>() * <span class="tok-num">0.5</span>);
+    <span class="tok-kw">for</span> (&amp;s.stars) |*star| {
+        <span class="tok-fn">respawn</span>(star, rand, hw, hh);
+        star.z = <span class="tok-fn">randf</span>(rand, <span class="tok-num">0.1</span>, <span class="tok-num">1.0</span>); <span class="tok-comment">// spread the initial depths</span>
+    }
+    <span class="tok-kw">return</span> s;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> hw: f32 = w * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> hh: f32 = h * <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> rand: std.Random = s.rng.<span class="tok-fn">random</span>();
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">6</span>, <span class="tok-num">8</span>, <span class="tok-num">16</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-kw">for</span> (&amp;s.stars) |*star| {
+        star.z -= dt * speed;
+        <span class="tok-kw">if</span> (star.z &lt; <span class="tok-num">0.02</span>) {
+            <span class="tok-fn">respawn</span>(star, rand, hw, hh);
+        }
+        <span class="tok-kw">const</span> sx: f32 = hw + star.x / star.z;
+        <span class="tok-kw">const</span> sy: f32 = hh + star.y / star.z;
+        <span class="tok-kw">if</span> (sx &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> sy &lt; <span class="tok-num">0</span> <span class="tok-kw">or</span> sx &gt; w <span class="tok-kw">or</span> sy &gt; h) {
+            <span class="tok-fn">respawn</span>(star, rand, hw, hh);
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> t: f32 = zm.<span class="tok-fn">clamp</span>(star.z + trail_age, <span class="tok-num">0.02</span>, <span class="tok-num">1.0</span>);
+        <span class="tok-kw">const</span> px: f32 = hw + star.x / t;
+        <span class="tok-kw">const</span> py: f32 = hh + star.y / t;
+        <span class="tok-kw">const</span> bright: f32 = zm.<span class="tok-fn">clamp</span>(<span class="tok-num">1.0</span> - star.z, <span class="tok-num">0.0</span>, <span class="tok-num">1.0</span>);
+        <span class="tok-kw">const</span> cr: u8 = <span class="tok-builtin">@intFromFloat</span>(<span class="tok-num">180.0</span> + <span class="tok-num">75.0</span> * bright);
+        <span class="tok-kw">const</span> cg: u8 = <span class="tok-builtin">@intFromFloat</span>(<span class="tok-num">200.0</span> + <span class="tok-num">55.0</span> * bright);
+        <span class="tok-kw">const</span> col: z.colors.Color = c.<span class="tok-fn">init</span>(cr, cg, <span class="tok-num">255</span>, <span class="tok-num">255</span>);
+        z.<span class="tok-fn">drawLineEx</span>(f.gl, .{ px, py }, .{ sx, sy }, <span class="tok-num">1.0</span> + bright * <span class="tok-num">2.0</span>, col);
+    }
+
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">32</span>]u8 = undefined;
+    <span class="tok-kw">const</span> fps: i32 = <span class="tok-kw">if</span> (dt &gt; <span class="tok-num">0.0</span>) <span class="tok-builtin">@intFromFloat</span>(<span class="tok-num">1.0</span> / dt) <span class="tok-kw">else</span> <span class="tok-num">0</span>;
+    <span class="tok-kw">const</span> label: []<span class="tok-kw">const</span> u8 = std.fmt.<span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"{d} FPS"</span>, .{fps}) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, label, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">18</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">140</span>, <span class="tok-num">230</span>, <span class="tok-num">140</span>, <span class="tok-num">255</span>));
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="kaleidoscope">5 · wgpu_kaleidoscope</h3>
+<p>Symmetric trail art. An auto-driven brush follows a Lissajous path; each new segment is mirrored across N rotational axes (plus an X reflection) about the screen centre, wrapping the stroke into a kaleidoscope. The centring uses <code>beginMode2D</code> — the 2D camera — so this doubles as a camera-on-wgpu check. A short ring buffer of brush points gives the flowing, fading rainbow trail.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 102 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_kaleidoscope — symmetric trail art ported to WebGPU. A brush follows an</span>
+<span class="tok-comment">//! auto-driven Lissajous path; every frame the new segment is mirrored across N</span>
+<span class="tok-comment">//! rotational axes (plus an X-axis reflection) about the screen centre, so the stroke</span>
+<span class="tok-comment">//! wraps a full 360° into a kaleidoscope. A short ring buffer of recent brush points</span>
+<span class="tok-comment">//! gives a flowing, fading rainbow trail. The GL original was mouse-painted; this runs</span>
+<span class="tok-comment">//! itself so it's alive in a screenshot. Exercises `beginMode2D` (the 2D camera) to</span>
+<span class="tok-comment">//! centre the pattern, and is viewport-relative under `.responsive`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+
+<span class="tok-kw">const</span> trail_len: usize = <span class="tok-num">150</span>;
+<span class="tok-kw">const</span> symmetry: usize = <span class="tok-num">6</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    trail: [trail_len]z.Vec2 = <span class="tok-builtin">@splat</span>(z.Vec2{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }),
+    count: usize = <span class="tok-num">0</span>,
+    head: usize = <span class="tok-num">0</span>,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - kaleidoscope"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+    <span class="tok-kw">return</span> .{ .font = font };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> m: f32 = <span class="tok-builtin">@min</span>(w, h);
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+
+    <span class="tok-comment">// Auto-driven brush in centre-relative coords (a Lissajous figure).</span>
+    <span class="tok-kw">const</span> radius: f32 = m * <span class="tok-num">0.30</span>;
+    <span class="tok-kw">const</span> brush: z.Vec2 = .{ radius * <span class="tok-builtin">@cos</span>(t * <span class="tok-num">0.7</span>), radius * <span class="tok-builtin">@sin</span>(t * <span class="tok-num">1.1</span>) };
+    s.trail[s.head] = brush;
+    s.head = (s.head + <span class="tok-num">1</span>) % trail_len;
+    <span class="tok-kw">if</span> (s.count &lt; trail_len) {
+        s.count += <span class="tok-num">1</span>;
+    }
+
+    <span class="tok-kw">const</span> thick: f32 = m * <span class="tok-num">0.006</span> + <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> angle_step: f32 = (<span class="tok-num">2.0</span> * zm.pi) / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(symmetry));
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">8</span>, <span class="tok-num">8</span>, <span class="tok-num">14</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-kw">const</span> cam: z.Camera2D = .{
+        .target = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+        .offset = .{ w * <span class="tok-num">0.5</span>, h * <span class="tok-num">0.5</span> },
+        .rotation = <span class="tok-num">0</span>,
+        .zoom = <span class="tok-num">1</span>,
+    };
+    z.<span class="tok-fn">beginMode2D</span>(f.gl, cam);
+    <span class="tok-kw">if</span> (s.count &gt; <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> start: usize = (s.head + trail_len - s.count) % trail_len;
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (k + <span class="tok-num">1</span> &lt; s.count) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> p0: z.Vec2 = s.trail[(start + k) % trail_len];
+            <span class="tok-kw">const</span> p1: z.Vec2 = s.trail[(start + k + <span class="tok-num">1</span>) % trail_len];
+            <span class="tok-kw">const</span> num: f32 = <span class="tok-builtin">@floatFromInt</span>(k + <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> den: f32 = <span class="tok-builtin">@floatFromInt</span>(s.count);
+            <span class="tok-kw">const</span> alpha: f32 = num / den;
+            <span class="tok-kw">const</span> hue: f32 = <span class="tok-builtin">@mod</span>(t * <span class="tok-num">40.0</span> + num * <span class="tok-num">1.2</span>, <span class="tok-num">360.0</span>);
+            <span class="tok-kw">const</span> col: z.colors.Color = z.<span class="tok-fn">colorFromHSV</span>(hue, <span class="tok-num">0.7</span>, <span class="tok-num">0.95</span>);
+            <span class="tok-kw">var</span> a_idx: usize = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (a_idx &lt; symmetry) : (a_idx += <span class="tok-num">1</span>) {
+                <span class="tok-kw">const</span> ang: f32 = angle_step * <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(a_idx));
+                <span class="tok-kw">const</span> r0: z.Vec2 = zm.<span class="tok-fn">rotate2</span>(p0, ang);
+                <span class="tok-kw">const</span> r1: z.Vec2 = zm.<span class="tok-fn">rotate2</span>(p1, ang);
+                z.<span class="tok-fn">drawLineThick</span>(f.gl, r0, r1, thick, col.<span class="tok-fn">fade</span>(alpha));
+                <span class="tok-kw">const</span> m0: z.Vec2 = .{ r0[<span class="tok-num">0</span>], -r0[<span class="tok-num">1</span>] };
+                <span class="tok-kw">const</span> m1: z.Vec2 = .{ r1[<span class="tok-num">0</span>], -r1[<span class="tok-num">1</span>] };
+                z.<span class="tok-fn">drawLineThick</span>(f.gl, m0, m1, thick, col.<span class="tok-fn">fade</span>(alpha));
+            }
+        }
+    }
+    z.<span class="tok-fn">endMode2D</span>(f.gl);
+
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"kaleidoscope: auto-driven symmetric trail"</span>, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">16</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">220</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="particles">6 · wgpu_simple_particles</h3>
+<p>A three-type particle emitter over a ring buffer: water (blue, falls under gravity), smoke (grey, rises + grows + fades), and fire (yellow→red, rises with a flicker wobble + shrinks). The active type cycles every few seconds. The ring buffer's head/tail indices are the emit/retire cursors.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 176 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_simple_particles — a three-type particle emitter ported to WebGPU. A ring</span>
+<span class="tok-comment">//! buffer of particles is emitted from a centre emitter; the active type cycles every</span>
+<span class="tok-comment">//! few seconds: water (blue, falls under gravity), smoke (grey, rises, grows, fades),</span>
+<span class="tok-comment">//! and fire (yellow→red, rises with a flicker wobble, shrinks). The GL original let you</span>
+<span class="tok-comment">//! drag the emitter with the mouse; this runs itself. Viewport-relative under</span>
+<span class="tok-comment">//! `.responsive`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+
+<span class="tok-kw">const</span> max_particles: usize = <span class="tok-num">1600</span>;
+<span class="tok-kw">const</span> emit_per_frame: usize = <span class="tok-num">5</span>;
+<span class="tok-kw">const</span> cycle_frames: usize = <span class="tok-num">200</span>; <span class="tok-comment">// switch active type on this cadence</span>
+
+<span class="tok-kw">const</span> ParticleType = <span class="tok-kw">enum</span>(u8) { water, smoke, fire };
+
+<span class="tok-kw">const</span> Particle = <span class="tok-kw">struct</span> {
+    ptype: ParticleType = .water,
+    pos: z.Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    vel: z.Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> },
+    radius: f32 = <span class="tok-num">0</span>,
+    color: z.colors.Color = c.white,
+    alive: bool = false,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    particles: []Particle,
+    head: usize = <span class="tok-num">0</span>,
+    tail: usize = <span class="tok-num">0</span>,
+    rng: std.Random.DefaultPrng,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - particles"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+    <span class="tok-kw">const</span> particles: []Particle = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Particle, max_particles);
+    <span class="tok-kw">for</span> (particles) |*p| {
+        p.* = .{};
+    }
+    <span class="tok-kw">return</span> .{
+        .font = font,
+        .particles = particles,
+        .rng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0x9a7d_1c3e</span>),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">emit</span>(
+    s: *State,
+    ptype: ParticleType,
+    emitter: z.Vec2,
+) void {
+    <span class="tok-kw">const</span> next: usize = (s.head + <span class="tok-num">1</span>) % max_particles;
+    <span class="tok-kw">if</span> (next == s.tail) {
+        <span class="tok-kw">return</span>; <span class="tok-comment">// buffer full</span>
+    }
+    <span class="tok-kw">const</span> rand: std.Random = s.rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">const</span> speed: f32 = rand.<span class="tok-fn">float</span>(f32) * <span class="tok-num">1.8</span>;
+    <span class="tok-kw">const</span> dir: f32 = rand.<span class="tok-fn">float</span>(f32) * <span class="tok-num">2.0</span> * zm.pi;
+    <span class="tok-kw">const</span> eff: f32 = <span class="tok-kw">if</span> (ptype == .fire) speed / <span class="tok-num">10.0</span> <span class="tok-kw">else</span> speed;
+    <span class="tok-kw">var</span> p: Particle = .{ .ptype = ptype, .pos = emitter, .alive = true };
+    p.vel = .{ eff * <span class="tok-builtin">@cos</span>(dir), eff * <span class="tok-builtin">@sin</span>(dir) };
+    <span class="tok-kw">switch</span> (ptype) {
+        .water =&gt; {
+            p.radius = <span class="tok-num">5.0</span>;
+            p.color = c.<span class="tok-fn">init</span>(<span class="tok-num">60</span>, <span class="tok-num">130</span>, <span class="tok-num">235</span>, <span class="tok-num">255</span>);
+        },
+        .smoke =&gt; {
+            p.radius = <span class="tok-num">7.0</span>;
+            p.color = c.<span class="tok-fn">init</span>(<span class="tok-num">150</span>, <span class="tok-num">150</span>, <span class="tok-num">150</span>, <span class="tok-num">255</span>);
+        },
+        .fire =&gt; {
+            p.radius = <span class="tok-num">10.0</span>;
+            p.color = c.<span class="tok-fn">init</span>(<span class="tok-num">255</span>, <span class="tok-num">230</span>, <span class="tok-num">60</span>, <span class="tok-num">255</span>);
+        },
+    }
+    s.particles[s.head] = p;
+    s.head = next;
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tickParticles</span>(
+    s: *State,
+    w: f32,
+    h: f32,
+) void {
+    <span class="tok-kw">var</span> i: usize = s.tail;
+    <span class="tok-kw">while</span> (i != s.head) : (i = (i + <span class="tok-num">1</span>) % max_particles) {
+        <span class="tok-kw">const</span> p: *Particle = &amp;s.particles[i];
+        <span class="tok-kw">if</span> (!p.alive) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">switch</span> (p.ptype) {
+            .water =&gt; {
+                p.vel[<span class="tok-num">1</span>] += <span class="tok-num">0.2</span>;
+                p.pos += p.vel;
+            },
+            .smoke =&gt; {
+                p.vel[<span class="tok-num">1</span>] -= <span class="tok-num">0.05</span>;
+                p.pos += p.vel;
+                p.radius += <span class="tok-num">0.5</span>;
+                p.color.a = <span class="tok-kw">if</span> (p.color.a &gt;= <span class="tok-num">4</span>) p.color.a - <span class="tok-num">4</span> <span class="tok-kw">else</span> <span class="tok-num">0</span>;
+                <span class="tok-kw">if</span> (p.color.a &lt; <span class="tok-num">4</span>) {
+                    p.alive = false;
+                }
+            },
+            .fire =&gt; {
+                p.pos[<span class="tok-num">0</span>] += p.vel[<span class="tok-num">0</span>] + <span class="tok-builtin">@cos</span>(<span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(s.frame_count)) * <span class="tok-num">0.21</span>);
+                p.vel[<span class="tok-num">1</span>] -= <span class="tok-num">0.05</span>;
+                p.pos[<span class="tok-num">1</span>] += p.vel[<span class="tok-num">1</span>];
+                p.radius -= <span class="tok-num">0.15</span>;
+                p.color.g = <span class="tok-kw">if</span> (p.color.g &gt;= <span class="tok-num">3</span>) p.color.g - <span class="tok-num">3</span> <span class="tok-kw">else</span> <span class="tok-num">0</span>;
+                <span class="tok-kw">if</span> (p.radius &lt;= <span class="tok-num">0.02</span>) {
+                    p.alive = false;
+                }
+            },
+        }
+        <span class="tok-kw">if</span> (p.pos[<span class="tok-num">0</span>] &lt; -p.radius <span class="tok-kw">or</span> p.pos[<span class="tok-num">0</span>] &gt; w + p.radius <span class="tok-kw">or</span>
+            p.pos[<span class="tok-num">1</span>] &lt; -p.radius <span class="tok-kw">or</span> p.pos[<span class="tok-num">1</span>] &gt; h + p.radius)
+        {
+            p.alive = false;
+        }
+    }
+    <span class="tok-comment">// Retire leading dead slots so alive particles stay contiguous.</span>
+    <span class="tok-kw">while</span> (s.tail != s.head <span class="tok-kw">and</span> !s.particles[s.tail].alive) {
+        s.tail = (s.tail + <span class="tok-num">1</span>) % max_particles;
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> ptype: ParticleType = <span class="tok-builtin">@enumFromInt</span>(<span class="tok-builtin">@as</span>(u8, <span class="tok-builtin">@intCast</span>((s.frame_count / cycle_frames) % <span class="tok-num">3</span>)));
+    <span class="tok-kw">const</span> emitter: z.Vec2 = .{ w * <span class="tok-num">0.5</span>, h * <span class="tok-num">0.5</span> };
+
+    <span class="tok-kw">var</span> e: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (e &lt; emit_per_frame) : (e += <span class="tok-num">1</span>) {
+        <span class="tok-fn">emit</span>(s, ptype, emitter);
+    }
+    <span class="tok-fn">tickParticles</span>(s, w, h);
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">8</span>, <span class="tok-num">9</span>, <span class="tok-num">14</span>, <span class="tok-num">255</span>));
+    <span class="tok-kw">var</span> i: usize = s.tail;
+    <span class="tok-kw">while</span> (i != s.head) : (i = (i + <span class="tok-num">1</span>) % max_particles) {
+        <span class="tok-kw">const</span> p: Particle = s.particles[i];
+        <span class="tok-kw">if</span> (p.alive <span class="tok-kw">and</span> p.radius &gt; <span class="tok-num">0.1</span>) {
+            z.<span class="tok-fn">drawCircleV</span>(f.gl, p.pos, p.radius, p.color);
+        }
+    }
+    <span class="tok-kw">const</span> label: []<span class="tok-kw">const</span> u8 = <span class="tok-kw">switch</span> (ptype) {
+        .water =&gt; <span class="tok-str">"particles: water (gravity)"</span>,
+        .smoke =&gt; <span class="tok-str">"particles: smoke (rises + fades)"</span>,
+        .fire =&gt; <span class="tok-str">"particles: fire (flicker)"</span>,
+    };
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, label, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">16</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">220</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="sine-cosine">7 · wgpu_math_sine_cosine</h3>
+<p>A unit-circle visualisation of sine &amp; cosine — and the showcase for the three new line primitives. A point sweeps the circle; the right triangle's legs are cos (blue) and sin (red). The swept angle is a <code>drawCircleSectorLines</code> arc, the axes are <code>drawLineDashed</code>, and the two wave traces below are <code>drawSplineLinear</code> polylines with moving markers. All three primitives are just <code>drawLineEx</code> loops under the hood.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 104 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_math_sine_cosine — unit-circle visualisation of sine &amp; cosine, ported to WebGPU.</span>
+<span class="tok-comment">//! A point sweeps the unit circle (auto-advancing angle); the right triangle's legs ARE</span>
+<span class="tok-comment">//! cos (horizontal, blue) and sin (vertical, red). A sector arc marks the swept angle,</span>
+<span class="tok-comment">//! dashed lines mark the axes, and two wave traces below plot sin/cos over 0–360° with a</span>
+<span class="tok-comment">//! moving marker. Exercises the new drawSplineLinear / drawLineDashed /</span>
+<span class="tok-comment">//! drawCircleSectorLines primitives. Self-running, viewport-relative under `.responsive`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+<span class="tok-kw">const</span> deg2rad: f32 = zm.pi / <span class="tok-num">180.0</span>;
+<span class="tok-kw">const</span> wave_points: usize = <span class="tok-num">64</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    angle: f32 = <span class="tok-num">0</span>,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - sine &amp; cosine"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">return</span> .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>) };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    s.angle = <span class="tok-builtin">@mod</span>(s.angle + <span class="tok-num">0.8</span>, <span class="tok-num">360.0</span>);
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> m: f32 = <span class="tok-builtin">@min</span>(w, h);
+
+    <span class="tok-kw">const</span> cx: f32 = w * <span class="tok-num">0.42</span>;
+    <span class="tok-kw">const</span> cy: f32 = h * <span class="tok-num">0.40</span>;
+    <span class="tok-kw">const</span> r: f32 = m * <span class="tok-num">0.26</span>;
+    <span class="tok-kw">const</span> ar: f32 = s.angle * deg2rad;
+    <span class="tok-kw">const</span> px: f32 = cx + r * <span class="tok-builtin">@cos</span>(ar);
+    <span class="tok-kw">const</span> py: f32 = cy - r * <span class="tok-builtin">@sin</span>(ar); <span class="tok-comment">// y-up</span>
+
+    <span class="tok-kw">const</span> gray: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">120</span>, <span class="tok-num">126</span>, <span class="tok-num">140</span>, <span class="tok-num">200</span>);
+    <span class="tok-kw">const</span> red: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">235</span>, <span class="tok-num">90</span>, <span class="tok-num">90</span>, <span class="tok-num">255</span>);
+    <span class="tok-kw">const</span> blue: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">90</span>, <span class="tok-num">150</span>, <span class="tok-num">235</span>, <span class="tok-num">255</span>);
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">10</span>, <span class="tok-num">12</span>, <span class="tok-num">18</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-comment">// Dashed axes through the circle centre.</span>
+    z.<span class="tok-fn">drawLineDashed</span>(f.gl, .{ cx - r - <span class="tok-num">20</span>, cy }, .{ cx + r + <span class="tok-num">20</span>, cy }, <span class="tok-num">1.0</span>, <span class="tok-num">6</span>, <span class="tok-num">5</span>, gray);
+    z.<span class="tok-fn">drawLineDashed</span>(f.gl, .{ cx, cy - r - <span class="tok-num">20</span> }, .{ cx, cy + r + <span class="tok-num">20</span> }, <span class="tok-num">1.0</span>, <span class="tok-num">6</span>, <span class="tok-num">5</span>, gray);
+
+    <span class="tok-comment">// Unit circle + swept-angle sector (negative end-angle so it sweeps y-up).</span>
+    z.<span class="tok-fn">drawCircleLinesV</span>(f.gl, .{ cx, cy }, r, c.<span class="tok-fn">init</span>(<span class="tok-num">150</span>, <span class="tok-num">156</span>, <span class="tok-num">170</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleSectorLines</span>(f.gl, .{ cx, cy }, r * <span class="tok-num">0.38</span>, <span class="tok-num">0</span>, -s.angle, <span class="tok-num">40</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">235</span>, <span class="tok-num">200</span>, <span class="tok-num">90</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-comment">// cos leg (horizontal), sin leg (vertical), radius, and the point.</span>
+    z.<span class="tok-fn">drawLineThick</span>(f.gl, .{ cx, cy }, .{ px, cy }, <span class="tok-num">3.0</span>, blue);
+    z.<span class="tok-fn">drawLineThick</span>(f.gl, .{ px, cy }, .{ px, py }, <span class="tok-num">3.0</span>, red);
+    z.<span class="tok-fn">drawLineThick</span>(f.gl, .{ cx, cy }, .{ px, py }, <span class="tok-num">2.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">220</span>, <span class="tok-num">224</span>, <span class="tok-num">232</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, .{ px, py }, <span class="tok-num">6.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">245</span>, <span class="tok-num">248</span>, <span class="tok-num">252</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-comment">// Wave traces below: sin (red) and cos (blue) over 0..360, computed for this size.</span>
+    <span class="tok-kw">const</span> wx: f32 = w * <span class="tok-num">0.06</span>;
+    <span class="tok-kw">const</span> ww: f32 = w * <span class="tok-num">0.42</span>;
+    <span class="tok-kw">const</span> wy: f32 = h * <span class="tok-num">0.82</span>;
+    <span class="tok-kw">const</span> wh: f32 = m * <span class="tok-num">0.16</span>;
+    <span class="tok-kw">var</span> sine_pts: [wave_points]z.Vec2 = undefined;
+    <span class="tok-kw">var</span> cos_pts: [wave_points]z.Vec2 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..wave_points) |i| {
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(i)) / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(wave_points - <span class="tok-num">1</span>));
+        <span class="tok-kw">const</span> a: f32 = t * <span class="tok-num">360.0</span> * deg2rad;
+        sine_pts[i] = .{ wx + t * ww, wy - <span class="tok-builtin">@sin</span>(a) * wh };
+        cos_pts[i] = .{ wx + t * ww, wy - <span class="tok-builtin">@cos</span>(a) * wh };
+    }
+    z.<span class="tok-fn">drawLineDashed</span>(f.gl, .{ wx, wy }, .{ wx + ww, wy }, <span class="tok-num">1.0</span>, <span class="tok-num">5</span>, <span class="tok-num">4</span>, gray);
+    z.<span class="tok-fn">drawSplineLinear</span>(f.gl, &amp;sine_pts, <span class="tok-num">2.0</span>, red);
+    z.<span class="tok-fn">drawSplineLinear</span>(f.gl, &amp;cos_pts, <span class="tok-num">2.0</span>, blue);
+    <span class="tok-kw">const</span> tt: f32 = s.angle / <span class="tok-num">360.0</span>;
+    <span class="tok-kw">const</span> msx: f32 = wx + tt * ww;
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, .{ msx, wy - <span class="tok-builtin">@sin</span>(ar) * wh }, <span class="tok-num">4.0</span>, red);
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, .{ msx, wy - <span class="tok-builtin">@cos</span>(ar) * wh }, <span class="tok-num">4.0</span>, blue);
+
+    <span class="tok-comment">// Labels.</span>
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"sin"</span>, px + <span class="tok-num">6</span>, (cy + py) * <span class="tok-num">0.5</span> - <span class="tok-num">8</span>, <span class="tok-num">16</span>, red);
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"cos"</span>, (cx + px) * <span class="tok-num">0.5</span> - <span class="tok-num">10</span>, cy + <span class="tok-num">6</span>, <span class="tok-num">16</span>, blue);
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">40</span>]u8 = undefined;
+    <span class="tok-kw">const</span> lbl: []<span class="tok-kw">const</span> u8 = std.fmt.<span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"angle: {d:.0} deg"</span>, .{s.angle}) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, lbl, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">16</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">230</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="bezier">8 · wgpu_lines_bezier</h3>
+<p>An animated cubic Bézier. Four control points drift along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn with <code>drawSplineLinear</code>, the control polygon is a dashed line, and the control points are dots.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 105 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_lines_bezier — a cubic Bézier curve ported to WebGPU. Four control points drift</span>
+<span class="tok-comment">//! along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn</span>
+<span class="tok-comment">//! via `drawSplineLinear`, with the control polygon as a dashed line and the control</span>
+<span class="tok-comment">//! points as dots. The GL original let you drag the endpoints; this animates itself.</span>
+<span class="tok-comment">//! Viewport-relative under `.responsive`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+<span class="tok-kw">const</span> samples: usize = <span class="tok-num">48</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - bezier"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">return</span> .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>) };
+}
+
+<span class="tok-comment">/// A control point drifting on a Lissajous path centred at (cxf*w, cyf*h).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ctrl</span>(
+    w: f32,
+    h: f32,
+    t: f32,
+    cxf: f32,
+    cyf: f32,
+    fx: f32,
+    fy: f32,
+    amp: f32,
+) z.Vec2 {
+    <span class="tok-kw">const</span> m: f32 = <span class="tok-builtin">@min</span>(w, h);
+    <span class="tok-kw">return</span> .{ w * cxf + <span class="tok-builtin">@cos</span>(t * fx) * m * amp, h * cyf + <span class="tok-builtin">@sin</span>(t * fy) * m * amp };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">cubic</span>(
+    p0: z.Vec2,
+    c0: z.Vec2,
+    c1: z.Vec2,
+    p1: z.Vec2,
+    t: f32,
+) z.Vec2 {
+    <span class="tok-kw">const</span> u: f32 = <span class="tok-num">1.0</span> - t;
+    <span class="tok-kw">const</span> a: f32 = u * u * u;
+    <span class="tok-kw">const</span> b: f32 = <span class="tok-num">3.0</span> * u * u * t;
+    <span class="tok-kw">const</span> cc: f32 = <span class="tok-num">3.0</span> * u * t * t;
+    <span class="tok-kw">const</span> d: f32 = t * t * t;
+    <span class="tok-kw">return</span> .{
+        a * p0[<span class="tok-num">0</span>] + b * c0[<span class="tok-num">0</span>] + cc * c1[<span class="tok-num">0</span>] + d * p1[<span class="tok-num">0</span>],
+        a * p0[<span class="tok-num">1</span>] + b * c0[<span class="tok-num">1</span>] + cc * c1[<span class="tok-num">1</span>] + d * p1[<span class="tok-num">1</span>],
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+
+    <span class="tok-kw">const</span> p0: z.Vec2 = <span class="tok-fn">ctrl</span>(w, h, t, <span class="tok-num">0.18</span>, <span class="tok-num">0.50</span>, <span class="tok-num">0.5</span>, <span class="tok-num">0.7</span>, <span class="tok-num">0.10</span>);
+    <span class="tok-kw">const</span> c0: z.Vec2 = <span class="tok-fn">ctrl</span>(w, h, t, <span class="tok-num">0.40</span>, <span class="tok-num">0.25</span>, <span class="tok-num">0.8</span>, <span class="tok-num">1.1</span>, <span class="tok-num">0.16</span>);
+    <span class="tok-kw">const</span> c1: z.Vec2 = <span class="tok-fn">ctrl</span>(w, h, t, <span class="tok-num">0.62</span>, <span class="tok-num">0.75</span>, <span class="tok-num">1.1</span>, <span class="tok-num">0.9</span>, <span class="tok-num">0.16</span>);
+    <span class="tok-kw">const</span> p1: z.Vec2 = <span class="tok-fn">ctrl</span>(w, h, t, <span class="tok-num">0.84</span>, <span class="tok-num">0.50</span>, <span class="tok-num">0.7</span>, <span class="tok-num">0.6</span>, <span class="tok-num">0.10</span>);
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">10</span>, <span class="tok-num">12</span>, <span class="tok-num">18</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-comment">// Control polygon (dashed) + control points.</span>
+    <span class="tok-kw">const</span> ctl: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">120</span>, <span class="tok-num">126</span>, <span class="tok-num">140</span>, <span class="tok-num">200</span>);
+    z.<span class="tok-fn">drawLineDashed</span>(f.gl, p0, c0, <span class="tok-num">1.0</span>, <span class="tok-num">6</span>, <span class="tok-num">5</span>, ctl);
+    z.<span class="tok-fn">drawLineDashed</span>(f.gl, c0, c1, <span class="tok-num">1.0</span>, <span class="tok-num">6</span>, <span class="tok-num">5</span>, ctl);
+    z.<span class="tok-fn">drawLineDashed</span>(f.gl, c1, p1, <span class="tok-num">1.0</span>, <span class="tok-num">6</span>, <span class="tok-num">5</span>, ctl);
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, c0, <span class="tok-num">5.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">235</span>, <span class="tok-num">200</span>, <span class="tok-num">90</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, c1, <span class="tok-num">5.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">235</span>, <span class="tok-num">200</span>, <span class="tok-num">90</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, p0, <span class="tok-num">6.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">90</span>, <span class="tok-num">200</span>, <span class="tok-num">130</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(f.gl, p1, <span class="tok-num">6.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">90</span>, <span class="tok-num">200</span>, <span class="tok-num">130</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-comment">// Sample + draw the cubic.</span>
+    <span class="tok-kw">var</span> pts: [samples]z.Vec2 = undefined;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..samples) |i| {
+        <span class="tok-kw">const</span> tt: f32 = <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(i)) / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(samples - <span class="tok-num">1</span>));
+        pts[i] = <span class="tok-fn">cubic</span>(p0, c0, c1, p1, tt);
+    }
+    z.<span class="tok-fn">drawSplineLinear</span>(f.gl, &amp;pts, <span class="tok-num">3.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">120</span>, <span class="tok-num">170</span>, <span class="tok-num">245</span>, <span class="tok-num">255</span>));
+
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"cubic bezier (animated control points)"</span>, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">16</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">220</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="camera2d">9 · wgpu_camera2d</h3>
+<p>The full Camera2D transform. A fixed world scene (grid + landmark shapes + origin marker) is viewed through a camera whose target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising offset / target / zoom / rotation via <code>beginMode2D</code>. The world is drawn in world coordinates; the camera does the rest.</p>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 84 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_camera2d — the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world</span>
+<span class="tok-comment">//! scene (grid + landmark shapes + origin marker) is viewed through a Camera2D whose</span>
+<span class="tok-comment">//! target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising</span>
+<span class="tok-comment">//! the full 2D camera (offset / target / zoom / rotation) via `beginMode2D`. The GL</span>
+<span class="tok-comment">//! original was mouse-driven; this animates itself. Viewport-relative under `.responsive`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - camera2d"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">return</span> .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>) };
+}
+
+<span class="tok-comment">/// Draw the fixed world scene (world coordinates; the camera transforms it).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawWorld</span>(gl: <span class="tok-kw">anytype</span>) void {
+    <span class="tok-kw">const</span> grid: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">40</span>, <span class="tok-num">44</span>, <span class="tok-num">54</span>, <span class="tok-num">255</span>);
+    <span class="tok-kw">var</span> g: i32 = -<span class="tok-num">400</span>;
+    <span class="tok-kw">while</span> (g &lt;= <span class="tok-num">400</span>) : (g += <span class="tok-num">50</span>) {
+        <span class="tok-kw">const</span> v: f32 = <span class="tok-builtin">@floatFromInt</span>(g);
+        z.<span class="tok-fn">drawLine</span>(gl, v, -<span class="tok-num">400.0</span>, v, <span class="tok-num">400.0</span>, grid);
+        z.<span class="tok-fn">drawLine</span>(gl, -<span class="tok-num">400.0</span>, v, <span class="tok-num">400.0</span>, v, grid);
+    }
+    <span class="tok-kw">const</span> axis: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">80</span>, <span class="tok-num">86</span>, <span class="tok-num">100</span>, <span class="tok-num">255</span>);
+    z.<span class="tok-fn">drawLine</span>(gl, -<span class="tok-num">400.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">400.0</span>, <span class="tok-num">0.0</span>, axis);
+    z.<span class="tok-fn">drawLine</span>(gl, <span class="tok-num">0.0</span>, -<span class="tok-num">400.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">400.0</span>, axis);
+
+    z.<span class="tok-fn">drawRectangleRec</span>(gl, .{ .x = -<span class="tok-num">170</span>, .y = -<span class="tok-num">130</span>, .width = <span class="tok-num">80</span>, .height = <span class="tok-num">80</span> }, c.<span class="tok-fn">init</span>(<span class="tok-num">235</span>, <span class="tok-num">90</span>, <span class="tok-num">90</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawRectangleRec</span>(gl, .{ .x = <span class="tok-num">100</span>, .y = -<span class="tok-num">150</span>, .width = <span class="tok-num">64</span>, .height = <span class="tok-num">64</span> }, c.<span class="tok-fn">init</span>(<span class="tok-num">90</span>, <span class="tok-num">200</span>, <span class="tok-num">130</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(gl, .{ <span class="tok-num">165</span>, <span class="tok-num">120</span> }, <span class="tok-num">42.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">90</span>, <span class="tok-num">150</span>, <span class="tok-num">235</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(gl, .{ -<span class="tok-num">150</span>, <span class="tok-num">140</span> }, <span class="tok-num">32.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">235</span>, <span class="tok-num">200</span>, <span class="tok-num">90</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawCircleV</span>(gl, .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> }, <span class="tok-num">8.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">245</span>, <span class="tok-num">248</span>, <span class="tok-num">252</span>, <span class="tok-num">255</span>));
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-kw">const</span> cam: z.Camera2D = .{
+        .target = .{ <span class="tok-builtin">@cos</span>(t * <span class="tok-num">0.3</span>) * <span class="tok-num">120.0</span>, <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.4</span>) * <span class="tok-num">120.0</span> },
+        .offset = .{ w * <span class="tok-num">0.5</span>, h * <span class="tok-num">0.5</span> },
+        .rotation = t * <span class="tok-num">10.0</span>,
+        .zoom = <span class="tok-num">1.0</span> + <span class="tok-builtin">@sin</span>(t * <span class="tok-num">0.5</span>) * <span class="tok-num">0.35</span>,
+    };
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">12</span>, <span class="tok-num">14</span>, <span class="tok-num">20</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">beginMode2D</span>(f.gl, cam);
+    <span class="tok-fn">drawWorld</span>(f.gl);
+    z.<span class="tok-fn">endMode2D</span>(f.gl);
+
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">56</span>]u8 = undefined;
+    <span class="tok-kw">const</span> lbl: []<span class="tok-kw">const</span> u8 = std.fmt.<span class="tok-fn">bufPrint</span>(
+        &amp;buf,
+        <span class="tok-str">"Camera2D  zoom {d:.2}  rot {d:.0}"</span>,
+        .{ cam.zoom, <span class="tok-builtin">@mod</span>(cam.rotation, <span class="tok-num">360.0</span>) },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, lbl, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">16</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">230</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3 id="boids">10 · wgpu_ecs_boids</h3>
+<p>Reynolds flocking on the zimr ECS — the example that proves the whole ECS subsystem (<code>Registry</code>, archetypes, <code>iterator</code>, <code>forEach</code>) runs on the wgpu backend. ~160 boids live in an archetype of Pos + Vel components. Each frame: a snapshot via <code>iterator</code> feeds a steering <code>forEach</code> (separation / alignment / cohesion), then an integrate-and-wrap <code>forEach</code>, then a render <code>iterator</code>.</p>
+<blockquote class="bug">
+<strong>known bug — help wanted</strong>
+<p>The boids clump into an arc in the <em>top-left corner</em> instead of spreading out and flocking. Confirmed working: the viewport is valid (the HUD reads e.g. <code>343x261</code>, not <code>0x0</code>), GPU validation is clean, 60–120&nbsp;fps. Already tried: the original's tuned params (<code>separation_factor = 1.4</code>); a one-time <code>redistribute</code> of positions across the viewport on the first valid frame; viewport-relative toroidal wrap.</p>
+<p>Leading suspects: <strong>(a)</strong> the <code>redistribute</code> writes through an <code>iterator</code> view (<code>view.p.* = ...</code>) — if an iterator view isn't a writable pointer into chunk storage the way a <code>forEach</code> component pointer is, the redistribute is a silent no-op and the boids stay where they spawned. <strong>(b)</strong> <code>initState</code> spawns with <code>@max(64, f.window.widthf())</code>; since <code>f.window</code> is 0 at init, that's a 64×64 top-left box — exactly where they're stuck. <strong>(c)</strong> Pos and Vel are both <code>z.Vec2</code>, so the matcher distinguishes them by archetype field order — worth checking p/v aren't swapped in some query. The full code is below.</p>
+</blockquote>
+<details class="src-fold"><summary><code>const std</code><span class="faint"> · 247 lines</span></summary><pre><code class="zig">
+<span class="tok-comment">//! wgpu_ecs_boids — Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live</span>
+<span class="tok-comment">//! in an archetype with Pos + Vel components; each frame three passes run the classic</span>
+<span class="tok-comment">//! rules — a snapshot (via `iterator`) feeds a steering `forEach`</span>
+<span class="tok-comment">//! (separation/alignment/cohesion), then an integrate-and-wrap `forEach`, then a render</span>
+<span class="tok-comment">//! `iterator`. Proves the ECS subsystem (Registry, archetypes, iterator, forEach) on the</span>
+<span class="tok-comment">//! wgpu backend. The GL original was mouse-driven; this flocks on its own.</span>
+<span class="tok-comment">//! Viewport-relative under `.responsive`.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+<span class="tok-kw">const</span> ecs = z.ecs;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+
+<span class="tok-kw">const</span> NUM_BOIDS: usize = <span class="tok-num">160</span>;
+<span class="tok-kw">const</span> MAX_SPEED: f32 = <span class="tok-num">140</span>;
+<span class="tok-kw">const</span> MIN_SPEED: f32 = <span class="tok-num">60</span>;
+
+<span class="tok-comment">// Pos and Vel are both Vec2; the ECS matcher distinguishes them by archetype field order</span>
+<span class="tok-comment">// (pos first, vel second) — mirror that order in every query.</span>
+<span class="tok-kw">const</span> Pos = z.Vec2;
+<span class="tok-kw">const</span> Vel = z.Vec2;
+<span class="tok-kw">const</span> Snap = <span class="tok-kw">struct</span> { p: Pos, v: Vel };
+
+<span class="tok-kw">const</span> Params = <span class="tok-kw">struct</span> {
+    neighbor_radius: f32 = <span class="tok-num">60</span>,
+    separation_radius: f32 = <span class="tok-num">18</span>,
+    alignment_factor: f32 = <span class="tok-num">0.06</span>,
+    cohesion_factor: f32 = <span class="tok-num">0.0009</span>,
+    separation_factor: f32 = <span class="tok-num">1.4</span>,
+};
+<span class="tok-kw">const</span> params: Params = .{};
+
+<span class="tok-kw">const</span> SteerCtx = <span class="tok-kw">struct</span> {
+    snap: []<span class="tok-kw">const</span> Snap,
+};
+
+<span class="tok-kw">const</span> IntegrateCtx = <span class="tok-kw">struct</span> {
+    dt: f32,
+    w: f32,
+    h: f32,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    es: ecs.Registry,
+    rng: std.Random.DefaultPrng,
+    snap: [NUM_BOIDS]Snap = undefined,
+    distributed: bool = false,
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - ECS boids"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>);
+    <span class="tok-kw">var</span> es: ecs.Registry = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(.{
+        .gpa = gpa,
+        .cap = .{ .entities = NUM_BOIDS + <span class="tok-num">16</span>, .arches = <span class="tok-num">4</span>, .chunks = <span class="tok-num">8</span>, .chunk = <span class="tok-num">4096</span> },
+    });
+    <span class="tok-kw">errdefer</span> es.<span class="tok-fn">deinit</span>(gpa);
+    <span class="tok-kw">var</span> rng: std.Random.DefaultPrng = .<span class="tok-fn">init</span>(<span class="tok-num">0xB01D5</span>);
+    <span class="tok-kw">const</span> r: std.Random = rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">64.0</span>, f.window.<span class="tok-fn">widthf</span>());
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-builtin">@max</span>(<span class="tok-num">64.0</span>, f.window.<span class="tok-fn">heightf</span>());
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..NUM_BOIDS) |_| {
+        <span class="tok-kw">const</span> e: ecs.Entity = <span class="tok-kw">try</span> ecs.Entity.<span class="tok-fn">reserveImmediateOrErr</span>(&amp;es);
+        <span class="tok-kw">const</span> angle: f32 = r.<span class="tok-fn">float</span>(f32) * zm.tau;
+        <span class="tok-kw">const</span> speed: f32 = MIN_SPEED + r.<span class="tok-fn">float</span>(f32) * (MAX_SPEED - MIN_SPEED);
+        _ = <span class="tok-kw">try</span> e.<span class="tok-fn">changeArchImmediateOrErr</span>(&amp;es, gpa, <span class="tok-kw">struct</span> {
+            pos: Pos,
+            vel: Vel,
+        }, .{
+            .add = .{
+                .pos = .{ r.<span class="tok-fn">float</span>(f32) * w, r.<span class="tok-fn">float</span>(f32) * h },
+                .vel = .{ <span class="tok-builtin">@cos</span>(angle) * speed, <span class="tok-builtin">@sin</span>(angle) * speed },
+            },
+        });
+    }
+    <span class="tok-kw">return</span> .{ .font = font, .es = es, .rng = rng };
+}
+
+<span class="tok-comment">/// Three Reynolds rules from the immutable snapshot, then a speed clamp.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">steerBoid</span>(
+    ctx: SteerCtx,
+    p: *<span class="tok-kw">const</span> Pos,
+    v: *Vel,
+) void {
+    <span class="tok-kw">var</span> sep_x: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> sep_y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> ali_x: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> ali_y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> coh_x: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> coh_y: f32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> neighbor_count: usize = <span class="tok-num">0</span>;
+
+    <span class="tok-kw">for</span> (ctx.snap) |other| {
+        <span class="tok-kw">if</span> (other.p[<span class="tok-num">0</span>] == p[<span class="tok-num">0</span>] <span class="tok-kw">and</span> other.p[<span class="tok-num">1</span>] == p[<span class="tok-num">1</span>] <span class="tok-kw">and</span> other.v[<span class="tok-num">0</span>] == v[<span class="tok-num">0</span>] <span class="tok-kw">and</span> other.v[<span class="tok-num">1</span>] == v[<span class="tok-num">1</span>]) {
+            <span class="tok-kw">continue</span>;
+        }
+        <span class="tok-kw">const</span> dx: f32 = other.p[<span class="tok-num">0</span>] - p[<span class="tok-num">0</span>];
+        <span class="tok-kw">const</span> dy: f32 = other.p[<span class="tok-num">1</span>] - p[<span class="tok-num">1</span>];
+        <span class="tok-kw">const</span> d: f32 = <span class="tok-builtin">@sqrt</span>(dx * dx + dy * dy);
+        <span class="tok-kw">if</span> (d &gt; params.neighbor_radius) {
+            <span class="tok-kw">continue</span>;
+        }
+        coh_x += other.p[<span class="tok-num">0</span>];
+        coh_y += other.p[<span class="tok-num">1</span>];
+        ali_x += other.v[<span class="tok-num">0</span>];
+        ali_y += other.v[<span class="tok-num">1</span>];
+        neighbor_count += <span class="tok-num">1</span>;
+        <span class="tok-kw">if</span> (d &lt; params.separation_radius <span class="tok-kw">and</span> d &gt; <span class="tok-num">0.001</span>) {
+            <span class="tok-kw">const</span> inv: f32 = <span class="tok-num">1.0</span> / d;
+            sep_x += -dx * inv;
+            sep_y += -dy * inv;
+        }
+    }
+
+    <span class="tok-kw">if</span> (neighbor_count &gt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">const</span> inv_count: f32 = <span class="tok-num">1.0</span> / <span class="tok-builtin">@as</span>(f32, <span class="tok-builtin">@floatFromInt</span>(neighbor_count));
+        v[<span class="tok-num">0</span>] += (ali_x * inv_count - v[<span class="tok-num">0</span>]) * params.alignment_factor;
+        v[<span class="tok-num">1</span>] += (ali_y * inv_count - v[<span class="tok-num">1</span>]) * params.alignment_factor;
+        v[<span class="tok-num">0</span>] += (coh_x * inv_count - p[<span class="tok-num">0</span>]) * params.cohesion_factor;
+        v[<span class="tok-num">1</span>] += (coh_y * inv_count - p[<span class="tok-num">1</span>]) * params.cohesion_factor;
+        v[<span class="tok-num">0</span>] += sep_x * params.separation_factor;
+        v[<span class="tok-num">1</span>] += sep_y * params.separation_factor;
+    }
+
+    <span class="tok-kw">const</span> speed: f32 = <span class="tok-builtin">@sqrt</span>(v[<span class="tok-num">0</span>] * v[<span class="tok-num">0</span>] + v[<span class="tok-num">1</span>] * v[<span class="tok-num">1</span>]);
+    <span class="tok-kw">if</span> (speed &gt; MAX_SPEED) {
+        <span class="tok-kw">const</span> scale: f32 = MAX_SPEED / speed;
+        v[<span class="tok-num">0</span>] *= scale;
+        v[<span class="tok-num">1</span>] *= scale;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (speed &lt; MIN_SPEED <span class="tok-kw">and</span> speed &gt; <span class="tok-num">0.001</span>) {
+        <span class="tok-kw">const</span> scale: f32 = MIN_SPEED / speed;
+        v[<span class="tok-num">0</span>] *= scale;
+        v[<span class="tok-num">1</span>] *= scale;
+    }
+}
+
+<span class="tok-comment">/// Move by velocity; toroidal wrap against the live viewport.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">integrateAndWrap</span>(
+    ctx: IntegrateCtx,
+    p: *Pos,
+    v: *<span class="tok-kw">const</span> Vel,
+) void {
+    p[<span class="tok-num">0</span>] += v[<span class="tok-num">0</span>] * ctx.dt;
+    p[<span class="tok-num">1</span>] += v[<span class="tok-num">1</span>] * ctx.dt;
+    <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &lt; <span class="tok-num">0</span>) {
+        p[<span class="tok-num">0</span>] += ctx.w;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">0</span>] &gt;= ctx.w) {
+        p[<span class="tok-num">0</span>] -= ctx.w;
+    }
+    <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &lt; <span class="tok-num">0</span>) {
+        p[<span class="tok-num">1</span>] += ctx.h;
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (p[<span class="tok-num">1</span>] &gt;= ctx.h) {
+        p[<span class="tok-num">1</span>] -= ctx.h;
+    }
+}
+
+<span class="tok-comment">/// A small triangle pointing along the boid's velocity.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawBoid</span>(
+    gl: <span class="tok-kw">anytype</span>,
+    pos: z.Vec2,
+    vel: z.Vec2,
+) void {
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sqrt</span>(vel[<span class="tok-num">0</span>] * vel[<span class="tok-num">0</span>] + vel[<span class="tok-num">1</span>] * vel[<span class="tok-num">1</span>]);
+    <span class="tok-kw">const</span> dx: f32 = <span class="tok-kw">if</span> (sp &gt; <span class="tok-num">0.001</span>) vel[<span class="tok-num">0</span>] / sp <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> dy: f32 = <span class="tok-kw">if</span> (sp &gt; <span class="tok-num">0.001</span>) vel[<span class="tok-num">1</span>] / sp <span class="tok-kw">else</span> <span class="tok-num">0.0</span>;
+    <span class="tok-kw">const</span> size: f32 = <span class="tok-num">6.0</span>;
+    <span class="tok-kw">const</span> tip: z.Vec2 = .{ pos[<span class="tok-num">0</span>] + dx * size, pos[<span class="tok-num">1</span>] + dy * size };
+    <span class="tok-kw">const</span> back: z.Vec2 = .{ pos[<span class="tok-num">0</span>] - dx * size * <span class="tok-num">0.6</span>, pos[<span class="tok-num">1</span>] - dy * size * <span class="tok-num">0.6</span> };
+    <span class="tok-kw">const</span> lft: z.Vec2 = .{ back[<span class="tok-num">0</span>] - dy * size * <span class="tok-num">0.5</span>, back[<span class="tok-num">1</span>] + dx * size * <span class="tok-num">0.5</span> };
+    <span class="tok-kw">const</span> rgt: z.Vec2 = .{ back[<span class="tok-num">0</span>] + dy * size * <span class="tok-num">0.5</span>, back[<span class="tok-num">1</span>] - dx * size * <span class="tok-num">0.5</span> };
+    <span class="tok-kw">const</span> col: z.colors.Color = c.<span class="tok-fn">init</span>(<span class="tok-num">120</span>, <span class="tok-num">190</span>, <span class="tok-num">245</span>, <span class="tok-num">255</span>);
+    z.<span class="tok-fn">drawLineEx</span>(gl, tip, lft, <span class="tok-num">1.5</span>, col);
+    z.<span class="tok-fn">drawLineEx</span>(gl, tip, rgt, <span class="tok-num">1.5</span>, col);
+    z.<span class="tok-fn">drawLineEx</span>(gl, lft, rgt, <span class="tok-num">1.5</span>, col);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    <span class="tok-comment">// initState ran before the canvas was sized (f.window was 0), so the boids spawned</span>
+    <span class="tok-comment">// into a tiny corner. The first frame with a valid viewport, spread them out.</span>
+    <span class="tok-kw">if</span> (!s.distributed <span class="tok-kw">and</span> w &gt; <span class="tok-num">1</span> <span class="tok-kw">and</span> h &gt; <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> r: std.Random = s.rng.<span class="tok-fn">random</span>();
+        <span class="tok-kw">var</span> dist_it = s.es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+            p: *Pos,
+            v: *<span class="tok-kw">const</span> Vel,
+        });
+        <span class="tok-kw">while</span> (dist_it.<span class="tok-fn">next</span>(&amp;s.es)) |view| {
+            view.p.* = .{ r.<span class="tok-fn">float</span>(f32) * w, r.<span class="tok-fn">float</span>(f32) * h };
+        }
+        s.distributed = true;
+    }
+
+    <span class="tok-comment">// 1. Snapshot every boid's (pos, vel) so steering reads a stable world.</span>
+    <span class="tok-kw">var</span> n: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">var</span> snap_it = s.es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+        p: *<span class="tok-kw">const</span> Pos,
+        v: *<span class="tok-kw">const</span> Vel,
+    });
+    <span class="tok-kw">while</span> (snap_it.<span class="tok-fn">next</span>(&amp;s.es)) |view| {
+        <span class="tok-kw">if</span> (n &gt;= s.snap.len) {
+            <span class="tok-kw">break</span>;
+        }
+        s.snap[n] = .{ .p = view.p.*, .v = view.v.* };
+        n += <span class="tok-num">1</span>;
+    }
+
+    <span class="tok-comment">// 2. Steer, 3. integrate + wrap.</span>
+    s.es.<span class="tok-fn">forEach</span>(steerBoid, SteerCtx{ .snap = s.snap[<span class="tok-num">0</span>..n] });
+    s.es.<span class="tok-fn">forEach</span>(integrateAndWrap, IntegrateCtx{ .dt = dt, .w = w, .h = h });
+
+    <span class="tok-comment">// 4. Render.</span>
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">8</span>, <span class="tok-num">10</span>, <span class="tok-num">16</span>, <span class="tok-num">255</span>));
+    <span class="tok-kw">var</span> draw_it = s.es.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> {
+        p: *<span class="tok-kw">const</span> Pos,
+        v: *<span class="tok-kw">const</span> Vel,
+    });
+    <span class="tok-kw">while</span> (draw_it.<span class="tok-fn">next</span>(&amp;s.es)) |view| {
+        <span class="tok-fn">drawBoid</span>(f.gl, view.p.*, view.v.*);
+    }
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">56</span>]u8 = undefined;
+    <span class="tok-kw">const</span> lbl: []<span class="tok-kw">const</span> u8 = std.fmt.<span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"ECS boids: {d} | {d:.0}x{d:.0}"</span>, .{ n, w, h }) <span class="tok-kw">catch</span> <span class="tok-str">"?"</span>;
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, lbl, <span class="tok-num">12</span>, <span class="tok-num">12</span>, <span class="tok-num">16</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">220</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre></details>
+<h3>highlighter</h3>
+<p>This page colours Zig client-side with a tiny single-pass tokeniser (comments, strings, keywords, <code>@builtins</code>, primitive types, numbers) — no external dependency, so it renders the same offline.</p>
+</div>
+</body>
+</html>

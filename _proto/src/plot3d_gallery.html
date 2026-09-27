@@ -1,0 +1,695 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>plot3d_gallery — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>plot3d_gallery</h1>
+<figure class="code src-file" data-path="examples/plot3d_gallery/plot3d_gallery.zig" data-lines="415"><figcaption><span>examples/plot3d_gallery/plot3d_gallery.zig</span><span>415 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/plot3d_gallery/plot3d_gallery.zig</span>
+<span class="tok-comment">//! A tabbed gallery of zimr's 3D plotting (the ImPlot3D port), reproducing the</span>
+<span class="tok-comment">//! plots from ImPlot3D's README: a line + scatter pair (f(x)/g(x)), a warm</span>
+<span class="tok-comment">//! "wave surface", a correlated scatter cloud (Data 1 / Data 2), a wireframe</span>
+<span class="tok-comment">//! sphere, a solid mesh, and the filled-vs-open marker matrix with rotated</span>
+<span class="tok-comment">//! text. It mirrors plot_demo's tabbed shell, but each tab drives</span>
+<span class="tok-comment">//! `z.plot3d` (CPU projection + painter's-algorithm depth sort over ui.zig)</span>
+<span class="tok-comment">//! instead of the 2D plot_ui.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Note: ImPlot3D's README renders a rubber-duck OBJ for its mesh example. That</span>
+<span class="tok-comment">//! asset is not bundled here, so the "Mesh" tab generates a torus to show the</span>
+<span class="tok-comment">//! same thing the duck does - an arbitrary solid triangle mesh, shaded.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> ui = z.ui_real;
+<span class="tok-kw">const</span> p3 = z.plot3d;
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-comment">// File-scope binds (lint: no qualified zm.* in bodies).</span>
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> pi = zm.pi;
+
+<span class="tok-kw">const</span> screen_w: i32 = <span class="tok-num">980</span>;
+<span class="tok-kw">const</span> screen_h: i32 = <span class="tok-num">860</span>;
+<span class="tok-kw">const</span> plot_h: f32 = <span class="tok-num">624</span>;
+
+<span class="tok-comment">// ---- data sizes ----------------------------------------------------------</span>
+<span class="tok-kw">const</span> spring_n: usize = <span class="tok-num">480</span>; <span class="tok-comment">// f(x): a coiled spring (line)</span>
+<span class="tok-kw">const</span> gx_n: usize = <span class="tok-num">28</span>; <span class="tok-comment">// g(x): rising parabola (scatter)</span>
+<span class="tok-kw">const</span> grid_n: usize = <span class="tok-num">40</span>; <span class="tok-comment">// wave surface is grid_n x grid_n vertices</span>
+<span class="tok-kw">const</span> surf_n: usize = grid_n * grid_n;
+<span class="tok-kw">const</span> cloud1_n: usize = <span class="tok-num">220</span>; <span class="tok-comment">// Data 1 (diagonal cloud)</span>
+<span class="tok-kw">const</span> cloud2_n: usize = <span class="tok-num">90</span>; <span class="tok-comment">// Data 2 (cross streak)</span>
+
+<span class="tok-comment">// sphere mesh (wireframe): (stacks+1) x (slices+1) vertices.</span>
+<span class="tok-kw">const</span> sph_stacks: usize = <span class="tok-num">20</span>;
+<span class="tok-kw">const</span> sph_slices: usize = <span class="tok-num">22</span>;
+<span class="tok-kw">const</span> sph_vtx_cap: usize = (sph_stacks + <span class="tok-num">1</span>) * (sph_slices + <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> sph_idx_cap: usize = sph_stacks * sph_slices * <span class="tok-num">6</span>;
+
+<span class="tok-comment">// torus mesh (solid): rings x sides vertices.</span>
+<span class="tok-kw">const</span> tor_rings: usize = <span class="tok-num">48</span>;
+<span class="tok-kw">const</span> tor_sides: usize = <span class="tok-num">24</span>;
+<span class="tok-kw">const</span> tor_vtx_n: usize = tor_rings * tor_sides;
+<span class="tok-kw">const</span> tor_idx_n: usize = tor_rings * tor_sides * <span class="tok-num">6</span>;
+
+<span class="tok-comment">// ---- colors (zm.Color via p3.rgbaF; 0..1 sRGB floats) --------------------</span>
+<span class="tok-kw">const</span> blue: Color = p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.30</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.95</span>, <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> orange: Color = p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.95</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.20</span>, <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> white: Color = p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.92</span>, <span class="tok-num">0.94</span>, <span class="tok-num">0.98</span>, <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> yellow: Color = p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.88</span>, <span class="tok-num">0.80</span>, <span class="tok-num">0.12</span>, <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> edge_dark: Color = p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.18</span>, <span class="tok-num">0.16</span>, <span class="tok-num">0.05</span>, <span class="tok-num">1</span>);
+<span class="tok-kw">const</span> clear: Color = p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+
+<span class="tok-kw">const</span> marker_kinds = [_]p3.Marker{
+    .circle, .square, .diamond, .up,   .down,
+    .left,   .right,  .cross,   .plus, .asterisk,
+};
+<span class="tok-kw">const</span> marker_cols = [_]Color{
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.91</span>, <span class="tok-num">0.30</span>, <span class="tok-num">0.24</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.95</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.20</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.93</span>, <span class="tok-num">0.83</span>, <span class="tok-num">0.25</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.40</span>, <span class="tok-num">0.78</span>, <span class="tok-num">0.35</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.25</span>, <span class="tok-num">0.74</span>, <span class="tok-num">0.70</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.30</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.95</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.45</span>, <span class="tok-num">0.40</span>, <span class="tok-num">0.85</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.65</span>, <span class="tok-num">0.40</span>, <span class="tok-num">0.85</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.90</span>, <span class="tok-num">0.40</span>, <span class="tok-num">0.80</span>, <span class="tok-num">1</span>),
+    p3.<span class="tok-fn">rgbaF</span>(<span class="tok-num">0.70</span>, <span class="tok-num">0.72</span>, <span class="tok-num">0.78</span>, <span class="tok-num">1</span>),
+};
+<span class="tok-comment">// Unique per-row labels so the two columns never collide on item IDs.</span>
+<span class="tok-kw">const</span> lbl_filled = [_][:<span class="tok-num">0</span>]<span class="tok-kw">const</span> u8{
+    <span class="tok-str">"fm0"</span>, <span class="tok-str">"fm1"</span>, <span class="tok-str">"fm2"</span>, <span class="tok-str">"fm3"</span>, <span class="tok-str">"fm4"</span>, <span class="tok-str">"fm5"</span>, <span class="tok-str">"fm6"</span>, <span class="tok-str">"fm7"</span>, <span class="tok-str">"fm8"</span>, <span class="tok-str">"fm9"</span>,
+};
+<span class="tok-kw">const</span> lbl_open = [_][:<span class="tok-num">0</span>]<span class="tok-kw">const</span> u8{
+    <span class="tok-str">"om0"</span>, <span class="tok-str">"om1"</span>, <span class="tok-str">"om2"</span>, <span class="tok-str">"om3"</span>, <span class="tok-str">"om4"</span>, <span class="tok-str">"om5"</span>, <span class="tok-str">"om6"</span>, <span class="tok-str">"om7"</span>, <span class="tok-str">"om8"</span>, <span class="tok-str">"om9"</span>,
+};
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    ui_host: z.UiHost,
+    font: z.Font,
+    ctx: *p3.Context,
+    current_tab: usize = <span class="tok-num">0</span>,
+
+    spring_x: [spring_n]f32 = undefined,
+    spring_y: [spring_n]f32 = undefined,
+    spring_z: [spring_n]f32 = undefined,
+    gx_x: [gx_n]f32 = undefined,
+    gx_y: [gx_n]f32 = undefined,
+    gx_z: [gx_n]f32 = undefined,
+
+    surf_x: [surf_n]f32 = undefined,
+    surf_y: [surf_n]f32 = undefined,
+    surf_z: [surf_n]f32 = undefined,
+
+    c1x: [cloud1_n]f32 = undefined,
+    c1y: [cloud1_n]f32 = undefined,
+    c1z: [cloud1_n]f32 = undefined,
+    c2x: [cloud2_n]f32 = undefined,
+    c2y: [cloud2_n]f32 = undefined,
+    c2z: [cloud2_n]f32 = undefined,
+
+    sph_v: [sph_vtx_cap]p3.Point3 = undefined,
+    sph_i: [sph_idx_cap]u32 = undefined,
+    sph_vn: usize = <span class="tok-num">0</span>,
+    sph_in: usize = <span class="tok-num">0</span>,
+
+    tor_v: [tor_vtx_n]p3.Point3 = undefined,
+    tor_i: [tor_idx_n]u32 = undefined,
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+    p3.<span class="tok-fn">destroyContext</span>(s.ctx);
+    s.ui_host.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Fill a torus: `rings` major segments, `sides` minor segments. Wraps both</span>
+<span class="tok-comment">/// rings of indices so the surface is closed.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">genTorus</span>(
+    out_v: []p3.Point3,
+    out_i: []u32,
+    big_r: f32,
+    small_r: f32,
+    rings: usize,
+    sides: usize,
+) void {
+    <span class="tok-kw">var</span> vi: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..rings) |ri| {
+        <span class="tok-kw">const</span> a: f32 = <span class="tok-num">2.0</span> * pi * <span class="tok-fn">float</span>(ri) / <span class="tok-fn">float</span>(rings);
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..sides) |si| {
+            <span class="tok-kw">const</span> b: f32 = <span class="tok-num">2.0</span> * pi * <span class="tok-fn">float</span>(si) / <span class="tok-fn">float</span>(sides);
+            <span class="tok-kw">const</span> rim: f32 = big_r + small_r * <span class="tok-builtin">@cos</span>(b);
+            out_v[vi] = p3.<span class="tok-fn">point3</span>(rim * <span class="tok-builtin">@cos</span>(a), rim * <span class="tok-builtin">@sin</span>(a), small_r * <span class="tok-builtin">@sin</span>(b));
+            vi += <span class="tok-num">1</span>;
+        }
+    }
+    <span class="tok-kw">var</span> ii: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..rings) |ri| {
+        <span class="tok-kw">const</span> rn: usize = (ri + <span class="tok-num">1</span>) % rings;
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..sides) |si| {
+            <span class="tok-kw">const</span> sn: usize = (si + <span class="tok-num">1</span>) % sides;
+            <span class="tok-kw">const</span> v00: u32 = <span class="tok-builtin">@intCast</span>(ri * sides + si);
+            <span class="tok-kw">const</span> v10: u32 = <span class="tok-builtin">@intCast</span>(rn * sides + si);
+            <span class="tok-kw">const</span> v11: u32 = <span class="tok-builtin">@intCast</span>(rn * sides + sn);
+            <span class="tok-kw">const</span> v01: u32 = <span class="tok-builtin">@intCast</span>(ri * sides + sn);
+            out_i[ii + <span class="tok-num">0</span>] = v00;
+            out_i[ii + <span class="tok-num">1</span>] = v10;
+            out_i[ii + <span class="tok-num">2</span>] = v11;
+            out_i[ii + <span class="tok-num">3</span>] = v00;
+            out_i[ii + <span class="tok-num">4</span>] = v11;
+            out_i[ii + <span class="tok-num">5</span>] = v01;
+            ii += <span class="tok-num">6</span>;
+        }
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-kw">const</span> font: z.Font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">28</span>);
+    s.* = .{
+        .font = font,
+        .ui_host = z.UiHost.<span class="tok-fn">init</span>(gpa, font),
+        .ctx = p3.<span class="tok-fn">createContext</span>(gpa),
+    };
+
+    <span class="tok-comment">// f(x): a horizontal coiled spring (nine turns) along x.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..spring_n) |i| {
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-fn">float</span>(i) / <span class="tok-fn">float</span>(spring_n - <span class="tok-num">1</span>);
+        <span class="tok-kw">const</span> ang: f32 = t * <span class="tok-num">9.0</span> * <span class="tok-num">2.0</span> * pi;
+        s.spring_x[i] = t;
+        s.spring_y[i] = <span class="tok-num">0.30</span> * <span class="tok-builtin">@sin</span>(ang);
+        s.spring_z[i] = <span class="tok-num">0.30</span> * <span class="tok-builtin">@cos</span>(ang);
+    }
+    <span class="tok-comment">// g(x): a rising parabola sampled as markers.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..gx_n) |i| {
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-fn">float</span>(i) / <span class="tok-fn">float</span>(gx_n - <span class="tok-num">1</span>);
+        s.gx_x[i] = t;
+        s.gx_y[i] = <span class="tok-num">0</span>;
+        s.gx_z[i] = t * t;
+    }
+
+    <span class="tok-comment">// Wave surface: radial z = cos(r), giving a central peak, a trough ring,</span>
+    <span class="tok-comment">// and rising corners (domain chosen so the corners reach the next crest).</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..grid_n) |j| {
+        <span class="tok-kw">for</span> (<span class="tok-num">0</span>..grid_n) |i| {
+            <span class="tok-kw">const</span> fx: f32 = <span class="tok-fn">float</span>(i) / <span class="tok-fn">float</span>(grid_n - <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> fy: f32 = <span class="tok-fn">float</span>(j) / <span class="tok-fn">float</span>(grid_n - <span class="tok-num">1</span>);
+            <span class="tok-kw">const</span> xv: f32 = -<span class="tok-num">4.6</span> + <span class="tok-num">9.2</span> * fx;
+            <span class="tok-kw">const</span> yv: f32 = -<span class="tok-num">4.6</span> + <span class="tok-num">9.2</span> * fy;
+            <span class="tok-kw">const</span> r: f32 = <span class="tok-builtin">@sqrt</span>(xv * xv + yv * yv);
+            <span class="tok-kw">const</span> idx: usize = j * grid_n + i;
+            s.surf_x[idx] = xv;
+            s.surf_y[idx] = yv;
+            s.surf_z[idx] = <span class="tok-num">0.85</span> * <span class="tok-builtin">@cos</span>(r);
+        }
+    }
+
+    <span class="tok-kw">var</span> prng: std.Random.DefaultPrng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0x9E3779B97F4A7C15</span>);
+    <span class="tok-kw">const</span> rnd: std.Random = prng.<span class="tok-fn">random</span>();
+    <span class="tok-comment">// Data 1: a noisy main-diagonal cloud.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..cloud1_n) |i| {
+        <span class="tok-kw">const</span> t: f32 = <span class="tok-fn">float</span>(i) / <span class="tok-fn">float</span>(cloud1_n - <span class="tok-num">1</span>);
+        s.c1x[i] = t + rnd.<span class="tok-fn">floatNorm</span>(f32) * <span class="tok-num">0.05</span>;
+        s.c1y[i] = t + rnd.<span class="tok-fn">floatNorm</span>(f32) * <span class="tok-num">0.05</span>;
+        s.c1z[i] = t + rnd.<span class="tok-fn">floatNorm</span>(f32) * <span class="tok-num">0.05</span>;
+    }
+    <span class="tok-comment">// Data 2: a tight cluster crossing the diagonal near the centre.</span>
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..cloud2_n) |i| {
+        <span class="tok-kw">const</span> u: f32 = rnd.<span class="tok-fn">float</span>(f32) * <span class="tok-num">2.0</span> - <span class="tok-num">1.0</span>;
+        s.c2x[i] = <span class="tok-num">0.5</span> + u * <span class="tok-num">0.32</span> + rnd.<span class="tok-fn">floatNorm</span>(f32) * <span class="tok-num">0.03</span>;
+        s.c2y[i] = <span class="tok-num">0.5</span> - u * <span class="tok-num">0.04</span> + rnd.<span class="tok-fn">floatNorm</span>(f32) * <span class="tok-num">0.05</span>;
+        s.c2z[i] = <span class="tok-num">0.5</span> + rnd.<span class="tok-fn">floatNorm</span>(f32) * <span class="tok-num">0.05</span>;
+    }
+
+    <span class="tok-comment">// Wireframe sphere mesh.</span>
+    <span class="tok-kw">const</span> sc: p3.SphereCounts = p3.<span class="tok-fn">genSphere</span>(<span class="tok-num">1.0</span>, sph_stacks, sph_slices, s.sph_v[<span class="tok-num">0</span>..], s.sph_i[<span class="tok-num">0</span>..]);
+    s.sph_vn = sc.vtx;
+    s.sph_in = sc.idx;
+
+    <span class="tok-comment">// Solid torus mesh (the duck stand-in).</span>
+    <span class="tok-fn">genTorus</span>(s.tor_v[<span class="tok-num">0</span>..], s.tor_i[<span class="tok-num">0</span>..], <span class="tok-num">0.70</span>, <span class="tok-num">0.30</span>, tor_rings, tor_sides);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabLineScatter</span>(s: *State) void {
+    p3.<span class="tok-fn">pushColormap</span>(s.ctx, .deep);
+    <span class="tok-kw">if</span> (p3.<span class="tok-fn">beginPlot</span>(s.ctx, <span class="tok-str">"f(x) / g(x)###ls"</span>, .{ <span class="tok-num">0</span>, plot_h }, .{})) {
+        p3.<span class="tok-fn">setupAxes</span>(s.ctx, <span class="tok-str">"x"</span>, <span class="tok-str">"y"</span>, <span class="tok-str">"z"</span>, .{}, .{}, .{});
+        p3.<span class="tok-fn">setupAxesLimits</span>(s.ctx, <span class="tok-num">0</span>, <span class="tok-num">1</span>, -<span class="tok-num">0.4</span>, <span class="tok-num">0.4</span>, -<span class="tok-num">0.4</span>, <span class="tok-num">1.1</span>, .once);
+        p3.<span class="tok-fn">plotLine</span>(s.ctx, f32, <span class="tok-str">"f(x)"</span>, s.spring_x[<span class="tok-num">0</span>..], s.spring_y[<span class="tok-num">0</span>..], s.spring_z[<span class="tok-num">0</span>..], .{
+            .line_color = blue,
+            .line_weight = <span class="tok-num">2.0</span>,
+        });
+        p3.<span class="tok-fn">plotScatter</span>(s.ctx, f32, <span class="tok-str">"g(x)"</span>, s.gx_x[<span class="tok-num">0</span>..], s.gx_y[<span class="tok-num">0</span>..], s.gx_z[<span class="tok-num">0</span>..], .{
+            .marker = .circle,
+            .marker_size = <span class="tok-num">4.0</span>,
+            .line_color = orange,
+        });
+        p3.<span class="tok-fn">endPlot</span>(s.ctx);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabSurface</span>(s: *State) void {
+    p3.<span class="tok-fn">pushColormap</span>(s.ctx, .hot);
+    <span class="tok-kw">if</span> (p3.<span class="tok-fn">beginPlot</span>(s.ctx, <span class="tok-str">"Wave Surface###surf"</span>, .{ <span class="tok-num">0</span>, plot_h }, .{})) {
+        p3.<span class="tok-fn">setupAxes</span>(s.ctx, <span class="tok-str">"x"</span>, <span class="tok-str">"y"</span>, <span class="tok-str">"z"</span>, .{}, .{}, .{});
+        p3.<span class="tok-fn">setupAxesLimits</span>(s.ctx, -<span class="tok-num">4.6</span>, <span class="tok-num">4.6</span>, -<span class="tok-num">4.6</span>, <span class="tok-num">4.6</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span>, .once);
+        p3.<span class="tok-fn">plotSurface</span>(s.ctx, f32, <span class="tok-str">"Wave Surface"</span>, s.surf_x[<span class="tok-num">0</span>..], s.surf_y[<span class="tok-num">0</span>..], s.surf_z[<span class="tok-num">0</span>..], grid_n, grid_n, .{
+            .fill_alpha = <span class="tok-num">1.0</span>,
+        });
+        p3.<span class="tok-fn">endPlot</span>(s.ctx);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabScatter</span>(s: *State) void {
+    p3.<span class="tok-fn">pushColormap</span>(s.ctx, .deep);
+    <span class="tok-kw">if</span> (p3.<span class="tok-fn">beginPlot</span>(s.ctx, <span class="tok-str">"Data 1 / Data 2###sc"</span>, .{ <span class="tok-num">0</span>, plot_h }, .{})) {
+        p3.<span class="tok-fn">setupAxes</span>(s.ctx, <span class="tok-str">"x"</span>, <span class="tok-str">"y"</span>, <span class="tok-str">"z"</span>, .{}, .{}, .{});
+        p3.<span class="tok-fn">setupAxesLimits</span>(s.ctx, -<span class="tok-num">0.1</span>, <span class="tok-num">1.1</span>, -<span class="tok-num">0.1</span>, <span class="tok-num">1.1</span>, -<span class="tok-num">0.1</span>, <span class="tok-num">1.1</span>, .once);
+        p3.<span class="tok-fn">plotScatter</span>(s.ctx, f32, <span class="tok-str">"Data 1"</span>, s.c1x[<span class="tok-num">0</span>..], s.c1y[<span class="tok-num">0</span>..], s.c1z[<span class="tok-num">0</span>..], .{
+            .marker = .circle,
+            .marker_size = <span class="tok-num">3.0</span>,
+            .line_color = blue,
+        });
+        p3.<span class="tok-fn">plotScatter</span>(s.ctx, f32, <span class="tok-str">"Data 2"</span>, s.c2x[<span class="tok-num">0</span>..], s.c2y[<span class="tok-num">0</span>..], s.c2z[<span class="tok-num">0</span>..], .{
+            .marker = .square,
+            .marker_size = <span class="tok-num">4.0</span>,
+            .line_color = orange,
+        });
+        p3.<span class="tok-fn">endPlot</span>(s.ctx);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabSphere</span>(s: *State) void {
+    p3.<span class="tok-fn">pushColormap</span>(s.ctx, .deep);
+    <span class="tok-kw">if</span> (p3.<span class="tok-fn">beginPlot</span>(s.ctx, <span class="tok-str">"Sphere###sph"</span>, .{ <span class="tok-num">0</span>, plot_h }, .{})) {
+        p3.<span class="tok-fn">setupAxes</span>(s.ctx, <span class="tok-str">"x"</span>, <span class="tok-str">"y"</span>, <span class="tok-str">"z"</span>, .{}, .{}, .{});
+        p3.<span class="tok-fn">setupAxesLimits</span>(s.ctx, -<span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>, -<span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>, -<span class="tok-num">1.2</span>, <span class="tok-num">1.2</span>, .once);
+        <span class="tok-comment">// fill_alpha = 0 leaves only the triangle edges -&gt; a see-through mesh.</span>
+        p3.<span class="tok-fn">plotMesh</span>(s.ctx, <span class="tok-str">"Sphere"</span>, s.sph_v[<span class="tok-num">0</span>..s.sph_vn], s.sph_i[<span class="tok-num">0</span>..s.sph_in], .{
+            .fill_alpha = <span class="tok-num">0.0</span>,
+            .line_color = white,
+            .line_weight = <span class="tok-num">1.0</span>,
+        });
+        p3.<span class="tok-fn">endPlot</span>(s.ctx);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabMesh</span>(s: *State) void {
+    p3.<span class="tok-fn">pushColormap</span>(s.ctx, .deep);
+    <span class="tok-kw">if</span> (p3.<span class="tok-fn">beginPlot</span>(s.ctx, <span class="tok-str">"Solid Mesh###mesh"</span>, .{ <span class="tok-num">0</span>, plot_h }, .{})) {
+        p3.<span class="tok-fn">setupAxes</span>(s.ctx, <span class="tok-str">"x"</span>, <span class="tok-str">"y"</span>, <span class="tok-str">"z"</span>, .{}, .{}, .{});
+        p3.<span class="tok-fn">setupAxesLimits</span>(s.ctx, -<span class="tok-num">1.1</span>, <span class="tok-num">1.1</span>, -<span class="tok-num">1.1</span>, <span class="tok-num">1.1</span>, -<span class="tok-num">0.6</span>, <span class="tok-num">0.6</span>, .once);
+        p3.<span class="tok-fn">plotMesh</span>(s.ctx, <span class="tok-str">"Solid Mesh"</span>, s.tor_v[<span class="tok-num">0</span>..], s.tor_i[<span class="tok-num">0</span>..], .{
+            .fill_color = yellow,
+            .line_color = edge_dark,
+            .line_weight = <span class="tok-num">1.0</span>,
+        });
+        p3.<span class="tok-fn">endPlot</span>(s.ctx);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">tabMarkers</span>(s: *State) void {
+    p3.<span class="tok-fn">pushColormap</span>(s.ctx, .deep);
+    <span class="tok-kw">if</span> (p3.<span class="tok-fn">beginPlot</span>(s.ctx, <span class="tok-str">"Markers###mk"</span>, .{ <span class="tok-num">0</span>, plot_h }, .{})) {
+        p3.<span class="tok-fn">setupAxes</span>(s.ctx, <span class="tok-str">"x"</span>, <span class="tok-str">"y"</span>, <span class="tok-str">"z"</span>, .{}, .{}, .{});
+        p3.<span class="tok-fn">setupAxesLimits</span>(s.ctx, -<span class="tok-num">2</span>, <span class="tok-num">2</span>, -<span class="tok-num">1.7</span>, <span class="tok-num">1.7</span>, -<span class="tok-num">1</span>, <span class="tok-num">1</span>, .once);
+        <span class="tok-kw">for</span> (marker_kinds, <span class="tok-num">0</span>..) |m, i| {
+            <span class="tok-kw">const</span> yy: f32 = <span class="tok-num">1.2</span> - <span class="tok-fn">float</span>(i) * <span class="tok-num">0.26</span>;
+            <span class="tok-kw">const</span> col: Color = marker_cols[i];
+
+            <span class="tok-kw">const</span> xl: [<span class="tok-num">2</span>]f32 = .{ -<span class="tok-num">1.4</span>, -<span class="tok-num">0.8</span> };
+            <span class="tok-kw">const</span> xr: [<span class="tok-num">2</span>]f32 = .{ <span class="tok-num">0.8</span>, <span class="tok-num">1.4</span> };
+            <span class="tok-kw">const</span> ys: [<span class="tok-num">2</span>]f32 = .{ yy, yy };
+            <span class="tok-kw">const</span> zs: [<span class="tok-num">2</span>]f32 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+
+            <span class="tok-comment">// Filled markers (left column): the marker fills with the line color.</span>
+            p3.<span class="tok-fn">plotLine</span>(s.ctx, f32, lbl_filled[i], xl[<span class="tok-num">0</span>..], ys[<span class="tok-num">0</span>..], zs[<span class="tok-num">0</span>..], .{
+                .line_color = col,
+                .line_weight = <span class="tok-num">1.5</span>,
+                .marker = .none,
+                .flags = .{ .no_legend = true },
+            });
+            p3.<span class="tok-fn">plotScatter</span>(s.ctx, f32, lbl_filled[i], xl[<span class="tok-num">0</span>..], ys[<span class="tok-num">0</span>..], zs[<span class="tok-num">0</span>..], .{
+                .marker = m,
+                .marker_size = <span class="tok-num">6.0</span>,
+                .line_color = col,
+                .flags = .{ .no_legend = true },
+            });
+
+            <span class="tok-comment">// Open markers (right column): transparent fill -&gt; outline only.</span>
+            p3.<span class="tok-fn">plotLine</span>(s.ctx, f32, lbl_open[i], xr[<span class="tok-num">0</span>..], ys[<span class="tok-num">0</span>..], zs[<span class="tok-num">0</span>..], .{
+                .line_color = col,
+                .line_weight = <span class="tok-num">1.5</span>,
+                .marker = .none,
+                .flags = .{ .no_legend = true },
+            });
+            p3.<span class="tok-fn">plotScatter</span>(s.ctx, f32, lbl_open[i], xr[<span class="tok-num">0</span>..], ys[<span class="tok-num">0</span>..], zs[<span class="tok-num">0</span>..], .{
+                .marker = m,
+                .marker_size = <span class="tok-num">6.0</span>,
+                .line_color = col,
+                .marker_fill_color = clear,
+                .flags = .{ .no_legend = true },
+            });
+        }
+        <span class="tok-kw">const</span> no_off: Vec2 = .{ <span class="tok-num">0</span>, <span class="tok-num">0</span> };
+        p3.<span class="tok-fn">plotText</span>(s.ctx, <span class="tok-str">"Filled Markers"</span>, -<span class="tok-num">1.1</span>, <span class="tok-num">1.5</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, no_off);
+        p3.<span class="tok-fn">plotText</span>(s.ctx, <span class="tok-str">"Open Markers"</span>, <span class="tok-num">0.7</span>, <span class="tok-num">1.5</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>, no_off);
+        p3.<span class="tok-fn">plotText</span>(s.ctx, <span class="tok-str">"Rotated Text"</span>, -<span class="tok-num">0.35</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.0</span>, <span class="tok-num">0.6</span>, no_off);
+        p3.<span class="tok-fn">endPlot</span>(s.ctx);
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> u: ui.Ui = s.ui_host.<span class="tok-fn">begin</span>(f);
+    <span class="tok-kw">defer</span> s.ui_host.<span class="tok-fn">render</span>(f);
+    p3.<span class="tok-fn">setUiHandle</span>(s.ctx, u);
+
+    <span class="tok-kw">if</span> (u.<span class="tok-fn">window</span>(<span class="tok-str">"zimr 3D plot gallery"</span>, .{
+        .initial_pos = .{ <span class="tok-num">14</span>, <span class="tok-num">14</span> },
+        .initial_size = .{ <span class="tok-num">952</span>, <span class="tok-num">832</span> },
+    })) |w| {
+        <span class="tok-kw">defer</span> w.<span class="tok-fn">close</span>();
+        u.<span class="tok-fn">text</span>(<span class="tok-str">"ImPlot3D gallery. Drag to orbit, pinch/scroll to zoom, double-tap to fit."</span>, .{});
+        u.<span class="tok-fn">separator</span>();
+
+        <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabBar</span>(<span class="tok-str">"gallery"</span>, .{})) {
+            <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabBar</span>();
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabItem</span>(<span class="tok-str">"Line + Scatter"</span>, null, .{})) {
+                <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabItem</span>();
+                <span class="tok-fn">tabLineScatter</span>(s);
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabItem</span>(<span class="tok-str">"Surface"</span>, null, .{})) {
+                <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabItem</span>();
+                <span class="tok-fn">tabSurface</span>(s);
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabItem</span>(<span class="tok-str">"Scatter"</span>, null, .{})) {
+                <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabItem</span>();
+                <span class="tok-fn">tabScatter</span>(s);
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabItem</span>(<span class="tok-str">"Sphere"</span>, null, .{})) {
+                <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabItem</span>();
+                <span class="tok-fn">tabSphere</span>(s);
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabItem</span>(<span class="tok-str">"Mesh"</span>, null, .{})) {
+                <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabItem</span>();
+                <span class="tok-fn">tabMesh</span>(s);
+            }
+            <span class="tok-kw">if</span> (u.<span class="tok-fn">beginTabItem</span>(<span class="tok-str">"Markers"</span>, null, .{})) {
+                <span class="tok-kw">defer</span> u.<span class="tok-fn">endTabItem</span>();
+                <span class="tok-fn">tabMarkers</span>(s);
+            }
+        }
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - 3D plot gallery"</span>,
+            .width = screen_w,
+            .height = screen_h,
+            <span class="tok-comment">// Harmless for the CPU painter path; matches plot3d_demo.</span>
+            .depth_format = .depth24_plus,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

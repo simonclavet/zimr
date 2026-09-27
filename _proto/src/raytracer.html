@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>raytracer — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>raytracer</h1>
+<figure class="code src-file" data-path="examples/raytracer/raytracer.zig" data-lines="840"><figcaption><span>examples/raytracer/raytracer.zig</span><span>840 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">// examples/raytracer.zig - single-file CPU path tracer.</span>
+<span class="tok-comment">// A real-time, interactive Whitted-style path tracer.  Five sphere</span>
+<span class="tok-comment">// primitives plus a giant ground sphere, three material types</span>
+<span class="tok-comment">// (lambertian / metal / dielectric), one progressively-accumulated</span>
+<span class="tok-comment">// float framebuffer, one upload-each-frame pixel texture.</span>
+<span class="tok-comment">// Inspiration: Peter Shirley's "Ray Tracing in One Weekend", with</span>
+<span class="tok-comment">// the f64/multithread/PPM-output trio swapped for zimr's f32 +</span>
+<span class="tok-comment">// single-thread-wasm + live-screen-pixel-buffer story.</span>
+<span class="tok-comment">// Three runtime modes:</span>
+<span class="tok-comment">//   - **Moving** - any movement input is active.  Render at 1/4</span>
+<span class="tok-comment">//     resolution (stride 4) with one sample per pixel.  ~8K rays per</span>
+<span class="tok-comment">//     frame, sub-millisecond.  Image is noisy and pixelated;</span>
+<span class="tok-comment">//     motion masks both.</span>
+<span class="tok-comment">//   - **Still, converging** - no input for &gt;0 frames; accumulator is</span>
+<span class="tok-comment">//     summing one fresh sample per pixel per frame.  Image refines</span>
+<span class="tok-comment">//     over ~5 seconds.</span>
+<span class="tok-comment">//   - **Still, converged** - accumulator hit the cap; rendering</span>
+<span class="tok-comment">//     pauses, the buffer just keeps re-uploading the same pixels.</span>
+<span class="tok-comment">//     Zero ray work, ~free.</span>
+<span class="tok-comment">// Controls:</span>
+<span class="tok-comment">//   - W / S         translate along the camera forward / back axis</span>
+<span class="tok-comment">//   - A / D         translate left / right</span>
+<span class="tok-comment">//   - Q / E         translate down / up</span>
+<span class="tok-comment">//   - RMB-drag      yaw / pitch</span>
+<span class="tok-comment">//   - Shift         4x movement speed</span>
+<span class="tok-comment">//   - Mouse wheel   nudge vertical FOV (zoom)</span>
+<span class="tok-comment">// All other tuning lives in the ImGui panel.</span>
+<span class="tok-comment">// What's exercised on the zimr side:</span>
+<span class="tok-comment">//   - `entities.zig` (one archetype, two components, ~7 entities)</span>
+<span class="tok-comment">//   - `zimrmath.zig` random-vector helpers + reflect/refract</span>
+<span class="tok-comment">//   - `ui` panel with sliders, combo, color picker, buttons</span>
+<span class="tok-comment">//   - `gpu.updateTexture` for streaming a CPU framebuffer</span>
+<span class="tok-comment">//   - `drawTextureRotated` to scale the small-res buffer to canvas</span>
+<span class="tok-comment">//   - `f.input` (keyboard + mouse + wheel)</span>
+<span class="tok-comment">// What's NOT done:</span>
+<span class="tok-comment">//   - No multithreading (wasm32, single-threaded)</span>
+<span class="tok-comment">//   - No BVH (linear sphere iteration; fine for ~10 spheres)</span>
+<span class="tok-comment">//   - No textures, area lights, or volumetrics</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> clamp = zm.clamp;
+<span class="tok-kw">const</span> cross = zm.cross;
+<span class="tok-kw">const</span> dot3 = zm.dot3;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> inf = zm.inf;
+<span class="tok-kw">const</span> int = zm.int;
+<span class="tok-kw">const</span> lengthSq3 = zm.lengthSq3;
+<span class="tok-kw">const</span> normalize3 = zm.normalize3;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> pow = zm.pow;
+<span class="tok-kw">const</span> reflect3 = zm.reflect3;
+<span class="tok-kw">const</span> refract3 = zm.refract3;
+<span class="tok-kw">const</span> splat = zm.splat;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> ecs = z.ecs;
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+
+<span class="tok-comment">/// Random unit vector by rejection sampling - replaces the old</span>
+<span class="tok-comment">/// `zimrmath.vector3RandomUnitVector` (the zimrmath compute surface</span>
+<span class="tok-comment">/// was deleted in Z4).  Uses the same algorithm: sample a cube,</span>
+<span class="tok-comment">/// reject points outside the unit ball, normalize what survives.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">randomUnitVec3</span>(rng: std.Random) zm.Vec {
+    <span class="tok-kw">while</span> (true) {
+        <span class="tok-kw">const</span> v = <span class="tok-fn">vec</span>(
+            rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">2</span> - <span class="tok-num">1</span>,
+            rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">2</span> - <span class="tok-num">1</span>,
+            rng.<span class="tok-fn">float</span>(f32) * <span class="tok-num">2</span> - <span class="tok-num">1</span>,
+        );
+        <span class="tok-kw">const</span> len_sq: f32 = <span class="tok-fn">lengthSq3</span>(v);
+        <span class="tok-kw">if</span> (len_sq &gt; <span class="tok-num">1.0e-10</span> <span class="tok-kw">and</span> len_sq &lt;= <span class="tok-num">1.0</span>) {
+            <span class="tok-kw">return</span> <span class="tok-fn">normalize3</span>(v);
+        }
+    }
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Constants</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> screen_w: i32 = <span class="tok-num">800</span>;
+<span class="tok-kw">const</span> screen_h: i32 = <span class="tok-num">450</span>;
+
+<span class="tok-comment">/// Internal render resolution.  The framebuffer is this many pixels;</span>
+<span class="tok-comment">/// `drawTextureRotated` stretches the result to fill the canvas.  16:9</span>
+<span class="tok-comment">/// quarter-of-1080p - a sweet spot for "image still looks like an</span>
+<span class="tok-comment">/// image" at single-thread f32.</span>
+<span class="tok-kw">const</span> rt_w: i32 = <span class="tok-num">480</span>;
+<span class="tok-kw">const</span> rt_h: i32 = <span class="tok-num">270</span>;
+<span class="tok-kw">const</span> rt_px_count: usize = <span class="tok-builtin">@intCast</span>(rt_w * rt_h);
+
+<span class="tok-comment">/// Stride used when moving - every Nth pixel is rendered, the rest</span>
+<span class="tok-comment">/// inherit their last-frame color (since we never overwrite them</span>
+<span class="tok-comment">/// during a moving frame).</span>
+<span class="tok-kw">const</span> move_stride: i32 = <span class="tok-num">4</span>;
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Components (one entity per scene object)</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> Sphere = <span class="tok-kw">struct</span> {
+    center: Vec,
+    radius: f32,
+};
+
+<span class="tok-kw">const</span> Lambertian = <span class="tok-kw">struct</span> { albedo: Vec };
+
+<span class="tok-kw">const</span> Metal = <span class="tok-kw">struct</span> { albedo: Vec, fuzz: f32 };
+
+<span class="tok-kw">const</span> Dielectric = <span class="tok-kw">struct</span> { ref_idx: f32 };
+
+<span class="tok-kw">const</span> Material = <span class="tok-kw">union</span>(<span class="tok-kw">enum</span>) {
+    lambertian: Lambertian,
+    metal: Metal,
+    dielectric: Dielectric,
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Ray + HitRecord (plain data passed through trace recursion)</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> Ray = zm.Ray;
+<span class="tok-kw">fn</span> <span class="tok-fn">rayAt</span>(self: Ray, t: f32) Vec {
+    <span class="tok-kw">return</span> (self.position + (self.direction * <span class="tok-fn">splat</span>(t)));
+}
+
+<span class="tok-kw">const</span> HitRecord = <span class="tok-kw">struct</span> {
+    point: Vec,
+    normal: Vec,
+    t: f32,
+    front_face: bool,
+    material: Material,
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Camera - pose + derived viewport basis</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// Camera pose is `(lookfrom, yaw, pitch, vfov)`; the rest of the</span>
+<span class="tok-comment">/// viewport math (`px00`, `pdu`, `pdv`, `u`, `v`, `w`) is recomputed</span>
+<span class="tok-comment">/// each frame from these four fields.  Cheap to redo (~30 FLOPs);</span>
+<span class="tok-comment">/// keeps "did the camera move?" trivially detectable.</span>
+<span class="tok-kw">const</span> Camera = <span class="tok-kw">struct</span> {
+    lookfrom: Vec,
+    yaw: f32, <span class="tok-comment">// radians, around world +Y</span>
+    pitch: f32, <span class="tok-comment">// radians, clamped to +/-~80 deg</span>
+    vfov: f32, <span class="tok-comment">// degrees, vertical</span>
+};
+
+<span class="tok-comment">/// Derived per-frame camera basis + viewport plane.</span>
+<span class="tok-kw">const</span> CamBasis = <span class="tok-kw">struct</span> {
+    origin: Vec,
+    u: Vec, <span class="tok-comment">// viewport right</span>
+    v: Vec, <span class="tok-comment">// viewport down (note: negated relative to world up)</span>
+    w: Vec, <span class="tok-comment">// camera forward (points behind the camera, raylib style)</span>
+    px00: Vec, <span class="tok-comment">// center of the top-left pixel</span>
+    pdu: Vec, <span class="tok-comment">// one-pixel right</span>
+    pdv: Vec, <span class="tok-comment">// one-pixel down</span>
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deriveBasis</span>(cam: Camera) CamBasis {
+    <span class="tok-comment">// Forward direction from (yaw, pitch).  Yaw rotates around +Y,</span>
+    <span class="tok-comment">// pitch tilts up/down.  At yaw=0, the camera looks toward -Z.</span>
+    <span class="tok-kw">const</span> cp: f32 = <span class="tok-builtin">@cos</span>(cam.pitch);
+    <span class="tok-kw">const</span> sp: f32 = <span class="tok-builtin">@sin</span>(cam.pitch);
+    <span class="tok-kw">const</span> cy: f32 = <span class="tok-builtin">@cos</span>(cam.yaw);
+    <span class="tok-kw">const</span> sy: f32 = <span class="tok-builtin">@sin</span>(cam.yaw);
+
+    <span class="tok-kw">const</span> forward: Vec = <span class="tok-fn">vec</span>(-cp * sy, sp, -cp * cy);
+    <span class="tok-kw">const</span> w: zm.Vec = <span class="tok-fn">normalize3</span>((-(forward)));
+    <span class="tok-kw">const</span> world_up: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> u: zm.Vec = <span class="tok-fn">normalize3</span>(<span class="tok-fn">cross</span>(world_up, w));
+    <span class="tok-kw">const</span> v: zm.Vec = <span class="tok-fn">cross</span>(w, u);
+
+    <span class="tok-comment">// Viewport size in world units.  `focus_dist = 1.0` (no depth-</span>
+    <span class="tok-comment">// of-field) keeps the math straightforward.</span>
+    <span class="tok-kw">const</span> focus_dist: f32 = <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> theta: f32 = cam.vfov * pi / <span class="tok-num">180.0</span>;
+    <span class="tok-kw">const</span> half_h: f32 = <span class="tok-builtin">@tan</span>(theta / <span class="tok-num">2.0</span>) * focus_dist;
+    <span class="tok-kw">const</span> half_w: f32 = half_h * (<span class="tok-fn">float</span>(rt_w) / <span class="tok-fn">float</span>(rt_h));
+
+    <span class="tok-kw">const</span> viewport_u: zm.Vec = (u * <span class="tok-fn">splat</span>(<span class="tok-num">2.0</span> * half_w));
+    <span class="tok-kw">const</span> viewport_v: zm.Vec = (v * <span class="tok-fn">splat</span>(-<span class="tok-num">2.0</span> * half_h));
+    <span class="tok-kw">const</span> pdu: zm.Vec = (viewport_u * <span class="tok-fn">splat</span>(<span class="tok-num">1.0</span> / <span class="tok-fn">float</span>(rt_w)));
+    <span class="tok-kw">const</span> pdv: zm.Vec = (viewport_v * <span class="tok-fn">splat</span>(<span class="tok-num">1.0</span> / <span class="tok-fn">float</span>(rt_h)));
+
+    <span class="tok-comment">// Top-left corner of the viewport, then nudge by half a pixel</span>
+    <span class="tok-comment">// to sit at the center of pixel (0, 0).</span>
+    <span class="tok-kw">const</span> upper_left: zm.Vec =
+        cam.lookfrom - (w * <span class="tok-fn">splat</span>(focus_dist)) - (viewport_u * <span class="tok-fn">splat</span>(<span class="tok-num">0.5</span>)) - (viewport_v * <span class="tok-fn">splat</span>(<span class="tok-num">0.5</span>));
+    <span class="tok-kw">const</span> px00: zm.Vec = upper_left + (pdu * <span class="tok-fn">splat</span>(<span class="tok-num">0.5</span>)) + (pdv * <span class="tok-fn">splat</span>(<span class="tok-num">0.5</span>));
+
+    <span class="tok-kw">return</span> .{
+        .origin = cam.lookfrom,
+        .u = u,
+        .v = v,
+        .w = w,
+        .px00 = px00,
+        .pdu = pdu,
+        .pdv = pdv,
+    };
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// UI-tunable params</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> SkyPreset = <span class="tok-kw">enum</span>(i32) { day, sunset, night };
+
+<span class="tok-kw">const</span> Params = <span class="tok-kw">struct</span> {
+    samples_per_pixel: i32 = <span class="tok-num">64</span>, <span class="tok-comment">// cap on accumulated samples per pixel</span>
+    max_depth: i32 = <span class="tok-num">5</span>, <span class="tok-comment">// recursion cap</span>
+    vfov: f32 = <span class="tok-num">50.0</span>,
+    sky_preset: i32 = <span class="tok-builtin">@backingInt</span>(SkyPreset.day),
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// State</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">// -- ECS ---------------------------</span>
+    world: ecs.Registry,
+
+    <span class="tok-comment">// -- Camera + params -----------------------</span>
+    cam: Camera,
+    params: Params = .{},
+
+    <span class="tok-comment">// -- Framebuffers ------------------------</span>
+    <span class="tok-comment">/// Float HDR accumulator - sum of all samples drawn into each</span>
+    <span class="tok-comment">/// pixel since the last camera move.  Divided by `sample_count`</span>
+    <span class="tok-comment">/// at tonemap time to produce the displayed color.</span>
+    accum: []Vec,
+    <span class="tok-comment">/// Per-pixel sample count.  Stays in lock-step with `accum`.</span>
+    sample_count: u32 = <span class="tok-num">0</span>,
+    <span class="tok-comment">/// LDR display buffer - what gets uploaded to the GPU texture.</span>
+    <span class="tok-comment">/// Owned by `accum_image`; pointer alias kept here for clarity.</span>
+    pixels: []Color,
+
+    <span class="tok-comment">// -- GPU resources ------------------------</span>
+    fb: z.CpuFramebuffer,
+
+    <span class="tok-comment">// -- Input bookkeeping ----------------------</span>
+    <span class="tok-comment">/// Did anything move during the last frame?  Drives stride</span>
+    <span class="tok-comment">/// (full-res when false, 1/4-res when true) and accum-reset</span>
+    <span class="tok-comment">/// (reset when transitioning false-&gt;true).</span>
+    moving: bool = false,
+
+    <span class="tok-comment">// -- UI + scratch ------------------------</span>
+    rng: std.Random.DefaultPrng,
+    gpa: Allocator,
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Main entry point</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.fb.<span class="tok-fn">deinit</span>();
+    s.world.<span class="tok-fn">deinit</span>(gpa);
+    gpa.<span class="tok-fn">free</span>(s.accum);
+    gpa.<span class="tok-fn">free</span>(s.pixels);
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Init</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">spawnSphere</span>(
+    gpa: Allocator,
+    world: *ecs.Registry,
+    center: Vec,
+    radius: f32,
+    mat: Material,
+) !void {
+    <span class="tok-kw">const</span> e: ecs.Entity = <span class="tok-kw">try</span> ecs.Entity.<span class="tok-fn">reserveImmediateOrErr</span>(world);
+    _ = <span class="tok-kw">try</span> e.<span class="tok-fn">changeArchImmediateOrErr</span>(world, gpa, <span class="tok-kw">struct</span> {
+        sphere: Sphere,
+        material: Material,
+    }, .{ .add = .{
+        .sphere = .{ .center = center, .radius = radius },
+        .material = mat,
+    } });
+}
+
+<span class="tok-comment">/// Spawn the opening scene: ground + 3 feature spheres + 3 small</span>
+<span class="tok-comment">/// accents.  All hard-coded; the user can add/remove via the UI.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">spawnDefaultScene</span>(gpa: Allocator, world: *ecs.Registry) !void {
+    <span class="tok-comment">// Ground (giant green-grey sphere - looks like a plane from</span>
+    <span class="tok-comment">// anywhere near the origin).</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">100.5</span>, -<span class="tok-num">1</span>), <span class="tok-num">100</span>, .{
+        .lambertian = .{ .albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.5</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.45</span>) },
+    });
+    <span class="tok-comment">// Center sphere - matte teal.</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1.2</span>), <span class="tok-num">0.5</span>, .{
+        .lambertian = .{ .albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.15</span>, <span class="tok-num">0.45</span>, <span class="tok-num">0.55</span>) },
+    });
+    <span class="tok-comment">// Left sphere - clear glass (dielectric).  The "bubble" trick</span>
+    <span class="tok-comment">// from RTiOW: an outer sphere with ri=1.5 plus a slightly-</span>
+    <span class="tok-comment">// smaller negative-radius (inverted normals) sphere with</span>
+    <span class="tok-comment">// ri=1/1.5 inside it produces a hollow-sphere look.</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(-<span class="tok-num">1.0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span>), <span class="tok-num">0.5</span>, .{
+        .dielectric = .{ .ref_idx = <span class="tok-num">1.5</span> },
+    });
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(-<span class="tok-num">1.0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span>), <span class="tok-num">0.4</span>, .{
+        .dielectric = .{ .ref_idx = <span class="tok-num">1.0</span> / <span class="tok-num">1.5</span> },
+    });
+    <span class="tok-comment">// Right sphere - brushed gold (metal with some fuzz).</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(<span class="tok-num">1.0</span>, <span class="tok-num">0</span>, -<span class="tok-num">1</span>), <span class="tok-num">0.5</span>, .{
+        .metal = .{ .albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.8</span>, <span class="tok-num">0.6</span>, <span class="tok-num">0.2</span>), .fuzz = <span class="tok-num">0.25</span> },
+    });
+    <span class="tok-comment">// Three small accents - different positions + materials, spread</span>
+    <span class="tok-comment">// out in front to give the camera something to look around at.</span>
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(-<span class="tok-num">0.3</span>, -<span class="tok-num">0.35</span>, -<span class="tok-num">0.5</span>), <span class="tok-num">0.15</span>, .{
+        .metal = .{ .albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.75</span>, <span class="tok-num">0.75</span>, <span class="tok-num">0.85</span>), .fuzz = <span class="tok-num">0.0</span> },
+    });
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(<span class="tok-num">0.4</span>, -<span class="tok-num">0.4</span>, -<span class="tok-num">0.4</span>), <span class="tok-num">0.1</span>, .{
+        .lambertian = .{ .albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.85</span>, <span class="tok-num">0.3</span>, <span class="tok-num">0.3</span>) },
+    });
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnSphere</span>(gpa, world, <span class="tok-fn">vec</span>(<span class="tok-num">0.65</span>, -<span class="tok-num">0.42</span>, -<span class="tok-num">1.5</span>), <span class="tok-num">0.08</span>, .{
+        .lambertian = .{ .albedo = <span class="tok-fn">vec</span>(<span class="tok-num">0.95</span>, <span class="tok-num">0.85</span>, <span class="tok-num">0.2</span>) },
+    });
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    <span class="tok-comment">// ECS world for scene objects.  Tiny - a handful of entities,</span>
+    <span class="tok-comment">// one archetype.  Capacity headroom for ~50 spawn-via-UI clicks.</span>
+    <span class="tok-kw">var</span> world: ecs.Registry = <span class="tok-kw">try</span> .<span class="tok-fn">init</span>(.{
+        .gpa = gpa,
+        .cap = .{ .entities = <span class="tok-num">64</span>, .arches = <span class="tok-num">4</span>, .chunks = <span class="tok-num">4</span>, .chunk = <span class="tok-num">4096</span> },
+    });
+    <span class="tok-kw">errdefer</span> world.<span class="tok-fn">deinit</span>(gpa);
+
+    <span class="tok-kw">try</span> <span class="tok-fn">spawnDefaultScene</span>(gpa, &amp;world);
+
+    <span class="tok-comment">// Allocate the float accumulator + LDR display buffers.</span>
+    <span class="tok-kw">const</span> accum = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, rt_px_count);
+    <span class="tok-builtin">@memset</span>(accum, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>));
+    <span class="tok-kw">const</span> pixels = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Color, rt_px_count);
+    <span class="tok-builtin">@memset</span>(pixels, .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> });
+
+    <span class="tok-comment">// Wrap the LDR buffer in an `Image` so we can upload it through</span>
+    <span class="tok-comment">// the standard `loadFromImage` -&gt; `updateTexture` pipeline.</span>
+
+    <span class="tok-comment">// GPU texture world (Phase E pattern - same shape as</span>
+    <span class="tok-comment">// procgen_noise).  Just holds the one streaming texture.</span>
+    <span class="tok-kw">const</span> fb: z.CpuFramebuffer = z.CpuFramebuffer.<span class="tok-fn">init</span>(
+        f.gpu.device,
+        f.gpu.queue,
+        <span class="tok-builtin">@intCast</span>(rt_w),
+        <span class="tok-builtin">@intCast</span>(rt_h),
+        std.mem.<span class="tok-fn">sliceAsBytes</span>(pixels),
+        <span class="tok-str">"raytracer_fb"</span>,
+    );
+
+    s.* = .{
+        .world = world,
+        .cam = .{
+            .lookfrom = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0.5</span>, <span class="tok-num">2.0</span>),
+            .yaw = <span class="tok-num">0</span>,
+            .pitch = -<span class="tok-num">0.15</span>, <span class="tok-comment">// small tilt down, so the ground is visible</span>
+            .vfov = <span class="tok-num">50</span>,
+        },
+        .accum = accum,
+        .pixels = pixels,
+        .fb = fb,
+        .rng = std.Random.DefaultPrng.<span class="tok-fn">init</span>(<span class="tok-num">0xCAFE</span>),
+        .gpa = gpa,
+    };
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Per-frame update</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">fn</span> <span class="tok-fn">drawUiPanel</span>(f: *z.Frame, s: *State) bool {
+    _ = f;
+    _ = s;
+    <span class="tok-kw">return</span> false; <span class="tok-comment">// UI panel omitted in the wgpu CPU port (no z.Ui yet)</span>
+}
+
+<span class="tok-comment">/// Read input.  Returns true if any camera-related state changed</span>
+<span class="tok-comment">/// this frame (which triggers the accumulator reset + low-res</span>
+<span class="tok-comment">/// render path).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">handleInput</span>(
+    f: *z.Frame,
+    s: *State,
+    ui_capture_mouse: bool,
+) bool {
+    <span class="tok-kw">var</span> changed: bool = false;
+    <span class="tok-kw">const</span> dt: f32 = f.time.delta_time;
+
+    <span class="tok-comment">// Movement speed: 1.5 world-units/sec normally, 6 with Shift.</span>
+    <span class="tok-kw">const</span> speed_mul: f32 = <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .left_shift)) <span class="tok-num">4.0</span> <span class="tok-kw">else</span> <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> speed: f32 = <span class="tok-num">1.5</span> * speed_mul * dt;
+
+    <span class="tok-kw">const</span> basis: CamBasis = <span class="tok-fn">deriveBasis</span>(s.cam);
+
+    <span class="tok-comment">// WASDQE - translate along the camera basis.</span>
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .w)) {
+        s.cam.lookfrom = (s.cam.lookfrom - (basis.w * <span class="tok-fn">splat</span>(speed)));
+        changed = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .s)) {
+        s.cam.lookfrom = (s.cam.lookfrom + (basis.w * <span class="tok-fn">splat</span>(speed)));
+        changed = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .a)) {
+        s.cam.lookfrom = (s.cam.lookfrom - (basis.u * <span class="tok-fn">splat</span>(speed)));
+        changed = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .d)) {
+        s.cam.lookfrom = (s.cam.lookfrom + (basis.u * <span class="tok-fn">splat</span>(speed)));
+        changed = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .q)) {
+        s.cam.lookfrom = (s.cam.lookfrom - (basis.v * <span class="tok-fn">splat</span>(speed)));
+        changed = true;
+    }
+    <span class="tok-kw">if</span> (z.<span class="tok-fn">isKeyDown</span>(f.input, .e)) {
+        s.cam.lookfrom = (s.cam.lookfrom + (basis.v * <span class="tok-fn">splat</span>(speed)));
+        changed = true;
+    }
+
+    <span class="tok-comment">// RMB-drag: yaw / pitch.  Gated on `ui_capture_mouse` so the</span>
+    <span class="tok-comment">// UI panel stays clickable.</span>
+    <span class="tok-kw">if</span> (!ui_capture_mouse <span class="tok-kw">and</span> z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .right)) {
+        <span class="tok-kw">const</span> delta: Vec2 = z.<span class="tok-fn">getMouseDelta</span>(f.input);
+        <span class="tok-kw">if</span> (delta[<span class="tok-num">0</span>] != <span class="tok-num">0</span> <span class="tok-kw">or</span> delta[<span class="tok-num">1</span>] != <span class="tok-num">0</span>) {
+            <span class="tok-kw">const</span> sensitivity: f32 = <span class="tok-num">0.005</span>;
+            s.cam.yaw += delta[<span class="tok-num">0</span>] * sensitivity;
+            s.cam.pitch -= delta[<span class="tok-num">1</span>] * sensitivity;
+            <span class="tok-comment">// Clamp pitch so the camera can't flip past straight-up</span>
+            <span class="tok-comment">// or straight-down (would gimbal-lock the yaw axis).</span>
+            <span class="tok-kw">const</span> pitch_cap: f32 = <span class="tok-num">1.4</span>; <span class="tok-comment">// ~80 deg</span>
+            s.cam.pitch = <span class="tok-fn">clamp</span>(s.cam.pitch, -pitch_cap, pitch_cap);
+            changed = true;
+        }
+    }
+
+    <span class="tok-comment">// Wheel: zoom by nudging vfov.</span>
+    <span class="tok-kw">const</span> wheel: f32 = z.<span class="tok-fn">getMouseWheelMove</span>(f.input);
+    <span class="tok-kw">if</span> (wheel != <span class="tok-num">0</span> <span class="tok-kw">and</span> !ui_capture_mouse) {
+        s.cam.vfov = <span class="tok-fn">clamp</span>(s.cam.vfov - wheel * <span class="tok-num">2.0</span>, <span class="tok-num">10.0</span>, <span class="tok-num">90.0</span>);
+        changed = true;
+    }
+
+    <span class="tok-kw">return</span> changed;
+}
+
+<span class="tok-comment">/// Build the ray for pixel (x, y), with a tiny anti-alias jitter so</span>
+<span class="tok-comment">/// successive samples for the same pixel sit at slightly different</span>
+<span class="tok-comment">/// sub-pixel positions - the convergence path.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">pixelRay</span>(
+    rng: std.Random,
+    basis: *<span class="tok-kw">const</span> CamBasis,
+    x: i32,
+    y: i32,
+) Ray {
+    <span class="tok-kw">const</span> jx: f32 = rng.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> jy: f32 = rng.<span class="tok-fn">float</span>(f32) - <span class="tok-num">0.5</span>;
+    <span class="tok-kw">const</span> fx: f32 = <span class="tok-fn">float</span>(x) + jx;
+    <span class="tok-kw">const</span> fy: f32 = <span class="tok-fn">float</span>(y) + jy;
+    <span class="tok-kw">const</span> px_center: zm.Vec = basis.px00 + (basis.pdu * <span class="tok-fn">splat</span>(fx)) + (basis.pdv * <span class="tok-fn">splat</span>(fy));
+    <span class="tok-kw">return</span> .{
+        .position = basis.origin,
+        .direction = (px_center - basis.origin),
+    };
+}
+
+<span class="tok-comment">/// Analytic ray-sphere intersection.  Solves the quadratic</span>
+<span class="tok-comment">/// `|O + tD - C|^2 = r^2` for `t`.  Returns the nearest root in</span>
+<span class="tok-comment">/// `(t_min, t_max)` or null.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">hitSphere</span>(
+    s: Sphere,
+    mat: Material,
+    ray: Ray,
+    t_min: f32,
+    t_max: f32,
+) ?HitRecord {
+    <span class="tok-kw">const</span> oc: zm.Vec = (s.center - ray.position);
+    <span class="tok-kw">const</span> a: f32 = <span class="tok-fn">dot3</span>(ray.direction, ray.direction);
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-fn">dot3</span>(oc, ray.direction);
+    <span class="tok-kw">const</span> c: f32 = <span class="tok-fn">dot3</span>(oc, oc) - s.radius * s.radius;
+    <span class="tok-kw">const</span> disc: f32 = h * h - a * c;
+    <span class="tok-kw">if</span> (disc &lt; <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> null;
+    }
+    <span class="tok-kw">const</span> sqrt_d: f32 = <span class="tok-builtin">@sqrt</span>(disc);
+
+    <span class="tok-comment">// Try the nearer root first; fall back to the further one if</span>
+    <span class="tok-comment">// the nearer is outside the interval.  (This handles cases like</span>
+    <span class="tok-comment">// "ray origin is inside the sphere".)</span>
+    <span class="tok-kw">var</span> root: f32 = (h - sqrt_d) / a;
+    <span class="tok-kw">if</span> (root &lt;= t_min <span class="tok-kw">or</span> root &gt;= t_max) {
+        root = (h + sqrt_d) / a;
+        <span class="tok-kw">if</span> (root &lt;= t_min <span class="tok-kw">or</span> root &gt;= t_max) {
+            <span class="tok-kw">return</span> null;
+        }
+    }
+
+    <span class="tok-kw">const</span> point: zm.Vec = <span class="tok-fn">rayAt</span>(ray, root);
+    <span class="tok-kw">const</span> outward_normal: zm.Vec = ((point - s.center) * <span class="tok-fn">splat</span>(<span class="tok-num">1.0</span> / s.radius));
+    <span class="tok-kw">const</span> front_face: bool = <span class="tok-fn">dot3</span>(ray.direction, outward_normal) &lt; <span class="tok-num">0</span>;
+    <span class="tok-kw">return</span> .{
+        .point = point,
+        .normal = <span class="tok-kw">if</span> (front_face) outward_normal <span class="tok-kw">else</span> (-(outward_normal)),
+        .t = root,
+        .front_face = front_face,
+        .material = mat,
+    };
+}
+
+<span class="tok-comment">/// Iterate every (Sphere, Material) entity, return the nearest hit</span>
+<span class="tok-comment">/// in the [t_min, t_max] interval (or null).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">hitScene</span>(
+    ray: Ray,
+    world: *<span class="tok-kw">const</span> ecs.Registry,
+    t_min: f32,
+    t_max: f32,
+) ?HitRecord {
+    <span class="tok-kw">var</span> closest: ?HitRecord = null;
+    <span class="tok-kw">var</span> closest_t: f32 = t_max;
+
+    <span class="tok-comment">// Cast away const for iteration (ecs requires *World).  No</span>
+    <span class="tok-comment">// component mutation happens - we only read.</span>
+    <span class="tok-kw">const</span> w_mut: *ecs.Registry = <span class="tok-builtin">@constCast</span>(world);
+    <span class="tok-kw">var</span> iter = w_mut.<span class="tok-fn">iterator</span>(<span class="tok-kw">struct</span> { s: *<span class="tok-kw">const</span> Sphere, m: *<span class="tok-kw">const</span> Material });
+    <span class="tok-kw">while</span> (iter.<span class="tok-fn">next</span>(w_mut)) |view| {
+        <span class="tok-kw">if</span> (<span class="tok-fn">hitSphere</span>(view.s.*, view.m.*, ray, t_min, closest_t)) |rec| {
+            closest = rec;
+            closest_t = rec.t;
+        }
+    }
+    <span class="tok-kw">return</span> closest;
+}
+
+<span class="tok-kw">const</span> Scatter = <span class="tok-kw">struct</span> {
+    attenuation: Vec,
+    scattered: Ray,
+};
+
+<span class="tok-comment">/// Diffuse: scatter in a random direction biased toward the normal.</span>
+<span class="tok-comment">/// `normal + randomUnitVector` is the "true Lambertian" distribution</span>
+<span class="tok-comment">/// (cosine-weighted) - gives the soft, even-illumination look.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">scatterLambertian</span>(
+    rng: std.Random,
+    m: Lambertian,
+    rec: HitRecord,
+) ?Scatter {
+    <span class="tok-kw">var</span> dir: zm.Vec = (rec.normal + <span class="tok-fn">randomUnitVec3</span>(rng));
+    <span class="tok-comment">// Guard against the degenerate case where the random vector</span>
+    <span class="tok-comment">// cancels the normal (would produce a zero-length ray direction).</span>
+    <span class="tok-kw">if</span> (<span class="tok-fn">lengthSq3</span>(dir) &lt; <span class="tok-num">1.0e-8</span>) {
+        dir = rec.normal;
+    }
+    <span class="tok-kw">return</span> .{
+        .attenuation = m.albedo,
+        .scattered = .{ .position = rec.point, .direction = dir },
+    };
+}
+
+<span class="tok-comment">/// Specular reflection plus optional fuzz.  Fuzz=0 is a perfect</span>
+<span class="tok-comment">/// mirror; higher fuzz scatters the reflection inside a sphere</span>
+<span class="tok-comment">/// around the ideal direction, producing brushed-metal blur.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">scatterMetal</span>(
+    rng: std.Random,
+    m: Metal,
+    ray_in: Ray,
+    rec: HitRecord,
+) ?Scatter {
+    <span class="tok-kw">const</span> reflected: zm.Vec = <span class="tok-fn">reflect3</span>(<span class="tok-fn">normalize3</span>(ray_in.direction), rec.normal);
+    <span class="tok-kw">const</span> fuzzy: zm.Vec = (reflected + (<span class="tok-fn">randomUnitVec3</span>(rng) * <span class="tok-fn">splat</span>(m.fuzz)));
+    <span class="tok-comment">// If the fuzz scatter pushes the ray below the surface, drop</span>
+    <span class="tok-comment">// the bounce - would otherwise produce darkened pixels at</span>
+    <span class="tok-comment">// grazing angles.</span>
+    <span class="tok-kw">if</span> (<span class="tok-fn">dot3</span>(fuzzy, rec.normal) &lt;= <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> null;
+    }
+    <span class="tok-kw">return</span> .{
+        .attenuation = m.albedo,
+        .scattered = .{ .position = rec.point, .direction = fuzzy },
+    };
+}
+
+<span class="tok-comment">/// Schlick's approximation for the Fresnel reflectance - gives the</span>
+<span class="tok-comment">/// "edges of glass reflect more than the middle" effect cheaply.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">schlick</span>(cos_theta: f32, ref_idx: f32) f32 {
+    <span class="tok-kw">var</span> r0: f32 = (<span class="tok-num">1.0</span> - ref_idx) / (<span class="tok-num">1.0</span> + ref_idx);
+    r0 = r0 * r0;
+    <span class="tok-kw">return</span> r0 + (<span class="tok-num">1.0</span> - r0) * <span class="tok-fn">pow</span>(<span class="tok-num">1.0</span> - cos_theta, <span class="tok-num">5</span>);
+}
+
+<span class="tok-comment">/// Glass: refract (Snell's law) unless total internal reflection or</span>
+<span class="tok-comment">/// the Schlick approximation says "reflect this one anyway."  No</span>
+<span class="tok-comment">/// attenuation - glass passes color through unchanged.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">scatterDielectric</span>(
+    rng: std.Random,
+    m: Dielectric,
+    ray_in: Ray,
+    rec: HitRecord,
+) ?Scatter {
+    <span class="tok-kw">const</span> ri: f32 = <span class="tok-kw">if</span> (rec.front_face) <span class="tok-num">1.0</span> / m.ref_idx <span class="tok-kw">else</span> m.ref_idx;
+    <span class="tok-kw">const</span> unit_dir: zm.Vec = <span class="tok-fn">normalize3</span>(ray_in.direction);
+    <span class="tok-kw">const</span> cos_theta: f32 = <span class="tok-builtin">@min</span>(<span class="tok-fn">dot3</span>((-(unit_dir)), rec.normal), <span class="tok-num">1.0</span>);
+    <span class="tok-kw">const</span> sin_theta: f32 = <span class="tok-builtin">@sqrt</span>(<span class="tok-num">1.0</span> - cos_theta * cos_theta);
+
+    <span class="tok-kw">const</span> cannot_refract: bool = ri * sin_theta &gt; <span class="tok-num">1.0</span>;
+    <span class="tok-kw">const</span> reflect_prob: f32 = <span class="tok-fn">schlick</span>(cos_theta, ri);
+    <span class="tok-kw">const</span> must_reflect = cannot_refract <span class="tok-kw">or</span> reflect_prob &gt; rng.<span class="tok-fn">float</span>(f32);
+
+    <span class="tok-kw">const</span> dir: Vec = <span class="tok-kw">if</span> (must_reflect)
+        <span class="tok-fn">reflect3</span>(unit_dir, rec.normal)
+    <span class="tok-kw">else</span>
+        <span class="tok-fn">refract3</span>(unit_dir, rec.normal, ri);
+
+    <span class="tok-kw">return</span> .{
+        .attenuation = <span class="tok-fn">vec</span>(<span class="tok-num">1</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>),
+        .scattered = .{ .position = rec.point, .direction = dir },
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">scatter</span>(
+    rng: std.Random,
+    ray_in: Ray,
+    rec: HitRecord,
+) ?Scatter {
+    <span class="tok-kw">return</span> <span class="tok-kw">switch</span> (rec.material) {
+        .lambertian =&gt; |m| <span class="tok-fn">scatterLambertian</span>(rng, m, rec),
+        .metal =&gt; |m| <span class="tok-fn">scatterMetal</span>(rng, m, ray_in, rec),
+        .dielectric =&gt; |m| <span class="tok-fn">scatterDielectric</span>(rng, m, ray_in, rec),
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">skyColor</span>(dir: Vec, preset_idx: i32) Vec {
+    <span class="tok-kw">const</span> unit: zm.Vec = <span class="tok-fn">normalize3</span>(dir);
+    <span class="tok-kw">const</span> a: f32 = <span class="tok-num">0.5</span> * (unit[<span class="tok-num">1</span>] + <span class="tok-num">1.0</span>);
+    <span class="tok-kw">const</span> preset: SkyPreset = <span class="tok-builtin">@fromBackingInt</span>(<span class="tok-builtin">@intCast</span>(preset_idx));
+    <span class="tok-kw">const</span> colors: [<span class="tok-num">2</span>]zm.Vec = <span class="tok-kw">switch</span> (preset) {
+        .day =&gt; .{
+            <span class="tok-fn">vec</span>(<span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>, <span class="tok-num">1.0</span>), <span class="tok-comment">// horizon - bright white</span>
+            <span class="tok-fn">vec</span>(<span class="tok-num">0.5</span>, <span class="tok-num">0.7</span>, <span class="tok-num">1.0</span>), <span class="tok-comment">// zenith - sky blue</span>
+        },
+        .sunset =&gt; .{
+            <span class="tok-fn">vec</span>(<span class="tok-num">1.0</span>, <span class="tok-num">0.55</span>, <span class="tok-num">0.35</span>), <span class="tok-comment">// horizon - orange</span>
+            <span class="tok-fn">vec</span>(<span class="tok-num">0.25</span>, <span class="tok-num">0.15</span>, <span class="tok-num">0.45</span>), <span class="tok-comment">// zenith - purple</span>
+        },
+        .night =&gt; .{
+            <span class="tok-fn">vec</span>(<span class="tok-num">0.05</span>, <span class="tok-num">0.06</span>, <span class="tok-num">0.12</span>), <span class="tok-comment">// horizon - dim navy</span>
+            <span class="tok-fn">vec</span>(<span class="tok-num">0.01</span>, <span class="tok-num">0.01</span>, <span class="tok-num">0.03</span>), <span class="tok-comment">// zenith - near-black</span>
+        },
+    };
+    <span class="tok-kw">return</span> ((colors[<span class="tok-num">0</span>] * <span class="tok-fn">splat</span>(<span class="tok-num">1.0</span> - a)) + (colors[<span class="tok-num">1</span>] * <span class="tok-fn">splat</span>(a)));
+}
+
+<span class="tok-comment">/// Recursive ray color.  Hits -&gt; scatter recursively x albedo.  Miss</span>
+<span class="tok-comment">/// -&gt; sky.  Depth -&gt; black (energy budget exhausted).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">rayColor</span>(
+    rng: std.Random,
+    ray: Ray,
+    world: *<span class="tok-kw">const</span> ecs.Registry,
+    params: Params,
+    depth: u32,
+) Vec {
+    <span class="tok-kw">if</span> (depth == <span class="tok-num">0</span>) {
+        <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    }
+
+    <span class="tok-kw">if</span> (<span class="tok-fn">hitScene</span>(ray, world, <span class="tok-num">0.001</span>, <span class="tok-fn">inf</span>(f32))) |rec| {
+        <span class="tok-kw">if</span> (<span class="tok-fn">scatter</span>(rng, ray, rec)) |scat| {
+            <span class="tok-kw">const</span> sub: zm.Vec = <span class="tok-fn">rayColor</span>(rng, scat.scattered, world, params, depth - <span class="tok-num">1</span>);
+            <span class="tok-kw">return</span> (scat.attenuation * sub);
+        }
+        <span class="tok-kw">return</span> <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>);
+    }
+
+    <span class="tok-kw">return</span> <span class="tok-fn">skyColor</span>(ray.direction, params.sky_preset);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">clamp8</span>(v: f32) u8 {
+    <span class="tok-kw">return</span> <span class="tok-fn">int</span>(u8, <span class="tok-fn">clamp</span>(v, <span class="tok-num">0</span>, <span class="tok-num">0.999</span>) * <span class="tok-num">256.0</span>);
+}
+
+<span class="tok-comment">/// Linear HDR -&gt; sRGB-ish 8-bit color.  `sqrt` is the cheap stand-in</span>
+<span class="tok-comment">/// for gamma 2.0 (the proper sRGB curve is barely different</span>
+<span class="tok-comment">/// visually and costlier per pixel).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">tonemap</span>(c: Vec) Color {
+    <span class="tok-kw">return</span> .{
+        .r = <span class="tok-fn">clamp8</span>(<span class="tok-builtin">@sqrt</span>(<span class="tok-builtin">@max</span>(<span class="tok-num">0</span>, c[<span class="tok-num">0</span>]))),
+        .g = <span class="tok-fn">clamp8</span>(<span class="tok-builtin">@sqrt</span>(<span class="tok-builtin">@max</span>(<span class="tok-num">0</span>, c[<span class="tok-num">1</span>]))),
+        .b = <span class="tok-fn">clamp8</span>(<span class="tok-builtin">@sqrt</span>(<span class="tok-builtin">@max</span>(<span class="tok-num">0</span>, c[<span class="tok-num">2</span>]))),
+        .a = <span class="tok-num">255</span>,
+    };
+}
+
+<span class="tok-comment">/// Low-resolution single-sample stride render.  Renders every</span>
+<span class="tok-comment">/// `move_stride`-th pixel; the other pixels keep their last-frame</span>
+<span class="tok-comment">/// color.  Runs while the camera is moving - the framebuffer was</span>
+<span class="tok-comment">/// just reset to zero in the caller, so the un-stride pixels read</span>
+<span class="tok-comment">/// as zero (black).  To compensate, we fill an entire stridexstride</span>
+<span class="tok-comment">/// block from each rendered sample so the image looks coherent</span>
+<span class="tok-comment">/// instead of like a polka-dot pattern.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">renderStride</span>(s: *State, basis: *<span class="tok-kw">const</span> CamBasis) void {
+    <span class="tok-kw">const</span> rng: std.Random = s.rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">var</span> y: i32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (y &lt; rt_h) : (y += move_stride) {
+        <span class="tok-kw">var</span> x: i32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (x &lt; rt_w) : (x += move_stride) {
+            <span class="tok-kw">const</span> ray: Ray = <span class="tok-fn">pixelRay</span>(rng, basis, x, y);
+            <span class="tok-comment">// Shallower depth while moving (cap at 3) - the extra</span>
+            <span class="tok-comment">// bounces are invisible in motion + halve the per-ray</span>
+            <span class="tok-comment">// work.</span>
+            <span class="tok-kw">const</span> depth: u32 = <span class="tok-builtin">@min</span>(<span class="tok-num">3</span>, <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(s.params.max_depth)));
+            <span class="tok-kw">const</span> color: Vec = <span class="tok-fn">rayColor</span>(rng, ray, &amp;s.world, s.params, depth);
+            <span class="tok-kw">const</span> display: Color = <span class="tok-fn">tonemap</span>(color);
+            <span class="tok-comment">// Splat this color across the move_stride x move_stride</span>
+            <span class="tok-comment">// pixel block.</span>
+            <span class="tok-kw">var</span> dy: i32 = <span class="tok-num">0</span>;
+            <span class="tok-kw">while</span> (dy &lt; move_stride <span class="tok-kw">and</span> (y + dy) &lt; rt_h) : (dy += <span class="tok-num">1</span>) {
+                <span class="tok-kw">var</span> dx: i32 = <span class="tok-num">0</span>;
+                <span class="tok-kw">while</span> (dx &lt; move_stride <span class="tok-kw">and</span> (x + dx) &lt; rt_w) : (dx += <span class="tok-num">1</span>) {
+                    <span class="tok-kw">const</span> idx: usize = <span class="tok-builtin">@intCast</span>((y + dy) * rt_w + (x + dx));
+                    s.pixels[idx] = display;
+                }
+            }
+        }
+    }
+}
+
+<span class="tok-comment">/// Full-resolution single-sample-per-frame accumulator render.  Adds</span>
+<span class="tok-comment">/// one fresh sample to each pixel; caller divides by `sample_count`</span>
+<span class="tok-comment">/// at tonemap time.  Runs while the camera is still.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">renderOneSample</span>(s: *State, basis: *<span class="tok-kw">const</span> CamBasis) void {
+    <span class="tok-kw">const</span> rng: std.Random = s.rng.<span class="tok-fn">random</span>();
+    <span class="tok-kw">var</span> y: i32 = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (y &lt; rt_h) : (y += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> x: i32 = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (x &lt; rt_w) : (x += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> idx: usize = <span class="tok-builtin">@intCast</span>(y * rt_w + x);
+            <span class="tok-kw">const</span> ray: Ray = <span class="tok-fn">pixelRay</span>(rng, basis, x, y);
+            <span class="tok-kw">const</span> sample: Vec = <span class="tok-fn">rayColor</span>(rng, ray, &amp;s.world, s.params, <span class="tok-builtin">@intCast</span>(s.params.max_depth));
+            s.accum[idx] = (s.accum[idx] + sample);
+        }
+    }
+    <span class="tok-comment">// Tonemap the whole buffer for display.</span>
+    <span class="tok-kw">const</span> denom: f32 = <span class="tok-num">1.0</span> / <span class="tok-fn">float</span>(s.sample_count + <span class="tok-num">1</span>);
+    <span class="tok-kw">for</span> (s.accum, <span class="tok-num">0</span>..) |c, i| {
+        s.pixels[i] = <span class="tok-fn">tonemap</span>((c * <span class="tok-fn">splat</span>(denom)));
+    }
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-comment">// Per-frame order of operations:</span>
+    <span class="tok-comment">//   1. Submit the UI panel first.  This populates the context's</span>
+    <span class="tok-comment">//      `frame_windows` list (used by `wantCaptureMouse`), so by</span>
+    <span class="tok-comment">//      the time we read input below the hit-test against the</span>
+    <span class="tok-comment">//      panel rect is correct.  The UI's draw calls go into the</span>
+    <span class="tok-comment">//      same render batch as everything else and only flush at</span>
+    <span class="tok-comment">//      `endDrawing` - there's no "render UI first" cost.</span>
+    <span class="tok-comment">//   2. Read input + maybe-update camera.</span>
+    <span class="tok-comment">//   3. Render the scene + upload pixels.</span>
+    <span class="tok-comment">//   4. Issue draw calls (clear -&gt; texture -&gt; UI commands -&gt; flush).</span>
+    <span class="tok-kw">const</span> ui_capture_mouse: bool = <span class="tok-fn">drawUiPanel</span>(f, s);
+    <span class="tok-kw">const</span> cam_changed: bool = <span class="tok-fn">handleInput</span>(f, s, ui_capture_mouse);
+
+    <span class="tok-kw">const</span> basis: CamBasis = <span class="tok-fn">deriveBasis</span>(s.cam);
+
+    <span class="tok-kw">if</span> (cam_changed) {
+        <span class="tok-builtin">@memset</span>(s.accum, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>));
+        s.sample_count = <span class="tok-num">0</span>;
+    }
+    s.moving = cam_changed;
+
+    <span class="tok-comment">// 4. Render - full-res accumulate when still, stride-4 single-</span>
+    <span class="tok-comment">//    sample when moving.  When the accumulator hits its cap,</span>
+    <span class="tok-comment">//    skip rendering entirely; the displayed image already shows</span>
+    <span class="tok-comment">//    the converged result.</span>
+    <span class="tok-kw">if</span> (s.moving) {
+        <span class="tok-fn">renderStride</span>(s, &amp;basis);
+    } <span class="tok-kw">else</span> <span class="tok-kw">if</span> (s.sample_count &lt; <span class="tok-builtin">@as</span>(u32, <span class="tok-builtin">@intCast</span>(s.params.samples_per_pixel))) {
+        <span class="tok-fn">renderOneSample</span>(s, &amp;basis);
+        s.sample_count += <span class="tok-num">1</span>;
+    }
+
+    <span class="tok-comment">// 5. Push pixels to the GPU + draw.</span>
+    s.fb.<span class="tok-fn">update</span>(f.gpu.queue, std.mem.<span class="tok-fn">sliceAsBytes</span>(s.pixels));
+
+    z.<span class="tok-fn">clearViewport</span>(f, .{ .r = <span class="tok-num">0</span>, .g = <span class="tok-num">0</span>, .b = <span class="tok-num">0</span>, .a = <span class="tok-num">255</span> });
+    s.fb.<span class="tok-fn">present</span>(f.gl, <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-fn">float</span>(screen_w), <span class="tok-fn">float</span>(screen_h));
+
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Input -&gt; camera updates</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Rendering - two paths, full-res accumulate + low-res-while-moving</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Trace - recursive shading</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Material scatter</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Sky + tonemap</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// UI panel</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// User-owned framework integration point.  See `examples/basic.zig`</span>
+<span class="tok-comment">/// for the canonical comment block; this declaration is the</span>
+<span class="tok-comment">/// AppBridge pattern's required convention.</span>
+<span class="tok-comment">/// Descriptor-only: the runner (standalone) or a launcher drives this.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - ray tracer (CPU)"</span>,
+            .width = screen_w,
+            .height = screen_h,
+            .scale_mode = .fit,
+            .depth_format = null,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+</body>
+</html>

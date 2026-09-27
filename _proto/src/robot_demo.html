@@ -1,0 +1,1128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>robot_demo — source</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+</head>
+<body class="src-page">
+<h1>robot_demo</h1>
+<figure class="code src-file" data-path="examples/robot_demo/robot_demo.zig" data-lines="288"><figcaption><span>examples/robot_demo/robot_demo.zig</span><span>288 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! robot_demo - a scene table for `src/robot.zig`, in the shape of the 2D physics demo.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! The host knows nothing about any individual scene: it steps whatever `scenes.zig` hands</span>
+<span class="tok-comment">//! it, draws the links from the engine's own body poses, and renders a HUD. Adding a scene</span>
+<span class="tok-comment">//! is adding a row to that table.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Every scene is planar (hinges about Z), so this draws in 2D with no camera. The engine</span>
+<span class="tok-comment">//! is fully 3D; the demo is 2D because that is what reads on a phone.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> common = <span class="tok-builtin">@import</span>(<span class="tok-str">"example_common"</span>);
+
+<span class="tok-comment">/// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.</span>
+<span class="tok-comment">/// See `common.reportPanic`: six turns of debugging went to a panic that named itself in one</span>
+<span class="tok-comment">/// build once a handler existed.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> panic = std.debug.<span class="tok-fn">FullPanic</span>(common.reportPanic);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> rbt = z.robot;
+<span class="tok-kw">const</span> scenes = <span class="tok-builtin">@import</span>(<span class="tok-str">"scenes.zig"</span>);
+
+<span class="tok-kw">const</span> atkinson_mono_ttf = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"atkinson_mono_ttf"</span>);
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> Color = zm.Color;
+<span class="tok-kw">const</span> vec2 = zm.vec2;
+<span class="tok-kw">const</span> rotate = zm.rotate;
+<span class="tok-kw">const</span> float = zm.float;
+<span class="tok-kw">const</span> assertUnreachable = zm.assertUnreachable;
+
+<span class="tok-comment">/// Scale text and chrome with the viewport.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// A standalone build renders at DEVICE resolution - a phone reporting a CSS width of 400</span>
+<span class="tok-comment">/// gives a canvas near 1080 wide - so a fixed 13-pixel font arrives about four CSS pixels</span>
+<span class="tok-comment">/// tall. Readable in the in-app viewer, invisible in a browser full-screen. Scaling against</span>
+<span class="tok-comment">/// the smaller dimension makes a glyph a fixed fraction of the screen instead.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">uiScale</span>(w: f32, h: f32) f32 {
+    <span class="tok-kw">return</span> <span class="tok-builtin">@max</span>(<span class="tok-num">1.0</span>, <span class="tok-builtin">@min</span>(w, h) / <span class="tok-num">450.0</span>);
+}
+
+<span class="tok-comment">/// The scene picker's strip along the bottom, before scaling.</span>
+<span class="tok-kw">const</span> picker_h: f32 = <span class="tok-num">108</span>;
+<span class="tok-comment">/// Where the pivot sits within the world area, as a fraction of its height. Leaves room</span>
+<span class="tok-comment">/// above for the HUD and below for a full downward swing.</span>
+<span class="tok-kw">const</span> origin_y_frac: f32 = <span class="tok-num">0.30</span>;
+<span class="tok-comment">/// Fraction of the world area a scene's full reach should occupy. Under 1 so a mechanism</span>
+<span class="tok-comment">/// swinging sideways still has margin.</span>
+<span class="tok-kw">const</span> fill: f32 = <span class="tok-num">0.62</span>;
+
+<span class="tok-kw">const</span> bg: Color = .{ .r = <span class="tok-num">31</span>, .g = <span class="tok-num">20</span>, .b = <span class="tok-num">14</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> panel: Color = .{ .r = <span class="tok-num">51</span>, .g = <span class="tok-num">34</span>, .b = <span class="tok-num">24</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> panel_on: Color = .{ .r = <span class="tok-num">88</span>, .g = <span class="tok-num">52</span>, .b = <span class="tok-num">32</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> accent: Color = .{ .r = <span class="tok-num">211</span>, .g = <span class="tok-num">95</span>, .b = <span class="tok-num">51</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> accent2: Color = .{ .r = <span class="tok-num">79</span>, .g = <span class="tok-num">179</span>, .b = <span class="tok-num">165</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> trail_col: Color = .{ .r = <span class="tok-num">79</span>, .g = <span class="tok-num">179</span>, .b = <span class="tok-num">165</span>, .a = <span class="tok-num">80</span> };
+<span class="tok-kw">const</span> text_col: Color = .{ .r = <span class="tok-num">240</span>, .g = <span class="tok-num">230</span>, .b = <span class="tok-num">210</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> dim_col: Color = .{ .r = <span class="tok-num">168</span>, .g = <span class="tok-num">150</span>, .b = <span class="tok-num">132</span>, .a = <span class="tok-num">255</span> };
+<span class="tok-kw">const</span> target_col: Color = .{ .r = <span class="tok-num">232</span>, .g = <span class="tok-num">196</span>, .b = <span class="tok-num">92</span>, .a = <span class="tok-num">255</span> };
+
+<span class="tok-kw">const</span> trail_len: usize = <span class="tok-num">200</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    gpa: Allocator,
+    font: z.Font,
+    index: usize,
+    live: scenes.Live,
+    trail: [trail_len]Vec2,
+    trail_n: usize,
+    accumulator: f32,
+    <span class="tok-comment">/// Live drag target, in world metres.</span>
+    target: Vec2,
+    pointing: bool,
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">load</span>(self: *State, index: usize) !void {
+        self.live.<span class="tok-fn">deinit</span>(self.gpa);
+        self.index = index;
+        self.live = <span class="tok-kw">try</span> scenes.all[index].<span class="tok-fn">build</span>(self.gpa);
+        self.trail_n = <span class="tok-num">0</span>;
+        self.accumulator = <span class="tok-num">0</span>;
+        self.pointing = false;
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{
+        .gpa = gpa,
+        .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, atkinson_mono_ttf, <span class="tok-num">22</span>),
+        .index = <span class="tok-num">0</span>,
+        .live = <span class="tok-kw">try</span> scenes.all[<span class="tok-num">0</span>].<span class="tok-fn">build</span>(gpa),
+        .trail = <span class="tok-builtin">@splat</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>)),
+        .trail_n = <span class="tok-num">0</span>,
+        .accumulator = <span class="tok-num">0</span>,
+        .target = <span class="tok-fn">vec2</span>(<span class="tok-num">0</span>, -<span class="tok-num">0.5</span>),
+        .pointing = false,
+    };
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(gpa: Allocator, s: *State) void {
+    s.live.<span class="tok-fn">deinit</span>(gpa);
+    z.<span class="tok-fn">unloadFont</span>(gpa, s.font);
+}
+
+<span class="tok-comment">/// How the world maps onto the screen, recomputed each frame so the view survives a</span>
+<span class="tok-comment">/// resize, a rotation, and a viewport squashed by an on-screen keyboard.</span>
+<span class="tok-kw">const</span> View = <span class="tok-kw">struct</span> {
+    origin: Vec2,
+    scale: f32,
+
+    <span class="tok-comment">/// Fit `reach` metres into the space above the picker, in both axes.</span>
+    <span class="tok-kw">fn</span> <span class="tok-fn">fit</span>(w: f32, h: f32, reach: f32) View {
+        <span class="tok-kw">const</span> world_h: f32 = <span class="tok-builtin">@max</span>(h - picker_h * <span class="tok-fn">uiScale</span>(w, h), <span class="tok-num">80</span>);
+        <span class="tok-kw">const</span> oy: f32 = world_h * origin_y_frac;
+        <span class="tok-comment">// Vertically the mechanism hangs DOWN from the pivot, so the space that matters is</span>
+        <span class="tok-comment">// what is below it. Horizontally it can swing either way, so it is the half-width.</span>
+        <span class="tok-kw">const</span> room: f32 = <span class="tok-builtin">@min</span>(world_h - oy, w * <span class="tok-num">0.5</span>);
+        <span class="tok-kw">return</span> .{ .origin = <span class="tok-fn">vec2</span>(w * <span class="tok-num">0.5</span>, oy), .scale = room * fill / <span class="tok-builtin">@max</span>(reach, <span class="tok-num">0.01</span>) };
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">toScreen</span>(self: View, p: Vec2) Vec2 {
+        <span class="tok-kw">return</span> <span class="tok-fn">vec2</span>(self.origin[<span class="tok-num">0</span>] + p[<span class="tok-num">0</span>] * self.scale, self.origin[<span class="tok-num">1</span>] - p[<span class="tok-num">1</span>] * self.scale);
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">toWorld</span>(self: View, p: Vec2) Vec2 {
+        <span class="tok-kw">return</span> <span class="tok-fn">vec2</span>((p[<span class="tok-num">0</span>] - self.origin[<span class="tok-num">0</span>]) / self.scale, (self.origin[<span class="tok-num">1</span>] - p[<span class="tok-num">1</span>]) / self.scale);
+    }
+};
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    <span class="tok-kw">const</span> gl: *z.WgpuGl = f.gl;
+    <span class="tok-kw">const</span> w: f32 = <span class="tok-fn">float</span>(f.window.screen_width);
+    <span class="tok-kw">const</span> h: f32 = <span class="tok-fn">float</span>(f.window.screen_height);
+    <span class="tok-kw">const</span> scene: scenes.Scene = scenes.all[s.index];
+    <span class="tok-kw">const</span> m: *rbt.Model = &amp;s.live.model;
+    <span class="tok-kw">const</span> d: *rbt.Data = &amp;s.live.data;
+
+    <span class="tok-comment">// ---- input ----</span>
+    <span class="tok-kw">const</span> mouse: Vec2 = z.<span class="tok-fn">getMousePosition</span>(f.input);
+    <span class="tok-kw">const</span> held: bool = z.<span class="tok-fn">isMouseButtonDown</span>(f.input, .left);
+    <span class="tok-kw">const</span> view: View = .<span class="tok-fn">fit</span>(w, h, scene.reach);
+    <span class="tok-comment">// The bottom strip is the scene picker; everything above it is the world.</span>
+    <span class="tok-kw">const</span> ui: f32 = <span class="tok-fn">uiScale</span>(w, h);
+    <span class="tok-kw">const</span> picker_top: f32 = h - picker_h * ui;
+    <span class="tok-kw">const</span> in_world: bool = mouse[<span class="tok-num">1</span>] &lt; picker_top;
+    s.pointing = held <span class="tok-kw">and</span> in_world;
+    <span class="tok-kw">if</span> (s.pointing) {
+        s.target = view.<span class="tok-fn">toWorld</span>(mouse);
+    }
+
+    <span class="tok-comment">// ---- step, at a fixed rate independent of frame rate ----</span>
+    <span class="tok-kw">const</span> dt: f32 = m.opt.timestep;
+    s.accumulator += <span class="tok-builtin">@min</span>(f.time.delta_time, <span class="tok-num">0.1</span>);
+    <span class="tok-kw">while</span> (s.accumulator &gt;= dt) : (s.accumulator -= dt) {
+        <span class="tok-comment">// A controller belongs between "state is known" and "forces are committed", so the</span>
+        <span class="tok-comment">// hook runs against a forward pass and then the step re-runs it. That costs one</span>
+        <span class="tok-comment">// extra evaluation and keeps the control law honest about what it can see.</span>
+        rbt.<span class="tok-fn">forward</span>(m, d);
+        <span class="tok-builtin">@memset</span>(d.applied_force, <span class="tok-num">0</span>);
+        <span class="tok-kw">if</span> (scene.control) |hook| {
+            <span class="tok-fn">hook</span>(&amp;s.live, .{ .target = s.target, .pointing = s.pointing, .elapsed = s.live.elapsed });
+        }
+        rbt.<span class="tok-fn">step</span>(m, d);
+        s.live.elapsed += dt;
+    }
+    rbt.<span class="tok-fn">forward</span>(m, d);
+
+    <span class="tok-comment">// ---- draw ----</span>
+    z.<span class="tok-fn">clearViewport</span>(f, bg);
+
+    <span class="tok-comment">// Trail of the scene's nominated tip.</span>
+    <span class="tok-kw">if</span> (scene.tip) |tip| {
+        <span class="tok-kw">const</span> p: Vec = d.body_xpos[tip.body] + <span class="tok-fn">rotate</span>(d.body_xrot[tip.body], tip.local);
+        s.trail[s.trail_n % trail_len] = <span class="tok-fn">vec2</span>(p[<span class="tok-num">0</span>], p[<span class="tok-num">1</span>]);
+        s.trail_n += <span class="tok-num">1</span>;
+        <span class="tok-kw">const</span> shown: usize = <span class="tok-builtin">@min</span>(s.trail_n, trail_len);
+        <span class="tok-kw">const</span> oldest: usize = <span class="tok-kw">if</span> (s.trail_n &gt; trail_len) s.trail_n - trail_len <span class="tok-kw">else</span> <span class="tok-num">0</span>;
+        <span class="tok-kw">var</span> k: usize = <span class="tok-num">1</span>;
+        <span class="tok-kw">while</span> (k &lt; shown) : (k += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> a: Vec2 = s.trail[(oldest + k - <span class="tok-num">1</span>) % trail_len];
+            <span class="tok-kw">const</span> b: Vec2 = s.trail[(oldest + k) % trail_len];
+            gl.<span class="tok-fn">line</span>(view.<span class="tok-fn">toScreen</span>(a), view.<span class="tok-fn">toScreen</span>(b), .{ .color = trail_col, .thickness = <span class="tok-num">2</span> * ui });
+        }
+    }
+
+    <span class="tok-comment">// The mechanism itself, drawn from the engine's body poses. Body 0 is the world, so</span>
+    <span class="tok-comment">// each real body's link runs from its parent's origin to its own.</span>
+    <span class="tok-kw">var</span> bi: u32 = <span class="tok-num">1</span>;
+    <span class="tok-kw">while</span> (bi &lt; m.nbody) : (bi += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> parent: u32 = m.body_parent[bi];
+        <span class="tok-kw">const</span> a: Vec = d.body_xpos[parent];
+        <span class="tok-kw">const</span> b: Vec = d.body_xpos[bi];
+        <span class="tok-kw">const</span> col: Color = <span class="tok-kw">if</span> (bi % <span class="tok-num">2</span> == <span class="tok-num">1</span>) accent <span class="tok-kw">else</span> accent2;
+        gl.<span class="tok-fn">line</span>(
+            view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(a[<span class="tok-num">0</span>], a[<span class="tok-num">1</span>])),
+            view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(b[<span class="tok-num">0</span>], b[<span class="tok-num">1</span>])),
+            .{ .color = col, .thickness = <span class="tok-num">9</span> * ui },
+        );
+        gl.<span class="tok-fn">circle</span>(view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(b[<span class="tok-num">0</span>], b[<span class="tok-num">1</span>])), <span class="tok-num">6</span>, .{ .color = col });
+    }
+    <span class="tok-comment">// The far end of the last link, which no body origin marks.</span>
+    <span class="tok-kw">if</span> (scene.tip) |tip| {
+        <span class="tok-kw">const</span> p: Vec = d.body_xpos[tip.body] + <span class="tok-fn">rotate</span>(d.body_xrot[tip.body], tip.local);
+        <span class="tok-kw">const</span> last: Vec = d.body_xpos[tip.body];
+        <span class="tok-kw">const</span> col: Color = <span class="tok-kw">if</span> (tip.body % <span class="tok-num">2</span> == <span class="tok-num">1</span>) accent <span class="tok-kw">else</span> accent2;
+        gl.<span class="tok-fn">line</span>(
+            view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(last[<span class="tok-num">0</span>], last[<span class="tok-num">1</span>])),
+            view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(p[<span class="tok-num">0</span>], p[<span class="tok-num">1</span>])),
+            .{ .color = col, .thickness = <span class="tok-num">9</span> * ui },
+        );
+        gl.<span class="tok-fn">circle</span>(view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(p[<span class="tok-num">0</span>], p[<span class="tok-num">1</span>])), <span class="tok-num">7</span>, .{ .color = col });
+    }
+    gl.<span class="tok-fn">circle</span>(view.<span class="tok-fn">toScreen</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>)), <span class="tok-num">7</span>, .{ .color = dim_col });
+
+    <span class="tok-kw">if</span> (s.pointing) {
+        gl.<span class="tok-fn">circle</span>(view.<span class="tok-fn">toScreen</span>(s.target), <span class="tok-num">9</span> * ui, .{ .color = target_col, .outline = <span class="tok-num">2</span> });
+    }
+
+    <span class="tok-comment">// ---- HUD ----</span>
+    <span class="tok-kw">var</span> buf: [<span class="tok-num">160</span>]u8 = undefined;
+    <span class="tok-kw">const</span> title: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(&amp;buf, <span class="tok-str">"{s} / {s}"</span>, .{ scene.category, scene.name }) <span class="tok-kw">catch</span> scene.name;
+    gl.<span class="tok-fn">text</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">26</span> * ui), title, .{ .size = <span class="tok-num">18</span> * ui, .color = text_col, .font = &amp;s.font });
+    gl.<span class="tok-fn">text</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">48</span> * ui), scene.blurb, .{ .size = <span class="tok-num">13</span> * ui, .color = dim_col, .font = &amp;s.font });
+
+    <span class="tok-kw">var</span> buf2: [<span class="tok-num">160</span>]u8 = undefined;
+    <span class="tok-kw">const</span> stats: []<span class="tok-kw">const</span> u8 = <span class="tok-fn">bufPrint</span>(
+        &amp;buf2,
+        <span class="tok-str">"nv {d}  nu {d}  constraints {d}  solver {d} it  energy {d:.2} J"</span>,
+        .{ m.nv, m.nu, d.constraint_count, d.solver_iterations, rbt.<span class="tok-fn">energy</span>(m, d) },
+    ) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    gl.<span class="tok-fn">text</span>(<span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">70</span> * ui), stats, .{ .size = <span class="tok-num">13</span> * ui, .color = dim_col, .font = &amp;s.font });
+
+    <span class="tok-comment">// A scene's own readout, if it has one: the numbers that scene is actually about.</span>
+    <span class="tok-kw">if</span> (scene.readout) |readout| {
+        <span class="tok-kw">var</span> buf3: [<span class="tok-num">160</span>]u8 = undefined;
+        gl.<span class="tok-fn">text</span>(
+            <span class="tok-fn">vec2</span>(<span class="tok-num">16</span> * ui, <span class="tok-num">92</span> * ui),
+            <span class="tok-fn">readout</span>(&amp;s.live, &amp;buf3),
+            .{ .size = <span class="tok-num">13</span> * ui, .color = accent2, .font = &amp;s.font },
+        );
+    }
+
+    <span class="tok-comment">// ---- scene picker: one cell per scene, wrapped ----</span>
+    <span class="tok-kw">const</span> cols: usize = <span class="tok-num">4</span>;
+    <span class="tok-kw">const</span> cell_w: f32 = (w - <span class="tok-num">24</span> * ui) / <span class="tok-fn">float</span>(cols);
+    <span class="tok-kw">const</span> cell_h: f32 = <span class="tok-num">30</span> * ui;
+    <span class="tok-kw">const</span> clicked: bool = z.<span class="tok-fn">isMouseButtonPressed</span>(f.input, .left);
+    <span class="tok-kw">for</span> (scenes.all, <span class="tok-num">0</span>..) |sc, i| {
+        <span class="tok-kw">const</span> col_i: f32 = <span class="tok-fn">float</span>(i % cols);
+        <span class="tok-kw">const</span> row_i: f32 = <span class="tok-fn">float</span>(i / cols);
+        <span class="tok-kw">const</span> r: z.Rectangle = .{
+            .x = <span class="tok-num">12</span> * ui + col_i * cell_w,
+            .y = picker_top + <span class="tok-num">6</span> * ui + row_i * (cell_h + <span class="tok-num">6</span> * ui),
+            .width = cell_w - <span class="tok-num">6</span> * ui,
+            .height = cell_h,
+        };
+        gl.<span class="tok-fn">rect</span>(r, .{ .color = <span class="tok-kw">if</span> (i == s.index) panel_on <span class="tok-kw">else</span> panel });
+        gl.<span class="tok-fn">text</span>(
+            <span class="tok-fn">vec2</span>(r.x + <span class="tok-num">7</span> * ui, r.y + cell_h * <span class="tok-num">0.68</span>),
+            sc.name,
+            .{ .size = <span class="tok-num">11</span> * ui, .color = <span class="tok-kw">if</span> (i == s.index) text_col <span class="tok-kw">else</span> dim_col, .font = &amp;s.font },
+        );
+        <span class="tok-kw">const</span> hit: bool = mouse[<span class="tok-num">0</span>] &gt;= r.x <span class="tok-kw">and</span> mouse[<span class="tok-num">0</span>] &lt;= r.x + r.width <span class="tok-kw">and</span>
+            mouse[<span class="tok-num">1</span>] &gt;= r.y <span class="tok-kw">and</span> mouse[<span class="tok-num">1</span>] &lt;= r.y + r.height;
+        <span class="tok-kw">if</span> (clicked <span class="tok-kw">and</span> hit <span class="tok-kw">and</span> i != s.index) {
+            s.<span class="tok-fn">load</span>(i) <span class="tok-kw">catch</span> <span class="tok-fn">assertUnreachable</span>(<span class="tok-builtin">@src</span>(), <span class="tok-str">"scene build failed"</span>, .{});
+        }
+    }
+}
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> app: z.<span class="tok-fn">AppSpec</span>(State) = .{
+    .config = .{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - robot demo"</span>,
+            .width = <span class="tok-num">560</span>,
+            .height = <span class="tok-num">940</span>,
+            .scale_mode = .responsive,
+        },
+    },
+    .init = initState,
+    .memory = .managed,
+    .deinit = deinit,
+    .update = update,
+};
+</code></pre></figure>
+<figure class="code src-file" data-path="examples/robot_demo/scenes.zig" data-lines="559"><figcaption><span>examples/robot_demo/scenes.zig</span><span>559 lines</span></figcaption><pre><code class="zig"><span class="tok-comment">//! scenes.zig - the robot demo's scene table.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Same shape as `examples/zimrphysics2d_demo/scenes.zig`: one table, one row per scene,</span>
+<span class="tok-comment">//! and the host knows nothing about any individual scene. Adding a scene is adding a row.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! Every scene is PLANAR - hinges about Z, so the machine swings in the screen plane and</span>
+<span class="tok-comment">//! the host can draw it in 2D with no camera. That is not a limitation of the engine (it</span>
+<span class="tok-comment">//! is fully 3D); it is what makes the demo readable on a phone.</span>
+<span class="tok-comment">//!</span>
+<span class="tok-comment">//! A scene owns a `robot.Model` and a `robot.Data`. It may install a `control` hook, which</span>
+<span class="tok-comment">//! runs once per frame BEFORE the physics - the same position in the pipeline a real</span>
+<span class="tok-comment">//! controller occupies, between "everything derived from state is known" and "no force has</span>
+<span class="tok-comment">//! been committed yet".</span>
+
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> Allocator = std.mem.Allocator;
+
+<span class="tok-kw">const</span> zm = <span class="tok-builtin">@import</span>(<span class="tok-str">"zm"</span>);
+<span class="tok-kw">const</span> rbt = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>).robot;
+<span class="tok-kw">const</span> bufPrint = std.fmt.bufPrint;
+
+<span class="tok-kw">const</span> Vec = zm.Vec;
+<span class="tok-kw">const</span> Vec2 = zm.Vec2;
+<span class="tok-kw">const</span> vec = zm.vec;
+<span class="tok-kw">const</span> pi = zm.pi;
+<span class="tok-kw">const</span> dot3 = zm.dot3;
+<span class="tok-kw">const</span> splat = zm.splat;
+
+<span class="tok-comment">/// What a scene's control hook can see. Deliberately small: a target the user is dragging,</span>
+<span class="tok-comment">/// and the clock. A scene that needs more probably wants to be a different demo.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Input = <span class="tok-kw">struct</span> {
+    <span class="tok-comment">/// Where the user is pointing, in world metres. Only meaningful while `pointing`.</span>
+    target: Vec2,
+    pointing: bool,
+    <span class="tok-comment">/// Seconds since this scene was (re)started.</span>
+    elapsed: f32,
+};
+
+<span class="tok-comment">/// A live scene: the model, its state, and scratch the control hook may use.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Live = <span class="tok-kw">struct</span> {
+    model: rbt.Model,
+    data: rbt.Data,
+    <span class="tok-comment">/// Jacobian scratch, sized to the model. Allocated once so a control hook running at</span>
+    <span class="tok-comment">/// 240 Hz never touches an allocator.</span>
+    jac_p: []Vec,
+    jac_r: []Vec,
+    elapsed: f32,
+
+    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">deinit</span>(self: *Live, gpa: Allocator) void {
+        gpa.<span class="tok-fn">free</span>(self.jac_p);
+        gpa.<span class="tok-fn">free</span>(self.jac_r);
+        self.data.<span class="tok-fn">deinit</span>();
+        self.model.<span class="tok-fn">deinit</span>();
+    }
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> Scene = <span class="tok-kw">struct</span> {
+    category: []<span class="tok-kw">const</span> u8,
+    name: []<span class="tok-kw">const</span> u8,
+    <span class="tok-comment">/// One line under the title, explaining what to look at.</span>
+    blurb: []<span class="tok-kw">const</span> u8,
+    build: *<span class="tok-kw">const</span> <span class="tok-kw">fn</span> (gpa: Allocator) anyerror!Live,
+    <span class="tok-comment">/// Optional per-frame hook, run before the physics.</span>
+    control: ?*<span class="tok-kw">const</span> <span class="tok-kw">fn</span> (live: *Live, in: Input) void = null,
+    <span class="tok-comment">/// Which body/offset the tip marker and trail follow. Null draws no trail.</span>
+    tip: ?<span class="tok-kw">struct</span> { body: u32, local: Vec } = null,
+    <span class="tok-comment">/// Optional live readout, drawn under the blurb. Lets a scene surface the numbers it is</span>
+    <span class="tok-comment">/// actually about - an IMU's reading, a tendon's length - rather than leaving the</span>
+    <span class="tok-comment">/// interesting quantity invisible inside `Data`.</span>
+    readout: ?*<span class="tok-kw">const</span> <span class="tok-kw">fn</span> (live: *<span class="tok-kw">const</span> Live, buf: []u8) []<span class="tok-kw">const</span> u8 = null,
+    <span class="tok-comment">/// Farthest the mechanism can reach from the origin, in metres. The host scales the</span>
+    <span class="tok-comment">/// view to fit it, so a three-link chain and a two-link arm both fill the screen</span>
+    <span class="tok-comment">/// instead of one being tiny and the other running off the bottom.</span>
+    reach: f32,
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Model builders. Each returns a fresh Live; the host owns exactly one at a time.</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// A chain of `n` identical links hanging along -Y, hinged about Z. Covers the whole</span>
+<span class="tok-comment">/// Basics category: one link is a pendulum, two is chaos, three is more chaos.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">Chain</span>(<span class="tok-kw">comptime</span> n: usize, <span class="tok-kw">comptime</span> armature: f32) type {
+    <span class="tok-kw">return</span> <span class="tok-kw">struct</span> {
+        <span class="tok-kw">const</span> half: f32 = <span class="tok-num">0.22</span>;
+        <span class="tok-kw">const</span> spec = blk: {
+            <span class="tok-kw">var</span> bodies: [n]rbt.BodySpec = undefined;
+            <span class="tok-kw">for</span> (&amp;bodies, <span class="tok-num">0</span>..) |*b, i| {
+                b.* = .{
+                    .name = std.fmt.<span class="tok-fn">comptimePrint</span>(<span class="tok-str">"link{d}"</span>, .{i}),
+                    .parent = <span class="tok-kw">if</span> (i == <span class="tok-num">0</span>) null <span class="tok-kw">else</span> std.fmt.<span class="tok-fn">comptimePrint</span>(<span class="tok-str">"link{d}"</span>, .{i - <span class="tok-num">1</span>}),
+                    .pos = <span class="tok-kw">if</span> (i == <span class="tok-num">0</span>) <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>) <span class="tok-kw">else</span> <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * half, <span class="tok-num">0</span>),
+                    .joints = &amp;.{.{
+                        .name = std.fmt.<span class="tok-fn">comptimePrint</span>(<span class="tok-str">"j{d}"</span>, .{i}),
+                        .kind = .hinge,
+                        .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+                        .armature = armature,
+                    }},
+                    .geoms = &amp;.{.{
+                        .shape = .{ .capsule = .{ .half_height = half, .radius = <span class="tok-num">0.035</span> } },
+                        .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -half, <span class="tok-num">0</span>),
+                    }},
+                };
+            }
+            <span class="tok-kw">const</span> frozen = bodies;
+            <span class="tok-kw">break</span> :blk rbt.ModelSpec{ .bodies = &amp;frozen, .options = .{ .timestep = <span class="tok-num">1.0</span> / <span class="tok-num">240.0</span> } };
+        };
+        <span class="tok-kw">const</span> Model = rbt.<span class="tok-fn">Spec</span>(spec);
+
+        <span class="tok-kw">fn</span> <span class="tok-fn">build</span>(gpa: Allocator) anyerror!Live {
+            <span class="tok-kw">var</span> live: Live = .{
+                .model = <span class="tok-kw">try</span> Model.<span class="tok-fn">build</span>(gpa),
+                .data = undefined,
+                .jac_p = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, Model.nv),
+                .jac_r = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, Model.nv),
+                .elapsed = <span class="tok-num">0</span>,
+            };
+            live.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;live.model);
+            <span class="tok-comment">// Start off vertical, or nothing interesting happens.</span>
+            live.data.pos[<span class="tok-num">0</span>] = <span class="tok-num">2.3</span>;
+            <span class="tok-kw">if</span> (Model.nv &gt; <span class="tok-num">1</span>) {
+                live.data.pos[<span class="tok-num">1</span>] = -<span class="tok-num">1.5</span>;
+            }
+            <span class="tok-kw">return</span> live;
+        }
+    };
+}
+
+<span class="tok-comment">/// A two-link arm with a site at its tip.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// TWO models, not one, and the difference matters: an arm with motors is a different</span>
+<span class="tok-comment">/// machine from an arm without. A position servo is ALWAYS acting - leave its control at</span>
+<span class="tok-comment">/// zero and it drives the joint to zero with all its gain, which silently overrules any</span>
+<span class="tok-comment">/// other controller you layer on top. So the Kinematics scenes get an unactuated arm and</span>
+<span class="tok-comment">/// drive it with joint forces, and the Actuators scenes get the servos.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">ArmSpec</span>(<span class="tok-kw">comptime</span> actuated: bool) rbt.ModelSpec {
+    <span class="tok-kw">const</span> servos: []<span class="tok-kw">const</span> rbt.ActuatorSpec = <span class="tok-kw">if</span> (actuated) &amp;.{
+        .{
+            .name = <span class="tok-str">"shoulder_servo"</span>,
+            .on = .{ .joint = .{ .name = <span class="tok-str">"shoulder"</span> } },
+            .kind = .{ .position = .{ .kp = <span class="tok-num">24</span>, .kv = <span class="tok-num">2.4</span> } },
+            .ctrl_range = .{ -pi, pi },
+        },
+        .{
+            .name = <span class="tok-str">"elbow_servo"</span>,
+            .on = .{ .joint = .{ .name = <span class="tok-str">"elbow"</span> } },
+            .kind = .{ .position = .{ .kp = <span class="tok-num">14</span>, .kv = <span class="tok-num">1.4</span> } },
+            .ctrl_range = .{ -pi, pi },
+        },
+    } <span class="tok-kw">else</span> &amp;.{};
+
+    <span class="tok-kw">return</span> .{
+        .bodies = &amp;.{
+            .{
+                .name = <span class="tok-str">"upper"</span>,
+                .joints = &amp;.{.{
+                    .name = <span class="tok-str">"shoulder"</span>,
+                    .kind = .hinge,
+                    .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+                    .armature = <span class="tok-num">0.002</span>,
+                    .damping = <span class="tok-num">0.02</span>,
+                }},
+                .geoms = &amp;.{.{
+                    .shape = .{ .capsule = .{ .half_height = Arm.upper, .radius = <span class="tok-num">0.045</span> } },
+                    .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -Arm.upper, <span class="tok-num">0</span>),
+                }},
+            },
+            .{
+                .name = <span class="tok-str">"lower"</span>,
+                .parent = <span class="tok-str">"upper"</span>,
+                .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Arm.upper, <span class="tok-num">0</span>),
+                .joints = &amp;.{.{
+                    .name = <span class="tok-str">"elbow"</span>,
+                    .kind = .hinge,
+                    .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+                    .armature = <span class="tok-num">0.002</span>,
+                    .damping = <span class="tok-num">0.02</span>,
+                }},
+                .geoms = &amp;.{.{
+                    .shape = .{ .capsule = .{ .half_height = Arm.lower, .radius = <span class="tok-num">0.035</span> } },
+                    .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -Arm.lower, <span class="tok-num">0</span>),
+                }},
+                .sites = &amp;.{.{ .name = <span class="tok-str">"tip"</span>, .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Arm.lower, <span class="tok-num">0</span>) }},
+            },
+        },
+        .actuators = servos,
+        .options = .{ .timestep = <span class="tok-num">1.0</span> / <span class="tok-num">240.0</span> },
+    };
+}
+
+<span class="tok-kw">const</span> Arm = <span class="tok-kw">struct</span> {
+    <span class="tok-kw">const</span> upper: f32 = <span class="tok-num">0.26</span>;
+    <span class="tok-kw">const</span> lower: f32 = <span class="tok-num">0.22</span>;
+    <span class="tok-kw">const</span> reach: f32 = <span class="tok-num">2.0</span> * upper + <span class="tok-num">2.0</span> * lower;
+    <span class="tok-kw">const</span> tip_local: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * lower, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> tip_body: u32 = <span class="tok-num">2</span>;
+
+    <span class="tok-kw">const</span> Free = rbt.<span class="tok-fn">Spec</span>(<span class="tok-fn">ArmSpec</span>(false));
+    <span class="tok-kw">const</span> Servo = rbt.<span class="tok-fn">Spec</span>(<span class="tok-fn">ArmSpec</span>(true));
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">make</span>(<span class="tok-kw">comptime</span> M: type, gpa: Allocator) anyerror!Live {
+        <span class="tok-kw">var</span> live: Live = .{
+            .model = <span class="tok-kw">try</span> M.<span class="tok-fn">build</span>(gpa),
+            .data = undefined,
+            .jac_p = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, M.nv),
+            .jac_r = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, M.nv),
+            .elapsed = <span class="tok-num">0</span>,
+        };
+        live.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;live.model);
+        live.data.pos[<span class="tok-num">0</span>] = <span class="tok-num">0.6</span>;
+        live.data.pos[<span class="tok-num">1</span>] = -<span class="tok-num">1.0</span>;
+        <span class="tok-kw">return</span> live;
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">buildFree</span>(gpa: Allocator) anyerror!Live {
+        <span class="tok-kw">return</span> <span class="tok-fn">make</span>(Free, gpa);
+    }
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">buildServo</span>(gpa: Allocator) anyerror!Live {
+        <span class="tok-kw">return</span> <span class="tok-fn">make</span>(Servo, gpa);
+    }
+};
+
+<span class="tok-comment">/// A two-link arm whose joints have travel LIMITS, so the soft constraint solver is what</span>
+<span class="tok-comment">/// stops it rather than the geometry running out.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The ranges deliberately stop short of the arm's gravity equilibrium, so gravity presses</span>
+<span class="tok-comment">/// steadily into a limit instead of the arm settling somewhere the constraint never</span>
+<span class="tok-comment">/// engages. `soft` widens the impedance ramp and lengthens the time constant, which is</span>
+<span class="tok-comment">/// visible as the arm sinking further past its stop and easing into it rather than</span>
+<span class="tok-comment">/// catching - the same model, one parameter apart.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">LimitedArm</span>(<span class="tok-kw">comptime</span> soft: bool) type {
+    <span class="tok-kw">return</span> <span class="tok-kw">struct</span> {
+        <span class="tok-kw">const</span> softness: rbt.Softness = <span class="tok-kw">if</span> (soft)
+            .{ .time_const_s = <span class="tok-num">0.15</span>, .damp_ratio = <span class="tok-num">1.0</span> }
+        <span class="tok-kw">else</span>
+            .{ .time_const_s = <span class="tok-num">0.02</span>, .damp_ratio = <span class="tok-num">1.0</span> };
+        <span class="tok-kw">const</span> impedance: rbt.Impedance = <span class="tok-kw">if</span> (soft)
+            .{ .min = <span class="tok-num">0.5</span>, .max = <span class="tok-num">0.8</span>, .width = <span class="tok-num">0.25</span>, .midpoint = <span class="tok-num">0.5</span>, .power = <span class="tok-num">2</span> }
+        <span class="tok-kw">else</span>
+            .{};
+
+        <span class="tok-kw">const</span> Model = rbt.<span class="tok-fn">Spec</span>(.{
+            .bodies = &amp;.{
+                .{
+                    .name = <span class="tok-str">"upper"</span>,
+                    .joints = &amp;.{.{
+                        .name = <span class="tok-str">"shoulder"</span>,
+                        .kind = .hinge,
+                        .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+                        .armature = <span class="tok-num">0.002</span>,
+                        .damping = <span class="tok-num">0.05</span>,
+                        .range = .{ <span class="tok-num">0.5</span>, <span class="tok-num">2.3</span> },
+                        .limit_softness = softness,
+                        .limit_impedance = impedance,
+                    }},
+                    .geoms = &amp;.{.{
+                        .shape = .{ .capsule = .{ .half_height = Arm.upper, .radius = <span class="tok-num">0.045</span> } },
+                        .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -Arm.upper, <span class="tok-num">0</span>),
+                    }},
+                },
+                .{
+                    .name = <span class="tok-str">"lower"</span>,
+                    .parent = <span class="tok-str">"upper"</span>,
+                    .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Arm.upper, <span class="tok-num">0</span>),
+                    .joints = &amp;.{.{
+                        .name = <span class="tok-str">"elbow"</span>,
+                        .kind = .hinge,
+                        .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+                        .armature = <span class="tok-num">0.002</span>,
+                        .damping = <span class="tok-num">0.05</span>,
+                        .range = .{ -<span class="tok-num">2.2</span>, -<span class="tok-num">0.4</span> },
+                        .limit_softness = softness,
+                        .limit_impedance = impedance,
+                    }},
+                    .geoms = &amp;.{.{
+                        .shape = .{ .capsule = .{ .half_height = Arm.lower, .radius = <span class="tok-num">0.035</span> } },
+                        .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -Arm.lower, <span class="tok-num">0</span>),
+                    }},
+                    .sites = &amp;.{.{ .name = <span class="tok-str">"tip"</span>, .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Arm.lower, <span class="tok-num">0</span>) }},
+                },
+            },
+            .options = .{ .timestep = <span class="tok-num">1.0</span> / <span class="tok-num">240.0</span> },
+        });
+
+        <span class="tok-kw">fn</span> <span class="tok-fn">build</span>(gpa: Allocator) anyerror!Live {
+            <span class="tok-kw">var</span> live: Live = .{
+                .model = <span class="tok-kw">try</span> Model.<span class="tok-fn">build</span>(gpa),
+                .data = undefined,
+                .jac_p = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, Model.nv),
+                .jac_r = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, Model.nv),
+                .elapsed = <span class="tok-num">0</span>,
+            };
+            live.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;live.model);
+            live.data.pos[<span class="tok-num">0</span>] = <span class="tok-num">2.0</span>;
+            live.data.pos[<span class="tok-num">1</span>] = -<span class="tok-num">1.6</span>;
+            <span class="tok-kw">return</span> live;
+        }
+    };
+}
+
+<span class="tok-kw">const</span> LimitStiff = <span class="tok-fn">LimitedArm</span>(false);
+<span class="tok-kw">const</span> LimitSoft = <span class="tok-fn">LimitedArm</span>(true);
+
+<span class="tok-comment">/// A pendulum wearing an inertial measurement unit at its tip.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The instrument is the point of the scene. An accelerometer does not measure coordinate</span>
+<span class="tok-comment">/// acceleration - it measures PROPER acceleration, the force per unit mass its case applies</span>
+<span class="tok-comment">/// to the proof mass. So one at rest reads 9.81 upward and one in free fall reads zero,</span>
+<span class="tok-comment">/// which is exactly backwards from the intuition most people start with.</span>
+<span class="tok-kw">const</span> Imu = <span class="tok-kw">struct</span> {
+    <span class="tok-kw">const</span> half: f32 = <span class="tok-num">0.3</span>;
+    <span class="tok-kw">const</span> Model = rbt.<span class="tok-fn">Spec</span>(.{
+        .bodies = &amp;.{.{
+            .name = <span class="tok-str">"link"</span>,
+            .joints = &amp;.{.{
+                .name = <span class="tok-str">"j"</span>,
+                .kind = .hinge,
+                .axis = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>),
+                .armature = <span class="tok-num">0.002</span>,
+                .damping = <span class="tok-num">0.01</span>,
+            }},
+            .geoms = &amp;.{.{
+                .shape = .{ .capsule = .{ .half_height = half, .radius = <span class="tok-num">0.04</span> } },
+                .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -half, <span class="tok-num">0</span>),
+            }},
+            .sites = &amp;.{.{ .name = <span class="tok-str">"imu"</span>, .pos = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * half, <span class="tok-num">0</span>) }},
+        }},
+        .sensors = &amp;.{
+            .{ .name = <span class="tok-str">"acc"</span>, .kind = .accelerometer, .target = <span class="tok-str">"imu"</span> },
+            .{ .name = <span class="tok-str">"gyro"</span>, .kind = .gyro, .target = <span class="tok-str">"imu"</span> },
+            .{ .name = <span class="tok-str">"vel"</span>, .kind = .velocimeter, .target = <span class="tok-str">"imu"</span> },
+        },
+        .options = .{ .timestep = <span class="tok-num">1.0</span> / <span class="tok-num">240.0</span> },
+    });
+
+    <span class="tok-kw">const</span> tip_local: Vec = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * half, <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> reach: f32 = <span class="tok-num">2.0</span> * half;
+
+    <span class="tok-kw">fn</span> <span class="tok-fn">build</span>(gpa: Allocator) anyerror!Live {
+        <span class="tok-kw">var</span> live: Live = .{
+            .model = <span class="tok-kw">try</span> Model.<span class="tok-fn">build</span>(gpa),
+            .data = undefined,
+            .jac_p = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, Model.nv),
+            .jac_r = <span class="tok-kw">try</span> gpa.<span class="tok-fn">alloc</span>(Vec, Model.nv),
+            .elapsed = <span class="tok-num">0</span>,
+        };
+        live.data = <span class="tok-kw">try</span> rbt.Data.<span class="tok-fn">init</span>(gpa, &amp;live.model);
+        live.data.pos[<span class="tok-num">0</span>] = <span class="tok-num">2.4</span>; <span class="tok-comment">// well up, so it swings hard through the bottom</span>
+        <span class="tok-kw">return</span> live;
+    }
+
+    <span class="tok-comment">/// The instrument's own reading, in its own frame - which is what makes it an</span>
+    <span class="tok-comment">/// instrument rather than a derived quantity.</span>
+    <span class="tok-kw">fn</span> <span class="tok-fn">readout</span>(live: *<span class="tok-kw">const</span> Live, buf: []u8) []<span class="tok-kw">const</span> u8 {
+        <span class="tok-kw">const</span> sensor: []<span class="tok-kw">const</span> f32 = live.data.sensor_data;
+        <span class="tok-kw">const</span> magnitude: f32 = <span class="tok-builtin">@sqrt</span>(sensor[<span class="tok-num">0</span>] * sensor[<span class="tok-num">0</span>] + sensor[<span class="tok-num">1</span>] * sensor[<span class="tok-num">1</span>] + sensor[<span class="tok-num">2</span>] * sensor[<span class="tok-num">2</span>]);
+        <span class="tok-kw">return</span> <span class="tok-fn">bufPrint</span>(
+            buf,
+            <span class="tok-str">"accel |a| {d:.2} m/s2   gyro {d:.2} rad/s   speed {d:.2} m/s"</span>,
+            .{ magnitude, sensor[<span class="tok-num">5</span>], <span class="tok-builtin">@abs</span>(sensor[<span class="tok-num">7</span>]) },
+        ) <span class="tok-kw">catch</span> <span class="tok-str">""</span>;
+    }
+};
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// Control hooks.</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-comment">/// Free fall: nothing to control. Present so the table reads uniformly.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">noControl</span>(_: *Live, _: Input) void {}
+
+<span class="tok-comment">/// No controller, but dragging pushes the tip - so you can drive the arm into its limits</span>
+<span class="tok-comment">/// and feel the constraint push back rather than watching it settle.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">dragOnly</span>(live: *Live, in: Input) void {
+    <span class="tok-kw">if</span> (!in.pointing) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;live.model;
+    <span class="tok-kw">const</span> d: *rbt.Data = &amp;live.data;
+    <span class="tok-kw">const</span> tip: Vec = d.site_xpos[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> pull: Vec = (<span class="tok-fn">vec</span>(in.target[<span class="tok-num">0</span>], in.target[<span class="tok-num">1</span>], <span class="tok-num">0</span>) - tip) * <span class="tok-fn">splat</span>(<span class="tok-num">25.0</span>);
+    rbt.<span class="tok-fn">applyForceAtPoint</span>(m, d, Arm.tip_body, tip, pull, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), live.jac_p, live.jac_r, d.applied_force);
+}
+
+<span class="tok-comment">/// Cancel gravity exactly. `bias_force` IS the force needed to hold still, so applying it</span>
+<span class="tok-comment">/// leaves the arm weightless - it stays wherever you leave it, in any pose.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// This is the cheapest genuinely useful thing an engine like this does, and it needs no</span>
+<span class="tok-comment">/// tuning, no gains and no target: it is inverse dynamics evaluated at zero acceleration.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">gravityCompensation</span>(live: *Live, in: Input) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;live.model;
+    <span class="tok-kw">const</span> d: *rbt.Data = &amp;live.data;
+    <span class="tok-builtin">@memcpy</span>(d.applied_force, d.bias_force);
+    <span class="tok-kw">if</span> (!in.pointing) {
+        <span class="tok-kw">return</span>;
+    }
+    <span class="tok-comment">// Drag applies a real force AT THE TIP, mapped into joint torques by the Jacobian</span>
+    <span class="tok-comment">// transpose. With gravity cancelled and almost no damping the arm keeps whatever motion</span>
+    <span class="tok-comment">// you give it, which is what "weightless" should look and feel like.</span>
+    <span class="tok-kw">const</span> tip: Vec = d.site_xpos[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> pull: Vec = (<span class="tok-fn">vec</span>(in.target[<span class="tok-num">0</span>], in.target[<span class="tok-num">1</span>], <span class="tok-num">0</span>) - tip) * <span class="tok-fn">splat</span>(<span class="tok-num">12.0</span>);
+    rbt.<span class="tok-fn">applyForceAtPoint</span>(m, d, Arm.tip_body, tip, pull, <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">0</span>), live.jac_p, live.jac_r, d.applied_force);
+}
+
+<span class="tok-comment">/// Jacobian-transpose reach: pull the tip toward the target.</span>
+<span class="tok-comment">///</span>
+<span class="tok-comment">/// The whole algorithm is `tau = J^T*(target - tip)`. It works because the transpose converts</span>
+<span class="tok-comment">/// a task-space pull into the joint torques that produce it - no matrix inverse, no</span>
+<span class="tok-comment">/// iteration, and it degrades gracefully at singularities instead of blowing up the way an</span>
+<span class="tok-comment">/// inverse-Jacobian method does.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">reachToTarget</span>(live: *Live, in: Input) void {
+    <span class="tok-kw">const</span> m: *<span class="tok-kw">const</span> rbt.Model = &amp;live.model;
+    <span class="tok-kw">const</span> d: *rbt.Data = &amp;live.data;
+    <span class="tok-comment">// Gravity compensation first, so the arm is weightless and the reach is the only force</span>
+    <span class="tok-comment">// acting. Without it you would be watching a tug-of-war rather than a controller.</span>
+    <span class="tok-builtin">@memcpy</span>(d.applied_force, d.bias_force);
+    <span class="tok-kw">if</span> (!in.pointing) {
+        <span class="tok-kw">return</span>;
+    }
+
+    <span class="tok-kw">const</span> tip: Vec = d.site_xpos[<span class="tok-num">0</span>];
+    <span class="tok-kw">const</span> target: Vec = <span class="tok-fn">vec</span>(in.target[<span class="tok-num">0</span>], in.target[<span class="tok-num">1</span>], <span class="tok-num">0</span>);
+    <span class="tok-kw">const</span> err: Vec = target - tip;
+    <span class="tok-kw">const</span> gain: f32 = <span class="tok-num">40.0</span>;
+
+    rbt.<span class="tok-fn">jacSite</span>(m, d, <span class="tok-builtin">@as</span>(u32, <span class="tok-num">0</span>), live.jac_p, null);
+    <span class="tok-kw">for</span> (<span class="tok-num">0</span>..m.nv) |i| {
+        d.applied_force[i] += gain * <span class="tok-fn">dot3</span>(live.jac_p[i], err);
+        <span class="tok-comment">// A little joint damping, or the arm rings: the transpose controller has no notion</span>
+        <span class="tok-comment">// of velocity and will happily oscillate forever around its target.</span>
+        d.applied_force[i] -= <span class="tok-num">1.2</span> * d.vel[i];
+    }
+}
+
+<span class="tok-comment">/// Drive both servos with a slow sweep, so the position actuators are visibly commanded</span>
+<span class="tok-comment">/// rather than merely holding.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">servoSweep</span>(live: *Live, in: Input) void {
+    <span class="tok-kw">const</span> s: f32 = <span class="tok-builtin">@sin</span>(in.elapsed * <span class="tok-num">0.9</span>);
+    <span class="tok-kw">const</span> c: f32 = <span class="tok-builtin">@cos</span>(in.elapsed * <span class="tok-num">0.6</span>);
+    live.data.ctrl[<span class="tok-num">0</span>] = <span class="tok-num">0.9</span> * s;
+    live.data.ctrl[<span class="tok-num">1</span>] = -<span class="tok-num">1.1</span> * c;
+}
+
+<span class="tok-comment">/// Hold a fixed pose against gravity using ONLY the servos - no gravity compensation. The</span>
+<span class="tok-comment">/// steady-state droop is the point: a finite-gain servo settles where its restoring torque</span>
+<span class="tok-comment">/// balances the load, and that error is a real property of proportional control.</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">servoHold</span>(live: *Live, _: Input) void {
+    live.data.ctrl[<span class="tok-num">0</span>] = <span class="tok-num">1.2</span>;
+    live.data.ctrl[<span class="tok-num">1</span>] = -<span class="tok-num">0.8</span>;
+}
+
+<span class="tok-comment">// ============================================================================</span>
+<span class="tok-comment">// The table.</span>
+<span class="tok-comment">// ============================================================================</span>
+
+<span class="tok-kw">const</span> Pendulum1 = <span class="tok-fn">Chain</span>(<span class="tok-num">1</span>, <span class="tok-num">0.0</span>);
+<span class="tok-kw">const</span> Pendulum2 = <span class="tok-fn">Chain</span>(<span class="tok-num">2</span>, <span class="tok-num">0.0</span>);
+<span class="tok-kw">const</span> Pendulum3 = <span class="tok-fn">Chain</span>(<span class="tok-num">3</span>, <span class="tok-num">0.0</span>);
+
+<span class="tok-kw">pub</span> <span class="tok-kw">const</span> all = [_]Scene{
+    .{
+        .category = <span class="tok-str">"Basics"</span>,
+        .name = <span class="tok-str">"single pendulum"</span>,
+        .blurb = <span class="tok-str">"one number describes this machine"</span>,
+        .build = Pendulum1.build,
+        .tip = .{ .body = <span class="tok-num">1</span>, .local = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Pendulum1.half, <span class="tok-num">0</span>) },
+        .reach = <span class="tok-num">2.0</span> * Pendulum1.half,
+    },
+    .{
+        .category = <span class="tok-str">"Basics"</span>,
+        .name = <span class="tok-str">"double pendulum"</span>,
+        .blurb = <span class="tok-str">"two numbers - and chaos"</span>,
+        .build = Pendulum2.build,
+        .tip = .{ .body = <span class="tok-num">2</span>, .local = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Pendulum2.half, <span class="tok-num">0</span>) },
+        .reach = <span class="tok-num">4.0</span> * Pendulum2.half,
+    },
+    .{
+        .category = <span class="tok-str">"Basics"</span>,
+        .name = <span class="tok-str">"triple pendulum"</span>,
+        .blurb = <span class="tok-str">"deeper chains exercise the sparsity"</span>,
+        .build = Pendulum3.build,
+        .tip = .{ .body = <span class="tok-num">3</span>, .local = <span class="tok-fn">vec</span>(<span class="tok-num">0</span>, -<span class="tok-num">2.0</span> * Pendulum3.half, <span class="tok-num">0</span>) },
+        .reach = <span class="tok-num">6.0</span> * Pendulum3.half,
+    },
+    .{
+        .category = <span class="tok-str">"Kinematics"</span>,
+        .name = <span class="tok-str">"weightless arm"</span>,
+        .blurb = <span class="tok-str">"gravity cancelled - drag to bat it around, it keeps going"</span>,
+        .build = Arm.buildFree,
+        .control = gravityCompensation,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Kinematics"</span>,
+        .name = <span class="tok-str">"reach to target"</span>,
+        .blurb = <span class="tok-str">"drag: the tip follows via the Jacobian transpose"</span>,
+        .build = Arm.buildFree,
+        .control = reachToTarget,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Actuators"</span>,
+        .name = <span class="tok-str">"position servos, swept"</span>,
+        .blurb = <span class="tok-str">"two PD servos tracking a moving command"</span>,
+        .build = Arm.buildServo,
+        .control = servoSweep,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Actuators"</span>,
+        .name = <span class="tok-str">"servo droop"</span>,
+        .blurb = <span class="tok-str">"no gravity compensation - it settles below its target, on purpose"</span>,
+        .build = Arm.buildServo,
+        .control = servoHold,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Limits"</span>,
+        .name = <span class="tok-str">"joint limits"</span>,
+        .blurb = <span class="tok-str">"drag: the stops are soft constraints, not geometry"</span>,
+        .build = LimitStiff.build,
+        .control = dragOnly,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Limits"</span>,
+        .name = <span class="tok-str">"soft limits"</span>,
+        .blurb = <span class="tok-str">"same arm, wider impedance ramp - it eases in instead of catching"</span>,
+        .build = LimitSoft.build,
+        .control = dragOnly,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Sensors"</span>,
+        .name = <span class="tok-str">"IMU readout"</span>,
+        .blurb = <span class="tok-str">"an accelerometer reads 9.81 at rest and ~0 in free fall - watch it swing"</span>,
+        .build = Imu.build,
+        .control = noControl,
+        .readout = Imu.readout,
+        .tip = .{ .body = <span class="tok-num">1</span>, .local = Imu.tip_local },
+        .reach = Imu.reach,
+    },
+    .{
+        .category = <span class="tok-str">"Actuators"</span>,
+        .name = <span class="tok-str">"free fall"</span>,
+        .blurb = <span class="tok-str">"no motors at all - the same arm, uncontrolled"</span>,
+        .build = Arm.buildFree,
+        .control = noControl,
+        .tip = .{ .body = Arm.tip_body, .local = Arm.tip_local },
+        .reach = Arm.reach,
+    },
+};
+</code></pre></figure>
+</body>
+</html>

@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>zimr — render to texture</title>
+<style>
+:root{
+  /* two surfaces, one ink */
+  --bg:#0a0a0a;          /* the page */
+  --panel:#141414;       /* anything set apart: code, callout, device side */
+  --panel-2:#1b1b1b;     /* a panel on a panel (figcaption, summary) */
+  --fg:#e8e8e8;          /* body text */
+  --dim:#9aa0a8;         /* secondary text, captions */
+  --faint:#6b7280;       /* labels, line numbers, table headers */
+  --rule:#262626;        /* every border in the document */
+  --link:#82d8ef;
+  /* tokens — the one set, shared by the Zig and WGSL highlighters */
+  --tok-comment:#6b7a8c;
+  --tok-kw:#c792ea;
+  --tok-fn:#82d8ef;
+  --tok-str:#9ad08a;
+  --tok-num:#f5a35e;
+  --tok-type:#6fb6ff;
+  --tok-builtin:#e9a23b;
+  /* one font: mono, from whatever ships on the device. No download. */
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --maxw:860px;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{
+  margin:0 auto;padding:2.2rem 1.1rem 6rem;max-width:var(--maxw);
+  background:var(--bg);color:var(--fg);
+  font-family:var(--mono);font-size:15px;line-height:1.65;
+}
+h1,h2,h3,h4{font-family:var(--mono);font-weight:700;line-height:1.25;margin:2.2em 0 .7em;}
+h1{font-size:1.6rem;margin-top:0;}
+h2{font-size:1.25rem;border-bottom:1px solid var(--rule);padding-bottom:.35em;}
+h3{font-size:1.05rem;}
+h4{font-size:.95rem;color:var(--dim);}
+p{margin:0 0 1.1em;}
+a{color:var(--link);text-decoration:none;border-bottom:1px solid var(--rule);}
+a:hover{border-bottom-color:var(--link);}
+strong,b{color:#fff;font-weight:700;}
+em,i{color:var(--dim);font-style:italic;}
+hr{border:0;border-top:1px solid var(--rule);margin:2.4em 0;}
+small,.dim{color:var(--dim);font-size:.87em;}
+.faint{color:var(--faint);}
+ul,ol{margin:0 0 1.1em;padding-left:1.5em;}
+li{margin:.3em 0;}
+blockquote{margin:1.2em 0;padding:.1em 0 .1em 1em;border-left:2px solid var(--rule);color:var(--dim);}
+/* code */
+pre{
+  margin:1.1em 0;padding:14px 16px;background:var(--panel);
+  border:1px solid var(--rule);border-radius:3px;
+  overflow-x:auto;font-size:13px;line-height:1.6;
+}
+pre,code,kbd,samp{font-family:var(--mono);}
+pre code{background:none;padding:0;border:0;font-size:inherit;color:var(--fg);}
+code{background:var(--panel);padding:.1em .35em;border-radius:2px;font-size:.92em;color:#fff;}
+.tok-comment{color:var(--tok-comment);font-style:italic;}
+.tok-kw{color:var(--tok-kw);}
+.tok-fn{color:var(--tok-fn);}
+.tok-str{color:var(--tok-str);}
+.tok-num{color:var(--tok-num);}
+.tok-type{color:var(--tok-type);}
+.tok-builtin{color:var(--tok-builtin);}
+/* a captioned code block: <figure class="code"><figcaption>… */
+figure{margin:1.3em 0;}
+figure.code{margin:1.3em 0;}
+figure.code figcaption{
+  background:var(--panel-2);border:1px solid var(--rule);border-bottom:0;
+  border-radius:3px 3px 0 0;padding:6px 12px;font-size:11.5px;color:var(--faint);
+  display:flex;justify-content:space-between;gap:1em;
+}
+figure.code figcaption .lang{color:var(--dim);text-transform:uppercase;letter-spacing:.16em;}
+figure.code pre{margin:0;border-radius:0 0 3px 3px;}
+/* folds — pure CSS, no JS. The summary text is just the name; the prose
+   comes from ::before, which is zimrnum-tutorial's trick and a good one. */
+details{border:1px solid var(--rule);border-radius:3px;margin:.5em 0;background:var(--panel);}
+details[open]{background:var(--bg);}
+summary{
+  cursor:pointer;padding:.4em .8em;color:var(--dim);font-size:.9em;
+  list-style:none;user-select:none;
+}
+summary::-webkit-details-marker{display:none;}
+summary::before{content:"\\25b8\\00a0";color:var(--faint);}
+details[open]>summary::before{content:"\\25be\\00a0";}
+summary:hover{color:var(--fg);}
+details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
+.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+/* callouts — one box, a coloured left rule says which kind */
+.note,.warn,.good,.bad{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left-width:3px;border-radius:3px;
+}
+.note{border-left-color:var(--tok-fn);}
+.warn{border-left-color:var(--tok-builtin);}
+.good{border-left-color:var(--tok-str);}
+.bad{border-left-color:#e0555f;}
+/* tables */
+table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:13px;}
+th,td{border:1px solid var(--rule);padding:.45em .7em;text-align:left;vertical-align:top;}
+th{color:var(--faint);font-weight:700;background:var(--panel);}
+/* the CPU/GPU split: two surfaces, same two colours as everything else */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:1.3em 0;}
+.split>*{min-width:0;}
+.split-cpu,.split-gpu{border:1px solid var(--rule);border-radius:3px;padding:2px;}
+.split-cpu{background:var(--bg);}
+.split-gpu{background:var(--panel);}
+.split-cpu>pre,.split-gpu>pre{margin:0;border:0;background:none;}
+.split h4,.split .lab{
+  margin:.2em 0 .4em;padding:4px 10px;font-size:11px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid var(--rule);
+}
+@media(max-width:700px){.split{grid-template-columns:1fr;}}
+/* media */
+img,svg,canvas,video{max-width:100%;height:auto;}
+iframe{max-width:100%;border:1px solid var(--rule);border-radius:3px;background:#000;}
+/* a live demo embedded in a page: the full column, 16:9. Without a size the
+   frame is the browser default 300x150 and the app boots that small. */
+.demo-embed{margin:1.6em 0;}
+.demo-embed iframe{display:block;width:100%;aspect-ratio:16/9;}
+.demo-embed figcaption{color:var(--dim);font-size:.9em;margin-top:.5em;}
+/* Inline marks the pages already use, mapped onto the SAME token colours
+   rather than given colours of their own — cheatsheet's signature rows,
+   the reference tables, and the two semantic marks that carry teaching
+   weight in shader-authoring (`hazard` = the hand-counted integer, and the
+   old/new path contrast). One palette, reused. */
+.sig{margin:1.2em 0 .2em;padding-top:.8em;border-top:1px solid var(--rule);}
+.k{color:var(--tok-kw);}
+.nm{color:var(--tok-fn);font-weight:700;}
+.ns{color:var(--faint);}
+.eq{color:var(--dim);}
+.doc{color:var(--dim);margin:.2em 0 .6em;}
+.num,.n{color:var(--tok-num);}
+.host,.lab,.lang,.path,.tag,.stage,.sec-num,.lesson-num{
+  color:var(--faint);font-size:.85em;letter-spacing:.12em;text-transform:uppercase;
+}
+.anchor{border:0;color:var(--faint);opacity:0;padding-left:.4em;}
+h1:hover .anchor,h2:hover .anchor,h3:hover .anchor{opacity:1;}
+.chip{
+  display:inline-block;padding:.05em .5em;margin:0 .15em;border:1px solid var(--rule);
+  border-radius:2px;color:var(--dim);font-size:.82em;
+}
+.chip.on{color:var(--fg);border-color:var(--tok-fn);}
+.hazard{color:#e0555f;font-weight:700;}
+.hl-old{color:var(--tok-builtin);}
+.hl-new{color:var(--tok-fn);}
+.yes,.good-mark{color:var(--tok-str);}
+.callout{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+}
+.zn-source{margin:.6em 0 1.4em;}
+.lesson{margin:2em 0;}
+.lesson-title{font-weight:700;color:#fff;}
+.lesson-goal{color:var(--dim);}
+/* page furniture: the landing page and the tutorials' own scaffolding */
+.blog-container,.wrap,.max{max-width:var(--maxw);margin:0 auto;}
+.title{font-size:1.8rem;margin:0 0 .2em;}
+.subtitle,.lede,.sub{
+  border:0;font-size:1rem;font-weight:400;color:var(--dim);
+  margin:0 0 1.6em;line-height:1.6;
+}
+.eyebrow{color:var(--faint);font-size:.85em;letter-spacing:.14em;text-transform:uppercase;}
+.toplinks{
+  display:flex;flex-wrap:wrap;gap:.1em 1.1em;margin:0 0 2em;
+  padding:.9em 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+  font-size:.88em;
+}
+.toplinks a{border:0;color:var(--dim);}
+.toplinks a:hover,.toplinks a.offsite{color:var(--link);}
+.wip-warning{
+  margin:0 0 2em;padding:.8em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-builtin);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.wip-warning strong{display:block;color:var(--tok-builtin);margin-bottom:.2em;}
+/* cheatsheet: one declaration per .fn row */
+.fn{margin:1.1em 0;}
+.what,.body{color:var(--dim);}
+.sketch{color:var(--dim);}
+.pane{border:1px solid var(--rule);border-radius:3px;margin:1.1em 0;}
+.pane-head{
+  padding:5px 11px;background:var(--panel-2);border-bottom:1px solid var(--rule);
+  color:var(--faint);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;
+}
+.cell{padding:.5em .8em;}
+.swatch{display:inline-block;width:.9em;height:.9em;border:1px solid var(--rule);vertical-align:-1px;}
+.old,.meh{color:var(--tok-builtin);}
+.new,.win{color:var(--tok-str);}
+.crit{
+  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid #e0555f;border-radius:3px;
+}
+/* The examples gallery (index.html): the list of examples on the left, the
+   selected one running in a frame that fills the rest. On a phone the list
+   is a drawer over the example, under the bar. `list-open` shows the list. */
+body.gallery{
+  max-width:none;margin:0;padding:0;height:100vh;height:100dvh;overflow:hidden;
+  display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,1fr);
+  color-scheme:dark;
+}
+body.gallery.list-open{grid-template-columns:minmax(240px,25%) 1fr;}
+.gallery a{border:0;}
+.g-side{display:none;flex-direction:column;min-height:0;background:var(--bg);border-right:1px solid var(--rule);}
+.list-open .g-side{display:flex;}
+.g-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:0 1em;padding:.7em 1em .6em;font-size:.85em;}
+.g-head a{color:var(--dim);}
+.g-head a:hover{color:var(--link);}
+.g-head .g-logo{margin-right:auto;font-size:1.1rem;font-weight:700;color:var(--fg);white-space:nowrap;}
+.g-filters{display:flex;flex-wrap:wrap;gap:.4em;padding:0 1em;}
+.g-filters input,.g-filters select{
+  min-width:0;padding:.35em .5em;background:var(--panel);color:var(--fg);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;font-size:.85em;
+}
+.g-filters input{flex:1 1 10em;}
+.g-filters select{flex:1 1 auto;}
+.g-filters input:focus,.g-filters select:focus{outline:none;border-color:var(--tok-fn);}
+.g-count{padding:.45em 1em;color:var(--faint);font-size:.75em;border-bottom:1px solid var(--rule);}
+.g-list{flex:1;overflow-y:auto;padding-bottom:3em;font-size:13px;}
+.g-group{
+  position:sticky;top:0;padding:.8em 1em .3em;background:var(--bg);
+  color:var(--faint);font-size:.8em;letter-spacing:.14em;text-transform:uppercase;
+}
+/* scroll-margin: scrolled into view, a row clears the sticky module heading */
+.g-item{
+  display:flex;justify-content:space-between;gap:.6em;padding:.15em 1em;
+  color:var(--dim);border-left:2px solid transparent;scroll-margin-top:2.4em;
+}
+.g-item:hover{color:var(--fg);background:var(--panel);}
+.g-item.on{color:#fff;background:var(--panel-2);border-left-color:var(--tok-fn);}
+.g-item span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.g-stars{color:var(--faint);font-size:.8em;white-space:nowrap;}
+.g-none{padding:1em;color:var(--faint);}
+.g-main{display:flex;flex-direction:column;min-width:0;min-height:0;}
+.g-bar{
+  flex:none;display:flex;align-items:center;gap:.4em;height:44px;padding:0 .6em;
+  border-bottom:1px solid var(--rule);white-space:nowrap;
+}
+.g-btn{
+  flex:none;width:30px;height:30px;padding:0;background:var(--panel);color:var(--dim);
+  border:1px solid var(--rule);border-radius:3px;font:inherit;cursor:pointer;
+}
+.g-btn:hover{color:var(--fg);border-color:var(--tok-fn);}
+.g-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;padding-left:.4em;}
+.g-desc{margin-left:.6em;color:var(--dim);font-size:.9em;}
+.g-open{flex:none;padding:0 .4em;font-size:.9em;}
+.g-stage{flex:1;position:relative;min-height:0;}
+.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
+.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+@media(max-width:700px){
+  body.gallery.list-open{grid-template-columns:1fr;}
+  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+  .g-item{padding:.45em 1em;}
+  .g-desc{display:none;}
+}
+/* A tutorial pointer, sitting directly under the heading whose subject it
+   covers rather than pooled in a list at the foot of the page. */
+.tut{
+  margin:.2em 0 1.3em;padding:.55em .9em;background:var(--panel);
+  border:1px solid var(--rule);border-left:3px solid var(--tok-fn);border-radius:3px;
+  color:var(--dim);font-size:.9em;
+}
+.tut a{color:var(--link);border:0;font-weight:700;}
+.tut-index{list-style:none;padding-left:0;}
+.tut-index li{padding:.25em 0;border-bottom:1px solid var(--rule);}
+.tut-index a{border:0;}
+/* `.reveal` was animated in by the JS that docfmt replaced; without a rule
+   it is simply visible, which is the correct end state. */
+@media(max-width:700px){body{font-size:14px;padding:1.4rem .8rem 4rem;}pre{font-size:12px;}}
+</style>
+<body>
+<div class="blog-container">
+<h1 class="title">zimr — render to texture</h1>
+<h2 class="subtitle">offscreen rendering on the pure-Zig WebGPU backend: the API, the mid-frame pass switch that powers it, and the six ways we could have wired it.</h2>
+
+<nav class="toc">
+<strong>contents</strong>
+<ol>
+<li><a href="#idea">The idea</a></li>
+<li><a href="#why">Why you want it</a></li>
+<li><a href="#api">The API</a></li>
+<li><a href="#how">How it works — the pass switch</a></li>
+<li><a href="#design">The design space: six ways to wire it</a></li>
+<li><a href="#gotchas">Gotchas</a></li>
+<li><a href="#example">The full example</a></li>
+</ol>
+</nav>
+
+<h3 id="idea">The idea</h3>
+<p>Normally a frame draws straight to the screen — the swap-chain <em>backbuffer</em>. Render-to-texture (RTT, also "render textures" or "framebuffer objects") inserts a detour: you draw into an offscreen image instead, and then that image becomes an ordinary texture you can sample, scale, tint, feed to a shader, or read back to the CPU.</p>
+<p>It's a two-phase move. <strong>Phase one:</strong> point your draw calls at the offscreen target and render a scene into it. <strong>Phase two:</strong> go back to drawing on the screen, and use the thing you just rendered as input. The six-panel demo this tutorial accompanies is the clearest possible illustration — one animated scene is rendered once into a 256×256 texture, then that single texture is stamped onto the screen six times at different tints. Render once, reuse many.</p>
+
+<h3 id="why">Why you want it</h3>
+<p>RTT is the substrate under a surprising amount of graphics work:</p>
+<ul>
+<li><strong>Accumulation / trails.</strong> Keep a texture between frames, fade it slightly, draw the new frame on top — motion trails, light painting, decay effects.</li>
+<li><strong>Compositing.</strong> Render a HUD or a minimap into its own texture, then place it as a unit — scaled, faded, in a corner.</li>
+<li><strong>Post-processing.</strong> Render the scene to a texture, then draw a full-screen quad with a shader that reads it: blur, bloom, color grading, CRT warp.</li>
+<li><strong>Reuse.</strong> Render an expensive thing once and stamp it many times (the demo) instead of re-rendering it per instance.</li>
+<li><strong>Readback.</strong> The texture is <code>copy_src</code>, so its pixels can be pulled back to the CPU for screenshots, hit-testing, or image export.</li>
+</ul>
+
+<h3 id="api">The API</h3>
+<p>Five calls, shaped to mirror raylib:</p>
+<ul>
+<li><code>z.loadRenderTexture(gl, w, h)</code> → a <code>RenderTexture</code> (color texture + view + sampler, optional depth).</li>
+<li><code>z.beginTextureMode(gl, rt)</code> — redirect drawing into <code>rt</code>.</li>
+<li><code>z.endTextureMode(gl)</code> — stop, return to the screen.</li>
+<li><code>rt.asTexture()</code> — view the result as a <code>WgpuTexture</code> for <code>drawTextureRec</code>.</li>
+<li><code>z.unloadRenderTexture(gl, &rt)</code> — free the GPU resources.</li>
+</ul>
+<p>The usage rhythm — note that the whole thing happens <em>inside</em> a normal <code>beginDrawing</code>/<code>endDrawing</code> frame:</p>
+<pre><code class="zig">z.<span class="tok-fn">beginDrawing</span>(f.gl);
+z.<span class="tok-fn">clearBackground</span>(f.gl, dark);
+
+z.<span class="tok-fn">beginTextureMode</span>(f.gl, rt, dark);  <span class="tok-comment">// phase one: draw into the texture (dark clears; null accumulates)</span>
+z.<span class="tok-fn">drawCircleV</span>(f.gl, center, r, white);
+z.<span class="tok-fn">endTextureMode</span>(f.gl);
+
+z.<span class="tok-fn">drawTextureRec</span>(                  <span class="tok-comment">// phase two: use it on the screen</span>
+    f.gl, rt.<span class="tok-fn">asTexture</span>(),
+    <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>,                    <span class="tok-comment">// source UVs (normalized, whole texture)</span>
+    dx, dy, dw, dh,                <span class="tok-comment">// destination rect (screen px)</span>
+    tint,
+);
+z.<span class="tok-fn">endDrawing</span>(f.gl);</code></pre>
+<h3 id="how">How it works — the pass switch</h3>
+<p>Inside one frame there is a single command <em>encoder</em> and, normally, a single render <em>pass</em> writing to the backbuffer. <code>beginTextureMode</code> performs a <strong>mid-frame pass switch</strong>: it flushes the pending 2D batch, ends the current pass, and opens a new pass on the <em>same encoder</em> aimed at the render texture's view — with the 2D ortho reprogrammed to the texture's pixel size, so your coordinates map to the texture rather than the window.</p>
+<p><code>endTextureMode</code> reverses it: flush, end the texture pass, reopen the backbuffer pass with a <strong>load</strong> (not a clear — so whatever you drew to the screen before the bracket survives), and restore the viewport ortho. Because both passes share the frame's one encoder, the GPU executes them in recorded order at submit time: the texture pass first, the screen pass second. That ordering is exactly the dependency we need — the texture is finished before the screen samples it.</p>
+<pre><code class="zig">
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">loadRenderTexture</span>(
+    gl: *WgpuGl,
+    width: i32,
+    height: i32,
+) WgpuRenderTexture {
+    <span class="tok-kw">const</span> app: *App = <span class="tok-fn">appOf</span>(gl);
+    <span class="tok-kw">return</span> WgpuRenderTexture.<span class="tok-fn">create</span>(app.gpu_frame.device, .{
+        .width = <span class="tok-builtin">@intCast</span>(width),
+        .height = <span class="tok-builtin">@intCast</span>(height),
+        .label = <span class="tok-str">"render_texture"</span>,
+    });
+}
+
+<span class="tok-comment">/// Free a render texture's GPU resources (raylib `unloadRenderTexture`).</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">unloadRenderTexture</span>(gl: *WgpuGl, rt: *WgpuRenderTexture) void {
+    _ = gl;
+    rt.<span class="tok-fn">deinit</span>();
+}
+
+<span class="tok-comment">/// Redirect 2D drawing to the offscreen `rt`. Flushes the current pass, opens a fresh</span>
+<span class="tok-comment">/// pass targeting the render texture, and sets the 2D ortho to the render texture's size.</span>
+<span class="tok-comment">/// `clear` is explicit: a color clears the texture on entry; `null` PRESERVES last frame's</span>
+<span class="tok-comment">/// contents (load) so you can accumulate — fade + draw for trails. Pair with</span>
+<span class="tok-comment">/// `endTextureMode`. Call between begin/endDrawing.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">beginTextureMode</span>(
+    gl: *WgpuGl,
+    rt: WgpuRenderTexture,
+    clear: ?types.Color,
+) void {
+    <span class="tok-kw">const</span> app: *App = <span class="tok-fn">appOf</span>(gl);
+    Backend.<span class="tok-fn">flushBatch</span>(&amp;app.pass);
+    Backend.<span class="tok-fn">endRenderPass</span>(&amp;app.pass);
+    app.pass = Backend.<span class="tok-fn">beginRenderPass</span>(app.gpu_frame.encoder, .{
+        .color_view = rt.color_view,
+        .clear = <span class="tok-kw">if</span> (clear) |col| .{ .r = col.r, .g = col.g, .b = col.b, .a = col.a } <span class="tok-kw">else</span> null,
+        .depth_view = rt.depth_view,
+    });
+    <span class="tok-kw">const</span> vp: [<span class="tok-num">16</span>]f32 = renderer_2d.<span class="tok-fn">orthoTopLeft</span>(
+        <span class="tok-builtin">@floatFromInt</span>(<span class="tok-builtin">@max</span>(rt.width, <span class="tok-num">1</span>)),
+        <span class="tok-builtin">@floatFromInt</span>(<span class="tok-builtin">@max</span>(rt.height, <span class="tok-num">1</span>)),
+    );
+    app.renderer_2d.?.<span class="tok-fn">updatePerFrame</span>(&amp;app.gpu_frame, .{ .view_projection = vp });
+    app.renderer_2d.?.<span class="tok-fn">bindForPass</span>(&amp;app.pass);
+    app.pass.batch = &amp;app.renderer_2d.?.shapes_batch;
+}
+
+<span class="tok-comment">/// End offscreen rendering: flush, close the render-texture pass, reopen the backbuffer</span>
+<span class="tok-comment">/// pass PRESERVING what was drawn before `beginTextureMode` (load, not clear), and</span>
+<span class="tok-comment">/// restore the 2D ortho to the live viewport.</span>
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">endTextureMode</span>(gl: *WgpuGl) void {
+    <span class="tok-kw">const</span> app: *App = <span class="tok-fn">appOf</span>(gl);
+    Backend.<span class="tok-fn">flushBatch</span>(&amp;app.pass);
+    Backend.<span class="tok-fn">endRenderPass</span>(&amp;app.pass);
+    app.pass = Backend.<span class="tok-fn">beginRenderPass</span>(app.gpu_frame.encoder, .{
+        .color_view = app.gpu_frame.surface_view,
+        .clear = null,
+        .depth_view = app.gpu_frame.depth_view,
+    });
+    <span class="tok-kw">const</span> size: wgpu.SurfaceSize = wgpu.<span class="tok-fn">getSurfaceCssSize</span>(app.gpu_frame.surface);
+    <span class="tok-kw">const</span> css_w: f32 = <span class="tok-builtin">@floatFromInt</span>(<span class="tok-builtin">@max</span>(size.width, <span class="tok-num">1</span>));
+    <span class="tok-kw">const</span> css_h: f32 = <span class="tok-builtin">@floatFromInt</span>(<span class="tok-builtin">@max</span>(size.height, <span class="tok-num">1</span>));
+    <span class="tok-kw">const</span> vp: [<span class="tok-num">16</span>]f32 = <span class="tok-kw">switch</span> (app.config.window.scale_mode) {
+        .responsive =&gt; renderer_2d.<span class="tok-fn">orthoTopLeft</span>(css_w, css_h),
+        .fit =&gt; <span class="tok-fn">fitOrtho</span>(
+            <span class="tok-builtin">@floatFromInt</span>(app.config.window.width),
+            <span class="tok-builtin">@floatFromInt</span>(app.config.window.height),
+            css_w,
+            css_h,
+</code></pre>
+<p>The display side needs the result as something <code>drawTextureRec</code> can bind, so the render texture carries its own sampler and views itself as a <code>WgpuTexture</code>:</p>
+<pre><code class="zig">
+    <span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">asTexture</span>(self: WgpuRenderTexture) WgpuTexture {
+        <span class="tok-kw">return</span> .{
+            .handle = self.color,
+            .view = self.color_view,
+            .sampler = self.sampler,
+            .width = self.width,
+            .height = self.height,
+            .format = self.format,
+        };
+    }
+</code></pre>
+<h3 id="design">The design space: six ways to wire it</h3>
+<p>The API we shipped is one point on a spectrum running from <em>implicit and stateful</em> to <em>explicit and threaded</em>. Here is the whole spectrum, roughly most-magical to least, with what each buys and what it costs.</p>
+
+<p><strong>1. Implicit mode — what we chose.</strong> A hidden "current target" lives in the app; bracketing with begin/end redirects every subsequent <code>draw…(gl, …)</code> call to the texture, then back. This is raylib's <code>BeginTextureMode</code>/<code>EndTextureMode</code>, verbatim.</p>
+<pre><code class="zig">z.<span class="tok-fn">beginTextureMode</span>(f.gl, rt, clear);
+z.<span class="tok-fn">drawCircle</span>(f.gl, ...);                       <span class="tok-comment">// goes to the texture</span>
+z.<span class="tok-fn">endTextureMode</span>(f.gl);
+z.<span class="tok-fn">drawTextureRec</span>(f.gl, rt.<span class="tok-fn">asTexture</span>(), ...);   <span class="tok-comment">// goes to the screen</span></code></pre>
+<p><em>Buys:</em> raylib examples port one-to-one — the call shape is identical, so a port is mechanical. And the "magic" is not something we invented: raylib hides exactly this, binding an OpenGL framebuffer object inside <code>BeginTextureMode</code>. We are faithful to the very thing we're porting. <em>Costs:</em> it is stateful — an unbalanced begin/end corrupts the frame — and the pass switch is invisible at the call site.</p>
+
+<p><strong>2. Target-in-handle.</strong> Instead of a global, <code>beginRenderTexture</code> returns a second <code>*WgpuGl</code> bound to the texture; you draw through that handle.</p>
+<pre><code class="zig"><span class="tok-kw">const</span> rt_gl = z.<span class="tok-fn">beginRenderTexture</span>(f.gl, rt);
+z.<span class="tok-fn">drawCircle</span>(rt_gl, ...);     <span class="tok-comment">// the target lives in the handle, not a global</span>
+z.<span class="tok-fn">endRenderTexture</span>(rt_gl);</code></pre>
+<p><em>Buys:</em> the target is visible in the code — which handle you pass — and there is no hidden global. Still immediate-mode. <em>Costs:</em> two handles to keep straight, ending order still matters, and it no longer matches raylib, so every port needs a small rewrite.</p>
+
+<p><strong>3. Scoped callback.</strong> You hand the engine a draw function; it brackets begin/end around it for you.</p>
+<pre><code class="zig">z.<span class="tok-fn">withRenderTexture</span>(f.gl, rt, &amp;ctx, drawSceneFn);</code></pre>
+<p><em>Buys:</em> you cannot forget to end — the scope is enforced. <em>Costs:</em> Zig has no closures, so you thread a <code>ctx</code> struct plus a function pointer by hand, which is clunky for the common case, and it diverges from raylib's call shape.</p>
+
+<p><strong>4. Explicit pass objects — the WebGPU shape.</strong> A render pass is a first-class value; draws are methods on it.</p>
+<pre><code class="zig"><span class="tok-kw">var</span> p = z.<span class="tok-fn">beginRenderPass</span>(.{ .target = rt, .clear = black });
+p.<span class="tok-fn">drawCircle</span>(...);
+p.<span class="tok-fn">end</span>();</code></pre>
+<p><em>Buys:</em> no hidden state at all; multiple passes compose naturally; this is closest to how wgpu actually works underneath. <em>Costs:</em> every draw becomes <code>p.draw…()</code> rather than <code>draw…(gl)</code>, which breaks not just raylib parity but the immediate-mode feel of the entire rest of zimr; it is more verbose; and batching has to be tracked per-pass.</p>
+
+<p><strong>5. Per-call target — no modes at all.</strong> Each draw names its destination; there is nothing to enter or leave.</p>
+<pre><code class="zig">z.<span class="tok-fn">drawCircleTo</span>(rt, ...);   <span class="tok-comment">// to the texture</span>
+z.<span class="tok-fn">drawCircle</span>(...);          <span class="tok-comment">// to the screen</span></code></pre>
+<p><em>Buys:</em> maximally explicit and stateless — there is no "current target" to get wrong. <em>Costs:</em> it doubles the draw surface (a <code>…To</code> variant per primitive), batching must key on the target, and it is the furthest thing from raylib.</p>
+
+<p><strong>6. Render graph.</strong> Record draw commands into lists, declare which textures each pass reads and writes, and let a scheduler order the passes and insert the dependencies.</p>
+<p><em>Buys:</em> this is how large engines manage many interdependent passes — shadow maps feeding lighting feeding post-processing. <em>Costs:</em> a completely different programming model, overkill for an immediate-mode 2D library, and a poor fit for "port the raylib examples."</p>
+
+<h3>The verdict</h3>
+<p>The mission decides it. zimr exists to run raylib's example corpus on WebGPU, and raylib's render-texture API <em>is</em> the implicit mode. Matching it means every example that uses a render texture ports with zero adaptation; choosing any of #2–#5 would tax each of those ports with a rewrite, in exchange for a safety-and-clarity win that raylib itself declined to take. So #1 is the right call <em>for a port</em> — even though #4 would likely be the better choice for an engine designed from a blank page.</p>
+<p>The part that makes this comfortable to commit: <strong>we did not give up the explicit option, we just declined to put it on top.</strong> <code>beginTextureMode</code> is a thin wrapper over primitives that already exist and are already explicit — <code>WgpuBackend.beginRenderPass(encoder, .{ .color_view, .clear, .depth_view })</code> hands back a real pass object, and <code>render_pass.setPipeline</code> / <code>draw</code> / <code>end</code> drive it directly. The implicit, raylib-facing surface sits <em>on top of</em> the explicit pass layer. The day we want #4 — multi-target output, custom load/store ops, a pass that feeds another pass — the machinery is already there to expose. Shipping #1 does not lock it out; it just keeps it off the path the examples walk.</p>
+
+<h3 id="gotchas">Gotchas</h3>
+<ul>
+<li><strong>Balance begin/end.</strong> Like raylib, an unmatched <code>beginTextureMode</code> leaves the frame pointed at the wrong target and corrupts output. Treat the bracket as inseparable.</li>
+<li><strong>Stay inside the frame.</strong> The bracket goes between <code>beginDrawing</code> and <code>endDrawing</code> — it manipulates the live pass and encoder, which only exist during a frame.</li>
+<li><strong>Orientation just works.</strong> The texture is rendered with the same top-left ortho the screen uses, and <code>drawTextureRec</code> samples v=0 at the top — so the result is upright, with no negative-height flip of the kind raylib needs for its bottom-up FBOs. The six-panel demo confirms it: the scene is right-side-up.</li>
+<li><strong>Clearing is an explicit argument.</strong> <code>beginTextureMode</code> takes a <code>clear: ?Color</code> — pass a color to clear the texture on entry (the "redraw every frame" pattern), or pass <code>null</code> to LOAD, preserving last frame's pixels so you can fade and accumulate. A motion trail is then just: enter with <code>null</code>, draw a faint translucent-black rectangle over the whole texture to decay the old image, draw the new dots, exit. (See the companion trails demo.)</li>
+<li><strong>First frame.</strong> A freshly created texture is undefined until first rendered; clearing on entry (as we do) sidesteps ever sampling garbage.</li>
+</ul>
+
+<h3 id="example">The full example</h3>
+<p>The complete source behind the six tinted panels — render the scene into the texture once per frame, then composite it across a viewport-relative grid:</p>
+<pre><code class="zig">
+<span class="tok-comment">//! wgpu_render_texture — render-to-texture demo for the new offscreen API. An animated</span>
+<span class="tok-comment">//! scene (spinning rectangles + a pulsing circle) is drawn INTO an offscreen render</span>
+<span class="tok-comment">//! texture via `beginTextureMode`/`endTextureMode`, then that ONE texture is composited</span>
+<span class="tok-comment">//! to the screen as a tinted grid with `drawTextureRec` — "render once, reuse many."</span>
+<span class="tok-comment">//! Exercises loadRenderTexture / texture-mode / asTexture. Viewport-relative.</span>
+<span class="tok-kw">const</span> std = <span class="tok-builtin">@import</span>(<span class="tok-str">"std"</span>);
+<span class="tok-kw">const</span> z = <span class="tok-builtin">@import</span>(<span class="tok-str">"zimr"</span>);
+<span class="tok-kw">const</span> zm = z.math;
+
+<span class="tok-kw">const</span> ROBOTO_MONO_TTF = <span class="tok-builtin">@embedFile</span>(<span class="tok-str">"roboto_mono_ttf"</span>);
+<span class="tok-kw">const</span> c = z.colors.Color;
+<span class="tok-kw">const</span> RT: f32 = <span class="tok-num">256</span>;
+<span class="tok-kw">const</span> COLS: usize = <span class="tok-num">3</span>;
+<span class="tok-kw">const</span> ROWS: usize = <span class="tok-num">2</span>;
+
+<span class="tok-kw">const</span> State = <span class="tok-kw">struct</span> {
+    font: z.Font,
+    rt: z.RenderTexture = .{},
+    frame_count: usize = <span class="tok-num">0</span>,
+};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">var</span> zimr_app: z.App = .{};
+
+<span class="tok-kw">pub</span> <span class="tok-kw">fn</span> <span class="tok-fn">main</span>() !void {
+    <span class="tok-kw">try</span> zimr_app.<span class="tok-fn">run</span>(.{
+        .window = .{
+            .title = <span class="tok-str">"zimr - WebGPU - render texture"</span>,
+            .width = <span class="tok-num">800</span>,
+            .height = <span class="tok-num">450</span>,
+            .scale_mode = .responsive,
+        },
+    }, State, initState, update);
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">initState</span>(gpa: std.mem.Allocator, f: *z.Frame) !State {
+    <span class="tok-kw">return</span> .{ .font = <span class="tok-kw">try</span> z.<span class="tok-fn">loadFont</span>(f, gpa, ROBOTO_MONO_TTF, <span class="tok-num">24</span>) };
+}
+
+<span class="tok-comment">/// Draw the animated scene into the render texture (RT-pixel coordinates).</span>
+<span class="tok-kw">fn</span> <span class="tok-fn">drawScene</span>(
+    gl: <span class="tok-kw">anytype</span>,
+    font: z.Font,
+    t: f32,
+) void {
+    <span class="tok-kw">var</span> i: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (i &lt; <span class="tok-num">4</span>) : (i += <span class="tok-num">1</span>) {
+        <span class="tok-kw">const</span> fi: f32 = zm.<span class="tok-fn">float</span>(i);
+        <span class="tok-kw">const</span> sz: f32 = <span class="tok-num">130.0</span> - fi * <span class="tok-num">24.0</span>;
+        <span class="tok-kw">const</span> rot: f32 = t * <span class="tok-num">40.0</span> + fi * <span class="tok-num">90.0</span>;
+        <span class="tok-kw">const</span> col: z.colors.Color = z.<span class="tok-fn">colorFromHSV</span>(<span class="tok-builtin">@mod</span>(t * <span class="tok-num">30.0</span> + fi * <span class="tok-num">60.0</span>, <span class="tok-num">360.0</span>), <span class="tok-num">0.7</span>, <span class="tok-num">0.95</span>);
+        z.<span class="tok-fn">drawRectanglePro</span>(
+            gl,
+            .{ .x = RT * <span class="tok-num">0.5</span>, .y = RT * <span class="tok-num">0.5</span>, .width = sz, .height = sz },
+            .{ sz * <span class="tok-num">0.5</span>, sz * <span class="tok-num">0.5</span> },
+            rot,
+            col.<span class="tok-fn">fade</span>(<span class="tok-num">0.7</span>),
+        );
+    }
+    z.<span class="tok-fn">drawCircleV</span>(gl, .{ RT * <span class="tok-num">0.5</span>, RT * <span class="tok-num">0.5</span> }, <span class="tok-num">26.0</span> + <span class="tok-builtin">@sin</span>(t * <span class="tok-num">2.0</span>) * <span class="tok-num">12.0</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">245</span>, <span class="tok-num">248</span>, <span class="tok-num">252</span>, <span class="tok-num">255</span>));
+    z.<span class="tok-fn">drawText</span>(gl, font, <span class="tok-str">"RT"</span>, <span class="tok-num">10</span>, <span class="tok-num">8</span>, <span class="tok-num">22</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">200</span>, <span class="tok-num">210</span>, <span class="tok-num">230</span>, <span class="tok-num">230</span>));
+}
+
+<span class="tok-kw">fn</span> <span class="tok-fn">update</span>(f: *z.Frame, s: *State) void {
+    s.frame_count += <span class="tok-num">1</span>;
+    <span class="tok-kw">if</span> (s.rt.color == .invalid) {
+        s.rt = z.<span class="tok-fn">loadRenderTexture</span>(f.gl, <span class="tok-builtin">@intFromFloat</span>(RT), <span class="tok-builtin">@intFromFloat</span>(RT));
+    }
+    <span class="tok-kw">const</span> t: f32 = f.time.time;
+    <span class="tok-kw">const</span> w: f32 = f.window.<span class="tok-fn">widthf</span>();
+    <span class="tok-kw">const</span> h: f32 = f.window.<span class="tok-fn">heightf</span>();
+
+    z.<span class="tok-fn">beginDrawing</span>(f.gl);
+    z.<span class="tok-fn">clearBackground</span>(f.gl, c.<span class="tok-fn">init</span>(<span class="tok-num">8</span>, <span class="tok-num">9</span>, <span class="tok-num">14</span>, <span class="tok-num">255</span>));
+
+    <span class="tok-comment">// 1. Render the animated scene once, into the offscreen render texture.</span>
+    z.<span class="tok-fn">beginTextureMode</span>(f.gl, s.rt, c.<span class="tok-fn">init</span>(<span class="tok-num">20</span>, <span class="tok-num">28</span>, <span class="tok-num">48</span>, <span class="tok-num">255</span>));
+    <span class="tok-fn">drawScene</span>(f.gl, s.font, t);
+    z.<span class="tok-fn">endTextureMode</span>(f.gl);
+
+    <span class="tok-comment">// 2. Composite that single texture to the screen as a tinted grid.</span>
+    <span class="tok-kw">const</span> gap: f32 = <span class="tok-num">6.0</span>;
+    <span class="tok-kw">const</span> cell_w: f32 = (w - gap * (COLS + <span class="tok-num">1</span>)) / <span class="tok-builtin">@as</span>(f32, COLS);
+    <span class="tok-kw">const</span> cell_h: f32 = (h - gap * (ROWS + <span class="tok-num">1</span>)) / <span class="tok-builtin">@as</span>(f32, ROWS);
+    <span class="tok-kw">var</span> ry: usize = <span class="tok-num">0</span>;
+    <span class="tok-kw">while</span> (ry &lt; ROWS) : (ry += <span class="tok-num">1</span>) {
+        <span class="tok-kw">var</span> cx: usize = <span class="tok-num">0</span>;
+        <span class="tok-kw">while</span> (cx &lt; COLS) : (cx += <span class="tok-num">1</span>) {
+            <span class="tok-kw">const</span> idx: f32 = zm.<span class="tok-fn">float</span>(ry * COLS + cx);
+            <span class="tok-kw">const</span> dx: f32 = gap + zm.<span class="tok-fn">float</span>(cx) * (cell_w + gap);
+            <span class="tok-kw">const</span> dy: f32 = gap + zm.<span class="tok-fn">float</span>(ry) * (cell_h + gap);
+            <span class="tok-kw">const</span> tint: z.colors.Color = z.<span class="tok-fn">colorFromHSV</span>(<span class="tok-builtin">@mod</span>(t * <span class="tok-num">20.0</span> + idx * <span class="tok-num">55.0</span>, <span class="tok-num">360.0</span>), <span class="tok-num">0.5</span>, <span class="tok-num">1.0</span>);
+            z.<span class="tok-fn">drawTextureRec</span>(f.gl, s.rt.<span class="tok-fn">asTexture</span>(), <span class="tok-num">0</span>, <span class="tok-num">0</span>, <span class="tok-num">1</span>, <span class="tok-num">1</span>, dx, dy, cell_w, cell_h, tint);
+        }
+    }
+
+    z.<span class="tok-fn">drawText</span>(f.gl, s.font, <span class="tok-str">"render texture: offscreen scene drawn 6x"</span>, <span class="tok-num">10</span>, <span class="tok-num">10</span>, <span class="tok-num">14</span>, c.<span class="tok-fn">init</span>(<span class="tok-num">210</span>, <span class="tok-num">214</span>, <span class="tok-num">224</span>, <span class="tok-num">230</span>));
+    z.<span class="tok-fn">endDrawing</span>(f.gl);
+}
+</code></pre>
+</div>
+</body>
+</html>
