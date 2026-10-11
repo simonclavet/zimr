@@ -42,6 +42,7 @@ const vec = zm.vec;
 const dot3 = zm.dot3;
 const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
+const Vec2 = zm.Vec2;
 const bufPrint = std.fmt.bufPrint;
 const common = @import("example_common");
 
@@ -139,6 +140,46 @@ fn loadBunny(gpa: Allocator) !z.Mesh {
     return mesh;
 }
 
+/// The decal sticker: a bright ring/target with a transparent surround so the
+/// decal edges fade rather than showing box seams.
+fn makeDecalImage(gpa: Allocator) !z.Image {
+    const n: usize = 64;
+    const img: z.Image = try z.genImageColor(gpa, @intCast(n), @intCast(n), .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    const px: [*]u8 = @ptrCast(img.data.?);
+    const c: f32 = float(n) * 0.5 - 0.5;
+    for (0..n) |y| {
+        for (0..n) |x| {
+            const dx: f32 = float(x) - c;
+            const dy: f32 = float(y) - c;
+            const r: f32 = @sqrt(dx * dx + dy * dy) / c;
+            var a: u8 = 0;
+            var col: [3]u8 = .{ 255, 220, 60 };
+            // Fade the ring fully to transparent by r~0.72 - well inside the
+            // decal box's edges - so the box side-plane clip only ever cuts
+            // already-transparent texels and never leaves a hard straight edge.
+            if (r < 0.72) {
+                a = 255;
+                // Concentric rings (packed into the inner 0.7 radius).
+                const band: f32 = @mod(r * 5.0, 1.0);
+                if (band < 0.5) {
+                    col = .{ 230, 60, 60 };
+                } else {
+                    col = .{ 255, 220, 60 };
+                }
+                if (r > 0.55) {
+                    a = @round(255.0 * (0.72 - r) / 0.17);
+                }
+            }
+            const i: usize = (y * n + x) * 4;
+            px[i + 0] = col[0];
+            px[i + 1] = col[1];
+            px[i + 2] = col[2];
+            px[i + 3] = a;
+        }
+    }
+    return img;
+}
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     const mesh: z.Mesh = try z.genMeshSphere(gpa, sphere_radius, 32, 24);
@@ -151,7 +192,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // drawn surface and the decal surface are identical geometry (no mismatch).
     const sphere_recv: u32 = z.uploadDecalReceiver(f.gl, mesh) orelse return error.DecalReceiverFailed;
     const bunny_recv: u32 = z.uploadDecalReceiver(f.gl, bunny) orelse return error.DecalReceiverFailed;
-    var cam: z.OrbitCamera = z.OrbitCamera.init(pointVec(1.6, 0, 0), 9.0);
+    var cam: z.OrbitCamera = .init(pointVec(1.6, 0, 0), 9.0);
     cam.yaw = 0.7;
     cam.pitch = 0.4;
     const decal_img: z.Image = try makeDecalImage(gpa);
@@ -179,6 +220,84 @@ fn xorshift(state: *u32) u32 {
     return x;
 }
 
+/// Record a decal at the hit: build the world->box projector and store it with
+/// the receiver handle. The GPU projects + paints it each frame (no clipping).
+fn placeDecal(s: *State, hit: RayCollision, receiver: u32) void {
+    if (s.decal_count >= max_decals) {
+        return;
+    }
+    // Projection: look from just outside the surface toward the hit point,
+    // spun a random amount about its own axis (raylib's `splat`).
+    const eye: Vec = vec(
+        hit.point[0] + hit.normal[0],
+        hit.point[1] + hit.normal[1],
+        hit.point[2] + hit.normal[2],
+    );
+    const look: Mat = lookAtRh(hit.point, eye, vec(0, 1, 0));
+    const spin_deg: f32 = float(@as(i32, @intCast(xorshift(&s.rng) % 360)) - 180);
+    // Apply the world->box `look`, then spin in-plane (spin acting in box space).
+    // `compose(first, then)` reads in application order.
+    const projector: Mat = compose(look, rotationZ(spin_deg * rad_per_deg));
+
+    s.decals[s.decal_count] = .{
+        .projector = projector,
+        .forward = vec(hit.normal[0], hit.normal[1], hit.normal[2]),
+        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
+        .receiver = receiver,
+    };
+    s.decal_count += 1;
+}
+
+fn controlPanel(u: z.ui_real.Ui, s: *State, vw: f32, vh: f32) void {
+    u.setNextWindowPos(.{ 8, vh - 66 }, .{});
+    u.setNextWindowSize(.{ @min(320, vw - 16), 58 }, .{});
+    if (u.window("decals", .{})) |w| {
+        defer w.close();
+        if (u.button(if (s.show_target) "hide target" else "show target", .{})) {
+            s.show_target = !s.show_target;
+        }
+        u.sameLine(.{});
+        if (u.button("clear", .{})) {
+            s.decal_count = 0;
+        }
+    }
+}
+
+fn drawPreview(f: *z.Frame, hit: RayCollision) void {
+    // Show the ACTUAL oriented decal box at the hit: the 8 corners of the
+    // [-s, s]^3 box transformed by the inverse projection into world space,
+    // drawn as edges. This is the ground-truth cursor - if a decal doesn't
+    // land inside this box, the projection is wrong.
+    const eye: Vec = vec(
+        hit.point[0] + hit.normal[0],
+        hit.point[1] + hit.normal[1],
+        hit.point[2] + hit.normal[2],
+    );
+    const look: Mat = lookAtRh(hit.point, eye, vec(0, 1, 0));
+    const inv_proj: Mat = inverse(look);
+    const s: f32 = 0.5 * decal_size;
+    var c: [8]Vec = undefined;
+    var i: usize = 0;
+    inline for ([_]f32{ -1, 1 }) |sx| {
+        inline for ([_]f32{ -1, 1 }) |sy| {
+            inline for ([_]f32{ -1, 1 }) |sz| {
+                c[i] = mulMatVec(inv_proj, pointVec(sx * s, sy * s, sz * s));
+                i += 1;
+            }
+        }
+    }
+    const col: Color = .{ .r = 120, .g = 230, .b = 120, .a = 255 };
+    // 12 edges of the box (corner index bit pattern: x=bit2, y=bit1, z=bit0).
+    const edges = [_][2]usize{
+        .{ 0, 1 }, .{ 2, 3 }, .{ 4, 5 }, .{ 6, 7 }, // z edges
+        .{ 0, 2 }, .{ 1, 3 }, .{ 4, 6 }, .{ 5, 7 }, // y edges
+        .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // x edges
+    };
+    for (edges) |e| {
+        z.drawLine3D(f.gl, c[e[0]], c[e[1]], col);
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
@@ -191,7 +310,7 @@ fn update(f: *z.Frame, s: *State) void {
     });
 
     // ---- pick the surface under the cursor (test both targets, keep nearer) ----
-    const m: zm.Vec2 = z.getMousePosition(f.input);
+    const m: Vec2 = z.getMousePosition(f.input);
     const ray: Ray = z.getScreenToWorldRay(m, cam, vw, vh);
     const hit_sphere: RayCollision = z.getRayCollisionMesh(ray, s.mesh, zm.identity());
     const hit_bunny: RayCollision = z.getRayCollisionMesh(ray, s.bunny, zm.identity());
@@ -277,124 +396,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     common.caption(f.gl, s.font, "WebGPU 3D - projected decals (click sphere or bunny; drag to orbit)");
     s.ui_host.render(f);
-}
-
-/// Record a decal at the hit: build the world->box projector and store it with
-/// the receiver handle. The GPU projects + paints it each frame (no clipping).
-fn placeDecal(s: *State, hit: RayCollision, receiver: u32) void {
-    if (s.decal_count >= max_decals) {
-        return;
-    }
-    // Projection: look from just outside the surface toward the hit point,
-    // spun a random amount about its own axis (raylib's `splat`).
-    const eye: Vec = vec(
-        hit.point[0] + hit.normal[0],
-        hit.point[1] + hit.normal[1],
-        hit.point[2] + hit.normal[2],
-    );
-    const look: Mat = lookAtRh(hit.point, eye, vec(0, 1, 0));
-    const spin_deg: f32 = float(@as(i32, @intCast(xorshift(&s.rng) % 360)) - 180);
-    // Apply the world->box `look`, then spin in-plane (spin acting in box space).
-    // `compose(first, then)` reads in application order.
-    const projector: Mat = compose(look, rotationZ(spin_deg * rad_per_deg));
-
-    s.decals[s.decal_count] = .{
-        .projector = projector,
-        .forward = vec(hit.normal[0], hit.normal[1], hit.normal[2]),
-        .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 },
-        .receiver = receiver,
-    };
-    s.decal_count += 1;
-}
-
-fn drawPreview(f: *z.Frame, hit: RayCollision) void {
-    // Show the ACTUAL oriented decal box at the hit: the 8 corners of the
-    // [-s, s]^3 box transformed by the inverse projection into world space,
-    // drawn as edges. This is the ground-truth cursor - if a decal doesn't
-    // land inside this box, the projection is wrong.
-    const eye: Vec = vec(
-        hit.point[0] + hit.normal[0],
-        hit.point[1] + hit.normal[1],
-        hit.point[2] + hit.normal[2],
-    );
-    const look: Mat = lookAtRh(hit.point, eye, vec(0, 1, 0));
-    const inv_proj: Mat = inverse(look);
-    const s: f32 = 0.5 * decal_size;
-    var c: [8]Vec = undefined;
-    var i: usize = 0;
-    inline for ([_]f32{ -1, 1 }) |sx| {
-        inline for ([_]f32{ -1, 1 }) |sy| {
-            inline for ([_]f32{ -1, 1 }) |sz| {
-                c[i] = mulMatVec(inv_proj, pointVec(sx * s, sy * s, sz * s));
-                i += 1;
-            }
-        }
-    }
-    const col: Color = .{ .r = 120, .g = 230, .b = 120, .a = 255 };
-    // 12 edges of the box (corner index bit pattern: x=bit2, y=bit1, z=bit0).
-    const edges = [_][2]usize{
-        .{ 0, 1 }, .{ 2, 3 }, .{ 4, 5 }, .{ 6, 7 }, // z edges
-        .{ 0, 2 }, .{ 1, 3 }, .{ 4, 6 }, .{ 5, 7 }, // y edges
-        .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // x edges
-    };
-    for (edges) |e| {
-        z.drawLine3D(f.gl, c[e[0]], c[e[1]], col);
-    }
-}
-
-fn controlPanel(u: z.ui_real.Ui, s: *State, vw: f32, vh: f32) void {
-    u.setNextWindowPos(.{ 8, vh - 66 }, .{});
-    u.setNextWindowSize(.{ @min(320, vw - 16), 58 }, .{});
-    if (u.window("decals", .{})) |w| {
-        defer w.close();
-        if (u.button(if (s.show_target) "hide target" else "show target", .{})) {
-            s.show_target = !s.show_target;
-        }
-        u.sameLine(.{});
-        if (u.button("clear", .{})) {
-            s.decal_count = 0;
-        }
-    }
-}
-
-/// The decal sticker: a bright ring/target with a transparent surround so the
-/// decal edges fade rather than showing box seams.
-fn makeDecalImage(gpa: Allocator) !z.Image {
-    const n: usize = 64;
-    const img: z.Image = try z.genImageColor(gpa, @intCast(n), @intCast(n), .{ .r = 0, .g = 0, .b = 0, .a = 0 });
-    const px: [*]u8 = @ptrCast(img.data.?);
-    const c: f32 = float(n) * 0.5 - 0.5;
-    for (0..n) |y| {
-        for (0..n) |x| {
-            const dx: f32 = float(x) - c;
-            const dy: f32 = float(y) - c;
-            const r: f32 = @sqrt(dx * dx + dy * dy) / c;
-            var a: u8 = 0;
-            var col: [3]u8 = .{ 255, 220, 60 };
-            // Fade the ring fully to transparent by r~0.72 - well inside the
-            // decal box's edges - so the box side-plane clip only ever cuts
-            // already-transparent texels and never leaves a hard straight edge.
-            if (r < 0.72) {
-                a = 255;
-                // Concentric rings (packed into the inner 0.7 radius).
-                const band: f32 = @mod(r * 5.0, 1.0);
-                if (band < 0.5) {
-                    col = .{ 230, 60, 60 };
-                } else {
-                    col = .{ 255, 220, 60 };
-                }
-                if (r > 0.55) {
-                    a = @round(255.0 * (0.72 - r) / 0.17);
-                }
-            }
-            const i: usize = (y * n + x) * 4;
-            px[i + 0] = col[0];
-            px[i + 1] = col[1];
-            px[i + 2] = col[2];
-            px[i + 3] = a;
-        }
-    }
-    return img;
 }
 
 pub const app: z.AppSpec(State) = .{

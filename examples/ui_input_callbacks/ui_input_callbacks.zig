@@ -23,13 +23,14 @@
 const std = @import("std");
 const startsWith = std.mem.startsWith;
 const Allocator = std.mem.Allocator;
+const zeroes = std.mem.zeroes;
 const z = @import("zimr");
 const ui = z.ui_real;
 
 // Callback state - one struct per widget.  These are the typed
 // targets the `user_data` pointers cast back to.
 const PasswordState = struct {
-    mask: [64]u8 = std.mem.zeroes([64]u8),
+    mask: [64]u8 = zeroes([64]u8),
     mask_len: usize = 0,
     show_plaintext: bool = false,
 };
@@ -120,20 +121,20 @@ const State = struct {
     font: z.Font,
 
     // Decimal-only field.
-    age_buf: [16]u8 = std.mem.zeroes([16]u8),
+    age_buf: [16]u8 = zeroes([16]u8),
     age_len: usize = 0,
 
     // Password field.
-    pwd_buf: [64]u8 = std.mem.zeroes([64]u8),
+    pwd_buf: [64]u8 = zeroes([64]u8),
     pwd_len: usize = 0,
     pwd_state: PasswordState = .{},
 
     // Autocomplete.
-    auto_buf: [64]u8 = std.mem.zeroes([64]u8),
+    auto_buf: [64]u8 = zeroes([64]u8),
     auto_len: usize = 0,
 
     // History.
-    hist_buf: [64]u8 = std.mem.zeroes([64]u8),
+    hist_buf: [64]u8 = zeroes([64]u8),
     hist_len: usize = 0,
     history: History = .{},
 };

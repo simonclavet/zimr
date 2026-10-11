@@ -9,6 +9,7 @@ const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
 const zn = @import("zn");
+const zrl = @import("zrl");
 const gym = @import("robot_gym.zig");
 const zn_mlp = @import("gpu/zn_mlp.zig");
 /// The XOR network's kernels - the phone's GPU confidence test runs them beside the robot.
@@ -17,6 +18,10 @@ const compute_host = @import("compute_host.zig");
 
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
+const Io = std.Io;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 const float = zm.float;
 const float64 = zm.float64;
 const clamp = zm.clamp;
@@ -32,28 +37,28 @@ test "gpu learn: G1 - zn_mlp's kernels train a two-layer net exactly as zimrnum'
     // weights - zimrnum's CPU graph with `zn.adamStep`, and `zn_mlp`'s kernels on their CPU
     // twin through `z.Compute(...).initCpu()`, dispatched in dependency order exactly as the
     // GPU will run them. Every loss and the final weights must agree to float precision.
-    const gpa: Allocator = std.testing.allocator;
-    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
     const rows: usize = 8;
     const n_in: usize = 5;
     const hidden: usize = 16;
-    var init_rng: std.Random.DefaultPrng = .init(11);
-    const random: std.Random = init_rng.random();
+    var init_rng: Random.DefaultPrng = .init(11);
+    const random: Random = init_rng.random();
 
     // -- The CPU reference: zimrnum's graph, Adam. --
     var l1: Layer = try .init(arena, random, n_in, hidden, 1.0);
     var l2: Layer = try .init(arena, random, hidden, 1, 1.0);
-    const x: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, n_in });
-    const t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, 1 });
+    const x: zn.Tensor(f32) = try .alloc(arena, &.{ rows, n_in });
+    const t: zn.Tensor(f32) = try .alloc(arena, &.{ rows, 1 });
     for (x.data) |*v| {
         v.* = 2.0 * random.float(f32) - 1.0;
     }
     for (t.data) |*v| {
         v.* = 2.0 * random.float(f32) - 1.0;
     }
-    const ones_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, 1 });
+    const ones_t: zn.Tensor(f32) = try .alloc(arena, &.{ rows, 1 });
     @memset(ones_t.data, 1.0);
     var graph: zn.Graph(f32) = .init(arena);
     const xv: zn.Var = try graph.constant(x);
@@ -161,8 +166,8 @@ test "gpu learn: D5 step 3a - cloning on the kit is the graph's, step for step; 
     // three-layer tanh policy, from the kit's own initial weights, on the same rows: 10 steps both ways, and
     // the weights must agree to float precision. And what cloning must NOT touch - the log-std row and the
     // value net - must come out bit for bit as they went in.
-    const gpa: Allocator = std.testing.allocator;
-    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
     const n_obs: usize = 7;
@@ -182,8 +187,8 @@ test "gpu learn: D5 step 3a - cloning on the kit is the graph's, step for step; 
     const start: []f32 = try arena.dupe(f32, ppo.cpu_params);
 
     // The graph: the same three layers, from the kit's weights.
-    var init_rng: std.Random.DefaultPrng = .init(1);
-    const random: std.Random = init_rng.random();
+    var init_rng: Random.DefaultPrng = .init(1);
+    const random: Random = init_rng.random();
     var l1: Layer = try .init(arena, random, n_obs, hidden, 1.0);
     var l2: Layer = try .init(arena, random, hidden, hidden, 1.0);
     var l3: Layer = try .init(arena, random, hidden, n_act, 1.0);
@@ -195,15 +200,15 @@ test "gpu learn: D5 step 3a - cloning on the kit is the graph's, step for step; 
         @memcpy(layer.w.data, start[at..][0 .. in_dim * out_dim]);
         @memcpy(layer.b.data, start[at + in_dim * out_dim ..][0..out_dim]);
     }
-    const x: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, n_obs });
-    const t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, n_act });
+    const x: zn.Tensor(f32) = try .alloc(arena, &.{ rows, n_obs });
+    const t: zn.Tensor(f32) = try .alloc(arena, &.{ rows, n_act });
     for (x.data) |*v| {
         v.* = 2.0 * random.float(f32) - 1.0;
     }
     for (t.data) |*v| {
         v.* = 2.0 * random.float(f32) - 1.0;
     }
-    const ones_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ rows, 1 });
+    const ones_t: zn.Tensor(f32) = try .alloc(arena, &.{ rows, 1 });
     @memset(ones_t.data, 1.0);
     var graph: zn.Graph(f32) = .init(arena);
     const xv: zn.Var = try graph.constant(x);
@@ -260,19 +265,25 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     var pipe: compute_host.Compute(zn_mlp) = .initCpu();
     defer pipe.deinit();
-    var ppo: GpuPpo = try .init(gpa, &pipe, zn.cartpole_state_dim, zn.cartpole_action_dim, .{});
+    var ppo: GpuPpo = try .init(gpa, &pipe, zrl.cartpole_state_dim, zrl.cartpole_action_dim, .{});
     defer ppo.deinit(gpa);
     const envs: usize = 16;
     const horizon: usize = 64;
     const samples: usize = envs * horizon;
-    var states: [16]zn.CartpoleState(f32) = undefined;
+    var states: [16]zrl.CartpoleState(f32) = undefined;
     var lengths: [16]u32 = @splat(0);
     var episode_counter: u32 = 0;
     for (&states) |*st| {
-        st.* = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode_counter, .hold);
+        st.* = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode_counter, .hold);
         episode_counter += 1;
     }
     const obs_all: []f32 = try gpa.alloc(f32, samples * 4);
@@ -285,10 +296,10 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
     defer gpa.free(advantages);
     const returns: []f64 = try gpa.alloc(f64, samples);
     defer gpa.free(returns);
-    var rollout: zn.RolloutBuffer = try .init(gpa, samples);
+    var rollout: zrl.RolloutBuffer = try .init(gpa, samples);
     defer rollout.deinit(gpa);
-    var rng: std.Random.DefaultPrng = .init(5);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(5);
+    const random: Random = rng.random();
     var order: [1024]u32 = undefined;
     for (&order, 0..) |*o, i| {
         o.* = @intCast(i);
@@ -303,20 +314,20 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
             for (0..horizon) |t| {
                 const row: usize = e * horizon + t;
                 var obs: [4]f32 = undefined;
-                try zn.cartpoleObserve(f32, states[e], &obs);
+                try zrl.cartpoleObserve(f32, states[e], &obs);
                 @memcpy(obs_all[row * 4 ..][0..4], &obs);
                 var action: [1]f32 = undefined;
                 logp_all[row] = ppo.act(&obs, &action, random);
                 act_all[row] = action[0];
                 const v_now: f32 = ppo.value(&obs);
-                const stepped = zn.cartpoleTaskStep(f32, states[e], 10.0 * clamp(action[0], -1.0, 1.0), .hold);
+                const stepped = zrl.cartpoleTaskStep(f32, states[e], 10.0 * clamp(action[0], -1.0, 1.0), .hold);
                 lengths[e] += 1;
                 const capped: bool = !stepped.failed and lengths[e] >= 500;
                 const segment_end: bool = t == horizon - 1;
                 var v_next: f32 = 0.0;
                 if (!stepped.failed) {
                     var next_obs: [4]f32 = undefined;
-                    try zn.cartpoleObserve(f32, stepped.state, &next_obs);
+                    try zrl.cartpoleObserve(f32, stepped.state, &next_obs);
                     v_next = ppo.value(&next_obs);
                 }
                 const truncated: bool = capped or (segment_end and !stepped.failed);
@@ -326,13 +337,13 @@ test "gpu learn: GPU PPO (on the kit's CPU twin) learns the cartpole hold" {
                     finished += 1;
                     finished_steps += lengths[e];
                     lengths[e] = 0;
-                    states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode_counter, .hold);
+                    states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode_counter, .hold);
                     episode_counter += 1;
                 }
             }
         }
-        try zn.gae(rollout.steps[0..rollout.len], 0.99, 0.95, advantages, returns);
-        try zn.normalizeAdvantages(f64, advantages, 1.0e-8);
+        try zrl.gae(rollout.steps[0..rollout.len], 0.99, 0.95, advantages, returns);
+        try zrl.normalizeAdvantages(f64, advantages, 1.0e-8);
         // 4 epochs of shuffled 256-row minibatches, each one kit step.
         for (0..4) |_| {
             random.shuffle(u32, order[0..samples]);
@@ -370,7 +381,7 @@ test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
     // same weights, fed the same batches and the same noise for 5 updates. Two action dimensions,
     // so the per-dimension paths are exercised; a raised learning rate, so the updates move the
     // weights far enough to disagree if anything is wrong. Every parameter group must agree.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const n_obs: usize = 4;
     const n_act: usize = 2;
     const batch: usize = 8;
@@ -391,8 +402,8 @@ test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
     // two learners that both did nothing would prove nothing.
     const start: []f32 = try gpa.dupe(f32, sac.readParams() orelse return error.NoReadback);
     defer gpa.free(start);
-    var rng: std.Random.DefaultPrng = .init(9);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(9);
+    const random: Random = rng.random();
     const width: usize = 2 * n_obs + n_act + 2;
     var rows: [batch * width]f32 = undefined;
     var next_noise: [batch * n_act]f32 = undefined;
@@ -403,7 +414,8 @@ test "gpu learn: S2 - the kit's SAC update is SacAgent's, update for update" {
             for (row) |*v| {
                 v.* = 2.0 * random.float(f32) - 1.0;
             }
-            row[width - 1] = if (i % 4 == 0) 1.0 else 0.0;
+            // The last column is the bootstrap discount: 0 for a termination, gamma otherwise.
+            row[width - 1] = if (i % 4 == 0) 0.0 else 0.99;
         }
         for (&next_noise) |*v| {
             v.* = random.floatNorm(f32);
@@ -438,22 +450,12 @@ const st_mod = @import("robot_supertrack.zig");
 /// SuperTrack's training steps on the kit as this file imports it.
 const StKit = st_mod.SuperTrackKitOn(zn_mlp);
 
-test "gpu learn: SuperTrack on the kit is the graph's, step for step" {
-    // *** AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
-    // SuperTrack (its CPU twin, dispatched exactly as a GPU runs it), from the same weights, fed
-    // the same windows, start states and noise for 4 iterations of (world step, policy step), at
-    // a raised learning rate - both the per-layer path (~1,050 dispatches an iteration) and the
-    // FUSED one (8). Both networks must agree - while their weights MOVE.
-    try stParity(false);
-    try stParity(true);
-}
-
 fn stParity(fused: bool) !void {
     // *** AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
     // SuperTrack (its CPU twin, dispatched exactly as a GPU runs it), from the same weights, fed
     // the same windows, start states and noise for 4 iterations of (world step, policy step), at
     // a raised learning rate. Both networks must agree - while their weights MOVE.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const options: st_mod.Options = .{
         .batch = 8,
         .hidden = 16,
@@ -470,8 +472,8 @@ fn stParity(fused: bool) !void {
     defer kit.deinit();
     const start: []f32 = try gpa.dupe(f32, kit.readParams() orelse return error.NoReadback);
     defer gpa.free(start);
-    var rng: std.Random.DefaultPrng = .init(21);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(21);
+    const random: Random = rng.random();
     const b: usize = options.batch;
     const states: []f32 = try gpa.alloc(f32, b * (options.wm_window + 1) * 4);
     defer gpa.free(states);
@@ -522,6 +524,98 @@ fn stParity(fused: bool) !void {
     try expect(moved_policy > 1.0e-3 and moved_world > 1.0e-3);
 }
 
+test "gpu learn: SuperTrack on the kit is the graph's, step for step" {
+    // *** AS S2 WAS FOR SAC: `robot_supertrack.SuperTrack` (zimrnum's graph) and the kit's
+    // SuperTrack (its CPU twin, dispatched exactly as a GPU runs it), from the same weights, fed
+    // the same windows, start states and noise for 4 iterations of (world step, policy step), at
+    // a raised learning rate - both the per-layer path (~1,050 dispatches an iteration) and the
+    // FUSED one (8). Both networks must agree - while their weights MOVE.
+    try stParity(false);
+    try stParity(true);
+}
+
+fn stCartpole(fused: bool) !void {
+    // The kit training the real task end to end, at the full configuration (batch 32, windows
+    // 8 / 32): the graph SuperTrack only gathers and samples (its buffer, its gym, its CPU
+    // policy forward, fed the kit's policy after every step); the KIT does all the training.
+    // The same gym, pushes and evaluation as robot_supertrack's own run - and the milliseconds
+    // an iteration, which decide whether a page can afford it.
+    const gpa: Allocator = testing_allocator;
+    const options: st_mod.Options = .{};
+    const host: *st_mod.SuperTrack = try .init(gpa, options);
+    defer host.deinit();
+    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
+    defer pipe.deinit();
+    var kit: StKit = try .initFrom(gpa, &pipe, host);
+    defer kit.deinit();
+    const io: Io = std.testing.io;
+    var states: [8]zrl.CartpoleState(f32) = undefined;
+    var steps: [8]u32 = @splat(0);
+    var segments: [8]u32 = undefined;
+    var next_segment: u32 = 0;
+    var episode: u32 = 0;
+    for (0..8) |e| {
+        states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+        episode += 1;
+        segments[e] = next_segment;
+        next_segment += 1;
+    }
+    const baseline: f32 = st_mod.evaluate(null, 10, 99);
+    var train_ns: i96 = 0;
+    var trained: u32 = 0;
+    var final_eval: f32 = 0.0;
+    report.print("\n  SuperTrack on the kit's CPU twin ({s}), real cartpole (baseline {d:.1}):\n", .{
+        if (fused) "fused" else "per-layer",
+        baseline,
+    });
+    for (1..2001) |iteration| {
+        for (0..4) |_| {
+            for (0..8) |e| {
+                if (steps[e] > 0 and steps[e] % st_mod.push_every == 0) {
+                    states[e].pole_rate_rad += st_mod.push_size * (2.0 * host.rng.random().float(f32) - 1.0);
+                    segments[e] = next_segment;
+                    next_segment += 1;
+                }
+                const force: f32 = host.act(st_mod.fromCartpole(states[e]), true);
+                host.remember(e, st_mod.fromCartpole(states[e]), force, segments[e]);
+                const stepped = zrl.cartpoleContinuousStep(f32, states[e], force);
+                steps[e] += 1;
+                if (stepped.failed or steps[e] >= st_mod.episode_cap) {
+                    states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+                    episode += 1;
+                    steps[e] = 0;
+                    segments[e] = next_segment;
+                    next_segment += 1;
+                } else {
+                    states[e] = stepped.state;
+                }
+            }
+        }
+        if (host.sampleWorldBatch() and host.samplePolicyBatch()) {
+            const started: Io.Timestamp = Io.Clock.now(.awake, io);
+            if (fused) {
+                kit.trainWorldFused(host.stage_states, host.stage_forces);
+                kit.trainPolicyFused(host.stage_starts, host.stage_noise);
+            } else {
+                kit.trainWorldWith(host.stage_states, host.stage_forces);
+                kit.trainPolicyWith(host.stage_starts, host.stage_noise);
+            }
+            const params_: []const f32 = kit.readParams() orelse return error.NoReadback;
+            train_ns += Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
+            trained += 1;
+            host.loadPolicy(params_, kit.pol);
+        }
+        if (iteration % 500 == 0) {
+            final_eval = st_mod.evaluate(host, 10, 99);
+            report.print("    iteration {d:>4}: REAL episodes {d:.1} steps\n", .{ iteration, final_eval });
+        }
+    }
+    const ms: f64 = float64(train_ns) / 1.0e6 / float64(@max(trained, 1));
+    report.print("    the kit's CPU twin: {d:.2} ms an iteration " ++
+        "(world step + policy step, batch 32, windows 8/32)\n", .{ms});
+    try expect(final_eval > baseline * 4.0);
+}
+
 test "gpu learn: SuperTrack FUSED on the kit's CPU twin holds the real cartpole - and its cost" {
     // The kit training the real task end to end on the FUSED path (8 dispatches an iteration),
     // full configuration: the graph SuperTrack only gathers and samples; the kit trains. The
@@ -546,87 +640,8 @@ test "gpu learn: SuperTrack per-layer on the kit's CPU twin holds the real cartp
     try stCartpole(false);
 }
 
-fn stCartpole(fused: bool) !void {
-    // The kit training the real task end to end, at the full configuration (batch 32, windows
-    // 8 / 32): the graph SuperTrack only gathers and samples (its buffer, its gym, its CPU
-    // policy forward, fed the kit's policy after every step); the KIT does all the training.
-    // The same gym, pushes and evaluation as robot_supertrack's own run - and the milliseconds
-    // an iteration, which decide whether a page can afford it.
-    const gpa: Allocator = std.testing.allocator;
-    const options: st_mod.Options = .{};
-    const host: *st_mod.SuperTrack = try .init(gpa, options);
-    defer host.deinit();
-    var pipe: compute_host.Compute(zn_mlp) = .initCpu();
-    defer pipe.deinit();
-    var kit: StKit = try .initFrom(gpa, &pipe, host);
-    defer kit.deinit();
-    const io: std.Io = std.testing.io;
-    var states: [8]zn.CartpoleState(f32) = undefined;
-    var steps: [8]u32 = @splat(0);
-    var segments: [8]u32 = undefined;
-    var next_segment: u32 = 0;
-    var episode: u32 = 0;
-    for (0..8) |e| {
-        states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
-        episode += 1;
-        segments[e] = next_segment;
-        next_segment += 1;
-    }
-    const baseline: f32 = st_mod.evaluate(null, 10, 99);
-    var train_ns: i96 = 0;
-    var trained: u32 = 0;
-    var final_eval: f32 = 0.0;
-    report.print("\n  SuperTrack on the kit's CPU twin ({s}), real cartpole (baseline {d:.1}):\n", .{
-        if (fused) "fused" else "per-layer",
-        baseline,
-    });
-    for (1..2001) |iteration| {
-        for (0..4) |_| {
-            for (0..8) |e| {
-                if (steps[e] > 0 and steps[e] % st_mod.push_every == 0) {
-                    states[e].pole_rate_rad += st_mod.push_size * (2.0 * host.rng.random().float(f32) - 1.0);
-                    segments[e] = next_segment;
-                    next_segment += 1;
-                }
-                const force: f32 = host.act(st_mod.fromCartpole(states[e]), true);
-                host.remember(e, st_mod.fromCartpole(states[e]), force, segments[e]);
-                const stepped = zn.cartpoleContinuousStep(f32, states[e], force);
-                steps[e] += 1;
-                if (stepped.failed or steps[e] >= st_mod.episode_cap) {
-                    states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
-                    episode += 1;
-                    steps[e] = 0;
-                    segments[e] = next_segment;
-                    next_segment += 1;
-                } else {
-                    states[e] = stepped.state;
-                }
-            }
-        }
-        if (host.sampleWorldBatch() and host.samplePolicyBatch()) {
-            const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
-            if (fused) {
-                kit.trainWorldFused(host.stage_states, host.stage_forces);
-                kit.trainPolicyFused(host.stage_starts, host.stage_noise);
-            } else {
-                kit.trainWorldWith(host.stage_states, host.stage_forces);
-                kit.trainPolicyWith(host.stage_starts, host.stage_noise);
-            }
-            const params_: []const f32 = kit.readParams() orelse return error.NoReadback;
-            train_ns += std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
-            trained += 1;
-            host.loadPolicy(params_, kit.pol);
-        }
-        if (iteration % 500 == 0) {
-            final_eval = st_mod.evaluate(host, 10, 99);
-            report.print("    iteration {d:>4}: REAL episodes {d:.1} steps\n", .{ iteration, final_eval });
-        }
-    }
-    const ms: f64 = float64(train_ns) / 1.0e6 / float64(@max(trained, 1));
-    report.print("    the kit's CPU twin: {d:.2} ms an iteration " ++
-        "(world step + policy step, batch 32, windows 8/32)\n", .{ms});
-    try expect(final_eval > baseline * 4.0);
-}
+/// The rate `geno_track`'s XOR confidence test trains at - one that never diverges (checked above).
+const xor_page_rate: f32 = 0.2;
 
 test "gpu learn: XOR on zn_train's CPU twin over long runs - does the loss stay finite?" {
     // Simon's phone: `geno_track`'s XOR confidence test drove the loss to 0 and then NaN inside 2,000-step runs.
@@ -650,7 +665,7 @@ test "gpu learn: XOR on zn_train's CPU twin over long runs - does the loss stay 
             pipe.params = .{ .samples = samples, .inputs = inputs, .hidden = hidden, .outputs = outputs, .rate = rate };
             pipe.upload(.inputs, &data);
             var weights: [param_count]f32 = undefined;
-            var rng: std.Random.DefaultPrng = .init(seed);
+            var rng: Random.DefaultPrng = .init(seed);
             for (&weights, 0..) |*w, i| {
                 const bias: bool = (i >= inputs * hidden and i < inputs * hidden + hidden) or i == param_count - 1;
                 w.* = if (bias) 0.0 else rng.random().floatNorm(f32);
@@ -697,6 +712,3 @@ test "gpu learn: XOR on zn_train's CPU twin over long runs - does the loss stay 
         }
     }
 }
-
-/// The rate `geno_track`'s XOR confidence test trains at - one that never diverges (checked above).
-const xor_page_rate: f32 = 0.2;

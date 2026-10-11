@@ -30,6 +30,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 
 const gpu = @import("gpu.zig");
 const gpu_iface = @import("gpu_iface.zig");
@@ -69,7 +71,7 @@ pub const Effect = struct {
     /// entire uniform block. Partial updates are a bug farm - the block is small
     /// and std140-padded, so there is nothing to gain by writing it piecemeal.
     pub fn setValues(self: Effect, queue: wgpu.QueueHandle, values: anytype) void {
-        wgpu.queueWriteBuffer(queue, self.ubo, 0, std.mem.asBytes(values));
+        wgpu.queueWriteBuffer(queue, self.ubo, 0, asBytes(values));
     }
 
     pub fn deinit(self: Effect) void {
@@ -177,7 +179,7 @@ pub const Host = struct {
             wgpu.getQueue(device),
             vbo,
             0,
-            std.mem.sliceAsBytes(quad_verts[0..]),
+            sliceAsBytes(quad_verts[0..]),
         );
 
         return .{
@@ -234,7 +236,7 @@ pub const Host = struct {
         // Mirror renderer_2d exactly: when the app has no depth, the pipeline must
         // declare NO depth state (`.none` + `.undefined_`), or it is incompatible
         // with the depth-less pass it gets bound into.
-        const combo: gpu.StateCombo = gpu.StateCombo.fromParts(
+        const combo: gpu.StateCombo = .fromParts(
             .triangle_list,
             .alpha, // effects carry the source's alpha; blend onto the clear
             if (self.depth_format != null) .always else .none,

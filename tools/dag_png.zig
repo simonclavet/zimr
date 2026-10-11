@@ -4,15 +4,24 @@
 //!
 //!   - Nodes = src modules; rectangle AREA is proportional to lines of code.
 //!   - Color = DAG level (L0 foundations -> L10), from the shared import_graph.
-//!   - Edges = the TRANSITIVE REDUCTION (covering edges only, not the hairball).
+//!   - Edges = the TRANSITIVE REDUCTION (covering edges only, not the hairball),
+//!     drawn as curves that leave and enter their boxes vertically, at PORTS
+//!     spread along each box's edge - so a hub's dozens of edges fan out
+//!     instead of knotting at one point.
 //!   - Layout = layered by level + barycenter crossing reduction + iterative
-//!     coordinate relaxation (connected nodes pull into alignment).  Modules
-//!     with no in-tree file imports (module-wired foundations like zimrmath)
-//!     are shown in a separate strip at the bottom.
+//!     coordinate relaxation (connected nodes pull into alignment), then
+//!     compaction (gaps capped, so the width stays bounded as the graph grows).
+//!     Level labels down the left margin. Modules with no in-tree file imports
+//!     (module-wired foundations) are shown in a separate strip at the bottom.
+//!   - Box text = the curated symbols in file_descriptions, or else the
+//!     module's largest public types and functions, read with Zig's parser.
+//!   - Memory: supersampling picks the largest factor that fits a budget, so a
+//!     bigger graph renders a little softer instead of OOM-killing the build.
 //!
 //! Usage: `zig build dag-png`  (writes src/notes/dag.png; run from repo root).
 
 const std = @import("std");
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const z = @import("zimr");
@@ -26,6 +35,9 @@ const Color = zm.Color;
 const Vec2 = zm.Vec2;
 const clamp = zm.clamp;
 const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const eql = std.mem.eql;
+const sortSlice = std.mem.sort;
 
 // ---- tunables (all in final pixels) ---------------------------------------
 const area_k: f32 = 7.0; // px^2 of box area per line of code
@@ -37,6 +49,14 @@ const max_h: f32 = 200;
 const h_gap: f32 = 28; // min horizontal gap between boxes in a row
 const row_vgap: f32 = 78; // vertical gap between row bands
 const margin: f32 = 70; // outer margin
+// The widest a gap between two neighbours in a row may grow during alignment. Uncapped, the relaxation below
+// spread the rows over 15,000 px at 111 modules - unreadable, and 3.8 GB to render.
+const max_gap: f32 = 90;
+// Segments per curved edge: enough that a curve spanning the whole graph still looks smooth.
+const edge_segments: usize = 28;
+// The most the supersampled canvas may take: (w*ss) x (h*ss) RGBA8. Well inside a 4 GB machine with the
+// downsample, the atlas and the PNG encoder on top.
+const supersample_budget_bytes: u64 = 768 << 20;
 const top_pad: f32 = 132; // space above first row for the title block
 const iso_gap: f32 = 84; // gap between main graph and the isolated strip
 const sweeps: usize = 16; // barycenter ordering sweeps
@@ -57,8 +77,8 @@ const fd_cooling: f32 = 0.99; // temperature decay per iter
 const fd_min_step: f32 = 1.2; // floor on the cooling temperature
 const fd_overlap_passes: usize = 220; // box overlap-removal sweeps after convergence
 
-fn countLines(io: std.Io, gpa: Allocator, path: []const u8) !usize {
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+fn countLines(io: Io, gpa: Allocator, path: []const u8) !usize {
+    const cwd: Io.Dir = .cwd();
     const text: []u8 = cwd.readFileAlloc(io, path, gpa, .unlimited) catch return 0;
     var nl: usize = 0;
     for (text) |c| {
@@ -90,14 +110,15 @@ fn levelColor(t: f32) Color {
     const r: f32 = a[1] + (b[1] - a[1]) * u;
     const g: f32 = a[2] + (b[2] - a[2]) * u;
     const bl: f32 = a[3] + (b[3] - a[3]) * u;
-    return .{ .r = @intFromFloat(r), .g = @intFromFloat(g), .b = @intFromFloat(bl), .a = 255 };
+    return .{ .r = @round(r), .g = @round(g), .b = @round(bl), .a = 255 };
 }
 
+// Each channel rounds to the nearest step - truncating would bias every shade darker.
 fn darken(c: Color, f: f32) Color {
     return .{
-        .r = @intFromFloat(float(c.r) * f),
-        .g = @intFromFloat(float(c.g) * f),
-        .b = @intFromFloat(float(c.b) * f),
+        .r = @round(float(c.r) * f),
+        .g = @round(float(c.g) * f),
+        .b = @round(float(c.b) * f),
         .a = c.a,
     };
 }
@@ -166,13 +187,233 @@ fn resolveRL(row: []const u32, bw: []const f32, cx: []f32) void {
 }
 
 /// Look up a file's curated key-symbol label ("" if none).
+/// Names read from a module for its box, and how many characters a line of them may hold.
+const max_auto_names: usize = 9;
+const auto_line_chars: usize = 26;
+
+/// A declaration's name and how many bytes of source it spans.
+const SizedName = struct {
+    name: []const u8,
+    size: usize,
+
+    fn larger(_: void, a: SizedName, b: SizedName) bool {
+        return a.size > b.size;
+    }
+};
+
+fn declSize(ast: *const std.zig.Ast, node: std.zig.Ast.Node.Index) usize {
+    return ast.tokenStart(ast.lastToken(node)) - ast.tokenStart(ast.firstToken(node));
+}
+
 fn symsFor(name: []const u8) []const u8 {
     for (fd.key_symbols) |k| {
-        if (std.mem.eql(u8, k.name, name)) {
+        if (eql(u8, k.name, name)) {
             return k.syms;
         }
     }
     return "";
+}
+
+/// A box's symbol lines ('|' breaks a line): the curated ones in `file_descriptions.key_symbols` when there are
+/// any - hand-picked says more - and otherwise read from the module itself with Zig's parser: its public types
+/// (TitleCase containers and type constructors) first, then its public functions, each group LARGEST FIRST - the
+/// declarations a module spends the most source on are the ones it is about (source order put zimrnum's small
+/// helpers ahead of its headline types) - packed a few to a line. Only 46 of 111 modules had a curated entry, so
+/// most boxes showed a bare name - zimrnum's among them - and the table fell further behind with every module added.
+fn symbolsOf(gpa: Allocator, io: Io, name: []const u8) ![]const u8 {
+    const curated: []const u8 = symsFor(name);
+    if (curated.len > 0) {
+        return curated;
+    }
+    const path: []const u8 = try allocPrint(gpa, "src/{s}.zig", .{name});
+    const text: []u8 = Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch return "";
+    const text_z: [:0]u8 = try gpa.allocSentinel(u8, text.len, 0);
+    @memcpy(text_z, text);
+    const ast: std.zig.Ast = try .parse(gpa, text_z, .{ .mode = .zig });
+    var types: ArrayList(SizedName) = .empty;
+    var fns: ArrayList(SizedName) = .empty;
+    for (ast.rootDecls()) |node| {
+        if (ast.fullVarDecl(node)) |var_decl| {
+            const decl_name: []const u8 = ast.tokenSlice(var_decl.ast.mut_token + 1);
+            const value: std.zig.Ast.Node.Index = var_decl.ast.init_node.unwrap() orelse continue;
+            var buf: [2]std.zig.Ast.Node.Index = undefined;
+            const is_type: bool = ast.fullContainerDecl(&buf, value) != null and std.ascii.isUpper(decl_name[0]);
+            if (var_decl.visib_token != null and is_type) {
+                try types.append(gpa, .{ .name = decl_name, .size = declSize(&ast, node) });
+            }
+            continue;
+        }
+        var proto_buf: [1]std.zig.Ast.Node.Index = undefined;
+        const proto: std.zig.Ast.full.FnProto = ast.fullFnProto(&proto_buf, node) orelse continue;
+        const name_token: std.zig.Ast.TokenIndex = proto.name_token orelse continue;
+        const fn_name: []const u8 = ast.tokenSlice(name_token);
+        const noise: bool = eql(u8, fn_name, "init") or eql(u8, fn_name, "deinit");
+        if (proto.visib_token == null or noise) {
+            continue;
+        }
+        // A TitleCase function returns a type (`pub fn Tensor(comptime T: type) type`) - Zig's own naming rule - so
+        // it counts with the types: zimrnum's headline types are all built this way.
+        const sized: SizedName = .{ .name = fn_name, .size = declSize(&ast, node) };
+        if (std.ascii.isUpper(fn_name[0])) {
+            try types.append(gpa, sized);
+        } else {
+            try fns.append(gpa, sized);
+        }
+    }
+    // Pack, types first: a line takes names until the next would pass `auto_line_chars`.
+    var out: ArrayList(u8) = .empty;
+    var line_len: usize = 0;
+    var taken: usize = 0;
+    sortSlice(SizedName, types.items, {}, SizedName.larger);
+    sortSlice(SizedName, fns.items, {}, SizedName.larger);
+    for ([_][]const SizedName{ types.items, fns.items }) |group| {
+        for (group) |sized| {
+            const sym: []const u8 = sized.name;
+            if (taken == max_auto_names) {
+                break;
+            }
+            if (line_len > 0 and line_len + 1 + sym.len > auto_line_chars) {
+                try out.append(gpa, '|');
+                line_len = 0;
+            } else if (line_len > 0) {
+                try out.append(gpa, ' ');
+                line_len += 1;
+            }
+            try out.appendSlice(gpa, sym);
+            line_len += sym.len;
+            taken += 1;
+        }
+    }
+    return out.items;
+}
+
+/// The largest supersampling factor (1..4) whose buffer fits `supersample_budget_bytes`. A fixed 4x made the
+/// canvas cost 64 bytes per final pixel, so the graph's growth alone OOM-killed this tool; a bigger picture now gets
+/// softer anti-aliasing instead of a dead build.
+fn supersampleFor(w: i32, h: i32) u8 {
+    const pixels: u64 = @as(u64, @intCast(w)) * @as(u64, @intCast(h));
+    var ss: u8 = 4;
+    while (ss > 1) : (ss -= 1) {
+        const bytes: u64 = pixels * @as(u64, ss) * @as(u64, ss) * 4;
+        if (bytes <= supersample_budget_bytes) {
+            break;
+        }
+    }
+    return ss;
+}
+
+/// Re-pack one row in the order the relaxation left it, keeping each gap between `h_gap` and `max_gap`: the
+/// alignment survives wherever it costs little, and no gap can stretch the picture.
+fn compactRow(row: []const u32, bw: []const f32, cx: []f32) void {
+    if (row.len < 2) {
+        return;
+    }
+    var prev_old: f32 = cx[row[0]];
+    var i: usize = 1;
+    while (i < row.len) : (i += 1) {
+        const a: u32 = row[i - 1];
+        const b: u32 = row[i];
+        const half_widths: f32 = (bw[a] + bw[b]) / 2;
+        const old_gap: f32 = cx[b] - prev_old - half_widths;
+        prev_old = cx[b];
+        cx[b] = cx[a] + half_widths + clamp(old_gap, h_gap, max_gap);
+    }
+}
+
+/// `c` pulled toward the paper by `t` (0 = itself, 1 = paper), fully opaque. Edges are drawn this way rather than
+/// translucent: a curve is many short segments, and translucent ones would darken at every joint.
+fn towardPaper(c: Color, t: f32) Color {
+    const paper: [3]f32 = .{ 252, 252, 254 };
+    const mix: [3]f32 = .{
+        float(c.r) + (paper[0] - float(c.r)) * t,
+        float(c.g) + (paper[1] - float(c.g)) * t,
+        float(c.b) + (paper[2] - float(c.b)) * t,
+    };
+    return .{ .r = @round(mix[0]), .g = @round(mix[1]), .b = @round(mix[2]), .a = 255 };
+}
+
+/// An edge from the bottom of one box to the top of another as a cubic Bezier that leaves straight down and
+/// arrives straight down - the shape a layered graph reads best in: an edge is easy to follow, and it meets its
+/// boxes cleanly instead of slicing into them at an angle.
+fn curvedEdge(
+    canvas: *Canvas,
+    a: Vec2,
+    b: Vec2,
+    col: Color,
+    thickness: f32,
+) void {
+    const bend: Vec2 = .{ 0, (b[1] - a[1]) * 0.5 };
+    const c1: Vec2 = a + bend;
+    const c2: Vec2 = b - bend;
+    var pts: [edge_segments + 1]Vec2 = undefined;
+    for (&pts, 0..) |*pt, k| {
+        const t: f32 = float(k) / float(edge_segments);
+        const u: f32 = 1 - t;
+        pt.* = a * @as(Vec2, @splat(u * u * u)) + c1 * @as(Vec2, @splat(3 * u * u * t)) +
+            c2 * @as(Vec2, @splat(3 * u * t * t)) + b * @as(Vec2, @splat(t * t * t));
+    }
+    canvas.polyline(&pts, col, thickness, false);
+}
+
+/// One drawn edge, from `u` (the importer, higher up) to `v`, and the points where it leaves and enters the boxes.
+const Edge = struct { u: u32, v: u32, x_out: f32 = 0, x_in: f32 = 0 };
+
+/// Orders a box's edges by where their OTHER end sits.
+const PortOrder = struct {
+    edges: []const Edge,
+    cx: []const f32,
+    by_target: bool,
+
+    fn less(ctx: PortOrder, a: u32, b: u32) bool {
+        const ea: Edge = ctx.edges[a];
+        const eb: Edge = ctx.edges[b];
+        const xa: f32 = if (ctx.by_target) ctx.cx[ea.v] else ctx.cx[ea.u];
+        const xb: f32 = if (ctx.by_target) ctx.cx[eb.v] else ctx.cx[eb.u];
+        return xa < xb;
+    }
+};
+
+/// Point `j` of `m` spread across the middle 80% of a box's edge - its center when there is only one.
+fn portX(center: f32, width: f32, j: usize, m: usize) f32 {
+    if (m == 1) {
+        return center;
+    }
+    const span: f32 = width * 0.8;
+    return center - span / 2 + span * (float(j) + 0.5) / float(m);
+}
+
+/// Ports: a box's edges leave from points spread along its bottom, in the order of where each one goes, and
+/// arrive at points spread along its top, in the order of where each comes from. The dozens of edges into a hub
+/// like zimrmath fan out across its top instead of knotting at one point, and no two cross at the box itself.
+fn assignPorts(
+    gpa: Allocator,
+    edges: []Edge,
+    cx: []const f32,
+    bw: []const f32,
+    n: usize,
+) !void {
+    var picked: ArrayList(u32) = .empty;
+    for (0..n) |node| {
+        for ([_]bool{ true, false }) |outgoing| {
+            picked.clearRetainingCapacity();
+            for (edges, 0..) |e, k| {
+                const touches: bool = if (outgoing) e.u == node else e.v == node;
+                if (touches) {
+                    try picked.append(gpa, @intCast(k));
+                }
+            }
+            const order: PortOrder = .{ .edges = edges, .cx = cx, .by_target = outgoing };
+            sortSlice(u32, picked.items, order, PortOrder.less);
+            for (picked.items, 0..) |k, j| {
+                const x: f32 = portX(cx[node], bw[node], j, picked.items.len);
+                if (outgoing) {
+                    edges[k].x_out = x;
+                } else {
+                    edges[k].x_in = x;
+                }
+            }
+        }
+    }
 }
 
 fn drawNode(
@@ -245,13 +486,14 @@ fn drawNode(
 /// depend on this). Drawn with the reduced-edge skeleton to avoid a hairball.
 fn renderForce(
     gpa: Allocator,
-    io: std.Io,
+    io: Io,
     graph: ig.Graph,
     reduced: []ArrayList(u32),
     level: []const u32,
     max_level: u32,
     bw: []const f32,
     bh: []const f32,
+    syms: []const []const u8,
 ) !void {
     const n: usize = graph.nodeCount();
     const fx: []f32 = try gpa.alloc(f32, n);
@@ -456,8 +698,8 @@ fn renderForce(
 
     const cw: i32 = @round(canvas_w);
     const ch: i32 = @round(canvas_h);
-    var canvas: Canvas = try Canvas.init(gpa, cw, ch, .{
-        .ss = 4,
+    var canvas: Canvas = try .init(gpa, cw, ch, .{
+        .ss = supersampleFor(cw, ch),
         .background = .{ .r = 252, .g = 252, .b = 254, .a = 255 },
         .font_atlas_size = 128,
     });
@@ -479,7 +721,7 @@ fn renderForce(
     // nodes coloured by in-degree (how many files depend on this one).
     for (0..n) |i| {
         const tc: f32 = @sqrt(indeg[i] / max_indeg);
-        drawNode(&canvas, graph.names[i], symsFor(graph.names[i]), fx[i], fy[i], bw[i], bh[i], levelColor(tc));
+        drawNode(&canvas, graph.names[i], syms[i], fx[i], fy[i], bw[i], bh[i], levelColor(tc));
     }
     if (iso_count > 0) {
         const div_col: Color = .{ .r = 214, .g = 216, .b = 224, .a = 255 };
@@ -507,7 +749,7 @@ fn renderForce(
 
     try canvas.savePng(io, "src/notes/dag_force.png");
     var buf: [256]u8 = undefined;
-    var ow: std.Io.File.Writer = std.Io.File.stdout().writer(io, &buf);
+    var ow: Io.File.Writer = Io.File.stdout().writer(io, &buf);
     try ow.interface.print("wrote src/notes/dag_force.png: {d}x{d}, {d} nodes, {d} reduced edges\n", .{
         cw,
         ch,
@@ -517,11 +759,21 @@ fn renderForce(
     try ow.interface.flush();
 }
 
-pub fn main() !void {
+/// The command line (std's cli, `src/command_line.zig`): none - but the parser still gives it `--help` and refuses
+/// an argument it would otherwise ignore.
+const NoArgs = struct {};
+
+const dag_png_cli: cli.Config(NoArgs) = .{
+    .prog = "zig build dag-png",
+    .description = "Renders the src/*.zig dependency graph to src/notes/dag.png, drawn by zimr itself.",
+};
+
+pub fn main(init: std.process.Init) !void {
+    _ = cli.args(&init, NoArgs, dag_png_cli);
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     const out_path: []const u8 = "src/notes/dag.png";
 
@@ -542,6 +794,12 @@ pub fn main() !void {
         const area: f32 = float(lines[i]) * area_k;
         bw[i] = clamp(@sqrt(area * aspect), min_w, max_w);
         bh[i] = clamp(@sqrt(area / aspect), min_h, max_h);
+    }
+
+    // --- the symbols each box lists: curated, or read from the module ---
+    const syms: [][]const u8 = try gpa.alloc([]const u8, n);
+    for (graph.names, 0..) |nm, i| {
+        syms[i] = try symbolsOf(gpa, io, nm);
     }
 
     // --- undirected neighbor lists (from reduced edges) ---
@@ -578,6 +836,8 @@ pub fn main() !void {
     }
 
     // row Y bands (px), top -> bottom, skipping empty rows.
+    const row_cy: []f32 = try gpa.alloc(f32, n_rows);
+    @memset(row_cy, 0);
     var bottom_y: f32 = top_pad;
     {
         var y: f32 = top_pad;
@@ -592,6 +852,7 @@ pub fn main() !void {
                 }
             }
             const band_center: f32 = y + rh / 2;
+            row_cy[ri] = band_center;
             for (rows[ri].items) |id| {
                 cy[id] = band_center;
             }
@@ -617,7 +878,7 @@ pub fn main() !void {
                 }
                 key[id] = sum / float(nbr[id].items.len);
             }
-            std.mem.sort(u32, rows[ri].items, KeyCtx{ .key = key }, keyLess);
+            sortSlice(u32, rows[ri].items, KeyCtx{ .key = key }, keyLess);
         }
         repack(rows, bw, cx);
     }
@@ -654,6 +915,22 @@ pub fn main() !void {
             for (rows[ri].items) |id| {
                 cx[id] -= mean;
             }
+        }
+    }
+
+    // Compaction: the relaxation only ever widens gaps. Cap them, then center each row again.
+    for (0..n_rows) |ri| {
+        compactRow(rows[ri].items, bw, cx);
+        if (rows[ri].items.len == 0) {
+            continue;
+        }
+        var mean: f32 = 0;
+        for (rows[ri].items) |id| {
+            mean += cx[id];
+        }
+        mean /= float(rows[ri].items.len);
+        for (rows[ri].items) |id| {
+            cx[id] -= mean;
         }
     }
 
@@ -717,8 +994,8 @@ pub fn main() !void {
     // --- render with zimr's own Canvas ---
     const cw: i32 = @round(canvas_w);
     const ch: i32 = @round(canvas_h);
-    var canvas: Canvas = try Canvas.init(gpa, cw, ch, .{
-        .ss = 4,
+    var canvas: Canvas = try .init(gpa, cw, ch, .{
+        .ss = supersampleFor(cw, ch),
         .background = .{ .r = 252, .g = 252, .b = 254, .a = 255 },
         .font_atlas_size = 128,
     });
@@ -727,15 +1004,29 @@ pub fn main() !void {
 
     const max_lvl_f: f32 = float(max_level);
 
-    // edges first (under nodes).
-    for (0..n) |u| {
-        const uc: Color = levelColor(float(level[u]) / max_lvl_f);
-        const ec: Color = .{ .r = uc.r, .g = uc.g, .b = uc.b, .a = 140 };
-        for (reduced[u].items) |v| {
-            const a: Vec2 = .{ cx[u], cy[u] + bh[u] / 2 };
-            const b: Vec2 = .{ cx[v], cy[v] - bh[v] / 2 };
-            canvas.line(a, b, .{ .color = ec, .thickness = 1.7 });
+    // Level labels down the left margin, one per row band: the color says the level, this says which.
+    for (0..n_rows) |ri| {
+        if (rows[ri].items.len == 0) {
+            continue;
         }
+        const label: []const u8 = try allocPrint(gpa, "L{d}", .{max_level - ri});
+        const label_color: Color = .{ .r = 150, .g = 154, .b = 166, .a = 255 };
+        canvas.text(.{ 18, row_cy[ri] - 9 }, label, .{ .size = 17, .color = label_color });
+    }
+
+    // edges first (under nodes).
+    var edges: ArrayList(Edge) = .empty;
+    for (0..n) |u| {
+        for (reduced[u].items) |v| {
+            try edges.append(gpa, .{ .u = @intCast(u), .v = v });
+        }
+    }
+    try assignPorts(gpa, edges.items, cx, bw, n);
+    for (edges.items) |e| {
+        const ec: Color = towardPaper(levelColor(float(level[e.u]) / max_lvl_f), 0.45);
+        const a: Vec2 = .{ e.x_out, cy[e.u] + bh[e.u] / 2 };
+        const b: Vec2 = .{ e.x_in, cy[e.v] - bh[e.v] / 2 };
+        curvedEdge(&canvas, a, b, ec, 1.6);
     }
 
     // connected nodes.
@@ -744,7 +1035,7 @@ pub fn main() !void {
             continue;
         }
         const fill: Color = levelColor(float(level[i]) / max_lvl_f);
-        drawNode(&canvas, graph.names[i], symsFor(graph.names[i]), cx[i], cy[i], bw[i], bh[i], fill);
+        drawNode(&canvas, graph.names[i], syms[i], cx[i], cy[i], bw[i], bh[i], fill);
     }
 
     // isolated strip: divider + label + nodes.
@@ -761,7 +1052,7 @@ pub fn main() !void {
     );
     for (isolated.items) |id| {
         const fill: Color = levelColor(float(level[id]) / max_lvl_f);
-        drawNode(&canvas, graph.names[id], symsFor(graph.names[id]), cx[id], cy[id], bw[id], bh[id], fill);
+        drawNode(&canvas, graph.names[id], syms[id], cx[id], cy[id], bw[id], bh[id], fill);
     }
 
     // title block (ASCII only - the mono font lacks em-dash / arrows).
@@ -778,12 +1069,12 @@ pub fn main() !void {
     try canvas.savePng(io, out_path);
 
     var buf: [256]u8 = undefined;
-    var ow: std.Io.File.Writer = std.Io.File.stdout().writer(io, &buf);
+    var ow: Io.File.Writer = Io.File.stdout().writer(io, &buf);
     try ow.interface.print("wrote {s}: {d}x{d}, {d} nodes ({d} isolated), {d} edges\n", .{
         out_path, cw, ch, n, isolated.items.len, ig.edgeCount(reduced),
     });
     try ow.interface.flush();
 
     // second view: freeform force-directed layout (cluster structure).
-    try renderForce(gpa, io, graph, reduced, level, max_level, bw, bh);
+    try renderForce(gpa, io, graph, reduced, level, max_level, bw, bh, syms);
 }

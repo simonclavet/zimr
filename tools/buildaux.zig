@@ -14,32 +14,68 @@
 //!   publish-pages     <remote>                  force-push prebuilt/ as the orphan `pages` branch
 
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const eql = std.mem.eql;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const trim = std.mem.trim;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
-const File = std.Io.File;
+const File = Io.File;
 const allocPrint = std.fmt.allocPrint;
+const indexOf = std.mem.indexOf;
+const startsWith = std.mem.startsWith;
 
-fn printUsage(io: std.Io) void {
-    var buf: [512]u8 = undefined;
-    var w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &buf);
-    w.interface.print(
-        \\usage: buildaux dist-copy
-        \\       buildaux check-wgsl-clean <file>
-        \\       buildaux publish-pages <remote>
-        \\
-    , .{}) catch {}; // lint:off catch-suppression: stderr write, best-effort
-    w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
+/// The subcommands, spelled as typed. std's cli has no subcommands, so the command is the first positional - an
+/// enum, so a misspelt one is refused with the usage - and the one argument two of them take is the second.
+const Command = enum { @"dist-copy", @"check-wgsl-clean", @"publish-pages" };
+
+/// The command line (std's cli, `src/command_line.zig`).
+const AuxArgs = struct {
+    command: Command,
+    target: ?[]const u8 = null,
+};
+
+const aux_cli: cli.Config(AuxArgs) = .{
+    .prog = "buildaux",
+    .description = "Build-time helpers the build graph runs as commands - a build.zig step can no longer run code " ++
+        "of its own (the 0.17 configurer/maker split).",
+    .args = .{
+        .command = .{ .description = "what to do: check-wgsl-clean takes a file after it, publish-pages a remote" },
+        .target = .{ .description = "the file check-wgsl-clean checks, or the remote publish-pages pushes to" },
+    },
+};
+
+/// A command line the parser accepted but the command cannot use - `check-wgsl-clean` with no file, `dist-copy`
+/// with one: say which, print the generated usage, exit 1 - the parser's own convention for a bad command line.
+fn usageError(io: Io, message: []const u8) noreturn {
+    var buf: [1024]u8 = undefined;
+    var stderr: Io.File.Writer = Io.File.stderr().writer(io, &buf);
+    // A report that cannot be written has nowhere left to go: exit 1 either way - it IS a bad command line.
+    stderr.interface.print("buildaux: {s}\n\n", .{message}) catch std.process.exit(1);
+    cli.printUsage(&stderr.interface, AuxArgs, aux_cli, "buildaux") catch std.process.exit(1);
+    stderr.interface.flush() catch std.process.exit(1);
+    std.process.exit(1);
 }
 
-fn distCopy(io: std.Io, gpa: Allocator) !void {
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+/// `path`'s first segment is `dir`, with either separator (the walker yields `\` on Windows).
+fn firstSegmentIs(path: []const u8, dir: []const u8) bool {
+    if (!startsWith(u8, path, dir)) {
+        return false;
+    }
+    if (path.len == dir.len) {
+        return true;
+    }
+    const c: u8 = path[dir.len];
+    return c == '/' or c == '\\';
+}
+
+fn distCopy(io: Io, gpa: Allocator) !void {
+    const cwd: Io.Dir = .cwd();
     try cwd.deleteTree(io, "prebuilt");
 
-    var src_dir: std.Io.Dir = try cwd.openDir(io, "zig-out/web", .{ .iterate = true });
+    var src_dir: Io.Dir = try cwd.openDir(io, "zig-out/web", .{ .iterate = true });
     defer src_dir.close(io);
 
-    var walker: std.Io.Dir.Walker = try src_dir.walk(gpa);
+    var walker: Io.Dir.Walker = try src_dir.walk(gpa);
     defer walker.deinit();
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file) {
@@ -60,45 +96,33 @@ fn distCopy(io: std.Io, gpa: Allocator) !void {
     try cwd.writeFile(io, .{ .sub_path = "prebuilt/.nojekyll", .data = "" });
 }
 
-/// `path`'s first segment is `dir`, with either separator (the walker yields `\` on Windows).
-fn firstSegmentIs(path: []const u8, dir: []const u8) bool {
-    if (!std.mem.startsWith(u8, path, dir)) {
-        return false;
-    }
-    if (path.len == dir.len) {
-        return true;
-    }
-    const c: u8 = path[dir.len];
-    return c == '/' or c == '\\';
-}
-
 fn die(
-    io: std.Io,
+    io: Io,
     comptime fmt: []const u8,
     args: anytype,
 ) noreturn {
     var buf: [1024]u8 = undefined;
-    var w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &buf);
+    var w: Io.File.Writer = Io.File.stderr().writer(io, &buf);
     w.interface.print(fmt, args) catch {}; // lint:off catch-suppression: stderr write, best-effort
     w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
     std.process.exit(1);
 }
 
 fn checkWgslClean(
-    io: std.Io,
+    io: Io,
     gpa: Allocator,
     path: []const u8,
 ) !void {
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+    const cwd: Io.Dir = .cwd();
     const bytes: []const u8 = try cwd.readFileAlloc(io, path, gpa, .unlimited);
     defer gpa.free(bytes);
     if (bytes.len == 0) {
         die(io, "fixture WGSL empty: {s}\n", .{path});
     }
-    if (std.mem.indexOf(u8, bytes, "__unresolved_") != null) {
+    if (indexOf(u8, bytes, "__unresolved_") != null) {
         die(io, "fixture WGSL contains '__unresolved_' placeholder: {s}\n", .{path});
     }
-    if (std.mem.indexOf(u8, bytes, "// ERROR:") != null) {
+    if (indexOf(u8, bytes, "// ERROR:") != null) {
         die(io, "fixture WGSL contains '// ERROR:' marker: {s}\n", .{path});
     }
 }
@@ -106,7 +130,7 @@ fn checkWgslClean(
 /// Runs `argv` (a git command), returning its trimmed stdout. On a non-zero exit it relays git's
 /// stderr and fails with `error.PublishFailed`, so `publishPages`' deferred cleanup still runs.
 fn runGit(
-    io: std.Io,
+    io: Io,
     arena: Allocator,
     env: ?*const std.process.Environ.Map,
     argv: []const []const u8,
@@ -119,7 +143,7 @@ fn runGit(
         try File.stderr().writeStreamingAll(io, failure_message);
         return error.PublishFailed;
     }
-    return std.mem.trim(u8, result.stdout, " \t\r\n");
+    return trim(u8, result.stdout, " \t\r\n");
 }
 
 /// A full git object id: 40 hex digits (SHA-1) or 64 (SHA-256).
@@ -137,7 +161,7 @@ fn isObjectId(text: []const u8) bool {
 }
 
 /// Deletes `path`, treating "already gone" as success.
-fn deleteIfPresent(io: std.Io, dir: std.Io.Dir, path: []const u8) !void {
+fn deleteIfPresent(io: Io, dir: Io.Dir, path: []const u8) !void {
     dir.deleteFile(io, path) catch |err| switch (err) {
         error.FileNotFound => {},
         else => return err,
@@ -145,15 +169,15 @@ fn deleteIfPresent(io: std.Io, dir: std.Io.Dir, path: []const u8) !void {
 }
 
 fn publishPages(
-    io: std.Io,
+    io: Io,
     gpa: Allocator,
     parent_env: *const std.process.Environ.Map,
     remote: []const u8,
 ) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+    const cwd: Io.Dir = .cwd();
 
     _ = try runGit(io, arena, null, &.{ "git", "rev-parse", "--is-inside-work-tree" });
     // `dist-copy` writes the marker last, so its presence means the mirror finished.
@@ -239,49 +263,28 @@ fn publishPages(
 
 pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = init.gpa;
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    var args_list: ArrayList([]u8) = .empty;
-    defer {
-        for (args_list.items) |a| {
-            gpa.free(a);
-        }
-        args_list.deinit(gpa);
-    }
-    var arg_it: std.process.Args.Iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
-    defer arg_it.deinit();
-    while (arg_it.next()) |arg| {
-        try args_list.append(gpa, try gpa.dupe(u8, arg));
-    }
-    const args: [][]u8 = args_list.items;
-
-    if (args.len < 2) {
-        printUsage(io);
-        std.process.exit(2);
-    }
-    const cmd: []const u8 = args[1];
-
-    if (eql(u8, cmd, "dist-copy")) {
-        try distCopy(io, gpa);
-    } else if (eql(u8, cmd, "check-wgsl-clean")) {
-        if (args.len != 3) {
-            printUsage(io);
-            std.process.exit(2);
-        }
-        try checkWgslClean(io, gpa, args[2]);
-    } else if (eql(u8, cmd, "publish-pages")) {
-        if (args.len != 3) {
-            printUsage(io);
-            std.process.exit(2);
-        }
-        publishPages(io, gpa, init.environ_map, args[2]) catch |err| switch (err) {
-            // Already explained on stderr; exit without an error-return trace.
-            error.PublishFailed => std.process.exit(1),
-            else => return err,
-        };
-    } else {
-        printUsage(io);
-        std.process.exit(2);
+    const args: AuxArgs = cli.args(&init, AuxArgs, aux_cli);
+    switch (args.command) {
+        .@"dist-copy" => {
+            if (args.target != null) {
+                usageError(io, "dist-copy takes no argument");
+            }
+            try distCopy(io, gpa);
+        },
+        .@"check-wgsl-clean" => {
+            const file: []const u8 = args.target orelse usageError(io, "check-wgsl-clean needs the file to check");
+            try checkWgslClean(io, gpa, file);
+        },
+        .@"publish-pages" => {
+            const remote: []const u8 = args.target orelse usageError(io, "publish-pages needs the remote to push to");
+            publishPages(io, gpa, init.environ_map, remote) catch |err| switch (err) {
+                // Already explained on stderr; exit without an error-return trace.
+                error.PublishFailed => std.process.exit(1),
+                else => return err,
+            };
+        },
     }
 }
 

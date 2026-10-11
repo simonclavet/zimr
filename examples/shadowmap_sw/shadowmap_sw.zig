@@ -24,6 +24,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const scene = @import("scene.zig");
@@ -278,49 +279,49 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const floor_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(scene.floor_verts[0..]),
+        sliceAsBytes(scene.floor_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "smsw_floor_vbo",
     );
     const floor_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(scene.floor_indices[0..]),
+        sliceAsBytes(scene.floor_indices[0..]),
         .{ .index = true, .copy_dst = true },
         "smsw_floor_ibo",
     );
     const cube_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(scene.cube_verts[0..]),
+        sliceAsBytes(scene.cube_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "smsw_cube_vbo",
     );
     const cube_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(scene.cube_indices[0..]),
+        sliceAsBytes(scene.cube_indices[0..]),
         .{ .index = true, .copy_dst = true },
         "smsw_cube_ibo",
     );
     const bunny_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(bunny_verts),
+        sliceAsBytes(bunny_verts),
         .{ .vertex = true, .copy_dst = true },
         "smsw_bunny_vbo",
     );
     const bunny_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(bunny_indices),
+        sliceAsBytes(bunny_indices),
         .{ .index = true, .copy_dst = true },
         "smsw_bunny_ibo",
     );
 
     // ---- GPU shadow map: rgba16_float + NEAREST sampler (linear filtering
     //      would blend depths across silhouettes and corrupt the compare) ----
-    const shadow_rt: z.RenderTexture = z.RenderTexture.create(device, .{
+    const shadow_rt: z.RenderTexture = .create(device, .{
         .width = @intCast(shadow_rt_size),
         .height = @intCast(shadow_rt_size),
         .format = .rgba16_float,
@@ -379,7 +380,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const depth_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.createPipelineLayout(device, depth_bgls[0..], "smsw_depth_pl");
     const depth_vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, depth_vs_wgsl, "depth_vs");
     const depth_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, depth_fs_wgsl, "depth_fs");
-    const depth_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const depth_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -411,7 +412,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const lit_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, lit_fs_wgsl, "lit_shadow_fs");
     // Cull .none: the winding of every caster matches the GPU shadowmap
     // example, whose back faces are depth-occluded anyway.
-    const lit_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const lit_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less,
@@ -480,9 +481,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
 
     // ---- CPU half: two Contexts + shared VS-out scratch (bunny-sized) ----
-    const sm_ctx: z.raster.Context = try z.raster.Context.init(gpa, cpu_shadow_res, cpu_shadow_res);
-    const sw: z.raster.Context = try z.raster.Context.init(gpa, 220, 124);
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(device, queue, 220, 124, sw.colorBufferBytes(), "smsw_cpu");
+    const sm_ctx: z.raster.Context = try .init(gpa, cpu_shadow_res, cpu_shadow_res);
+    const sw: z.raster.Context = try .init(gpa, 220, 124);
+    const sw_fb: z.CpuFramebuffer = .init(device, queue, 220, 124, sw.colorBufferBytes(), "smsw_cpu");
 
     z.wgpu.destroyBindGroupLayout(bgls.depth_g0);
     z.wgpu.destroyBindGroupLayout(bgls.lit_g0);
@@ -621,6 +622,14 @@ fn drawMesh(rps: *z.PassState, obj: *const Obj) void {
     });
 }
 
+fn geometryOf(s: *State, o: scene.Object) scene.Geometry {
+    return switch (o) {
+        .floor => .{ .verts = &scene.floor_verts, .indices = &scene.floor_indices },
+        .pillar, .receiver => .{ .verts = &scene.cube_verts, .indices = &scene.cube_indices },
+        .bunny => .{ .verts = s.bunny_verts, .indices = s.bunny_indices },
+    };
+}
+
 /// The CPU frame: the same two passes as the GPU, per-object draws through
 /// the same shader files, over two software Contexts.
 fn renderCpu(s: *State, t: f32, cam_vp: Mat, rig: scene.LightRig) void {
@@ -655,14 +664,6 @@ fn renderCpu(s: *State, t: f32, cam_vp: Mat, rig: scene.LightRig) void {
         };
         scene.drawLit(&s.sw, g.verts, g.indices, vs_io, fs_io, s.lit_outs);
     }
-}
-
-fn geometryOf(s: *State, o: scene.Object) scene.Geometry {
-    return switch (o) {
-        .floor => .{ .verts = &scene.floor_verts, .indices = &scene.floor_indices },
-        .pillar, .receiver => .{ .verts = &scene.cube_verts, .indices = &scene.cube_indices },
-        .bunny => .{ .verts = s.bunny_verts, .indices = s.bunny_indices },
-    };
 }
 
 fn update(f: *z.Frame, s: *State) void {

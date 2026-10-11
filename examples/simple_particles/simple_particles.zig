@@ -6,6 +6,7 @@
 //! `.responsive`.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -36,7 +37,7 @@ const State = struct {
     particles: []Particle,
     head: usize = 0,
     tail: usize = 0,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     frame_count: usize = 0,
 };
 
@@ -54,7 +55,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .font = font,
         .particles = particles,
-        .rng = std.Random.DefaultPrng.init(0x9a7d_1c3e),
+        .rng = Random.DefaultPrng.init(0x9a7d_1c3e),
     };
 }
 
@@ -67,7 +68,7 @@ fn emit(
     if (next == s.tail) {
         return; // buffer full
     }
-    const rand: std.Random = s.rng.random();
+    const rand: Random = s.rng.random();
     const speed: f32 = rand.float(f32) * 1.8;
     const dir: f32 = rand.float(f32) * 2.0 * pi;
     const eff: f32 = if (ptype == .fire) speed / 10.0 else speed;

@@ -20,20 +20,23 @@ const Vec = zm.Vec;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
 const pi = zm.pi;
 const expect = std.testing.expect;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 
 const half_y: f32 = 0.45; // box half-height (Y extent is unaffected by yaw)
 const n_boxes: u32 = 8;
 
 test "stack scene: boxes rest without interpenetrating" {
-    const gpa: std.mem.Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var world: zimrphysics.World = try zimrphysics.World.init(gpa, 1024);
+    var world: zimrphysics.World = try .init(gpa, 1024);
     defer world.deinit(gpa);
     // Stress: prove the solver holds the stack every frame, not that it merely
     // freezes once asleep. Sleeping would mask residual instability.
     world.settings.allow_sleeping = false;
 
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
 
     // floor_shape (top at y=0)
@@ -108,11 +111,11 @@ test "stack scene: boxes rest without interpenetrating" {
 }
 
 test "hanging chain: off-COM rope links hold a heavy bob" {
-    const gpa: std.mem.Allocator = std.testing.allocator;
-    var world: zimrphysics.World = try zimrphysics.World.init(gpa, 64);
+    const gpa: Allocator = testing_allocator;
+    var world: zimrphysics.World = try .init(gpa, 64);
     defer world.deinit(gpa);
     world.settings.allow_sleeping = false;
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
 
     const link: zimrphysics.ShapeId = try world.shapes.add(gpa, .{

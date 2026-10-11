@@ -1,443 +1,1161 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GPU Compute in zimr — one Zig function, two machines</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU compute — kernels in Zig with kompute</title>
 <!--docfmt:style-->
+<!--
+  Editing this page? Its CODE is generated, so never paste code into it.
+  Every code block names where it comes from: data-src (the file) and data-decl (how the
+  declaration's first line starts; add data-in="..." when that alone is ambiguous). To show
+  another declaration, add an empty tagged block like the others and run
+      zig build doc-folds
+  which fills in every block from the source. What is left to keep in sync by hand is the prose
+  around the code. Diagrams are marked class="sketch": they illustrate, they do not quote.
+-->
 </head>
 <body>
-<div class="wrap">
+<h1>GPU compute</h1>
+<p class="sub">How zimr computes on the GPU: kernels written once in Zig with the kompute library, run on the GPU
+as compute shaders and, from the same source, on the CPU as plain loops. The document follows a fluid of 20,000
+particles from its first kernel to its performance. How the build and each platform turn a kernel into a GPU's code
+is the subject of the <a href="backends-tutorial.html#compute">backends tutorial</a>.</p>
 
-<header class="hero">
-  <div class="hero-inner">
-    <p class="eyebrow">zimr · webgpu compute</p>
-    <h1 class="title">One Zig function,<br><span class="grad">two machines.</span></h1>
-    <p class="dek">How zimr takes a single piece of Zig and runs it as both an ordinary CPU loop and a massively-parallel GPU shader in the browser — told from the ground up, with the real code, and ending with the optimizations that make a 20,000-particle fluid run in your pocket.</p>
-    <div class="hero-meta">
-      <span><b>target</b> &nbsp;wasm32 + WebGPU</span>
-      <span><b>language</b> &nbsp;pure Zig, no C</span>
-      <span><b>example</b> &nbsp;20k-particle SPH fluid</span>
-    </div>
-  </div>
-  <div class="split">
-    <div class="split-grid">
-      <div class="split-card split-cpu">
-        <span class="tag">compiles to · CPU</span>
-        <code><span class="cm">// a plain loop over 20,000 items</span><br>
-        <span class="kw">while</span> (id &lt; count) : (id += 1) {<br>
-        &nbsp;&nbsp;double(.{ .id = id });<br>
-        }</code>
-      </div>
-      <div class="split-card split-gpu">
-        <span class="tag">compiles to · GPU</span>
-        <code><span class="cm">// 20,000 threads, all at once</span><br>
-        <span class="kw">@compute</span> @workgroup_size(256)<br>
-        <span class="kw">fn</span> <span class="fn">double</span>(id: vec3u) { … }</code>
-      </div>
-    </div>
-    <p class="split-from">…both generated from the&nbsp; <b>same source</b>.</p>
-  </div>
-</header>
+<p>Code is shown in folds, generated from the source files on every build, so it is always the code that ships. A
+closed fold opens with a click; the prose reads straight through without opening any.</p>
 
-<nav class="toc">
-  <ol>
-    <li><a href="#why">What "GPU compute" even means <span class="d">and why a fluid needs it</span></a></li>
-    <li><a href="#duality">The big idea: write once, run on both <span class="d">the CPU twin as truth</span></a></li>
-    <li><a href="#kernel">Anatomy of a kernel file <span class="d">Buffers, Params, Ctx</span></a></li>
-    <li><a href="#pipeline">From Zig to a running shader <span class="d">the three-stage build</span></a></li>
-    <li><a href="#transpiler">spv2wgsl: the translator <span class="d">SPIR-V → WGSL, and the atomics trick</span></a></li>
-    <li><a href="#host">The host: dispatch, batch, read back <span class="d">keeping data on the GPU</span></a></li>
-    <li><a href="#sph">The SPH fluid, kernel by kernel <span class="d">the whole simulation</span></a></li>
-    <li><a href="#perf">Making it fast <span class="d">what every optimization actually does</span></a></li>
-    <li><a href="#future">The road ahead <span class="d">the sort, and what's left</span></a></li>
-  </ol>
+<nav>
+<strong>Contents</strong>
+<ol>
+  <li><a href="#gpu">Compute on the GPU</a></li>
+  <li><a href="#builds">The CPU and GPU builds</a></li>
+  <li><a href="#kernelfiles">Kernel files</a>
+    <ol><li><a href="#buffers">Buffers and parameters</a></li>
+        <li><a href="#context">The context</a></li>
+        <li><a href="#entries">Entry points</a></li></ol></li>
+  <li><a href="#toshader">From kernel to shader</a></li>
+  <li><a href="#running">Running kernels</a>
+    <ol><li><a href="#dispatch">Dispatch</a></li>
+        <li><a href="#batching">Batching</a></li>
+        <li><a href="#ongpu">Data on the GPU</a></li>
+        <li><a href="#results">Reading results</a></li></ol></li>
+  <li><a href="#fluid">The SPH fluid</a>
+    <ol><li><a href="#state">The simulation state</a></li>
+        <li><a href="#grid">The neighbour grid</a></li>
+        <li><a href="#density">Density</a></li>
+        <li><a href="#pressure">Pressure</a></li>
+        <li><a href="#viscosity">Viscosity</a></li>
+        <li><a href="#walls">Gravity, prediction and walls</a></li>
+        <li><a href="#substep">The sub-step</a></li></ol></li>
+  <li><a href="#performance">Performance</a>
+    <ol><li><a href="#measured">Measured effects</a></li>
+        <li><a href="#coalesced">Coalesced memory</a></li>
+        <li><a href="#techniques">Other techniques</a></li>
+        <li><a href="#tiling">Tiling and sorting</a></li></ol></li>
+</ol>
 </nav>
 
-<main>
-<section id="why" class="reveal">
-  <p class="sec-num">01 — motivation</p>
-  <h2>What "GPU compute" even means, and why a fluid needs it</h2>
-  <p>A CPU is a small team of very fast, very clever workers. It has a handful of cores, and each one races through a list of instructions one after another. If you ask a CPU to update 20,000 water particles, it walks the list: particle 0, then 1, then 2, all the way to 19,999. Fast, but fundamentally <em>one thing at a time</em> per core.</p>
-  <p>A GPU is the opposite shape: thousands of much simpler workers that all do the <strong>same instructions at the same time</strong>, each on a different piece of data. That is exactly the shape of a particle simulation — every particle runs the identical update rule, just with its own position and velocity. So instead of a loop that visits 20,000 particles in sequence, you launch 20,000 tiny threads and they all move in parallel. This is called a <strong>compute shader</strong>: a program that doesn't draw anything directly, it just crunches numbers in parallel and leaves the results in memory.</p>
-  <p>The fluid in this project is an <strong>SPH</strong> simulation — Smoothed Particle Hydrodynamics. The water isn't a surface; it's 20,000 little balls that push on their neighbours. Every frame, each particle has to look at the particles near it, feel how crowded it is, and nudge itself to relieve the pressure. Done on a CPU, that's 20,000 particles × dozens of neighbours × several times per frame — far too slow for a phone. Done on a GPU, all 20,000 are handled together. That is why this lives on the GPU.</p>
-  <div class="note">
-    <span class="lab">the catch</span>
-    Writing GPU shaders normally means writing a <em>second</em> program in a <em>second</em> language (WGSL, the WebGPU Shading Language) that has to behave <em>identically</em> to your CPU code — and when they drift apart, you get bugs you can't see. zimr's whole trick is to never write that second program by hand.
-  </div>
-</section>
+<h2 id="gpu">1. Compute on the GPU</h2>
 
-<section id="duality" class="reveal">
-  <p class="sec-num">02 — the core idea</p>
-  <h2>Write once, run on both</h2>
-  <p>The heart of zimr's compute system is a module called <em>kompute</em>. You write your simulation logic <strong>one time</strong>, in plain Zig. From that single source, the build produces two things:</p>
-  <ul class="clean">
-    <li>A <strong>native CPU version</strong> — an ordinary loop you can run, step through in a debugger, and trust.</li>
-    <li>A <strong>GPU version</strong> — the same logic compiled all the way down to a WebGPU compute shader.</li>
-  </ul>
-  <p>How can one function become both? Zig has a value, available at compile time, that says which machine it's being compiled for. kompute exposes it as <em>is_gpu</em>:</p>
-  <figure class="code"><figcaption><span class="path">src/kompute.zig</span><span class="lang">zig</span></figcaption><pre><code class="zig">/// True when compiling for SPIR-V (the GPU dispatch). False for the
-/// native CPU loop. Kernel files comptime-branch on it.
-pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();</code></pre></figure>
-  <p>Because <em>is_gpu</em> is known at compile time, an <em>if (is_gpu)</em> isn't a runtime cost — the compiler keeps one branch and deletes the other. The CPU build and the GPU build literally contain different code, generated from the same text. The CPU version becomes the <strong>oracle</strong>: it is the definition of "correct." If the GPU version ever disagrees with it, the GPU version is wrong. That single idea — a trustworthy CPU twin you can compare against — is what makes it possible to develop a parallel program without going mad.</p>
-  <p>The same compile-time switch is how kompute handles operations the GPU compiler can't express directly. Take <strong>atomics</strong> — the special "no two threads collide" operations the particle grid needs (more on those soon). The CPU has real atomic instructions; the GPU shader language has its own. So the helper picks the right one at compile time:</p>
-  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the atomic-add helper</span><span class="lang">zig</span></figcaption><pre><code class="zig">/// Atomic read-modify-write add. Returns the value stored BEFORE the
-/// add (WGSL atomicAdd semantics — the grid build uses the returned
+<p>A CPU has a few cores, and each runs through its instructions one after another. A GPU has thousands of simpler
+cores, which run the same instructions at the same time, each on its own data. A computation that applies one rule
+to many elements has the GPU's shape: instead of a loop over 20,000 particles, the GPU runs 20,000 threads, one for
+each particle.</p>
+
+<pre class="sketch"><code>   the CPU: one core walks the elements          the GPU: one thread for each element
+   ------------------------------------------    ------------------------------------------
+   for (0..20_000) |id| step(id);                 thread 0:      step(0)
+                                                  thread 1:      step(1)
+                                                  ...            ...   all at once
+                                                  thread 19999:  step(19999)</code></pre>
+
+<p>A program run this way is a <em>compute shader</em>. It draws nothing: it reads and writes buffers in GPU memory,
+where a renderer can then draw from them. Each function a compute shader starts from is a <em>kernel</em>.</p>
+
+<p>The example throughout is a fluid simulated by SPH - <em>smoothed-particle hydrodynamics</em> - in which the water
+is 20,000 particles that push on their neighbours. Every frame, each particle measures how crowded its neighbourhood
+is and moves to relieve the pressure. On the CPU that is 20,000 particles, each against dozens of neighbours, several
+times a frame; on the GPU the particles are handled together.</p>
+
+<h2 id="builds">2. The CPU and GPU builds</h2>
+
+<p>zimr's kernels are written in Zig, with a small library called <em>kompute</em>, and each kernel is compiled
+twice from the same source: for the GPU, as a compute shader, and for the CPU, as an ordinary function called in a
+loop. A constant known at compile time tells the source which of the two builds it is in:</p>
+
+<pre data-src="src/kompute.zig" data-decl="pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();"><code class="zig">/// True when compiling for SPIR-V (the GPU dispatch). False for the native CPU
+/// loop. Kernel files comptime-branch on it via the generated helpers below.
+pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();</code></pre>
+
+<p>A test of <code>is_gpu</code> costs nothing when the program runs: the compiler keeps one branch and removes the
+other, so the two builds contain different code made from one text. The CPU build is the reference. It can be run,
+stepped through in a debugger and compared with the GPU's results; where the two differ, the GPU's are wrong.</p>
+
+<p>The same constant lets kompute offer one call where the two machines differ. An <em>atomic</em> add lets
+thousands of threads add into one counter without losing a single addition: the CPU has an instruction for it, the
+GPU's shader language a built-in function. A kernel calls <code>k.atomicAdd</code> either way, and kompute chooses:</p>
+
+<pre data-src="src/kompute.zig" data-decl="pub inline fn atomicAdd(arr: anytype, idx: u32, val: u32) u32 {"><code class="zig">/// Atomic read-modify-write add. Returns the value stored before the add (the
+/// WGSL `atomicAdd` semantics - the per-particle grid build uses this returned
 /// value as the claimed slot index).
 pub inline fn atomicAdd(arr: anytype, idx: u32, val: u32) u32 {
+    comptime requireU32ArrayPointer(@TypeOf(arr));
     if (is_gpu) {
-        return zatomicAdd(arr, idx, val);   // GPU: rewritten into WGSL later
+        return gpuAtomicAdd(&amp;arr[idx], val);
     }
-    return @atomicRmw(u32, &arr[idx], .Add, val, .monotonic); // CPU: the real thing
-}</code></pre></figure>
-  <p>One call, <em>k.atomicAdd(...)</em>, written once in the simulation. On the CPU it becomes a genuine atomic instruction; on the GPU it becomes a placeholder that a later stage turns into the WGSL atomic builtin. The kernel author never sees the difference.</p>
-</section>
+    return @atomicRmw(u32, &amp;arr[idx], .Add, val, .monotonic);
+}</code></pre>
 
-<section id="kernel" class="reveal">
-  <p class="sec-num">03 — anatomy</p>
-  <h2>What a kernel file actually contains</h2>
-  <p>A "kernel" is one parallel function. A kernel <em>file</em> declares three things, and then one or more kernel functions. Here's the shape, straight from kompute's own documentation:</p>
-  <figure class="code"><figcaption><span class="path">a minimal kernel file</span><span class="lang">zig</span></figcaption><pre><code class="zig">const k = @import("kompute");
+<h2 id="kernelfiles">3. Kernel files</h2>
 
-// 1. config — how big, and how many threads per workgroup
-pub const config = k.Config{ .max = 1024, .workgroup = 64 };
+<p>A kernel file declares the data a kernel works on and the kernel itself; kompute provides everything else. The
+smallest doubles every number in an array:</p>
 
-// 2. Buffers — the data living on the GPU (one big struct)
-pub const Buffers = extern struct { data: [config.max]f32 };
+<pre class="sketch"><code>   config         the most elements a dispatch covers, and the threads in a workgroup
+   Buffers        the arrays
+   Params         a few values for the whole dispatch
+   g              kompute's access to both, made from the file itself: k.Globals(@This())
+   the kernel     run once for each element
+   installKernel  makes the function a kernel the GPU can start</code></pre>
 
-// 3. Params — small read-only values passed in each dispatch
-pub const Params = extern struct { count: u32, _pad: [3]u32 = .{0,0,0} };
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub const config = k.Config{ .max = 1024, .workgroup = 64 };"><code class="zig">pub const config = k.Config{ .max = 1024, .workgroup = 64 };</code></pre>
 
-pub const g = k.Globals(@This());   // wires up storage on both targets
-const b_data = g.bind(.data);        // one alias per Buffers field
+<h3 id="buffers">3.1 Buffers and parameters</h3>
 
-// the kernel: runs once per thread, c.id is "which thread am I"
-pub fn double(c: k.Ctx(@This())) void {
-    if (c.id >= c.params.count) return;   // ignore threads past the data
-    b_data[c.id] = b_data[c.id] * 2.0;
-}
+<p><code>Buffers</code> holds the arrays a kernel reads and writes - positions, velocities, grid counters. On the GPU
+each field becomes a buffer of its own; on the CPU the fields are ordinary arrays. A kernel reaches a field through
+an alias made once, at the file's top level, by <code>g.bind</code>, and indexes it the same way in both builds:</p>
 
-comptime { k.installKernel(@This(), "double"); }   // register it</code></pre></figure>
-  <p>Three pieces deserve a closer look.</p>
-  <h3>Buffers — the shared data</h3>
-  <p><strong>Buffers</strong> is one big struct holding everything the simulation keeps on the GPU: arrays of positions, velocities, and so on. It uses <em>extern struct</em> so its memory layout is fixed and predictable — the CPU and the GPU have to agree, byte for byte, on where each field sits.</p>
-  <p>Each field is reached through an alias made by <em>g.bind(.field)</em>. On the GPU these become separate storage bindings; on the CPU they're pointers into plain memory. Either way, <em>b_data[i]</em> means the same thing in both worlds.</p>
-  <div class="note gotcha">
-    <span class="lab">a real scar in the code</span>
-    Early on, all the data lived in a <em>single</em> GPU binding (one giant struct). On the phone's Adreno GPU it silently corrupted above ~1000 threads: the large offsets inside one binding got mis-addressed. The fix was to give <strong>each field its own binding</strong> — the shape every hand-written WebGPU demo uses. The comments in the code still carry the warning so nobody re-introduces the bug.
-  </div>
-  <h3>Ctx — what each thread knows</h3>
-  <p>When a kernel runs, it receives a tiny context: <em>c.id</em> (this thread's global index — "which particle am I?") and <em>c.params</em> (the read-only settings for this dispatch). That's deliberately almost everything a thread needs and nothing it doesn't:</p>
-  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the context handed to every thread</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn Ctx(comptime Module: type) type {
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub const Buffers = extern struct {"><code class="zig">pub const Buffers = extern struct {
+    data: [config.max]f32,
+};</code></pre>
+
+<p>Giving each field its own buffer is a rule, not a choice of style: the same data placed in one large buffer was
+read at wrong offsets by some mobile GPUs once a dispatch passed about a thousand threads, while separate buffers -
+the arrangement hand-written WebGPU programs use - read correctly on the same devices.</p>
+
+<p><code>Params</code> holds a few values that stay the same for the whole dispatch: how many elements there are, the
+time step, a constant. On the GPU it is a <em>uniform</em> buffer, and the layout rules for uniforms apply: its size
+is a multiple of 16 bytes, padded with single scalar fields, because an array used as padding would take a layout a
+uniform buffer does not accept.</p>
+
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub const Params = extern struct {"><code class="zig">pub const Params = extern struct {
+    count: u32,
+    _pad0: u32 = 0,
+    _pad1: u32 = 0,
+    _pad2: u32 = 0,
+};</code></pre>
+
+<h3 id="context">3.2 The context</h3>
+
+<p>A kernel receives one argument, its <em>context</em>: <code>c.id</code>, the index of the element this thread
+handles, and <code>c.params</code>, the dispatch's <code>Params</code>. That is nearly everything a thread needs to
+know, and nothing more:</p>
+
+<pre data-src="src/kompute.zig" data-decl="pub fn Ctx(comptime Module: type) type {"><code class="zig">/// The compute context handed to a kernel: `c.id` is this invocation's global
+/// index, `c.params` is the kernel's `Params` by value. Buffers are NOT in here -
+/// reach them through the module-level `b` alias (`b.field[c.id]`).
+pub fn Ctx(comptime Module: type) type {
     return struct {
-        id: u32,              // this invocation's global index
-        params: Module.Params, // the kernel's Params, by value (read-only)
+        id: u32,
+        params: Module.Params,
     };
-}</code></pre></figure>
-  <p>The guard <em>if (c.id >= c.params.count) return;</em> appears at the top of every kernel. The GPU launches threads in fixed-size groups, so you almost always get a few <em>more</em> threads than you have data. Those extra threads must do nothing. Forgetting this guard is how you read or write past the end of an array on the GPU.</p>
-  <h3>installKernel — making it launchable</h3>
-  <p>The <em>comptime { k.installKernel(...) }</em> line is what turns your function into something the GPU can actually start. On the GPU build it generates the official entry point: read this thread's index, build the <em>Ctx</em>, call your function. On the CPU build it does nothing (the host just calls your function in a loop). Here it is:</p>
-  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the generated GPU entry point</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn installKernel(comptime Module: type, comptime name: []const u8) void {
-    if (!is_gpu) return;   // CPU: nothing to generate
+}</code></pre>
+
+<p>Every kernel begins by comparing <code>c.id</code> with the element count, because the GPU starts threads in whole
+<em>workgroups</em>. With 64 threads to a workgroup and 1,000 elements, 16 workgroups start 1,024 threads, and the
+last 24 have no element; without the test they would read and write past the end of the arrays:</p>
+
+<pre data-src="examples/compute_smoke/double_it.zig" data-decl="pub fn double(c: k.Ctx(@This())) void {"><code class="zig">/// The kernel, the same on CPU and GPU: the array is reached through the module-level `b_data`.
+pub fn double(c: k.Ctx(@This())) void {
+    if (c.id &gt;= c.params.count) {
+        return;
+    }
+    b_data[c.id] = b_data[c.id] * 2.0;
+}</code></pre>
+
+<h3 id="entries">3.3 Entry points</h3>
+
+<p>The line <code>comptime { k.installKernel(@This(), "double"); }</code> at the end of the file turns the function
+into a kernel the GPU can start. In the GPU build it generates the shader's <em>entry point</em> - the function the
+GPU calls for each thread - which reads the thread's index, builds the context and calls the kernel; it also gives
+the entry point its workgroup size, from <code>config</code>. In the CPU build it generates nothing, since the host
+calls the kernel itself in a loop:</p>
+
+<details class="src-fold" data-src="src/kompute.zig" data-decl="pub fn installKernel(comptime Module: type, comptime name: []const u8) void {"><summary><code>installKernel</code></summary><pre><code class="zig">/// Generate the SPIR-V compute entry point for kernel `name` in `Module`. Reads
+/// `global_invocation_id`, builds a `Ctx` (params by value from the uniform), and
+/// calls `Module.&lt;name&gt;(ctx)`. The exported symbol is `name`, so the host selects
+/// it with `createComputePipeline(module, name)`. A no-op on the CPU target.
+/// Call once per kernel from the file's `comptime {}` block.
+pub fn installKernel(comptime Module: type, comptime name: []const u8) void {
+    if (!is_gpu) {
+        return;
+    }
+    // `config.workgroup` is the single source of truth for the workgroup size:
+    // emit it as the entry's SPIR-V `OpExecutionMode LocalSize` so spv2wgsl reads
+    // the WGSL `@workgroup_size` straight off the compiled module. No build-side
+    // `--workgroup` flag, no duplicated literal in build.zig.
+    const wg_x: u32 = Module.config.workgroup;
     const Entry = struct {
-        fn run() callconv(.spirv_kernel) void {
+        fn run() callconv(.{ .spirv_kernel = .{ .x = wg_x, .y = 1, .z = 1 } }) void {
             @setRuntimeSafety(false);
+
+            // FIELD BY FIELD, never `.params = Module.g.P`.
+            //
+            // `P` lives in the UNIFORM address space, where SPIR-V decorates its struct
+            // as a Block with explicit member Offsets. `Ctx.params` is a function-local,
+            // with no such decorations. Writing `.params = Module.g.P` asks for a
+            // whole-struct copy BETWEEN THOSE TWO LAYOUTS - an OpCopyLogical - and it
+            // silently dropped a member: `n_cols` (field 15 of 20) arrived as 0 on device
+            // while its neighbour `n_rows` (field 16) arrived correctly, so the uniform
+            // buffer was right and the COPY was wrong. It cost a fluid sim that computed
+            // a 5704-cell grid with n_cols = 0, collapsed every particle onto one cell,
+            // and rendered a black screen.
+            //
+            // Reading each member instead emits an OpAccessChain + OpLoad at a known
+            // offset - no cross-layout struct copy exists to get wrong. Scalars only, so
+            // it is the same number of loads the kernel would have done anyway.
+            // Iterate FIELD ENUM VALUES, not the `field_names` slice: iterating the
+            // slice-of-slices makes the SPIR-V backend materialise every field NAME as
+            // data (`array&lt;u32,6&gt;` = "count"+nul), and spv2wgsl cannot lower the
+            // initialiser functions Zig emits for them. Enum values are plain integers.
+            const FE = meta.FieldEnum(Module.Params);
+            var params: Module.Params = undefined;
+            inline for (comptime std.enums.values(FE)) |fe| {
+                @field(params, @tagName(fe)) = @field(Module.g.P, @tagName(fe));
+            }
+
             const c: Ctx(Module) = .{
-                .id = gpu.global_invocation_id[0],   // ask the GPU "who am I"
-                .params = Module.g.P,
+                .id = gpu.global_invocation_id[0],
+                .params = params,
             };
-            @field(Module, name)(c);                 // call your kernel
+            @field(Module, name)(c);
         }
     };
-    @export(&Entry.run, .{ .name = name });          // name it for the host
-}</code></pre></figure>
-</section>
+    @export(&amp;Entry.run, .{ .name = name });
+}</code></pre></details>
 
-<section id="pipeline" class="reveal">
-  <p class="sec-num">04 — the build</p>
-  <h2>From Zig to a running shader, in three stages</h2>
-  <p>So you've written one Zig file. How does it become a GPU shader? WebGPU in the browser doesn't run Zig, and it doesn't run the GPU's native machine code either — it runs <strong>WGSL</strong>, a high-level shading language. The journey has three steps:</p>
-  <ul class="clean">
-    <li><strong>Zig → SPIR-V.</strong> Zig's own compiler can target SPIR-V, a portable binary format for GPU programs. This is just the normal Zig compiler with a GPU target.</li>
-    <li><strong>SPIR-V → WGSL.</strong> A custom tool in this project, <em>spv2wgsl</em>, reads that binary and writes out readable WGSL text. This is the part most engines outsource to a big C++ library; zimr does it in pure Zig.</li>
-    <li><strong>WGSL → GPU.</strong> The browser's WebGPU implementation compiles the WGSL the rest of the way and runs it.</li>
-  </ul>
-  <p>The build wires the first two stages together. The Zig-to-SPIR-V step is an ordinary compiler invocation with a GPU target:</p>
-  <figure class="code"><figcaption><span class="path">src/shader_codegen.zig &mdash; stage 1: Zig → SPIR-V</span><span class="lang">zig</span></figcaption><pre><code class="zig">// Stage 1: Zig -> SPIR-V (same flags as the fragment-shader path).
-const compile: *Run = b.addSystemCommand(&.{
-    b.graph.zig_exe, "build-obj",
-    "-target", "spirv32-vulkan",
-    "-mcpu",   "vulkan_v1_2",
-    "-fno-llvm", "-fno-lld",
-    "-O", "ReleaseFast",
-    "-ofmt=spirv",
-});
-const raw_spv: LazyPath = compile.addPrefixedOutputFileArg("-femit-bin=", "compute.spv");</code></pre></figure>
-  <p>Then the SPIR-V is handed to <em>spv2wgsl</em>, along with the workgroup size to stamp into the output:</p>
-  <figure class="code"><figcaption><span class="path">src/shader_codegen.zig &mdash; stage 2: SPIR-V → WGSL</span><span class="lang">zig</span></figcaption><pre><code class="zig">// Stage 2: SPIR-V -> WGSL with the injected @workgroup_size.
-w.addArg(b.fmt("--workgroup={d},{d},{d}", .{ workgroup[0], workgroup[1], workgroup[2] }));
-if (entry) |e| { w.addArg(b.fmt("--entry={s}", .{e})); }
-w.addFileArg(raw_spv);
-return w.addOutputFileArg("compute.wgsl");   // the finished shader text</code></pre></figure>
-  <p>The resulting WGSL is baked into the app, where the host loads it onto the GPU. One source file, run through a pipeline, comes out the other end as a shader — with the matching CPU loop built from the very same source in a separate pass.</p>
-</section>
-<section id="transpiler" class="reveal">
-  <p class="sec-num">05 — the translator</p>
-  <h2>spv2wgsl: turning GPU binary back into readable shaders</h2>
-  <p><em>spv2wgsl</em> is the most unusual piece. SPIR-V is a binary list of numbered instructions — closer to assembly than to source. WGSL is structured, high-level text with real <em>if</em>s and <em>for</em>s. Going from the first to the second means rebuilding structure that the binary has flattened: recovering loops from jumps, naming anonymous values, mapping each SPIR-V operation to its WGSL equivalent. It's a small compiler in its own right, and in this project it's around ten thousand lines of Zig.</p>
-  <p>Most of it is mechanical translation. The interesting parts are where the two languages <em>don't</em> line up. Atomics are the headline example, and they show how the whole system absorbs a gap in the toolchain rather than giving up.</p>
-  <h3>The atomics gap</h3>
-  <p>The version of Zig used here can target SPIR-V, but its SPIR-V backend doesn't yet implement atomic operations — the very thing the parallel grid build depends on. You'd be stuck, except for a trick. Recall the <em>k.atomicAdd</em> helper from earlier: on the GPU it calls a deliberately useless function named <em>zatomicAdd</em>:</p>
-  <figure class="code"><figcaption><span class="path">src/kompute.zig &mdash; the placeholder the GPU compiles</span><span class="lang">zig</span></figcaption><pre><code class="zig">// MUST be `noinline` so the call survives into the SPIR-V for spv2wgsl
-// to find. The body is never run on the GPU — it exists only to make
-// Zig emit a real function call with the right name.
-noinline fn zatomicAdd(arr: anytype, idx: u32, val: u32) u32 {
-    const prev: u32 = arr[idx];
-    arr[idx] = prev +% val;
-    return prev;
-}</code></pre></figure>
-  <p>Because it's marked <em>noinline</em>, Zig can't optimize it away — it leaves a real function call in the SPIR-V, named after the helper. spv2wgsl watches for that name. When it sees a call to something containing <em>zatomicAdd</em>, it does four things: it emits the genuine WGSL <em>atomicAdd(&field[idx], val)</em> instead of the call, it deletes the useless helper function, it marks the target array as atomic, and it changes that array's type to <em>array&lt;atomic&lt;u32&gt;&gt;</em> in the output. The placeholder is a hook; spv2wgsl rewrites it into the real builtin.</p>
-  <div class="note proof">
-    <span class="lab">why this is safe</span>
-    The CPU twin of <em>k.atomicAdd</em> is a <em>real</em> atomic instruction (Zig's native backend supports those). So the CPU build is a correct reference for what the GPU's rewritten atomics should do. The simulation has a permanent CPU test asserting the grid the build produces is well-formed — that test is how a change to the atomics path is caught without ever touching the phone.
-  </div>
-  <h3>A one-character bug that froze the fluid</h3>
-  <p>The translator also has to get small things exactly right, and one of them caused a memorable failure. In SPIR-V, a value can be given a name more than once. A data array that gets passed into a function picks up the function's <em>parameter</em> name as a second, later name. spv2wgsl was using "last name wins," so the array <em>grid_counts</em> ended up renamed to the generic parameter name <em>arr</em>. The host, which finds each buffer by its real name, then bound the wrong memory — and on the device the fluid froze into a dead blob. The fix is one line, and a comment now guards it: <strong>first name wins</strong>.</p>
-  <figure class="code"><figcaption><span class="path">src/spv2wgsl.zig &mdash; the OpName fix</span><span class="lang">zig</span></figcaption><pre><code class="zig">// Zig emits MULTIPLE names per id; a storage array passed as a function
-// arg picks up the callee's PARAMETER name as a later duplicate. Keep the
-// FIRST name so the host's `kbuf_<field>` lookup still matches the buffer.
-if (s.ids[target].wgsl_name.len == 0) s.ids[target].wgsl_name = name;</code></pre></figure>
-  <p>The lesson worth taking from this section isn't the specific bug — it's that a translator between two languages is a sequence of decisions this precise, and each one can be the difference between a working simulation and a frozen screen.</p>
-</section>
+<h2 id="toshader">4. From kernel to shader</h2>
 
-<section id="host" class="reveal">
-  <p class="sec-num">06 — the host</p>
-  <h2>The host: starting the work, and keeping data on the GPU</h2>
-  <p>The <em>host</em> is the ordinary code that runs on the CPU and tells the GPU what to do: load the shaders, allocate the buffers, and launch kernels. The launch function, <em>run</em>, is where the CPU/GPU split appears one more time. On the CPU it's literally a loop; on the GPU it records a dispatch:</p>
-  <figure class="code"><figcaption><span class="path">src/compute_host.zig &mdash; run, both backends</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn run(self: *Self, comptime name: []const u8) void {
+<p>Between the kernel file and the GPU, the build compiles the kernel to SPIR-V, a GPU program format, and for the
+browser translates it to WGSL, the language WebGPU runs. The backends tutorial follows those steps - for every shader
+in <a href="backends-tutorial.html#shaders">its chapter 5</a>, for kernels in <a href="backends-tutorial.html#compute">its
+chapter 12</a>, where each buffer's binding number is chosen too. A kernel's author meets that path only through a
+few rules:</p>
+
+<pre class="sketch"><code>   in a kernel                                   because
+   -------------------------------------------   ------------------------------------------------
+   Params: scalar fields, a multiple of 16       a uniform buffer's layout rules
+   bytes, padded with scalar fields
+   atomics through k.atomicAdd, k.atomicLoad,    the GPU build and the CPU build each use their
+   k.atomicStore, on arrays of u32               own atomic operations
+   one Buffers field for each array              one buffer for each field, on the GPU
+   at most 8 Buffers fields                      the storage buffers a WebGPU shader stage may use</code></pre>
+
+<p>The WGSL the browser receives for every kernel can be read: <code>zig build kernels-wgsl</code> writes each one to
+<code>zig-out/kernels-wgsl</code>.</p>
+
+<h2 id="running">5. Running kernels</h2>
+
+<p>The <em>host</em> is the program's ordinary code, on the CPU, that loads the kernels, creates their buffers and
+starts them. kompute's host, <code>compute_host.zig</code>, runs a module's kernels in one of three places, chosen
+when the program creates it, behind the same calls:</p>
+
+<pre class="sketch"><code>   .cpu       the CPU build, in a plain loop inside the frame: synchronous - the frame waits for it
+   .worker    the same loop in a Web Worker: asynchronous, so the frame never waits; the buffers
+              travel to the worker and back with each dispatch, one dispatch at a time
+   .gpu       the GPU build, as a compute dispatch: asynchronous, the results about a frame later</code></pre>
+
+<p>The three are interchangeable in the program's code, not in their cost: a device without a GPU can still run the
+fluid, on a worker, without freezing its frames.</p>
+
+<h3 id="dispatch">5.1 Dispatch</h3>
+
+<p>Starting a kernel over <code>n</code> elements is a <em>dispatch</em>. On <code>.cpu</code> and
+<code>.worker</code>, <code>run</code> is a loop that calls the kernel once for each element. On <code>.gpu</code> it
+records a dispatch of enough workgroups to cover the elements - the count divided by the workgroup size, rounded up,
+which is why every kernel tests its index (section 3.2):</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn run(self: *Self, comptime name: []const u8, n: u32) void {"><summary><code>run</code></summary><pre><code class="zig">/// Run kernel `name` over exactly `n` invocations. `n` is the dispatch
+/// width FOR THIS CALL - explicit, because a multi-kernel pipeline mixes
+/// widths (clearGrid over grid_cells, the particle kernels over
+/// num_particles, prefixSum over 1). Passing it per call kills the old
+/// footgun of a mutable `pipe.count` you had to re-set between kernels:
+/// forget, and a kernel silently dispatched the PREVIOUS kernel's width.
+///   CPU: a plain `for id in 0..n` loop calling the kernel (the dual-shape
+///        source runs as ordinary Zig).
+///   GPU: dispatch `ceil(n / config.workgroup)` workgroups - into the open
+///        batch pass if one is active, else a fresh single-dispatch submit.
+/// Readback is unaffected by `n`; it slices by `element_count` (set once).
+pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
+    assertf(n &gt; 0, @src(), "run('" ++ name ++ "'): n must be &gt; 0", .{});
+    assertf(
+        n &lt;= M.config.max,
+        @src(),
+        "run('" ++ name ++ "'): n={d} exceeds capacity config.max={d}",
+        .{ n, M.config.max },
+    );
     switch (self.backend) {
-        .cpu => {
-            // the GPU's "thousands of threads" is just a for-loop here
+        .cpu =&gt; {
+            // `M.g.P` is set either way: the LEAN form reads it through `g.uniform()`,
+            // and the stock form's `Ctx` carries a copy.
+            M.g.P = self.params;
             var id: u32 = 0;
-            while (id < self.count) : (id += 1) {
-                @field(M, name)(.{ .id = id, .params = self.params });
+            while (id &lt; n) : (id += 1) {
+                // ** A LEAN KERNEL TAKES THE RAW INDEX, a stock one takes a `Ctx`. The
+                // signature is the discriminator, so a file can mix both forms and
+                // neither has to declare which it is. Without this the CPU driver only
+                // spoke the `Ctx` dialect, and `installKernelLean` compiled but could
+                // never be run on the host - half a merge.
+                // Compared as a TYPE rather than through `@typeInfo`: on
+                // 0.17.0-dev.1980 `Type.Fn` no longer carries `.params`, and a direct
+                // comparison needs no reflection to survive.
+                const takes_raw_id: bool = @TypeOf(@field(M, name)) == fn (u32) void;
+                if (takes_raw_id) {
+                    @field(M, name)(id);
+                } else {
+                    @field(M, name)(.{ .id = id, .params = self.params });
+                }
             }
         },
-        .gpu => {
-            // ...find the compiled pipeline for `name`, then:
-            const wg: u32 = M.config.workgroup;
+        // The same loop, somewhere else. Three things diverge from `.cpu`, and
+        // they are the price of not freezing the frame:
+        //
+        //   1. It is ASYNCHRONOUS. `readLatest` returns null until the job lands
+        //      - as the GPU arm already does, so an app written for `.gpu` needs
+        //      no change.
+        //   2. It runs ONE JOB AT A TIME. A `run` issued while a job is still out
+        //      is DROPPED, because two jobs would both write back into the same
+        //      mirror. `.cpu` and `.gpu` would simply run again; this cannot.
+        //   3. It copies the WHOLE `Buffers` to the worker and back, every
+        //      dispatch. Fine for one-shot work with modest state; a poor trade
+        //      for a megabyte of particles you wanted stepped every frame. That
+        //      is what `.gpu` is for.
+        .worker =&gt; {
+            // Gated on `kernels` so a module that never opts in pays NOTHING for
+            // this arm - an untaken comptime `if` is never analyzed, so none of
+            // the jobs machinery is linked. Selecting `.worker` requires
+            // `initWorker`, which is a compile error without it.
+            if (comptime @hasDecl(M, "kernels")) {
+                const wk: *Worker = &amp;(self.worker orelse {
+                    assertUnreachable(@src(), "run('" ++ name ++ "'): .worker needs initWorker(gpa)", .{});
+                    return;
+                });
+                if (wk.job.inFlight()) {
+                    return; // still working on the last one - see (2) above
+                }
+                wk.job = komputeRegistry(M).submit(
+                    wk.gpa,
+                    komputeKernel(M, name),
+                    .{ .n = n, .params = self.params },
+                    asBytes(wk.mirror), // OUR state, not the module's
+                ) catch |err| blk: {
+                    std.log.err("Compute.run('" ++ name ++ "') on .worker: {s}", .{@errorName(err)});
+                    break :blk .{};
+                };
+            }
+        },
+        .gpu =&gt; {
+            const gp: *Gpu = &amp;self.gpu.?;
+            const workgroups: u32 = @divCeil(n, M.config.workgroup);
+            // Find this kernel's slot so we get BOTH its pipeline and its
+            // own bind group - each kernel binds a different subset of the
+            // buffers now, so the two always travel together.
+            const ki: usize = blk: {
+                for (gp.kernel_names, 0..) |kn, idx| {
+                    if (eql(u8, kn, name)) {
+                        break :blk idx;
+                    }
+                }
+                // A correctly-registered kernel is always found; reaching
+                // here means a name typo or a kernel missing from initGpu's
+                // list. assertf gives a localized message in dev and lowers
+                // to the `unreachable` optimization hint once stripped.
+                assertUnreachable(@src(), "run: kernel '" ++ name ++ "' is not registered with this pipe", .{});
+                unreachable;
+            };
+            const pipeline: wgpu.ComputePipelineHandle = gp.pipelines[ki];
+            const bind_group: wgpu.BindGroupHandle = gp.bind_groups[ki];
+            gp.kernel_last_n[ki] = n; // for describe()
+            if (gp.rec_enc != .invalid) {
+                // Recording: this dispatch's params into the next table slot, a copy of
+                // that slot into the uniform, and the dispatch in its own pass - all in
+                // the ONE open encoder. The copies execute in order on the GPU timeline,
+                // so every dispatch sees exactly its own params.
+                if (gp.rec_base + gp.rec_count == recording_slots) {
+                    // The ring's end: submit what is recorded, carry on from its start.
+                    flushRecording(gp);
+                    gp.rec_base = 0;
+                    gp.rec_enc = wgpu.createCommandEncoder(gp.dev);
+                }
+                const slot: u32 = gp.rec_base + gp.rec_count;
+                gp.rec_slots[slot] = self.params;
+                const size: u32 = @sizeOf(Params);
+                wgpu.copyBufferToBuffer(gp.rec_enc, gp.rec_table, slot * size, gp.uniform, 0, size);
+                const rp: wgpu.ComputePassEncoderHandle = compute_pass.begin(gp.rec_enc);
+                compute_pass.setPipeline(rp, pipeline);
+                compute_pass.setBindGroup(rp, 0, bind_group);
+                compute_pass.dispatchWorkgroups(rp, .{ .x = workgroups });
+                compute_pass.end(rp);
+                gp.rec_count += 1;
+                return;
+            }
+            if (gp.batch_enc != .invalid) {
+                // Open batch: encode into the shared pass. Params were
+                // written once at beginBatch (all batched dispatches share
+                // them). The bind group is set PER DISPATCH now - adjacent
+                // kernels bind different buffer subsets, so it can't be
+                // hoisted to beginBatch the way the old shared one was.
+                compute_pass.setPipeline(gp.batch_pass, pipeline);
+                compute_pass.setBindGroup(gp.batch_pass, 0, bind_group);
+                compute_pass.dispatchWorkgroups(gp.batch_pass, .{ .x = workgroups });
+                return;
+            }
+            self.syncParamsUniform(gp);
+            const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+            const cp: wgpu.ComputePassEncoderHandle = compute_pass.begin(enc);
             compute_pass.setPipeline(cp, pipeline);
-            compute_pass.setBindGroup(cp, 0, gp.bind_group);
-            // launch ceil(count / workgroup) groups of `workgroup` threads
-            compute_pass.dispatchWorkgroups(cp, .{ .x = (self.count + wg - 1) / wg });
+            compute_pass.setBindGroup(cp, 0, bind_group);
+            compute_pass.dispatchWorkgroups(cp, .{ .x = workgroups });
+            compute_pass.end(cp);
+            const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
+            // Both dispatch paths go through `submitDispatch`, which counts. I
+            // incremented by hand at the batched site only, and every caller using
+            // `run()` outside a batch then saw `submitted == 0` - so the sweep retired
+            // each row before its own dispatch had executed. **7 of 105 on device**,
+            // with `inf` against bars of zero: another row's data.
+            submitDispatch(gp, cmd);
         },
     }
-}</code></pre></figure>
-  <p>Notice <em>dispatchWorkgroups</em> launches <em>count / workgroup</em> groups — that's why the in-kernel guard matters: the division rounds up, so the last group has spare threads.</p>
-  <h3>One submission per frame</h3>
-  <p>Talking to the GPU has overhead. Every time the host "submits" work, the driver has paperwork to do. A naive simulation submits once per kernel — and with several kernels run several times per frame, that paperwork dominates. The fix is <strong>batching</strong>: open one recording, encode <em>all</em> the kernels and all the sub-steps into it, and submit once.</p>
-  <figure class="code"><figcaption><span class="path">src/compute_host.zig &mdash; batch the whole frame into one submit</span><span class="lang">zig</span></figcaption><pre><code class="zig">/// Open a single-pass batch: every following `run` encodes into one
-/// compute pass until `endBatch` submits it.
-pub fn beginBatch(self: *Self) void {
-    // ... write params once, open one encoder + one compute pass
+}</code></pre></details>
+
+<h3 id="batching">5.2 Batching</h3>
+
+<p>Each submission of work to the GPU has a fixed cost on the CPU and in the driver. A sub-step of the fluid starts
+eleven kernels; submitted one kernel at a time, the fixed costs would outweigh the work. A <em>batch</em> collects every dispatch of the frame into one recording, submitted once: between
+<code>beginBatch</code> and <code>endBatch</code>, each <code>run</code> only records its dispatch.</p>
+
+<pre data-src="src/compute_host.zig" data-decl="pub fn beginBatch(self: *Self, params: Params) void {"><code class="zig">pub fn beginBatch(self: *Self, params: Params) void {
+    self.params = params;
+    if (self.backend != .gpu) {
+        return;
+    }
+    const gp: *Gpu = &amp;self.gpu.?;
+    assertf(gp.batch_enc == .invalid, @src(), "beginBatch: a batch is already open", .{});
+    gp.batch_params = params;
+    self.syncParamsUniform(gp);
+    gp.batch_enc = wgpu.createCommandEncoder(gp.dev);
     gp.batch_pass = compute_pass.begin(gp.batch_enc);
-    compute_pass.setBindGroup(gp.batch_pass, 0, gp.bind_group);
-}
+}</code></pre>
+
+<pre data-src="src/compute_host.zig" data-decl="pub fn endBatch(self: *Self) void {"><code class="zig">/// Close + submit the open batch.
 pub fn endBatch(self: *Self) void {
+    if (self.backend != .gpu) {
+        return;
+    }
+    const gp: *Gpu = &amp;self.gpu.?;
+    assertf(gp.batch_enc != .invalid, @src(), "endBatch: no batch is open", .{});
+    // The uniform was written once at beginBatch; if params changed since,
+    // those changes never reached the GPU (batched dispatches don't
+    // re-upload). That's a silent-stale bug - flag it by name.
+    assertf(
+        meta.eql(self.params, gp.batch_params),
+        @src(),
+        "endBatch: params changed during the batch — pass them to beginBatch(params), " ++
+            "not after (a post-beginBatch change is silently ignored on-device)",
+        .{},
+    );
     compute_pass.end(gp.batch_pass);
-    const cmd = wgpu.finishCommandEncoder(gp.batch_enc);
-    wgpu.queueSubmit(gp.queue, cmd);   // ONE submit for the entire frame
-}</code></pre></figure>
-  <p>With batching on, the kernels just record themselves into the open pass and nothing is submitted until the frame is fully assembled.</p>
-  <h3>The data never leaves the GPU</h3>
-  <p>The most important performance fact about this fluid is something the host <em>doesn't</em> do. Once the particles are on the GPU, they stay there. The compute kernels write positions into a GPU buffer, and the renderer reads positions <em>from that same buffer</em> to draw the discs — no copy back to the CPU, no round trip. The simulation and the drawing share memory.</p>
-  <p>The only time data is copied back to the CPU is for the on-screen diagnostics (the "cells / average" readout), and that copy is switched off unless you open the diagnostics panel. The function that does it, <em>readLatest</em>, also carries a small scar:</p>
-  <figure class="code"><figcaption><span class="path">src/compute_host.zig &mdash; readLatest: slice to the field's OWN length</span><span class="lang">zig</span></figcaption><pre><code class="zig">// Variable-count fields (positions, …) are sized to the particle count;
-// fixed-size fields (grid_counts, cell_start) must slice to THEIR OWN
-// length, never the particle count — otherwise grid_counts overruns into
-// the cell_start array that follows it. Clamp to the lesser of the two.
-const arr_len: usize = @field(M.g.B, @tagName(field)).len;
-const n: usize = @min(self.count, arr_len);</code></pre></figure>
-  <p>Before this fix, the diagnostics asked for 20,000 grid cells when only ~1,300 existed, read straight past the end into the next array, and reported impossible numbers (a "fullest cell" of 19,999). The simulation itself was always fine — only the readout was lying. It's a clean illustration of how a bug in a <em>measurement</em> can look exactly like a bug in the thing being measured.</p>
-</section>
+    const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.batch_enc);
+    submitDispatch(gp, cmd);
+    gp.batch_enc = .invalid;
+    gp.batch_pass = .invalid;
+}</code></pre>
 
-<section id="sph" class="reveal">
-  <p class="sec-num">07 — the example</p>
-  <h2>The fluid, kernel by kernel</h2>
-  <p>Now the payoff: the actual simulation. The method is Clavet's <strong>double-density relaxation</strong>, a particle fluid that's stable and cheap enough for real time. Each frame runs a few <em>sub-steps</em>, and each sub-step is a short sequence of kernels. First, the data they all share:</p>
-  <figure class="code"><figcaption><span class="path">examples/wgpu_fluid_sort/sort_kernels.zig &mdash; the simulation state</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub const num_particles: u32 = 20000;
-pub const interact_radius: f32 = 22.0;   // a particle only feels neighbours within this
+<h3 id="ongpu">5.3 Data on the GPU</h3>
 
-pub const Buffers = extern struct {
-    pos:     [num_particles]zm.Vec2,   // position  (pos is FIRST: the renderer reads it)
-    prev:    [num_particles]zm.Vec2,   // last position (used to recover velocity)
-    vel:     [num_particles]zm.Vec2,   // velocity
-    delta:   [num_particles]zm.Vec2,   // pending position correction
-    density: [num_particles]zm.Vec2,   // (density, near-density) — also drives colour
-    grid_counts: [grid_cells]u32,          // particles per cell (atomic); reused as the scatter cursor
-    cell_start:  [grid_cells + 1]u32,      // prefix sum: cell c owns sorted slots [cell_start[c] .. cell_start[c+1])
-    pos2:    [num_particles]zm.Vec2,   // scatter scratch — the cell-sorted copy of pos/vel/prev
-    vel2:    [num_particles]zm.Vec2,
-    prev2:   [num_particles]zm.Vec2,
-};</code></pre></figure>
-  <h3>The neighbour grid: a counting sort, so the reads are fast</h3>
-  <p>Checking all 20,000 particles against each other would be 400 million comparisons. Instead the domain is chopped into a grid of square cells, each the size of the interaction radius. A particle only needs to look in its own cell and the eight around it — a 3×3 neighbourhood — because anything farther away is out of reach.</p>
-  <p>The interesting question is <em>how</em> a cell's particles are stored. The obvious way is a list of indices per cell; the neighbour walk then reads <code>pos[index]</code> for each one — and those indices point all over memory, so every read is a random jump. On a GPU that is the slowest thing you can do (see the performance section). The fast way is to <strong>physically reorder the particles into cell order every sub-step</strong>, so that a cell's particles occupy one <em>contiguous</em> run of memory. That reordering is a classic <strong>counting sort</strong>, and it's five small kernels.</p>
-  <p><strong>clearGrid</strong> zeroes every cell's counter — one thread per cell:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn clearGrid(c: k.Ctx(@This())) void {
-    const cell: u32 = c.id;
-    if (cell >= c.params.n_cols * c.params.n_rows) return;
-    k.atomicStore(b_grid_counts, cell, 0);
-}</code></pre></figure>
-  <p><strong>countGrid</strong> tallies how many particles fall in each cell — one thread per particle, an atomic add so thousands can count into the same cell at once:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the counting pass</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn countGrid(c: k.Ctx(@This())) void {
+<p>Once the particles are in GPU memory, they stay there. The kernels write positions into a buffer, and the renderer
+draws the particles from that same buffer: the simulation and the drawing share memory, and no position crosses back
+to the CPU during a frame.</p>
+
+<pre class="sketch"><code>   GPU memory: pos, vel, ...
+        ^   written by the kernels, every sub-step
+        |
+        +-- read by the renderer, every frame, to draw the particles
+   the CPU: none of it, unless the program asks (section 5.4)</code></pre>
+
+<h3 id="results">5.4 Reading results</h3>
+
+<p>A result the CPU needs - a count, an average, a value for the screen - is read back with <code>readLatest</code>.
+On <code>.cpu</code> the values are there at once. On <code>.gpu</code> the read is asynchronous: the GPU runs behind
+the CPU, so the bytes arrive a frame or two after they are asked for, and the call returns the latest ones that have
+arrived, or nothing yet; it starts the next copy itself when none is in flight (<code>.worker</code> behaves the
+same way). (How a read waits for the GPU, and why, is in the <a href="backends-tutorial.html#readback">backends
+tutorial</a>.) A copy moves each field's live elements into a staging buffer, and the CPU then scans them, so the
+fluid samples once every 30 frames rather than reading every frame - the fluid's extent, a density, the first grid
+cells, for its diagnostics. A read returns exactly the field's own elements, however large its buffer; reading
+further would return the next field's data.</p>
+
+<details class="src-fold" data-src="src/compute_host.zig" data-decl="pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {"><summary><code>readLatest</code></summary><pre><code class="zig">pub fn readLatest(self: *Self, comptime field: Field) ?[]const ElemOf(field) {
+    // Variable-count fields (pos/vel/...) are sized to capacity and slice to
+    // the live `element_count`; fixed fields (grid_counts, cell_start) must
+    // slice to THEIR OWN array length, never the particle count - else
+    // grid_counts (grid_cells long) overruns the next field. Clamp to the
+    // lesser of the two.
+    const arr_len: usize = @field(M.g.B, @tagName(field)).len;
+    const n: usize = @min(self.element_count, arr_len);
+    switch (self.backend) {
+        .cpu =&gt; {
+            return @field(M.g.B, @tagName(field))[0..n];
+        },
+        // Same contract as the GPU arm: null until it lands, then the data -
+        // out of our OWN mirror, never out of `M.g.B`, so a `.cpu` pipe on the
+        // same module keeps its answer.
+        .worker =&gt; {
+            if (comptime @hasDecl(M, "kernels")) {
+                const wk: *Worker = &amp;(self.worker orelse return null);
+                if (wk.job.poll()) |maybe_bytes| {
+                    if (maybe_bytes) |bytes| {
+                        if (bytes.len == @sizeOf(Buffers)) {
+                            @memcpy(asBytes(wk.mirror), bytes);
+                            wk.have_read = true;
+                        }
+                        wk.job.deinit();
+                    }
+                } else |err| {
+                    std.log.err("Compute.readLatest on .worker: {s}", .{@errorName(err)});
+                    wk.job.deinit();
+                }
+                if (!wk.have_read) {
+                    return null;
+                }
+                return @field(wk.mirror.*, @tagName(field))[0..n];
+            }
+            return null;
+        },
+        .gpu =&gt; {
+            const gp: *Gpu = &amp;self.gpu.?;
+            if (gp.read != .invalid and wgpu.bufferReadPoll(gp.read)) {
+                const mirror_bytes: []u8 = asBytes(gp.mirror);
+                wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
+                unpackPrefixes(mirror_bytes, gp.read_count);
+                wgpu.bufferReadRelease(gp.read);
+                gp.read = .invalid;
+                gp.have_read = true;
+                // The mirror now holds whatever had been dispatched when this copy was
+                // ENCODED, which is `copy_at` - not `submitted`, which may have moved on
+                // since. Recording the wrong one of those two is the whole bug this
+                // counter exists to prevent, so it is stored at encode time below.
+                gp.mirrored = gp.copy_at;
+            }
+            if (gp.read == .invalid) {
+                // Stamp the encode, not the completion: everything submitted BEFORE this
+                // point is what the copy will capture. Anything dispatched afterwards is
+                // not in it, and a caller comparing generations needs that to be exact
+                // rather than approximately recent.
+                // NOT `submitted += 1` here, and the asymmetry is the point: this
+                // submits a COPY, not a dispatch. Counting it would make the mirror
+                // appear to reflect work that was never run.
+                gp.copy_at = gp.submitted;
+                // ** ONLY WHAT `readLatest` CAN RETURN: each field's first
+                // `element_count` elements, packed back to back. This copied every field
+                // WHOLE - 7 MiB a readback for the zn_mlp kit's 1 MiB fields, mapped and
+                // copied into wasm memory up to 60 times a second, to return 6 KB of
+                // weights. The data a caller sees is unchanged: it was always sliced to
+                // `element_count`.
+                const count: usize = self.element_count;
+                const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                var packed_at: u32 = 0;
+                inline for (buffer_field_names, 0..) |fname, fi| {
+                    const bytes: u32 = prefixBytes(fname, count);
+                    if (bytes &gt; 0) {
+                        wgpu.copyBufferToBuffer(enc, gp.field_bufs[fi], 0, gp.staging, packed_at, bytes);
+                    }
+                    packed_at += bytes;
+                }
+                const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(enc);
+                wgpu.queueSubmit(gp.queue, cmd);
+                gp.read_bytes = packed_at;
+                gp.read_count = count;
+                if (packed_at &gt; 0) {
+                    gp.read = wgpu.bufferReadStart(gp.staging, packed_at);
+                } else {
+                    // Nothing to return (element_count 0): the copy is trivially complete.
+                    gp.mirrored = gp.copy_at;
+                    gp.have_read = true;
+                }
+            }
+            if (!gp.have_read) {
+                return null;
+            }
+            return @field(gp.mirror.*, @tagName(field))[0..n];
+        },
+    }
+}</code></pre></details>
+
+<h2 id="fluid">6. The SPH fluid</h2>
+
+<p>The fluid follows <em>double-density relaxation</em> (Clavet, Beaudoin and Poulin, 2005), a particle method that is
+stable and cheap enough for real time. Each frame advances the fluid by one sub-step: a short sequence of kernels,
+each started over every particle or every grid cell.</p>
+
+<h3 id="state">6.1 The simulation state</h3>
+
+<p>The kernels share their data through one <code>Buffers</code>: the particles' positions, velocities and previous
+positions, their position corrections and densities, the grid's counters and starts, and a scratch copy that the sort
+writes into.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub const Buffers = struct {"><summary><code>Buffers</code>, the fluid's state</summary><pre><code class="zig">pub const Buffers = struct {
+    pos: [num_particles]Vec2,
+    prev: [num_particles]Vec2,
+    vel: [num_particles]Vec2,
+    delta: [num_particles]Vec2,
+    /// (rho, rho_near) per particle - also read by the renderer for colour.
+    density: [num_particles]Vec2,
+    /// Per-cell particle count (atomic). countGrid accumulates it; prefixSum
+    /// consumes it into cell_start and ZEROES it so scatter can reuse it as the
+    /// per-cell write cursor.
+    grid_counts: [grid_cells]u32,
+    /// Exclusive prefix sum of grid_counts, +1 sentinel: cell c's particles
+    /// occupy sorted slots [cell_start[c], cell_start[c+1]); cell_start[cells]=N.
+    cell_start: [grid_cells + 1]u32,
+    /// Scatter scratch - scatter writes the cell-sorted pos/vel/prev here, then
+    /// copyback copies them back so pos/vel/prev are canonical (= sorted).
+    /// ONE scratch buffer for the counting sort's reorder, holding pos, vel and prev
+    /// back-to-back: `[0..N)` = pos2, `[N..2N)` = vel2, `[2N..3N)` = prev2.
+    ///
+    /// This used to be THREE separate buffers, which put the module at TEN - and WebGPU
+    /// guarantees only EIGHT storage buffers per shader stage. Bindings past the eighth
+    /// silently do not bind: the writes vanish with no error and the kernel runs on happily,
+    /// which is exactly how this fluid came to fill its box while its twin `fluid_gpu`
+    /// (which sits at exactly eight) worked perfectly. Packing them costs one multiply-add
+    /// and buys the module back under the ceiling. `Compute.initGpu` now refuses to compile
+    /// a module over the limit, so this can never be silently re-introduced.
+    /// ...plus 16 spare Vec2 at the tail, which `paramEcho` uses to write back every field
+    /// of `Params` AS THE SHADER ACTUALLY SEES IT. No new buffer: the module is at WebGPU's
+    /// hard ceiling of 8.
+    scratch: [3 * num_particles + 16]Vec2,
+};</code></pre></details>
+
+<h3 id="grid">6.2 The neighbour grid</h3>
+
+<p>A particle only interacts with particles closer than an interaction radius. Comparing every particle with every
+other would be 400 million comparisons for 20,000 particles. Instead the domain is divided into square cells the size
+of the radius, and a particle looks only in its own cell and the eight around it: anything farther is out of reach.</p>
+
+<p>How a cell's particles are stored decides the speed. A list of indices per cell sends every neighbour read to
+wherever that particle happens to sit in memory. The fluid instead moves the particles themselves into cell order,
+every sub-step, so that each cell's particles occupy one contiguous run of the arrays. The reordering is a
+<em>counting sort</em>, in five kernels. With six particles in three cells:</p>
+
+<pre class="sketch"><code>   the particles' cells:     p0: 2   p1: 0   p2: 1   p3: 0   p4: 2   p5: 2
+
+   clearGrid    counts = [0, 0, 0]                        one thread per cell
+   countGrid    counts = [2, 1, 3]                        one thread per particle, atomic adds
+   prefixSum    starts = [0, 2, 3, 6]                     one thread: cell c owns slots
+                counts = [0, 0, 0]                        starts[c] to starts[c+1]; counts is
+                                                          zeroed, to count the slots taken
+   scatter      slot = starts[cell] + atomicAdd(counts[cell], 1)
+                cell 0: slots 0 and 1   cell 1: slot 2   cell 2: slots 3, 4 and 5
+   copyback     the sorted copy replaces the originals:   p1 p3 | p2 | p0 p4 p5
+                                                          (the order inside a cell may vary)</code></pre>
+
+<p>Counting is an atomic add, so thousands of particles can count into the same cell at once without losing a count:</p>
+
+<pre data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn countGrid(c: k.Ctx(@This())) void {"><code class="zig">/// Per PARTICLE: count this particle into its cell (the counting pass). The
+/// atomicAdd result is unused - we only want the final per-cell totals.
+pub fn countGrid(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
-    if (i >= c.params.count) return;
+    if (i &gt;= c.params.count) {
+        return;
+    }
     const cell: u32 = cellOf(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
-    _ = k.atomicAdd(b_grid_counts, cell, 1);   // result unused — we only want the totals
-}</code></pre></figure>
-  <p><strong>prefixSum</strong> turns those per-cell counts into <em>start offsets</em>. A running total: cell 0 starts at 0, cell 1 starts after cell 0's particles, and so on. After it, cell <code>c</code> owns the contiguous slot range <code>[cell_start[c], cell_start[c+1])</code>. It's a single serial scan (~1,300 cells — nothing next to 20,000 particles), so it runs on <em>one</em> thread, and it zeroes <code>grid_counts</code> as it goes so the next kernel can reuse it as a write cursor:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the exclusive prefix sum (one invocation)</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn prefixSum(c: k.Ctx(@This())) void {
-    if (c.id != 0) return;                       // a single thread does the whole scan
+    _ = k.atomicAdd(b_grid_counts, cell, 1);
+}</code></pre>
+
+<p>The prefix sum turns the counts into each cell's first slot. It is a single running total over about 1,300 cells
+- small beside 20,000 particles - so one thread does it:</p>
+
+<pre data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn prefixSum(c: k.Ctx(@This())) void {"><code class="zig">/// SINGLE invocation (dispatch count = 1): serial exclusive prefix sum of
+/// grid_counts into cell_start, zeroing grid_counts as we go so scatter can
+/// reuse it as the per-cell write cursor. cell count (~1.3k) is tiny next to N.
+/// !! BROKEN ON GPU - spv2wgsl mis-structurizes this loop. See `src/notes/claude.md`.
+///
+/// This is the ONLY kernel in the tree with a real runtime loop (every other neighbour
+/// walk is an `inline for` and unrolls), and it is the only one that trips the bug.
+/// spv2wgsl emits two OpPhi variables DECLARED, READ, and NEVER ASSIGNED:
+///
+///     var phi26853: u32;              // never written
+///     let _26845: bool = 72u == 72u;  // computed, then discarded
+///     phi26855 = phi26853;            // reads the zero-init
+///     let _26859: bool = phi26855 == 41u;   // -&gt; false -&gt; loop breaks immediately
+///
+/// WGSL zero-initialises them, so the loop exits on its first iteration, `cell_start`
+/// stays all zeroes, `scatter` piles every particle into slot 0, and `copyback` writes
+/// those zeros back into `pos`. That is the whole "fluid stuck in the corner" bug.
+///
+/// Neither `@setRuntimeSafety(false)` nor changing the loop form (while-with-continue-
+/// expression vs manual increment) changes it - both still emit 2 unassigned phis. The
+/// fix belongs in spv2wgsl's phi/default-exit handling (`applyDefaultToShortestExit`).
+pub fn prefixSum(c: k.Ctx(@This())) void {
+    if (c.id != 0) {
+        return;
+    }
     const cells: u32 = c.params.n_cols * c.params.n_rows;
     var acc: u32 = 0;
     var cell: u32 = 0;
     while (cell &lt; cells) : (cell += 1) {
         const cnt: u32 = k.atomicLoad(b_grid_counts, cell);
-        b_cell_start[cell] = acc;                // where this cell's run begins
+        b_cell_start[cell] = acc;
         acc += cnt;
-        k.atomicStore(b_grid_counts, cell, 0);   // reset → reused as the scatter cursor
+        k.atomicStore(b_grid_counts, cell, 0);
     }
-    b_cell_start[cells] = acc;                   // == num_particles
-}</code></pre></figure>
-  <p><strong>scatter</strong> does the actual move: each particle claims the next free slot in its cell (atomic add on the reused counter) and writes its position, velocity, and previous-position into the sorted scratch at that slot. <strong>copyback</strong> then copies the scratch back over the originals, so <code>pos/vel/prev</code> <em>become</em> the cell-sorted order — the canonical layout for the rest of the sub-step and the next one. Because particles are interchangeable, there's no need to ever un-sort:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; place each particle in its cell's run</span><span class="lang">zig</span></figcaption><pre><code class="zig">pub fn scatter(c: k.Ctx(@This())) void {
+    b_cell_start[cells] = acc;
+}</code></pre>
+
+<p>Each particle then claims the next free slot in its cell, again with an atomic add, and writes itself there:</p>
+
+<pre data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn scatter(c: k.Ctx(@This())) void {"><code class="zig">/// Per PARTICLE: claim a slot in this particle's cell (atomicAdd on the reused
+/// grid_counts cursor) and write its pos/vel/prev into the cell-sorted scratch
+/// at cell_start[cell] + slot.
+pub fn scatter(c: k.Ctx(@This())) void {
     const i: u32 = c.id;
-    if (i >= c.params.count) return;
-    const cell: u32 = cellOf(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
-    const slot: u32 = k.atomicAdd(b_grid_counts, cell, 1);  // unique offset within the cell
-    const dest: u32 = b_cell_start[cell] + slot;            // its place in the sorted array
-    b_pos2[dest] = b_pos[i];
-    b_vel2[dest] = b_vel[i];
-    b_prev2[dest] = b_prev[i];
-}</code></pre></figure>
-  <p>There's a quiet bonus: with exact ranges there's no fixed per-cell capacity to overflow, so dense clumps never silently drop neighbours the way a capped slot list could.</p>
-  <h3>Density: how crowded am I?</h3>
-  <p><strong>density</strong> walks the 3×3 neighbourhood and sums up how close the neighbours are. Two numbers come out: a normal density and a sharper "near-density" that spikes when particles are almost touching. The near-density is what stops the fluid from collapsing into itself. Because of the sort, each neighbour cell is just a contiguous slice — the loop reads consecutive particles from consecutive memory:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; inside the neighbour loop</span><span class="lang">zig</span></figcaption><pre><code class="zig">// for each of the 9 neighbour cells: walk its contiguous run
-var kk: u32 = b_cell_start[cell];
-while (kk &lt; b_cell_start[cell + 1]) : (kk += 1) {   // consecutive kk → consecutive memory
-    if (kk == i) continue;
-    const sep: zm.Vec2 = b_pos[kk] - my_pos;
-    const d2: f32 = zm.dot(sep, sep);
-    if (d2 &lt; c.params.h * c.params.h) {     // squared compare: skip the sqrt if out of range
-        const dist: f32 = @sqrt(d2);
-        const omq: f32 = 1.0 - dist / c.params.h;
-        rho      += omq * omq;              // density
-        rho_near += omq * omq * omq;        // near-density (sharper)
+    if (i &gt;= c.params.count) {
+        return;
     }
-}</code></pre></figure>
-  <h3>Force: relieve the pressure</h3>
-  <p><strong>force</strong> turns those densities into movement. A crowded particle pushes its neighbours away; the push is stronger the closer they are. Rather than write the pushes straight to velocity, the kernel accumulates a position <em>correction</em>, which the final kernel turns back into velocity. It reads the same contiguous neighbour runs the density pass did — now also pulling each neighbour's density and velocity from consecutive memory:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the pressure displacement</span><span class="lang">zig</span></figcaption><pre><code class="zig">const omq: f32 = 1.0 - dist / c.params.h;
-const jd:  zm.Vec2 = b_density[kk];        // neighbour density — contiguous read
-const disp: f32 = 0.5 * c.params.dt * c.params.dt *
-    ((my_press + j_press) * omq + (my_near + j_near) * omq * omq);
-corr = corr - dir * zm.splat2(disp);       // push away from the crowd</code></pre></figure>
-  <h3>Viscosity: a separate, gentler pass</h3>
-  <p><strong>viscosity</strong> is what makes the fluid look like water rather than a gas — a drag between particles moving toward each other. It used to be folded into the force loop, but it now runs as its own pass <em>before</em> the prediction step, matching the order in Clavet's paper, which is noticeably more stable. The model is a small <strong>collision impulse</strong>: it acts only on a pair that's approaching (closing speed <code>u &gt; 0</code>), it's quadratic in that speed, and it's clamped so it can at most bring the pair's approach to rest — never a bounce, so it can only ever calm the fluid, never inject energy:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the collision-impulse viscosity</span><span class="lang">zig</span></figcaption><pre><code class="zig">const u: f32 = zm.dot(my_vel - b_vel[kk], n);   // closing speed along the line of centres
-if (u &gt; 0.0) {                                  // only if approaching
-    const w: f32 = if (w_lin &lt; 1.0) w_lin else 1.0;        // 1 inside h/2, fading to 0 at h
-    const imp_raw: f32 = c.params.visc_beta * w * u * u;   // quadratic in the closing speed
-    const imp: f32 = if (imp_raw &lt; u) imp_raw else u;      // clamp: never overshoot to a bounce
-    my_vel = my_vel - n * zm.splat2(0.5 * imp);            // half to each side
-}</code></pre></figure>
-  <h3>Gravity, predict, finalize: move, and hit the walls gracefully</h3>
-  <p>Three per-particle kernels bracket the neighbour work. <strong>gravityMouse</strong> applies gravity and any mouse push to the velocity. <strong>predict</strong> remembers each particle's current position (into <code>prev</code>) and advances it by its velocity. <strong>applyAndFinalize</strong> (run last) adds the accumulated correction, keeps particles inside the box, and recovers each velocity from how far it actually moved.</p>
-  <p>The wall handling here fixed a bug that resisted fixes for a long time: particles <strong>exploding in the corners</strong>. The cause was a hard clamp that pinned a cornered particle to the <em>exact</em> corner point on both axes at once. Several particles landing on the identical point made the near-density term blow up — and they shot apart. The fix is a soft push that ramps up near a wall (so density stays smooth), plus a tiny per-particle nudge along the wall so two particles never share one point:</p>
-  <figure class="code"><figcaption><span class="path">sort_kernels.zig &mdash; the corner-explosion fix</span><span class="lang">zig</span></figcaption><pre><code class="zig">const band: f32 = c.params.h;   // start pushing one radius from the wall
-const push: f32 = 0.25;
-if (p[0] < band) {                 p[0] += (band - p[0]) * push; }
-else if (p[0] > c.params.dom_w - band) { p[0] -= (p[0] - (c.params.dom_w - band)) * push; }
-// ... same for the vertical walls ...
-// hard safety clamp, with a sub-particle jitter ALONG the wall so two
-// cornered particles never land on the exact same point (which spiked density)
-const jitter: f32 = @as(f32, @floatFromInt(i % 7)) * 0.3;   // 0..1.8 px</code></pre></figure>
-  <h3>The whole sub-step, on one line</h3>
-  <p>Put together, each sub-step the host records is eleven dispatches — three per-particle steps, the five-kernel sort, then the two neighbour walks and the finalize:</p>
-  <figure class="code"><figcaption><span class="path">examples/wgpu_fluid_sort/wgpu_fluid_sort.zig &mdash; the per-sub-step sequence</span><span class="lang">zig</span></figcaption><pre><code class="zig">s.pipe.run("gravityMouse");      // gravity + mouse → velocity
-s.pipe.run("viscosity");         // collision-impulse drag (on last step's sorted grid)
-s.pipe.run("predict");           // remember prev, advance by velocity
-s.pipe.run("clearGrid");         // ─┐
-s.pipe.run("countGrid");         //  │ counting sort: reorder pos/vel/prev
-s.pipe.run("prefixSum");         //  │ into cell order so the neighbour
-s.pipe.run("scatter");           //  │ walks below read contiguous memory
-s.pipe.run("copyback");          // ─┘
-s.pipe.run("density");           // measure crowding   (neighbour walk #1)
-s.pipe.run("force");             // push apart          (neighbour walk #2)
-s.pipe.run("applyAndFinalize");  // apply, clamp to walls, recover velocity</code></pre></figure>
-  <p>That sequence, run three times per frame for 20,000 particles, batched into a single submit, with the results drawn straight from GPU memory — that's the whole fluid. (Viscosity runs <em>before</em> the sort, so it uses last sub-step's ordering — a damping term doesn't mind a slightly stale grid; density and force run <em>after</em>, on the fresh one.)</p>
-</section>
-<section id="perf" class="reveal">
-  <p class="sec-num">08 — performance</p>
-  <h2>Making it fast: what every optimization actually does</h2>
-  <p>A simulation can be correct and still too slow to use. The number that matters here is <strong>milliseconds per sub-step</strong> — how long one of those kernel sequences takes on the phone. Lower is better; to hit a smooth 60 frames per second with three sub-steps per frame, the budget is tight. Here's the path the project actually walked, from where it started to where it is now:</p>
-  <div class="ladder">
-    <div class="rung"><div class="what"><b>Starting point</b> — single-writer grid</div><div class="ms">15.5 ms</div><div class="bar"><i style="width:100%"></i></div></div>
-    <div class="rung"><div class="what"><b>Atomic grid build</b> — parallel binning</div><div class="ms">11.9 ms</div><div class="bar"><i style="width:77%"></i></div></div>
-    <div class="rung"><div class="what"><b>Bigger workgroups + arithmetic trims</b></div><div class="ms">~10 ms</div><div class="bar"><i style="width:65%"></i></div></div>
-    <div class="rung"><div class="what"><b>Counting sort</b> — cell-contiguous neighbours</div><div class="ms">3.8 ms</div><div class="bar"><i style="width:25%"></i></div></div>
-  </div>
-  <p>At three sub-steps a frame, 3.8 ms each comes to about 11 milliseconds of compute — so the simulation clears the 60-frames-per-second bar with real headroom, and on the test phone (an Adreno GPU) it runs at close to 90. That's the whole point of measuring in milliseconds per sub-step rather than frames per second: the frame rate hides behind the display's refresh cap, but the sub-step time is the honest throughput number, and it's what dropped.</p>
-  <p>The last step is the big one — it nearly tripled the throughput in a single change. It's also the most important idea in this whole document, so it's worth being precise about <em>why</em> it works.</p>
-  <h3>The headline: coalesced memory, and why the sort pays for itself</h3>
-  <p>On a GPU, threads run in lockstep groups (a "warp" — 32 or 64 of them). When all the threads in a group read memory at the same instant, the hardware can satisfy them efficiently only if the addresses they want are <strong>next to each other</strong> — then one wide memory transaction serves the whole group. That's called a <em>coalesced</em> read. If the addresses are scattered, the hardware must issue a separate transaction per thread, and the group stalls while they trickle in one by one. Same number of bytes, many times the latency.</p>
-  <p>Now look at the neighbour walk. The slow grid stored a list of particle <em>indices</em> per cell, so reading a neighbour meant <code>b_pos[grid_data[slot]]</code> — an index pulled from one place, then a position fetched from wherever <em>that</em> particle happened to live in memory. Adjacent threads, looking at the same cell, chased indices pointing all over the buffer. Every neighbour read was a scattered, uncoalesced jump. For a fluid, the neighbour walks are nearly the entire cost, so this one access pattern dominated the frame.</p>
-  <p>The counting sort fixes it at the source: after the sort, a cell's particles sit in one <strong>contiguous run</strong> of the <code>pos</code> array. The neighbour loop just walks <code>b_pos[kk]</code> for consecutive <code>kk</code> — consecutive addresses — so the reads coalesce, and the same is true for the density and velocity the force pass reads. The fluid does the identical math; it just stops fighting the memory system. The sort itself costs four extra little passes (count, the one-thread scan, scatter, copy-back), but every one of them is cheap and coalesced, and they buy back far more than they cost in the two neighbour walks that follow.</p>
-  <div class="note">
-    <span class="lab">the one-sentence version</span>
-    A GPU's real cost is moving data, not doing math — so the biggest win wasn't a faster calculation, it was <em>reordering the particles in memory</em> so thousands of neighbour reads turn from scattered jumps into contiguous, coalesced loads.
-  </div>
-  <p>Three earlier ideas are still in the code and still pull their weight:</p>
-  <ul class="clean">
-    <li><strong>Atomics for parallel binning.</strong> <code>countGrid</code> and <code>scatter</code> use atomic adds so all 20,000 particles can tally into — and claim slots in — shared cells at once, with the hardware guaranteeing no two collide. Atomics are the price of admission for "many threads writing to shared structures safely."</li>
-    <li><strong>Workgroup size 256.</strong> The GPU runs threads in groups; too small and the chip sits half-idle waiting on memory with nothing else to do. Launching in groups of 256 (up from 64) gives the scheduler enough threads that while some wait for data, others compute — exactly what hides the memory latency the sort doesn't eliminate.</li>
-    <li><strong>Skip the square root.</strong> To tell if a neighbour is in range you compare <em>squared</em> distances, avoiding a square root for the many candidates that turn out too far away — the 3×3 box reaches past the circular radius, so its corners are always out of range and now cost nothing.</li>
-  </ul>
-  <div class="note">
-    <span class="lab">the throughline</span>
-    Nearly every win here is about <em>memory traffic</em>, not arithmetic: bin in parallel, keep the machine busy enough to hide the waits, and above all lay the data out so the neighbour reads are contiguous. On a GPU, in that order of importance.
-  </div>
-</section>
+    const cell: u32 = cellOf(b_pos[i], c.params.n_cols, c.params.n_rows, c.params.h);
+    const slot: u32 = k.atomicAdd(b_grid_counts, cell, 1);
+    const dest: u32 = b_cell_start[cell] + slot;
+    b_scratch[dest] = b_pos[i];
+    b_scratch[num_particles + dest] = b_vel[i];
+    b_scratch[2 * num_particles + dest] = b_prev[i];
+}</code></pre>
 
-<section id="future" class="reveal">
-  <p class="sec-num">09 — the road ahead</p>
-  <h2>The turn we didn't take, and what's actually left</h2>
-  <p>For a long time the plan in this very section was <strong>shared-memory tiling</strong>: assign one thread-group to one cell, have it copy the cell's neighbourhood onto the GPU's small, fast on-chip scratchpad once, then let every particle in the cell read neighbours from the scratchpad instead of making repeated trips to main memory. On paper it's the textbook fix for redundant neighbour reads, and it's the kind of thing that closes the gap to a hand-tuned reference. So it got built — and on this fluid it was about <strong>19% slower</strong>.</p>
-  <h3>Why tiling lost</h3>
-  <p>The killer was <strong>occupancy</strong>. Tiling wants one workgroup per cell, and a workgroup here is 256 threads — but a typical cell holds only ~17–30 particles. So fewer than one lane in eight had a particle to work on; the rest sat idle holding the group open. The scratchpad did save memory traffic, but the machine was so under-filled that it lost far more than it saved. A clean illustration that an optimization can be locally correct — fewer reads! — and globally a loss.</p>
-  <h3>Why the sort won instead</h3>
-  <p>The counting sort chases the same prize — make the neighbour reads cheap — but from the opposite direction. Instead of caching scattered data in fast memory, it <em>rearranges the data so it isn't scattered in the first place</em>, and it keeps the simple, fully-occupied "one thread per particle" launch that fills the machine. Same goal (less effective memory traffic), no occupancy penalty, and a much simpler kernel: no scratchpad, no barrier. It's the better lever, and it's the one that actually moved the number — 10 ms to 3.8.</p>
-  <div class="note gotcha">
-    <span class="lab">the principle that held</span>
-    The reason a losing experiment and a winning one were both safe to try: a trustworthy CPU twin to compare against, a permanent test that the sort is well-formed (every particle in its cell, arrays stay in sync), and changes small enough to verify one at a time. That net is what let the project take big swings — at tiling, then at the sort — without ever gambling the whole simulation on a build it couldn't test directly on the phone.
-  </div>
-  <h3>What's actually left</h3>
-  <p>With the big lever pulled, the rest is tuning, not restructuring: choosing a particle count and cell size that hold a steady 60 frames per second with headroom, and trimming the cost of drawing 20,000 overlapping discs. One structural option remains in reserve — the prefix sum is a single-thread serial scan today, which is fine at ~1,300 cells but would become a parallel scan if the grid ever grew large enough for it to show up in a profile. It doesn't yet. Smaller knobs, turned now that the fluid is fast.</p>
-</section>
-</main>
+<p>The particles are interchangeable, so the sorted order simply becomes the order for the rest of the sub-step and
+the next; nothing is ever unsorted. And with exact ranges, a cell has no fixed capacity to overflow: a dense clump
+keeps every neighbour.</p>
 
-<footer>
-  <div class="fi">
-    <b>zimr</b> — a pure-Zig raylib &amp; Dear ImGui port to WebAssembly + WebGPU.<br>
-    This tutorial covers the compute system (<b>kompute</b>, <b>spv2wgsl</b>, the host) and the
-    20k-particle SPH fluid example.<br>
-    The CPU twin is the oracle · the sort test is the guardrail · one source, two machines.
-  </div>
-</footer>
+<h3 id="density">6.3 Density</h3>
 
-</div>
+<p><code>density</code> walks the nine cells around each particle and sums how close its neighbours are, into two
+numbers: the <em>density</em>, and a sharper <em>near-density</em> that rises steeply as particles come close to
+touching. The near-density is what keeps the fluid from collapsing into itself. After the sort, each neighbour cell is
+one contiguous range, so the loop reads consecutive particles from consecutive memory.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn density(c: k.Ctx(@This())) void {"><summary><code>density</code></summary><pre><code class="zig">/// Per particle: rho = sum(1-q)^2, rho_near = sum(1-q)^3 over the 3x3 neighbourhood,
+/// iterating each cell's CONTIGUOUS sorted range [cell_start[c], cell_start[c+1]).
+pub fn density(c: k.Ctx(@This())) void {
+    const i: u32 = c.id;
+    if (i &gt;= c.params.count) {
+        return;
+    }
+    const my_pos: Vec2 = b_pos[i];
+    var rho: f32 = 0.0;
+    var rho_near: f32 = 0.0;
+    const ccx: i32 = @floor(my_pos[0] / c.params.h);
+    const ccy: i32 = @floor(my_pos[1] / c.params.h);
+    var dy: i32 = -1;
+    while (dy &lt;= 1) : (dy += 1) {
+        var dx: i32 = -1;
+        while (dx &lt;= 1) : (dx += 1) {
+            const nx: i32 = ccx + dx;
+            const ny: i32 = ccy + dy;
+            if (nx &lt; 0 or ny &lt; 0) {
+                continue;
+            }
+            const unx: u32 = @intCast(nx);
+            const uny: u32 = @intCast(ny);
+            if (unx &gt;= c.params.n_cols or uny &gt;= c.params.n_rows) {
+                continue;
+            }
+            const cell: u32 = unx + uny * c.params.n_cols;
+            const start: u32 = b_cell_start[cell];
+            // CAP THE CELL, exactly as `fluid_gpu` does. Its bucket lists hold at most
+            // `max_per_cell` indices and silently drop the overflow, so it never sees more
+            // than 64 neighbours from one cell. This walk used to read the WHOLE range -
+            // and with cellmax running 74..97 that is ~30 extra neighbours per dense cell
+            // that the twin never counts. rho comes out systematically higher from the SAME
+            // configuration, and `rest_density = 15.39` was tuned against the capped number.
+            // Two demos cannot be a controlled comparison while one of them silently counts
+            // a different neighbourhood.
+            const end_raw: u32 = b_cell_start[cell + 1];
+            const end: u32 = if (end_raw - start &gt; max_per_cell) start + max_per_cell else end_raw;
+            var kk: u32 = start;
+            while (kk &lt; end) : (kk += 1) {
+                if (kk == i) {
+                    continue;
+                }
+                const sep: Vec2 = b_pos[kk] - my_pos;
+                const d2: f32 = dot(sep, sep);
+                if (d2 &lt; c.params.h * c.params.h) {
+                    const dist: f32 = @sqrt(d2);
+                    const omq: f32 = 1.0 - dist / c.params.h;
+                    rho += omq * omq;
+                    rho_near += omq * omq * omq;
+                }
+            }
+        }
+    }
+    b_density[i] = .{ rho, rho_near };
+}</code></pre></details>
+
+<h3 id="pressure">6.4 Pressure</h3>
+
+<p><code>force</code> turns the densities into movement: a crowded particle pushes its neighbours away, harder the
+closer they are. The kernel does not change velocities directly; it accumulates a correction of each particle's
+position, which the last kernel of the sub-step turns into velocity.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn force(c: k.Ctx(@This())) void {"><summary><code>force</code></summary><pre><code class="zig">/// Per particle: pressure-only double-density displacement (viscosity is the
+/// separate pre-predict pass). Reads neighbour pos + density from the CONTIGUOUS
+/// sorted ranges.
+pub fn force(c: k.Ctx(@This())) void {
+    const i: u32 = c.id;
+    if (i &gt;= c.params.count) {
+        return;
+    }
+    const my_pos: Vec2 = b_pos[i];
+    const my_d: Vec2 = b_density[i];
+    const my_press: f32 = c.params.k_far * (my_d[0] - c.params.r0);
+    const my_near: f32 = c.params.k_near * my_d[1];
+    var corr: Vec2 = .{ 0.0, 0.0 };
+    const ccx: i32 = @floor(my_pos[0] / c.params.h);
+    const ccy: i32 = @floor(my_pos[1] / c.params.h);
+    var dy: i32 = -1;
+    while (dy &lt;= 1) : (dy += 1) {
+        var dx: i32 = -1;
+        while (dx &lt;= 1) : (dx += 1) {
+            const nx: i32 = ccx + dx;
+            const ny: i32 = ccy + dy;
+            if (nx &lt; 0 or ny &lt; 0) {
+                continue;
+            }
+            const unx: u32 = @intCast(nx);
+            const uny: u32 = @intCast(ny);
+            if (unx &gt;= c.params.n_cols or uny &gt;= c.params.n_rows) {
+                continue;
+            }
+            const cell: u32 = unx + uny * c.params.n_cols;
+            const start: u32 = b_cell_start[cell];
+            // Capped to match `fluid_gpu` - see the note in `density`.
+            const end_raw: u32 = b_cell_start[cell + 1];
+            const end: u32 = if (end_raw - start &gt; max_per_cell) start + max_per_cell else end_raw;
+            var kk: u32 = start;
+            while (kk &lt; end) : (kk += 1) {
+                if (kk == i) {
+                    continue;
+                }
+                const rel: Vec2 = b_pos[kk] - my_pos;
+                const d2: f32 = dot(rel, rel);
+                if (d2 &gt;= c.params.h * c.params.h) {
+                    continue;
+                }
+                const dist: f32 = @sqrt(d2);
+                var dir: Vec2 = undefined;
+                if (dist &gt; 0.5) {
+                    dir = rel * splat2(1.0 / dist);
+                } else {
+                    // Co-location fallback (particles at ~the same point). THE BUG
+                    // this replaces: a FIXED +/-x axis whose sign was `i &lt; kk`. But i,
+                    // kk are sorted SLOTS, and the sort key is cell = cx + cy*n_cols,
+                    // so slot grows with ROW (cy). For a vertically-stacked
+                    // coincident pair the lower row always has the lower slot -&gt;
+                    // always pushed -x, upper row +x. That is a systematic shear
+                    // (v_x grows with y) which funnels particles into the (0,0) and
+                    // (W,H) corners - the bottom-left / top-right ejections. Fix:
+                    // pick a pair-CONSISTENT pseudo-random direction (seed is
+                    // symmetric in i,kk), signed by `i &lt; kk` so it stays
+                    // antisymmetric (momentum-conserving) but has NO axis bias.
+                    const seed: u32 = (i +% kk) *% 2654435761;
+                    const ang: f32 = float(seed % 6283) * 0.001;
+                    const sgn: f32 = if (i &lt; kk) 1.0 else -1.0;
+                    dir = .{ @cos(ang) * sgn, @sin(ang) * sgn };
+                }
+                const omq: f32 = 1.0 - dist / c.params.h;
+                const jd: Vec2 = b_density[kk];
+                const j_press: f32 = c.params.k_far * (jd[0] - c.params.r0);
+                const j_near: f32 = c.params.k_near * jd[1];
+                const disp: f32 = 0.5 * c.params.dt * c.params.dt *
+                    ((my_press + j_press) * omq + (my_near + j_near) * omq * omq);
+                corr = corr - dir * splat2(disp);
+            }
+        }
+    }
+    // NO CORRECTION CLAMP - `fluid_gpu` has none, and this is meant to be its twin.
+    //
+    // There WAS one here (|corr| bounded to h/2), added to stop a rho_near spike in a
+    // corner flinging a particle across the domain. But it also silently changes the
+    // pressure solve wherever the correction is large, which is exactly where the fluid
+    // is deciding how to compress - and with `h` raised from 10 to 22 the clamp bites in
+    // places it never used to. Two demos cannot be compared while one of them quietly
+    // truncates its own pressure. The wall clamp and the 40 px/s speed cap in
+    // `applyAndFinalize` already bound the runaway this was guarding against.
+    b_delta[i] = corr;
+}</code></pre></details>
+
+<h3 id="viscosity">6.5 Viscosity</h3>
+
+<p><code>viscosity</code> makes the fluid behave like water rather than a gas: a drag between particles moving toward
+each other. It acts only on a pair that is approaching, grows with the square of the approach speed, and is limited so
+that at most it brings the pair's approach to rest. It can therefore calm the fluid, and never add energy to it. It
+runs as its own kernel, before the prediction, in the order of Clavet's method, which is more stable than combining it
+with the pressure.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn viscosity(c: k.Ctx(@This())) void {"><summary><code>viscosity</code></summary><pre><code class="zig">/// Per particle: collision-style viscosity (t1178). Acts ONLY on approaching
+/// pairs (closing speed u &gt; 0); the impulse is QUADRATIC in u, then CLAMPED so
+/// it can at most bring the pair's radial motion to rest (u' = u - imp &gt;= 0):
+/// never a bounce, strictly dissipative, 1/2 each. Weight 1 inside h/2, linear to
+/// 0 at h. Reads the STALE sort (last frame's cell_start + the still-sorted
+/// pos) - it runs before predict and the reorder.
+pub fn viscosity(c: k.Ctx(@This())) void {
+    const i: u32 = c.id;
+    if (i &gt;= c.params.count) {
+        return;
+    }
+    const my_pos: Vec2 = b_pos[i];
+    var my_vel: Vec2 = b_vel[i];
+    const ccx: i32 = @floor(my_pos[0] / c.params.h);
+    const ccy: i32 = @floor(my_pos[1] / c.params.h);
+    var dy: i32 = -1;
+    while (dy &lt;= 1) : (dy += 1) {
+        var dx: i32 = -1;
+        while (dx &lt;= 1) : (dx += 1) {
+            const nx: i32 = ccx + dx;
+            const ny: i32 = ccy + dy;
+            if (nx &lt; 0 or ny &lt; 0) {
+                continue;
+            }
+            const unx: u32 = @intCast(nx);
+            const uny: u32 = @intCast(ny);
+            if (unx &gt;= c.params.n_cols or uny &gt;= c.params.n_rows) {
+                continue;
+            }
+            const cell: u32 = unx + uny * c.params.n_cols;
+            const start: u32 = b_cell_start[cell];
+            // Capped to match `fluid_gpu` - see the note in `density`.
+            const end_raw: u32 = b_cell_start[cell + 1];
+            const end: u32 = if (end_raw - start &gt; max_per_cell) start + max_per_cell else end_raw;
+            var kk: u32 = start;
+            while (kk &lt; end) : (kk += 1) {
+                if (kk == i) {
+                    continue;
+                }
+                const sep: Vec2 = b_pos[kk] - my_pos;
+                const dist: f32 = length(sep);
+                if (dist &lt; 0.1 or dist &gt;= c.params.h) {
+                    continue;
+                }
+                const n: Vec2 = sep * splat2(1.0 / dist);
+                const u: f32 = dot(my_vel - b_vel[kk], n);
+                if (u &lt;= 0.0) {
+                    continue;
+                }
+                const w_lin: f32 = 2.0 * (1.0 - dist / c.params.h);
+                const w: f32 = if (w_lin &lt; 1.0) w_lin else 1.0;
+                const imp_raw: f32 = c.params.visc_beta * w * u * u;
+                const imp: f32 = if (imp_raw &lt; u) imp_raw else u;
+                my_vel = my_vel - n * splat2(0.5 * imp);
+            }
+        }
+    }
+    b_vel[i] = my_vel;
+}</code></pre></details>
+
+<h3 id="walls">6.6 Gravity, prediction and walls</h3>
+
+<p>Three kernels surround the neighbour work. <code>gravityMouse</code> adds gravity, and any push from the mouse, to
+each velocity. <code>predict</code> records each position as the previous one and moves the particle by its velocity.
+<code>applyAndFinalize</code>, last, adds the accumulated correction, keeps the particle inside the box, and recovers
+its velocity from how far it actually moved.</p>
+
+<p>The walls are constraints on position. A hard clamp alone would pin a particle in a corner to the corner point on
+both axes; several particles sharing one point make the near-density grow without bound, and they fly apart. So the
+walls push softly over a band near each wall, and the clamp that follows moves each particle by a small amount of its
+own along the wall, so that no two share a point. The velocity is computed after the walls, from the movement that
+remains.</p>
+
+<details class="src-fold" data-src="examples/fluid_sort/sort_kernels.zig" data-decl="pub fn applyAndFinalize(c: k.Ctx(@This())) void {"><summary><code>applyAndFinalize</code></summary><pre><code class="zig">/// Per particle: derive velocity from the PHYSICS step, then resolve the domain
+/// boundary. Velocity is taken BEFORE any boundary position edit (so clamps/pushes
+/// can't pump energy in - the corner-jet fix), then a wall contact removes a
+/// tunable proportion of the normal and tangential velocity (diagnostic knobs).
+pub fn applyAndFinalize(c: k.Ctx(@This())) void {
+    const i: u32 = c.id;
+    if (i &gt;= c.params.count) {
+        return;
+    }
+    // Physics result for this substep: predicted position + the pressure
+    // correction. Velocity is read from THIS, before any boundary edit, so a
+    // position correction can never leak into velocity.
+    // POSITION FIRST, VELOCITY FROM THE FINAL POSITION.
+    //
+    // This is position-based dynamics: the walls are CONSTRAINTS, so the velocity has to be
+    // derived from the position that survives them - `v = (p_final - p_prev) / dt`. It used
+    // to be taken from `p_phys`, BEFORE the wall band and the clamp. That made the wall band
+    // a free teleport: it shoved a particle inward every substep and left its velocity
+    // untouched, so the particle paid nothing for the displacement. An energy pump running
+    // along all four walls. The fluid inflated until it filled the box (rho 11.5 against a
+    // rest density of 15.39) and flung particles clean through the boundary - `cellmax 97`
+    // against an average of 16.7, because `cellOf` clamps every out-of-bounds particle into
+    // cell 0. `fluid_gpu`, which computes v after its clamp, showed none of it (cap 0).
+    var p: Vec2 = b_pos[i] + b_delta[i];
+    // (Re-added) soft inward repulsion over a margin band. POSITION-ONLY: it
+    // edits p, never v - and since predict makes next frame's b_pos = b_prev +
+    // vel*dt, the b_prev cancels in the velocity formula, so this can never pump.
+    const band: f32 = c.params.h;
+    const push: f32 = 0.25;
+    if (p[0] &lt; band) {
+        p[0] += (band - p[0]) * push;
+    } else if (p[0] &gt; c.params.dom_w - band) {
+        p[0] -= (p[0] - (c.params.dom_w - band)) * push;
+    }
+    if (p[1] &lt; band) {
+        p[1] += (band - p[1]) * push;
+    } else if (p[1] &gt; c.params.dom_h - band) {
+        p[1] -= (p[1] - (c.params.dom_h - band)) * push;
+    }
+    // Hard clamp + per-axis jitter (different x/y bases -&gt; 2D scatter, not a
+    // diagonal line). Position-only.
+    const margin: f32 = 1.5;
+    const jx: f32 = float(i % 7) * 0.4;
+    const jy: f32 = float((i / 7) % 7) * 0.4;
+    const lo_x: f32 = margin + jx;
+    const hi_x: f32 = c.params.dom_w - margin - jx;
+    const lo_y: f32 = margin + jy;
+    const hi_y: f32 = c.params.dom_h - margin - jy;
+    const hit_x_lo: bool = p[0] &lt; lo_x;
+    const hit_x_hi: bool = p[0] &gt; hi_x;
+    const hit_y_lo: bool = p[1] &lt; lo_y;
+    const hit_y_hi: bool = p[1] &gt; hi_y;
+    if (hit_x_lo) {
+        p[0] = lo_x;
+    } else if (hit_x_hi) {
+        p[0] = hi_x;
+    }
+    if (hit_y_lo) {
+        p[1] = lo_y;
+    } else if (hit_y_hi) {
+        p[1] = hi_y;
+    }
+    // Wall-contact damping (the experiment): remove a proportion of the into-wall
+    // NORMAL velocity and the along-wall TANGENTIAL velocity. keep = 1 - damp.
+    // The constraint has been applied; NOW the velocity follows from the motion the particle
+    // actually made. A particle stopped by a wall gets a small v here by construction, so
+    // the explicit damping below only shapes what the constraint already resolved.
+    var v: Vec2 = (p - b_prev[i]) * splat2(1.0 / c.params.dt);
+    const kn: f32 = 1.0 - c.params.wall_normal_damp;
+    const kt: f32 = 1.0 - c.params.wall_tangent_damp;
+    const hit_x: bool = hit_x_lo or hit_x_hi;
+    const hit_y: bool = hit_y_lo or hit_y_hi;
+    // Normal = the axis that hit; damp only the INTO-wall direction.
+    if (hit_x_lo and v[0] &lt; 0.0) {
+        v[0] = v[0] * kn;
+    }
+    if (hit_x_hi and v[0] &gt; 0.0) {
+        v[0] = v[0] * kn;
+    }
+    if (hit_y_lo and v[1] &lt; 0.0) {
+        v[1] = v[1] * kn;
+    }
+    if (hit_y_hi and v[1] &gt; 0.0) {
+        v[1] = v[1] * kn;
+    }
+    // Tangential = the perpendicular axis; damp it on any wall touch (friction).
+    // At a corner both components get hit, which is fine (strong corner bleed).
+    if (hit_x) {
+        v[1] = v[1] * kt;
+    }
+    if (hit_y) {
+        v[0] = v[0] * kt;
+    }
+    b_pos[i] = p;
+    const speed: f32 = length(v);
+    const max_speed: f32 = 40.0;
+    if (speed &gt; max_speed) {
+        v = v * splat2(max_speed / speed);
+    }
+    b_vel[i] = v;
+}</code></pre></details>
+
+<h3 id="substep">6.7 The sub-step</h3>
+
+<p>Together, one sub-step is eleven dispatches, recorded into the frame's batch:</p>
+
+<pre class="sketch"><code>   gravityMouse        per particle   gravity and the mouse, into the velocities
+   viscosity           per particle   the drag, on last sub-step's grid
+   predict             per particle   move by the velocity; remember the previous position
+   clearGrid           per cell       \
+   countGrid           per particle    |
+   prefixSum           one thread      |  the counting sort: particles into cell order
+   scatter             per particle    |
+   copyback            per particle   /
+   density             per particle   density and near-density, from the neighbours
+   force               per particle   the pressure correction
+   applyAndFinalize    per particle   the correction applied, the walls, the velocity</code></pre>
+
+<p>Viscosity runs before the sort, so it reads the grid built in the previous sub-step: a damping term is not
+disturbed by a grid a few particle movements old. Density and force run after the sort, on the fresh grid. The
+sequence runs once a frame for 20,000 particles, in one submission, and the renderer draws the result straight from
+GPU memory.</p>
+
+<h2 id="performance">7. Performance</h2>
+
+<p>A simulation can be correct and still too slow. The measure used here is the time of one sub-step: frames per
+second stop at the display's refresh rate, while the sub-step's time keeps showing every change.</p>
+
+<h3 id="measured">7.1 Measured effects</h3>
+
+<p>Measured on one phone's GPU (an Adreno), each technique's effect on the time of one sub-step:</p>
+
+<pre class="sketch"><code>   the grid                                                       ms per sub-step
+   ------------------------------------------------------------   ---------------
+   built by one thread                                            15.5
+   built in parallel, with atomic adds                            11.9
+   with workgroups of 256 threads, and the arithmetic trimmed     about 10
+   with the counting sort: each cell's neighbours contiguous      3.8</code></pre>
+
+<p>A frame at 60 frames per second has 16.7 ms for the simulation and the drawing together; the measure is per
+sub-step so that a frame can hold several when the simulation needs a smaller time step.</p>
+
+<h3 id="coalesced">7.2 Coalesced memory</h3>
+
+<p>A GPU runs threads in lockstep groups of 32 or 64. When the threads of a group read memory together, the hardware
+serves them with one wide transaction if their addresses are adjacent - a <em>coalesced</em> read - and with one
+transaction per thread if the addresses are scattered. The bytes are the same; the time is many times longer.</p>
+
+<pre class="sketch"><code>   neighbours read through an index list       neighbours after the sort
+   ---------------------------------------     ---------------------------------------
+   thread 0: pos[17]                           thread 0: pos[812]
+   thread 1: pos[9402]                         thread 1: pos[813]
+   thread 2: pos[311]                          thread 2: pos[814]
+   thread 3: pos[15020]                        thread 3: pos[815]
+   one transaction for each thread             one transaction for the group</code></pre>
+
+<p>The neighbour walks are nearly the whole cost of the fluid, so their reads decide its speed. Through an index list,
+every neighbour read is a scattered jump. After the sort, a cell's particles are consecutive in memory and the reads
+coalesce, for the positions and for the densities and velocities the pressure kernel reads too. The sort costs four
+small kernels, each of them cheap and coalesced, and the two neighbour walks repay them many times over.</p>
+
+<h3 id="techniques">7.3 Other techniques</h3>
+
+<p>Three other techniques contribute:</p>
+
+<pre class="sketch"><code>   atomic adds          countGrid and scatter let every particle count into, and claim a slot in, a
+                        shared cell at once, with the hardware ensuring that no two collide
+   workgroups of 256    enough threads in flight that while some wait for memory, others compute:
+                        what hides the memory latency the sort does not remove
+   squared distances    a neighbour's range is tested on the squared distance, so the candidates
+                        out of range - the corners of the 3 x 3 cells, always - cost no square root</code></pre>
+
+<h3 id="tiling">7.4 Tiling and sorting</h3>
+
+<p><em>Tiling</em> is the usual way to make repeated neighbour reads cheap: one workgroup takes one cell, copies the
+cell's neighbourhood once into the GPU's small, fast on-chip memory (<code>k.shared</code>), and every thread reads
+its neighbours from there. On this fluid it is slower, by about a fifth. A workgroup has 256 threads, and a cell holds
+17 to 30 particles, so fewer than one thread in eight has a particle; the rest hold the workgroup open with nothing to
+do, and the GPU is mostly idle. Tiling saves memory traffic and loses more than it saves.</p>
+
+<p>The counting sort reaches the same goal from the other side. Rather than copy scattered data into fast memory, it
+stops the data from being scattered, and it keeps one thread for each particle, which keeps every thread busy.</p>
 
 </body>
 </html>

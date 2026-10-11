@@ -33,6 +33,9 @@ const std = @import("std");
 const shader_iface = @import("shader_interface");
 const wgsl_reflect = @import("wgsl_reflect");
 const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
+const indexOf = std.mem.indexOf;
 
 /// The `.decoration` half of every descriptor-bound `@extern` this file emits,
 /// as a `print` format fragment - takes the set, then the binding. One spelling
@@ -345,7 +348,7 @@ pub fn emit(comptime IfaceMod: type, writer: anytype) !void {
         const info = @typeInfo(T).@"struct";
         comptime var out_loc: u32 = 0;
         inline for (info.field_names, info.field_types) |field_name, field_type| {
-            const is_frag_depth: bool = comptime std.mem.eql(u8, field_name, "frag_depth");
+            const is_frag_depth: bool = comptime eql(u8, field_name, "frag_depth");
             if (is_frag_depth) {
                 // No decoration at all - the backend maps this exact extern name to
                 // the FragDepth builtin, exactly like std.spirv's "position".
@@ -1262,7 +1265,7 @@ fn expectedCells(comptime IfaceMod: type) [expectedCellCount(IfaceMod)]ExpectedC
 /// when it matches, otherwise a description of the FIRST disagreement (owned by `gpa`).
 pub fn checkWgsl(
     comptime IfaceMod: type,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     wgsl: []const u8,
 ) !?[]u8 {
     const expected = comptime expectedCells(IfaceMod);
@@ -1296,7 +1299,7 @@ pub fn checkWgsl(
             );
         };
         const kind_matches: bool = cell.kind == found.kind;
-        const name_matches: bool = std.mem.eql(u8, cell.name, found.name);
+        const name_matches: bool = eql(u8, cell.name, found.name);
         if (!kind_matches or !name_matches) {
             return try allocPrint(
                 gpa,
@@ -1328,7 +1331,7 @@ fn FakeAttr(comptime elem_kind: ElemKindForTest, comptime loc: u32) type {
 
 test "emit handles VS schema (attrs + outputs + uniforms)" {
     const t: type = std.testing;
-    var aw: std.Io.Writer.Allocating = .init(t.allocator);
+    var aw: Io.Writer.Allocating = .init(t.allocator);
     defer aw.deinit();
 
     const Iface = struct {
@@ -1348,25 +1351,25 @@ test "emit handles VS schema (attrs + outputs + uniforms)" {
     const out: []const u8 = aw.written();
 
     // Attributes: the Attr type's own location rides on the declaration.
-    try t.expect(std.mem.indexOf(u8, out, "pub const pos = @extern(*addrspace(.input) const @Vector(3, f32), " ++
+    try t.expect(indexOf(u8, out, "pub const pos = @extern(*addrspace(.input) const @Vector(3, f32), " ++
         ".{ .name = \"pos\", .decoration = .{ .location = 0 } });") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const uv = @extern(*addrspace(.input) const @Vector(2, f32), " ++
+    try t.expect(indexOf(u8, out, "pub const uv = @extern(*addrspace(.input) const @Vector(2, f32), " ++
         ".{ .name = \"uv\", .decoration = .{ .location = 1 } });") != null);
     // Outputs: writable pointer, location by declaration order.
-    try t.expect(std.mem.indexOf(u8, out, "pub const frag_uv = @extern(*addrspace(.output) [2]f32, " ++
+    try t.expect(indexOf(u8, out, "pub const frag_uv = @extern(*addrspace(.output) [2]f32, " ++
         ".{ .name = \"frag_uv\", .decoration = .{ .location = 0 } });") != null);
     // A VS loose uniform: one-field block in group 0, binding 0.
-    try t.expect(std.mem.indexOf(u8, out, "pub const _mvp_block = @extern(*addrspace(.uniform) const extern struct " ++
+    try t.expect(indexOf(u8, out, "pub const _mvp_block = @extern(*addrspace(.uniform) const extern struct " ++
         "{ value: [4]@Vector(4, f32) }, .{ .name = \"mvp\", .decoration = .{ .descriptor = " ++
         ".{ .set = 0, .binding = 0 } } });") != null);
     // Nothing is decorated through asm any more.
-    try t.expect(std.mem.indexOf(u8, out, "zm_location") == null);
-    try t.expect(std.mem.indexOf(u8, out, "zm_binding") == null);
+    try t.expect(indexOf(u8, out, "zm_location") == null);
+    try t.expect(indexOf(u8, out, "zm_binding") == null);
 }
 
 test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
     const t: type = std.testing;
-    var aw: std.Io.Writer.Allocating = .init(t.allocator);
+    var aw: Io.Writer.Allocating = .init(t.allocator);
     defer aw.deinit();
 
     const Iface = struct {
@@ -1390,9 +1393,9 @@ test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
     const out: []const u8 = aw.written();
 
     // Inputs: sequential locations, carried on the declaration.
-    try t.expect(std.mem.indexOf(u8, out, "pub const frag_uv = @extern(*addrspace(.input) const [2]f32, " ++
+    try t.expect(indexOf(u8, out, "pub const frag_uv = @extern(*addrspace(.input) const [2]f32, " ++
         ".{ .name = \"frag_uv\", .decoration = .{ .location = 0 } });") != null);
-    try t.expect(std.mem.indexOf(u8, out, "pub const frag_normal = @extern(*addrspace(.input) const [3]f32, " ++
+    try t.expect(indexOf(u8, out, "pub const frag_normal = @extern(*addrspace(.input) const [3]f32, " ++
         ".{ .name = \"frag_normal\", .decoration = .{ .location = 1 } });") != null);
     // Samplers: a REAL texture at (group, N) and its sampler at (group, N+1),
     // with the slots from the same solver the host layout uses.
@@ -1408,20 +1411,20 @@ test "emit handles FS schema (inputs + samplers + uniforms + outputs)" {
                 ".{{ .descriptor = .{{ .set = {d}, .binding = {d} }} }} }});",
             .{ name, name, slots[i].group, slots[i].binding + 1 },
         );
-        try t.expect(std.mem.indexOf(u8, out, texture_decl) != null);
-        try t.expect(std.mem.indexOf(u8, out, sampler_decl) != null);
+        try t.expect(indexOf(u8, out, texture_decl) != null);
+        try t.expect(indexOf(u8, out, sampler_decl) != null);
     }
     // The u32 placeholder is gone for good.
-    try t.expect(std.mem.indexOf(u8, out, "_sampler2d") == null);
+    try t.expect(indexOf(u8, out, "_sampler2d") == null);
     // An FS loose uniform: one-field block in group 2.
-    try t.expect(std.mem.indexOf(u8, out, "pub const _col_block = @extern(*addrspace(.uniform) const extern struct " ++
+    try t.expect(indexOf(u8, out, "pub const _col_block = @extern(*addrspace(.uniform) const extern struct " ++
         "{ value: [4]f32 }, .{ .name = \"col\", .decoration = .{ .descriptor = " ++
         ".{ .set = 2, .binding = 0 } } });") != null);
     // Outputs: writable pointer.
-    try t.expect(std.mem.indexOf(u8, out, "pub const out_color = @extern(*addrspace(.output) [4]f32, " ++
+    try t.expect(indexOf(u8, out, "pub const out_color = @extern(*addrspace(.output) [4]f32, " ++
         ".{ .name = \"out_color\", .decoration = .{ .location = 0 } });") != null);
     // No Attributes block emitted (FS has no @hasDecl(_, "Attributes")).
-    try t.expect(std.mem.indexOf(u8, out, "// Vertex attributes") == null);
+    try t.expect(indexOf(u8, out, "// Vertex attributes") == null);
 }
 
 test "checkWgsl: ssao_blur's WGSL as 2307 produced it is refused, the fixed one accepted" {
@@ -1459,7 +1462,7 @@ test "checkWgsl: ssao_blur's WGSL as 2307 produced it is refused, the fixed one 
     try t.expect(problem != null);
     defer if (problem) |p| t.allocator.free(p);
     // The FIRST thing wrong is the UBO: the schema puts it at group 2.
-    try t.expect(std.mem.indexOf(u8, problem.?, "@group(0) @binding(0)") != null);
+    try t.expect(indexOf(u8, problem.?, "@group(0) @binding(0)") != null);
 
     // The same shader as the current generator emits it.
     const fixed: []const u8 =

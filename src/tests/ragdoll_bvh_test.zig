@@ -45,6 +45,9 @@ const vec = zm.vec;
 const radFromDeg = zm.radFromDeg;
 const float = zm.float;
 const expect = std.testing.expect;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
 
 /// Euler angles to a quaternion in the BVH channel order the file declares.
 ///
@@ -69,18 +72,18 @@ fn quatFromChannels(chans: []const codecs.bvh.Channel, values: []const f32) Quat
 }
 
 test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(
+    var fh: Io.File = Io.Dir.cwd().openFile(
         io,
         "examples/geno_dance/dance1_20s.bvh",
         .{},
     ) catch return;
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -109,7 +112,7 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
 
     var m: rbt.Model = try rbt.skeletonToModel(gpa, names, parents, offsets, .{});
     defer m.deinit();
-    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    var d: rbt.Data = try .init(gpa, &m);
     defer d.deinit();
 
     // ---- decode one frame's channels into local rotations + root translation ----
@@ -179,17 +182,17 @@ test "ragdoll: the real Geno skeleton plays the real dance frame exactly" {
 }
 
 test "retarget: a skeleton onto ITSELF reproduces the source pose exactly" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(
+    const io: Io = threaded.io();
+    var fh: Io.File = Io.Dir.cwd().openFile(
         io,
         "examples/geno_dance/dance1_20s.bvh",
         .{},
     ) catch return;
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -261,7 +264,7 @@ test "retarget: a skeleton onto ITSELF reproduces the source pose exactly" {
 }
 
 test "retarget: the mixamorig: prefix is stripped, and an unmapped rig is visibly empty" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // * THE REAL MISMATCH, from the files: Mixamo prefixes every joint. Without stripping, a
     // LAFAN1 table matches NOTHING - and the failure mode is a rest pose, not an error, which
@@ -294,12 +297,12 @@ test "retarget: the mixamorig: prefix is stripped, and an unmapped rig is visibl
 /// Load a BVH file and hand back its parsed data, or null when the fixture is absent.
 fn loadBvhFixture(
     gpa: Allocator,
-    io: std.Io,
+    io: Io,
     path: []const u8,
 ) !?codecs.bvh.Data {
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    var file: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch return null;
     defer file.close(io);
-    const stat: std.Io.File.Stat = try file.stat(io);
+    const stat: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, stat.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -309,12 +312,12 @@ fn loadBvhFixture(
 /// Load an FBX file's SKELETON as BVH-shaped data, or null when the fixture is absent.
 fn loadFbxSkeletonFixture(
     gpa: Allocator,
-    io: std.Io,
+    io: Io,
     path: []const u8,
 ) !?codecs.bvh.Data {
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    var file: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch return null;
     defer file.close(io);
-    const stat: std.Io.File.Stat = try file.stat(io);
+    const stat: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, stat.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -324,10 +327,10 @@ fn loadFbxSkeletonFixture(
 }
 
 test "retarget: LAFAN1 dance onto the Mixamo skeleton keeps bone DIRECTIONS, not lengths" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     var source: codecs.bvh.Data =
         (try loadBvhFixture(gpa, io, "examples/geno_dance/dance1_20s.bvh")) orelse return;
@@ -493,10 +496,10 @@ test "retarget: LAFAN1 dance onto the Mixamo skeleton keeps bone DIRECTIONS, not
 }
 
 test "retarget: rest alignment puts a target's REST bone where its own rest points" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var source: codecs.bvh.Data =
         (try loadBvhFixture(gpa, io, "examples/geno_dance/dance1_20s.bvh")) orelse return;
     defer source.deinit();
@@ -608,10 +611,10 @@ test "retarget: rest alignment puts a target's REST bone where its own rest poin
 }
 
 test "retarget: an FBX's bind orientations describe a real pose, unlike its bare offsets" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var target: codecs.bvh.Data =
         (try loadFbxSkeletonFixture(gpa, io, "assets/Drop_Kick.fbx")) orelse return;
     defer target.deinit();
@@ -646,13 +649,13 @@ test "retarget: an FBX's bind orientations describe a real pose, unlike its bare
             joint.name[i + 1 ..]
         else
             joint.name;
-        if (std.mem.eql(u8, bare, "LeftHand")) {
+        if (eql(u8, bare, "LeftHand")) {
             hand_height = rest_positions[index][1];
         }
-        if (std.mem.eql(u8, bare, "LeftFoot")) {
+        if (eql(u8, bare, "LeftFoot")) {
             foot_height = rest_positions[index][1];
         }
-        if (std.mem.eql(u8, bare, "Hips")) {
+        if (eql(u8, bare, "Hips")) {
             hips_height = rest_positions[index][1];
         }
     }

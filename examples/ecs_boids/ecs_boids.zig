@@ -10,6 +10,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -51,7 +52,7 @@ const IntegrateCtx = struct {
 const State = struct {
     font: z.Font,
     es: ecs.Registry,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     snap: [num_boids]Snap = undefined,
     frame_count: usize = 0,
 };
@@ -68,12 +69,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .cap = .{ .entities = num_boids + 16, .arches = 4, .chunks = 8, .chunk = 4096 },
     });
     errdefer es.deinit(gpa);
-    var rng: std.Random.DefaultPrng = .init(0xB01D5);
-    const r: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(0xB01D5);
+    const r: Random = rng.random();
     const w: f32 = @max(64.0, f.window.widthf());
     const h: f32 = @max(64.0, f.window.heightf());
     for (0..num_boids) |_| {
-        const e: ecs.Entity = try ecs.Entity.reserveImmediateOrErr(&es);
+        const e: ecs.Entity = try .reserveImmediateOrErr(&es);
         const angle: f32 = r.float(f32) * tau;
         const speed: f32 = min_speed + r.float(f32) * (max_speed - min_speed);
         _ = try e.changeArchImmediateOrErr(&es, gpa, struct {

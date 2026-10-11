@@ -10,6 +10,7 @@ const zm = @import("zm");
 
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
+const Vec = zm.Vec;
 
 const solid_count: usize = 4;
 
@@ -19,7 +20,7 @@ const State = struct {
 };
 
 // spread the four solids out along X
-const positions = [solid_count]zm.Vec{
+const positions = [solid_count]Vec{
     pointVec(-4.2, 0, 0),
     pointVec(-1.4, 0, 0),
     pointVec(1.4, 0, 0),

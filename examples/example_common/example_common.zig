@@ -85,10 +85,10 @@ pub fn center(w: f32, h: f32) Vec2 {
 ///
 ///     pub const panic = std.debug.FullPanic(common.reportPanic);
 ///
-/// ** THE MESSAGE GOES TO THE BROWSER CONSOLE, not to the page. A panic has already happened,
+/// ** THE MESSAGE GOES TO THE PLATFORM'S LOG (the browser's console), not to the page. A panic has already happened,
 /// and the drawing path is exactly what cannot be trusted to report it.
 pub fn reportPanic(msg: []const u8, first_trace_addr: ?usize) noreturn {
     _ = first_trace_addr;
-    z.web.dom.log(.err, msg);
+    z.platform.current.log(.err, msg);
     @trap();
 }

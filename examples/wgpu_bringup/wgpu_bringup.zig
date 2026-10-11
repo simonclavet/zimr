@@ -16,6 +16,7 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -235,7 +236,7 @@ pub fn main() !void {
     s.fullscreen_vbo = z.wgpu.createBufferInit(
         s.gpu_frame.device,
         s.gpu_frame.queue,
-        std.mem.sliceAsBytes(&fullscreen_verts),
+        sliceAsBytes(&fullscreen_verts),
         .{ .vertex = true, .copy_dst = true },
         "bringup_fullscreen_vbo",
     );

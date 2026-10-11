@@ -13,6 +13,7 @@
 //! `zig build wgpu-zimrphysics-demo-standalone`.
 
 const std = @import("std");
+const ArenaAllocator = std.heap.ArenaAllocator;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -40,6 +41,9 @@ const quat_identity = zm.quat_identity;
 const rotate = zm.rotate;
 const pi = zm.pi;
 const radFromDeg = zm.radFromDeg;
+const Quat = zm.Quat;
+const cosRad = zm.cosRad;
+const sinRad = zm.sinRad;
 
 const c = z.colors;
 const zp = z.zimrphysics;
@@ -244,7 +248,7 @@ const State = struct {
     font: z.Font,
     gpa: Allocator,
     world: zp.World,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     ui_host: z.UiHost,
     profiling: bool = false, // "Profile" button: freeze the profiler + pause stepping
     watching: bool = false, // "Watch" button: auto-freeze the profiler on a frame-time spike
@@ -287,13 +291,13 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const world: zp.World = try zp.World.init(gpa, 1024);
+    const world: zp.World = try .init(gpa, 1024);
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     s.* = .{
         .font = font,
         .gpa = gpa,
         .world = world,
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .ui_host = z.UiHost.init(gpa, font),
     };
 }
@@ -319,7 +323,7 @@ fn addFlatFloor(world: *zp.World, gpa: Allocator, half: f32) !void {
 fn sceneShapes(world: *zp.World, gpa: Allocator, state: *State) !void {
     try addFlatFloor(world, gpa, 9);
     state.launch_shape = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.4 } });
-    const qid: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
+    const qid: Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
     const y: f32 = 3.0;
 
     const s_sphere: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.5 } });
@@ -377,7 +381,7 @@ fn sceneShapes(world: *zp.World, gpa: Allocator, state: *State) !void {
     });
 
     // Rotated/translated: a box pre-posed 45 deg about Z; lands on an edge.
-    const rt_rot: zm.Quat = quatFromAxisAngle(vec(0, 0, 1), pi * 0.25);
+    const rt_rot: Quat = quatFromAxisAngle(vec(0, 0, 1), pi * 0.25);
     const s_rt: zp.ShapeId = try world.shapes.addRotatedTranslated(gpa, base_box, rt_rot, vec(0, 0, 0));
     _ = try world.createBody(.{ .shape = s_rt, .position = vec(7.0, y, 0), .material = 4 });
 }
@@ -557,7 +561,7 @@ fn sceneRods(world: *zp.World, gpa: Allocator, state: *State) !void {
         const py: f32 = 3.0 + fi * 0.15;
         const tilt_x: f32 = 0.3 + fi * 0.12;
         const tilt_z: f32 = 0.7 - fi * 0.09;
-        const rot: zm.Quat = qmul(quatFromAxisAngle(vec(0, 0, 1), tilt_z), quatFromAxisAngle(vec(1, 0, 0), tilt_x));
+        const rot: Quat = qmul(quatFromAxisAngle(vec(0, 0, 1), tilt_z), quatFromAxisAngle(vec(1, 0, 0), tilt_x));
         const bi: zp.BodyHandle = try world.createBody(.{
             .shape = rod,
             .position = vec(px, py, 0),
@@ -640,7 +644,7 @@ fn sceneFunnel(world: *zp.World, gpa: Allocator, state: *State) !void {
     var w: u32 = 0;
     while (w < 4) : (w += 1) {
         const yaw: f32 = pi * 0.5 * float(w);
-        const rot: zm.Quat = qmul(quatFromAxisAngle(vec(1, 0, 0), tilt), quatFromAxisAngle(vec(0, 1, 0), yaw));
+        const rot: Quat = qmul(quatFromAxisAngle(vec(1, 0, 0), tilt), quatFromAxisAngle(vec(0, 1, 0), yaw));
         _ = try world.createBody(.{
             .shape = wall,
             .position = vec(@sin(yaw) * 4.5, 3.0, @cos(yaw) * 4.5),
@@ -1115,8 +1119,8 @@ fn sceneGear(world: *zp.World, gpa: Allocator, state: *State) !void {
     state.launch_shape = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.35 } });
     const hub: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.12 } });
     // Cylinder axis is local Y; rotate 90deg about X so the disk faces the camera (axis -> Z).
-    const face_z: zm.Quat = quatFromAxisAngle(vec(1, 0, 0), pi * 0.5);
-    const qid: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
+    const face_z: Quat = quatFromAxisAngle(vec(1, 0, 0), pi * 0.5);
+    const qid: Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
 
     const radii = [_]f32{ 1.1, 0.8, 0.55 };
     const gy: f32 = 4.0;
@@ -1211,8 +1215,8 @@ fn sceneRackPinion(world: *zp.World, gpa: Allocator, state: *State) !void {
     // Pinion: disk + spoke compound, hinged about Z, velocity-motored.
     const r_pin: f32 = 0.7;
     const py: f32 = 3.2;
-    const face_z: zm.Quat = quatFromAxisAngle(vec(1, 0, 0), pi * 0.5);
-    const qid: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
+    const face_z: Quat = quatFromAxisAngle(vec(1, 0, 0), pi * 0.5);
+    const qid: Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
     const disk: zp.ShapeId = try world.shapes.add(gpa, .{
         .cylinder = .{ .half_height = 0.18, .radius = r_pin, .convex_radius = 0.03 },
     });
@@ -1795,8 +1799,8 @@ fn sceneClockwork(world: *zp.World, gpa: Allocator, state: *State) !void {
     const radii = [_]f32{ 0.6, 1.3, 0.5, 1.1, 0.7 };
     const w0: f32 = 2.5;
     const gy: f32 = 3.0;
-    const face_z: zm.Quat = quatFromAxisAngle(vec(1, 0, 0), pi * 0.5);
-    const qid: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
+    const face_z: Quat = quatFromAxisAngle(vec(1, 0, 0), pi * 0.5);
+    const qid: Quat = quatFromAxisAngle(vec(0, 1, 0), 0.0);
     const hub: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.12 } });
     // Centre the train: the centres span the sum of adjacent radius pairs.
     var span: f32 = 0;
@@ -1952,7 +1956,7 @@ fn sceneStirrer(world: *zp.World, gpa: Allocator, state: *State) !void {
         const phi: f32 = float(seg) * (2.0 * pi / float(seg_count));
         _ = try world.createBody(.{
             .shape = seg_shape,
-            .position = vec(r_wall * zm.cosRad(phi), 1.5, r_wall * zm.sinRad(phi)),
+            .position = vec(r_wall * cosRad(phi), 1.5, r_wall * sinRad(phi)),
             .rotation = quatFromAxisAngle(vec(0, 1, 0), -(phi + pi / 2.0)),
             .motion_type = .static,
         });
@@ -2094,8 +2098,8 @@ fn buildRagdoll(
         .{ .hh = 0.2, .r = 0.06, .pos = vec(-0.15, 0.3, 0), .horiz = false },
         .{ .hh = 0.2, .r = 0.06, .pos = vec(0.15, 0.3, 0), .horiz = false },
     };
-    const z90: zm.Quat = quatFromAxisAngle(vec(0, 0, 1), pi / 2.0);
-    const idq: zm.Quat = quatFromAxisAngle(vec(0, 0, 1), 0);
+    const z90: Quat = quatFromAxisAngle(vec(0, 0, 1), pi / 2.0);
+    const idq: Quat = quatFromAxisAngle(vec(0, 0, 1), 0);
     var bodies: [12]zp.BodyHandle = undefined;
     for (parts, 0..) |pt, i| {
         const shape: zp.ShapeId = try world.shapes.add(gpa, .{ .capsule = .{
@@ -2231,7 +2235,7 @@ fn stressBlender(world: *zp.World, gpa: Allocator, state: *State, o: Vec) !void 
         const phi: f32 = float(seg) * (2.0 * pi / float(seg_count));
         _ = try world.createBody(.{
             .shape = seg_shape,
-            .position = o + vec(r_wall * zm.cosRad(phi), 3.8, r_wall * zm.sinRad(phi)),
+            .position = o + vec(r_wall * cosRad(phi), 3.8, r_wall * sinRad(phi)),
             .rotation = quatFromAxisAngle(vec(0, 1, 0), -(phi + pi / 2.0)),
             .motion_type = .static,
         });
@@ -2353,7 +2357,7 @@ fn stressGalton(world: *zp.World, gpa: Allocator, o: Vec, state: *State) !void {
         .radius = 0.25,
         .convex_radius = 0.02,
     } });
-    const peg_rot: zm.Quat = quatFromAxisAngle(vec(1, 0, 0), pi / 2.0);
+    const peg_rot: Quat = quatFromAxisAngle(vec(1, 0, 0), pi / 2.0);
     const dx: f32 = 1.4;
     const dy: f32 = 1.1;
     const y_top: f32 = 13.0;

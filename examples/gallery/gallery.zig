@@ -12,6 +12,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
@@ -113,7 +114,7 @@ const SparklesState = struct {
     next_slot: usize = 0,
 };
 
-fn updateSparkles(s: *SparklesState, f: *z.Frame, font: z.Font, rand: std.Random) void {
+fn updateSparkles(s: *SparklesState, f: *z.Frame, font: z.Font, rand: Random) void {
     s.frame_count += 1;
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
@@ -196,7 +197,7 @@ const State = struct {
     sparkles: SparklesState = .{},
     counter: CounterState = .{},
     // Distinct seed -> an independent RNG stream for the sparkles cell.
-    sparkles_rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xC3C3_C3C3),
+    sparkles_rng: Random.DefaultPrng = Random.DefaultPrng.init(0xC3C3_C3C3),
 };
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {

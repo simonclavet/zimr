@@ -21,31 +21,25 @@ const z = @import("zimr");
 const zm = @import("zm");
 const clamp = zm.clamp;
 const bufPrint = std.fmt.bufPrint;
-const floatEps = zm.floatEps;
-const zn = @import("zn");
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
 // The sweep's table, its CPU reference and the comparison now live in the engine:
 // `src/gpu/zn_conformance.zig`. This file keeps the rendering and nothing else.
 const conf = @import("zn_conformance");
-const Tn = conf.Tn;
 const Kind = conf.Kind;
-const Case = conf.Case;
 const cases = conf.cases;
 const Comparison = conf.Comparison;
 const compare = conf.compare;
+const barFor = conf.barFor;
 const side = conf.side;
 const count = conf.count;
-const learning_rate = conf.learning_rate;
-const layernorm_epsilon = conf.layernorm_epsilon;
-const elu_alpha = conf.elu_alpha;
-const momentum = conf.momentum;
-const huber_delta = conf.huber_delta;
-const clamp_lo = conf.clamp_lo;
-const clamp_hi = conf.clamp_hi;
 const zn_binary = @import("zn_binary");
 const zn_matmul = @import("zn_matmul");
 const zn_unary = @import("zn_unary");
+const zrl_binary = @import("zrl_binary");
 const float = zm.float;
 const Color = zm.Color;
+const Vec2 = zm.Vec2;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 // One WGSL per ENTRY, not per kernel file - the build names each embed after its entry.
@@ -106,42 +100,47 @@ comptime {
     const source: []const u8 = @embedFile("zimrnum_field.zig");
     for (.{ "a", "b", "c" }) |field| {
         const needle: []const u8 = ".upload(." ++ field ++ ",";
-        if (std.mem.indexOf(u8, source, needle) == null) {
+        if (indexOf(u8, source, needle) == null) {
             @compileError("zn_binary buffer `" ++ field ++ "` is never uploaded by the host");
         }
     }
     for (.{"x"}) |field| {
         const needle: []const u8 = "pipe_un.upload(." ++ field ++ ",";
-        if (std.mem.indexOf(u8, source, needle) == null) {
+        if (indexOf(u8, source, needle) == null) {
             @compileError("zn_unary buffer `" ++ field ++ "` is never uploaded by the host");
+        }
+    }
+    for (.{ "a", "b" }) |field| {
+        const needle: []const u8 = "pipe_rl.upload(." ++ field ++ ",";
+        if (indexOf(u8, source, needle) == null) {
+            @compileError("zrl_binary buffer `" ++ field ++ "` is never uploaded by the host");
         }
     }
 }
 
+// zrl_binary.zig copies zn_binary.zig's `Buffers` and `Params`: the host binds both files the same way, so the two
+// layouts must stay identical - every field's name, type and offset, and the total size.
 comptime {
-    // 23 rows x 22 entries of string comparison overruns the default quota; the check is O(n*m)
-    // and n and m both grow with the port, so raise it once here rather than per addition.
-    @setEvalBranchQuota(200_000);
-    for (cases) |c| {
-        const names: []const [:0]const u8 = switch (c.kind) {
-            .binary => &zn_binary.kernels,
-            .unary => &zn_unary.kernels,
-            .matmul => &zn_matmul.kernels,
-        };
-        var found: usize = 0;
-        for (names) |name| {
-            if (std.mem.eql(u8, name, c.entry)) {
-                found += 1;
+    for (.{ .{ zn_binary.Buffers, zrl_binary.Buffers }, .{ zn_binary.Params, zrl_binary.Params } }) |pair| {
+        const original_info = @typeInfo(pair[0]).@"struct";
+        const copied_info = @typeInfo(pair[1]).@"struct";
+        if (@sizeOf(pair[0]) != @sizeOf(pair[1]) or original_info.field_names.len != copied_info.field_names.len) {
+            @compileError("zrl_binary's " ++ @typeName(pair[1]) ++ " no longer matches zn_binary's");
+        }
+        for (
+            original_info.field_names,
+            copied_info.field_names,
+            original_info.field_types,
+            copied_info.field_types,
+        ) |original_name, copied_name, original_type, copied_type| {
+            const same_name: bool = eql(u8, original_name, copied_name);
+            if (!same_name or original_type != copied_type or
+                @offsetOf(pair[0], original_name) != @offsetOf(pair[1], copied_name))
+            {
+                @compileError("zrl_binary's field `" ++ copied_name ++ "` no longer matches zn_binary's");
             }
         }
-        if (found != 1) {
-            @compileError("sweep row '" ++ c.label ++ "' names entry '" ++ c.entry ++
-                "', which its kernel file does not export");
-        }
     }
-    coverEvery(zn_binary.kernels, .binary);
-    coverEvery(zn_unary.kernels, .unary);
-    coverEvery(zn_matmul.kernels, .matmul);
 }
 
 /// Assert every entry of one kernel file is exercised by exactly one row.
@@ -149,7 +148,7 @@ fn coverEvery(comptime names: anytype, comptime kind: Kind) void {
     for (names) |name| {
         var rows: usize = 0;
         for (cases) |c| {
-            if (c.kind == kind and std.mem.eql(u8, name, c.entry)) {
+            if (c.kind == kind and eql(u8, name, c.entry)) {
                 rows += 1;
             }
         }
@@ -167,6 +166,34 @@ fn coverEvery(comptime names: anytype, comptime kind: Kind) void {
     }
 }
 
+comptime {
+    // 23 rows x 22 entries of string comparison overruns the default quota; the check is O(n*m)
+    // and n and m both grow with the port, so raise it once here rather than per addition.
+    @setEvalBranchQuota(200_000);
+    for (cases) |c| {
+        const names: []const [:0]const u8 = switch (c.kind) {
+            .binary => &zn_binary.kernels,
+            .unary => &zn_unary.kernels,
+            .matmul => &zn_matmul.kernels,
+            .rl_binary => &zrl_binary.kernels,
+        };
+        var found: usize = 0;
+        for (names) |name| {
+            if (eql(u8, name, c.entry)) {
+                found += 1;
+            }
+        }
+        if (found != 1) {
+            @compileError("sweep row '" ++ c.label ++ "' names entry '" ++ c.entry ++
+                "', which its kernel file does not export");
+        }
+    }
+    coverEvery(zn_binary.kernels, .binary);
+    coverEvery(zn_unary.kernels, .unary);
+    coverEvery(zn_matmul.kernels, .matmul);
+    coverEvery(zrl_binary.kernels, .rl_binary);
+}
+
 /// One operation's verdict, filled in as the page walks the list.
 const Result = struct {
     done: bool = false,
@@ -181,28 +208,11 @@ const State = struct {
     pipe: z.Compute(zn_binary),
     pipe_mm: z.Compute(zn_matmul),
     pipe_un: z.Compute(zn_unary),
+    /// zimrrl's reinforcement-learning rows: the cartpole steps, PPO's clipped sample, the discriminator reward.
+    pipe_rl: z.Compute(zrl_binary),
 
-    /// The two dense operands both backends see.
-    field_a: []f32,
-    field_b: []f32,
-    /// `|field_a| + 0.5`: strictly positive, for the rows whose operation needs it.
-    field_p: []f32,
-    /// `tanh(noise)`, so every value lies strictly inside (-1, 1) - the domain of `atanh`.
-    field_u: []f32,
-    /// The `where` row's selector, `greater(a, b)`, which the kernel reads from buffer `c`.
-    field_c: []f32,
-    /// A narrow band of magnitudes near 1e-6, both signs. Narrow because the sweep's bar is
-    /// `ulps * peak`: a field spanning decades takes its bar from its largest element and stops
-    /// testing the small ones at all.
-    field_t: []f32,
-    /// -- *** ALL FOUR CPU REFERENCES, COMPUTED ONCE --
-    ///
-    /// The inputs never change, so each operation's answer is fixed. Computing them up front
-    /// removes the bug that produced `FAIL add worst 23.9`: the sweep used to rebuild `cpu_out`
-    /// the instant it advanced, while `readLatest` still held the PREVIOUS dispatch's data - so
-    /// operation N's GPU result was compared against operation N+1's reference. Nothing was wrong
-    /// with either kernel.
-    cpu_ref: [cases.len][]f32,
+    /// The sweep's inputs and every case's reference answer (`conf.Fixture`).
+    fixture: conf.Fixture,
     cpu_out: []f32,
     gpu_out: []f32,
 
@@ -248,205 +258,70 @@ const State = struct {
 };
 
 fn deinit(gpa: Allocator, s: *State) void {
-    gpa.free(s.field_a);
-    gpa.free(s.field_b);
-    gpa.free(s.field_p);
-    gpa.free(s.field_u);
-    gpa.free(s.field_c);
-    gpa.free(s.field_t);
-    for (s.cpu_ref) |r| {
-        gpa.free(r);
-    }
+    s.fixture.deinit(gpa);
     gpa.free(s.cpu_out);
     gpa.free(s.gpu_out);
     z.unloadFont(gpa, s.font);
     s.pipe.deinit();
     s.pipe_mm.deinit();
     s.pipe_un.deinit();
-}
-
-/// Build the two operands with zimrnum, then every operation's reference answer.
-///
-/// * Called ONCE. The inputs are fixed, so the four answers are fixed, and recomputing one of
-/// them mid-sweep is what let a stale readback be judged against the wrong reference.
-fn buildFields(s: *State) !void {
-    const shape = [_]usize{ side, side };
-    const a: zn.Tensor(f32) = try zn.Tensor(f32).fromSlice(s.field_a, &shape);
-    const b: zn.Tensor(f32) = try zn.Tensor(f32).fromSlice(s.field_b, &shape);
-
-    // Operand A: noise. Two labels off one seed, so nothing has to be coordinated.
-    const rng: zn.Rng = zn.Rng.init(20260904);
-    rng.split(0).fillNormal(f32, s.field_a);
-
-    // Operand B: a single row ramp, stretched down the field. `broadcastTo` makes that a view
-    // with a stride of 0 on the row axis - no storage, no copy.
-    var ramp_row: [side]f32 = undefined;
-    for (0..side) |i| {
-        ramp_row[i] = float(@as(u32, @intCast(i))) / float(side) * 2.0 - 1.0;
-    }
-    const row: zn.Tensor(f32) = try zn.Tensor(f32).fromSlice(&ramp_row, &.{ 1, side });
-    const stretched: zn.Tensor(f32) = try row.broadcastTo(&shape);
-
-    // ** MATERIALISE IT. The stretched view is fine for the CPU walk and cannot be bound to a
-    // kernel, which takes a dense buffer. Adding it to a zeroed field is the densify step.
-    b.fill(0.0);
-    try zn.add(f32, b, b, stretched);
-
-    // * `|a| + 0.5`, so `log` is defined too - a plain `|a|` would still hit zero and give -inf.
-    for (s.field_p, s.field_a) |*slot, x| {
-        slot.* = @abs(x) + 0.5;
-    }
-    // * `tanh` maps the whole real line into (-1, 1) exactly, so this field is inside the domain
-    // of `atanh` by construction rather than by clamping - and it still spans most of the range.
-    for (s.field_u, s.field_a) |*slot, x| {
-        slot.* = zm.tanh(x);
-    }
-    // Eight decades of magnitude below 1, alternating sign. Spread by index rather than drawn,
-    // so the smallest values are guaranteed present rather than merely likely.
-    // A NARROW BAND. THE FIRST VERSION SPANNED EIGHT DECADES AND WAS USELESS.
-    //
-    // The sweep compares the worst ABSOLUTE difference against a bar of `ulps * peak`, where peak
-    // is the largest reference value in the row. Spread a field over eight decades and the peak
-    // comes from the largest element, so the bar sits far above anything the smallest elements
-    // could fail. Measured on the exact bug these rows were added for - the old `tanh`, which
-    // returns 0 where the answer is x:
-    //
-    //     eight decades:  peak 9.97e-2  worst 1.92e-8  bar 4.75e-8   MISSED
-    //     band near 1e-6: peak 1.79e-6  worst 2.67e-8  bar 8.52e-13  CAUGHT
-    //
-    // **The rows would not have caught the bug they exist for.** A band keeps every value inside
-    // one decade, so the peak IS the scale of the field and the bar means something at that
-    // scale. One band tests one scale; 1e-6 is where a cancelling f32 formula has lost most of
-    // its digits without yet collapsing to zero.
-    for (s.field_t, 0..) |*slot, i| {
-        const step: f32 = @floatFromInt(i % 8);
-        const jitter: f32 = 1.0 + 0.9 * step / 8.0;
-        const magnitude: f32 = 1.0e-6 * jitter;
-        slot.* = if (i % 2 == 0) magnitude else -magnitude;
-    }
-
-    const positive: Tn = try Tn.fromSlice(s.field_p, &shape);
-    const unit: Tn = try Tn.fromSlice(s.field_u, &shape);
-    const tiny: Tn = try Tn.fromSlice(s.field_t, &shape);
-    for (s.cpu_ref, cases) |slot, c| {
-        const src: Tn = switch (c.input) {
-            .noise => a,
-            .positive => positive,
-            .unit => unit,
-            .tiny => tiny,
-        };
-        const out: Tn = try Tn.fromSlice(slot, &shape);
-        // Zeroed first: a reduction writes only `out_len` values, and the rest of the reference
-        // would otherwise be whatever the allocator handed over - visible in the heatmap even
-        // though the verdict ignores it.
-        out.fill(0);
-        try c.cpu(out, src, b);
-    }
+    s.pipe_rl.deinit();
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 16);
 
-    var pipe: z.Compute(zn_binary) = try z.Compute(zn_binary).initGpu(
+    var pipe: z.Compute(zn_binary) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
         &pipelineEntries(zn_binary),
     );
     pipe.element_count = count;
-    // Row-major strides for `bcast_add`: `a` is a full field, `b` is its first row stretched
-    // down - `b_row = 0` is the broadcast, exactly as `broadcastTo` does it on the CPU.
-    pipe.params = .{
-        .count = count,
-        .scalar = learning_rate,
-        .cols = side,
-        .delta = huber_delta,
-        .momentum = momentum,
-        .a_row = side,
-        //  is the only row that uses it; every other leaves each element alone.
-        .repeat_count = 2,
-        .a_col = 1,
-        .b_row = 0,
-        .b_col = 1,
-        // Their own fields, not the strides above: see the note in zn_binary.
-        .slice_start = side / 2,
-        .left_columns = side / 2,
-    };
-
-    var pipe_mm: z.Compute(zn_matmul) = try z.Compute(zn_matmul).initGpu(
+    pipe.params = conf.binaryParams(zn_binary.Params);
+    var pipe_mm: z.Compute(zn_matmul) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
         &pipelineEntries(zn_matmul),
     );
     pipe_mm.element_count = count;
-    // (64, 64) @ (64, 64). The tiled entry needs the same thread count: 4x4 tiles of 256 lanes.
-    pipe_mm.params = .{ .m = side, .n = side, .kdim = side };
-
-    var pipe_un: z.Compute(zn_unary) = try z.Compute(zn_unary).initGpu(
+    pipe_mm.params = conf.matmulParams(zn_matmul.Params);
+    var pipe_un: z.Compute(zn_unary) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
         &pipelineEntries(zn_unary),
     );
     pipe_un.element_count = count;
-    pipe_un.params = .{
-        .count = count,
-        .scalar = learning_rate,
-        .cols = side,
-        .epsilon = layernorm_epsilon,
-        .lo = clamp_lo,
-        .hi = clamp_hi,
-        .alpha = elu_alpha,
-        .pool = 2,
-    };
+    pipe_un.params = conf.unaryParams(zn_unary.Params);
+    var pipe_rl: z.Compute(zrl_binary) = try .initGpu(
+        gpa,
+        f.gpu.device,
+        f.gpu.queue,
+        &pipelineEntries(zrl_binary),
+    );
+    pipe_rl.element_count = count;
+    pipe_rl.params = conf.rlBinaryParams(zrl_binary.Params);
 
     s.* = .{
         .font = font,
         .pipe = pipe,
         .pipe_mm = pipe_mm,
         .pipe_un = pipe_un,
-        .field_a = try gpa.alloc(f32, count),
-        .field_b = try gpa.alloc(f32, count),
-        .field_p = try gpa.alloc(f32, count),
-        .field_u = try gpa.alloc(f32, count),
-        .field_c = try gpa.alloc(f32, count),
-        .field_t = try gpa.alloc(f32, count),
-        // Filled by the loop below: one reference per `cases` entry, so the count follows
-        // the table and cannot drift from it.
-        .cpu_ref = undefined,
+        .pipe_rl = pipe_rl,
+        .fixture = try conf.Fixture.build(gpa),
         .cpu_out = try gpa.alloc(f32, count),
         .gpu_out = try gpa.alloc(f32, count),
     };
-    for (&s.cpu_ref) |*slot| {
-        slot.* = try gpa.alloc(f32, count);
-    }
-    try buildFields(s);
-    s.pipe.upload(.a, s.field_a);
-    s.pipe.upload(.b, s.field_b);
-    // -- *** THE MASK THE `where` KERNEL READS --
-    //
-    // `where_pick` reads its selector from the `c` buffer, and **nothing was uploading it**. The
-    // headless twin test filled `c` by hand and passed; the sweep never did, so on the device the
-    // kernel selected from an empty buffer and the row failed with a worst of 4.2 - the input
-    // data itself, not a 0/1 mask.
-    //
-    // * A buffer a kernel READS but the host never WRITES is invisible to every check that runs
-    // on the host, because the host's own twin test fills it as part of the test. The device is
-    // the only thing that can see it, and it did.
-    for (s.field_c, s.field_a, s.field_b) |*slot, x, y| {
-        slot.* = if (x > y) 1 else 0;
-    }
-    s.pipe.upload(.c, s.field_c);
-    s.pipe_mm.upload(.a, s.field_a);
-    s.pipe_mm.upload(.b, s.field_b);
-    s.pipe_un.upload(.x, s.field_a);
-}
-
-/// The bar this row is judged against: its absolute allowance plus `ulps` units in the last place
-/// of its own peak magnitude.
-fn barFor(c: Case, peak: f32) f32 {
-    return c.tol + c.ulps * peak * floatEps(f32);
+    s.pipe.upload(.a, s.fixture.a);
+    s.pipe.upload(.b, s.fixture.b);
+    s.pipe.upload(.c, s.fixture.mask);
+    s.pipe_mm.upload(.a, s.fixture.a);
+    s.pipe_mm.upload(.b, s.fixture.b);
+    s.pipe_un.upload(.x, s.fixture.a);
+    s.pipe_rl.upload(.a, s.fixture.a);
+    s.pipe_rl.upload(.b, s.fixture.b);
 }
 
 /// One cell of a heatmap: blue below zero, red above, brightness with magnitude.
@@ -508,10 +383,37 @@ fn drawField(
 
 /// One pipeline's dispatch counters, in a type all three can be read into.
 ///
-/// The three pipelines are different `Compute(M)` instantiations, so each has its own
+/// The four pipelines are different `Compute(M)` instantiations, so each has its own
 /// `Generation` type even though the fields match. A local struct is what lets one variable
 /// hold the answer from whichever pipeline this row uses.
 const Gen = struct { submitted: u64, mirrored: u64 };
+
+/// The only hand-drawn text left: three labels under the heatmaps, which sit outside the UI
+/// window on purpose.
+fn textRow(
+    f: *z.Frame,
+    s: *State,
+    y: *f32,
+    color: Color,
+    size: f32,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    var buf: [160]u8 = undefined;
+    const text: []const u8 = bufPrint(&buf, fmt, args) catch return;
+    f.gl.text(.{ 12, y.* }, text, .{ .size = size, .color = color, .font = &s.font });
+    y.* += size + 4;
+}
+
+fn caption(
+    f: *z.Frame,
+    s: *State,
+    x: f32,
+    y: *f32,
+    text: []const u8,
+) void {
+    f.gl.text(.{ x, y.* }, text, .{ .size = 13, .color = z.colors.slate_400, .font = &s.font });
+}
 
 fn update(f: *z.Frame, s: *State) void {
     // Tapping anywhere switches the operation; both backends recompute from the same inputs.
@@ -520,7 +422,7 @@ fn update(f: *z.Frame, s: *State) void {
     // Tapping anywhere used to re-run the sweep, which meant every scroll, every stray touch and
     // every attempt to read a number restarted the measurement. A verifier that discards its
     // result when you look at it is a verifier you cannot read.
-    const mouse: zm.Vec2 = z.getMousePosition(f.input);
+    const mouse: Vec2 = z.getMousePosition(f.input);
     const over: bool = mouse[0] >= s.rerun.x and mouse[0] <= s.rerun.x + s.rerun.width and
         mouse[1] >= s.rerun.y and mouse[1] <= s.rerun.y + s.rerun.height;
     // Wheel, and vertical drag anywhere outside the button. Clamped to real content: scrolling
@@ -621,10 +523,10 @@ fn update(f: *z.Frame, s: *State) void {
         // the possibility of the two sides being compared on different data, which is the bug
         // that produced `FAIL add worst 23.9` earlier in this port.
         switch (cases[s.op].input) {
-            .noise => s.pipe_un.upload(.x, s.field_a),
-            .positive => s.pipe_un.upload(.x, s.field_p),
-            .unit => s.pipe_un.upload(.x, s.field_u),
-            .tiny => s.pipe_un.upload(.x, s.field_t),
+            .noise => s.pipe_un.upload(.x, s.fixture.a),
+            .positive => s.pipe_un.upload(.x, s.fixture.positive),
+            .unit => s.pipe_un.upload(.x, s.fixture.unit),
+            .tiny => s.pipe_un.upload(.x, s.fixture.tiny),
         }
         inline for (cases, 0..) |c, i| {
             if (i == s.op) {
@@ -641,6 +543,10 @@ fn update(f: *z.Frame, s: *State) void {
                         s.pipe_mm.run(c.entry, c.threads);
                         s.await_generation = s.pipe_mm.readGeneration().submitted;
                     },
+                    .rl_binary => {
+                        s.pipe_rl.run(c.entry, c.threads);
+                        s.await_generation = s.pipe_rl.readGeneration().submitted;
+                    },
                 }
             }
         }
@@ -651,6 +557,7 @@ fn update(f: *z.Frame, s: *State) void {
         .binary => s.pipe.readLatest(.out),
         .unary => s.pipe_un.readLatest(.out),
         .matmul => s.pipe_mm.readLatest(.out),
+        .rl_binary => s.pipe_rl.readLatest(.out),
     };
     // THE ROW RETIRES WHEN THE MIRROR REACHES ITS OWN DISPATCH
     //
@@ -658,7 +565,7 @@ fn update(f: *z.Frame, s: *State) void {
     // them is what removes the guess - a row that has not been dispatched yet
     // (`await_generation == null`) and one whose data has not arrived both wait, and neither
     // waits a frame longer than it has to.
-    // The three pipelines are different `Compute(M)` instantiations, so their `Generation`
+    // The four pipelines are different `Compute(M)` instantiations, so their `Generation`
     // types are distinct even though the fields match. Reading the fields out separately is
     // what lets one variable hold the answer from any of them.
     const generation: Gen = switch (cases[s.op].kind) {
@@ -674,6 +581,10 @@ fn update(f: *z.Frame, s: *State) void {
             const g: @TypeOf(s.pipe_mm).Generation = s.pipe_mm.readGeneration();
             break :blk Gen{ .submitted = g.submitted, .mirrored = g.mirrored };
         },
+        .rl_binary => blk: {
+            const g: @TypeOf(s.pipe_rl).Generation = s.pipe_rl.readGeneration();
+            break :blk Gen{ .submitted = g.submitted, .mirrored = g.mirrored };
+        },
     };
     const arrived: bool = if (s.await_generation) |wanted|
         generation.mirrored >= wanted
@@ -686,7 +597,7 @@ fn update(f: *z.Frame, s: *State) void {
     } else if (readback) |out| {
         const n: usize = @min(out.len, s.gpu_out.len);
         @memcpy(s.gpu_out[0..n], out[0..n]);
-        const reference: []const f32 = s.cpu_ref[s.op];
+        const reference: []const f32 = s.fixture.references[s.op];
         @memcpy(s.cpu_out[0..n], reference[0..n]);
         // Only the values this row actually produces.
         const judged: usize = @min(n, cases[s.op].out_len);
@@ -812,33 +723,6 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .size = 13, .color = z.colors.slate_100, .font = &s.font },
     );
     z.endDrawing(f.gl);
-}
-
-/// The only hand-drawn text left: three labels under the heatmaps, which sit outside the UI
-/// window on purpose.
-fn textRow(
-    f: *z.Frame,
-    s: *State,
-    y: *f32,
-    color: Color,
-    size: f32,
-    comptime fmt: []const u8,
-    args: anytype,
-) void {
-    var buf: [160]u8 = undefined;
-    const text: []const u8 = bufPrint(&buf, fmt, args) catch return;
-    f.gl.text(.{ 12, y.* }, text, .{ .size = size, .color = color, .font = &s.font });
-    y.* += size + 4;
-}
-
-fn caption(
-    f: *z.Frame,
-    s: *State,
-    x: f32,
-    y: *f32,
-    text: []const u8,
-) void {
-    f.gl.text(.{ x, y.* }, text, .{ .size = 13, .color = z.colors.slate_400, .font = &s.font });
 }
 
 /// Descriptor-only: the standalone runner or the launcher drives this.

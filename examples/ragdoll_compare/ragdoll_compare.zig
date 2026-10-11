@@ -138,6 +138,73 @@ const State = struct {
     rate_hz: u32,
 };
 
+/// A static floor, the same in both worlds.
+fn floorWorld(gpa: Allocator) !zp.World {
+    var world: zp.World = try .init(gpa, 256);
+    errdefer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    // Timing is compared, so neither side gets to skip work by sleeping.
+    world.settings.allow_sleeping = false;
+    world.settings.penetration_slop = 0.005;
+    const ground: zp.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{
+        .shape = ground,
+        .position = vec(0, 0, -0.5),
+        .motion_type = .static,
+        .friction = 0.7,
+    });
+    return world;
+}
+
+/// The model's `squat` keyframe, 1.2 m up and tipped onto its side - the drop `robot_physics`'
+/// ragdoll test uses. A body that lands upright makes few contacts and shows little.
+fn dropPose(s: *State) void {
+    const m: *const rbt.Model = &s.imported.model;
+    _ = rmj.applyKeyframe(m, &s.data, s.robot.keyframes[0]);
+    s.data.pos[2] = 1.2;
+    const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
+    s.data.pos[3] = tipped[0];
+    s.data.pos[4] = tipped[1];
+    s.data.pos[5] = tipped[2];
+    s.data.pos[6] = tipped[3];
+    @memset(s.data.vel, 0);
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+}
+
+/// Build both worlds and drop both ragdolls from the same pose.
+fn buildWorlds(gpa: Allocator, s: *State) !void {
+    const m: *rbt.Model = &s.imported.model;
+    m.opt.timestep = 1.0 / float(s.rate_hz);
+    // The maximal ragdoll is built at qpos0: its joint limits are measured from there.
+    @memcpy(s.data.pos, m.qpos0);
+    @memset(s.data.vel, 0);
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+    s.world_maximal = try floorWorld(gpa);
+    s.ragdoll = try rmx.build(gpa, &s.world_maximal, m, &s.data, .{
+        .limits = s.limit_mode != .none,
+        .swing_twist_limits = s.limit_mode == .all,
+    });
+
+    dropPose(s);
+    try s.ragdoll.setPose(gpa, &s.world_maximal, &s.data);
+    s.world_reduced = try floorWorld(gpa);
+    s.bridge = try bridge_mod.Bridge.init(gpa, &s.world_reduced, m, &s.data, 256);
+    s.bridge.listen(&s.world_reduced);
+    // Motors live on the constraints, which were just rebuilt.
+    s.motors_on = false;
+
+    s.accumulator = 0;
+    s.sim_time = 0;
+    s.window_time = 0;
+    s.reduced_timer = .{};
+    s.maximal_timer = .{};
+    s.joint_gap_peak = 0;
+}
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
     s.doc = try z.codecs.xml.parse(gpa, @embedFile("humanoid.xml"), null);
@@ -180,6 +247,13 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     try buildWorlds(gpa, s);
 }
 
+fn destroyWorlds(gpa: Allocator, s: *State) void {
+    s.bridge.deinit(&s.world_reduced);
+    s.world_reduced.deinit(gpa);
+    s.ragdoll.deinit();
+    s.world_maximal.deinit(gpa);
+}
+
 fn deinit(gpa: Allocator, s: *State) void {
     destroyWorlds(gpa, s);
     gpa.free(s.a_des);
@@ -197,78 +271,35 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.doc.deinit();
 }
 
-/// A static floor, the same in both worlds.
-fn floorWorld(gpa: Allocator) !zp.World {
-    var world: zp.World = try .init(gpa, 256);
-    errdefer world.deinit(gpa);
-    world.gravity = vec(0, 0, -9.81);
-    // Timing is compared, so neither side gets to skip work by sleeping.
-    world.settings.allow_sleeping = false;
-    world.settings.penetration_slop = 0.005;
-    const ground: zp.ShapeId = try world.shapes.add(gpa, .{
-        .box = .{ .half_extent = vec(6, 6, 0.5), .convex_radius = 0.01 },
-    });
-    _ = try world.createBody(.{
-        .shape = ground,
-        .position = vec(0, 0, -0.5),
-        .motion_type = .static,
-        .friction = 0.7,
-    });
-    return world;
-}
-
-/// Build both worlds and drop both ragdolls from the same pose.
-fn buildWorlds(gpa: Allocator, s: *State) !void {
-    const m: *rbt.Model = &s.imported.model;
-    m.opt.timestep = 1.0 / float(s.rate_hz);
-    // The maximal ragdoll is built at qpos0: its joint limits are measured from there.
-    @memcpy(s.data.pos, m.qpos0);
-    @memset(s.data.vel, 0);
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
-    s.world_maximal = try floorWorld(gpa);
-    s.ragdoll = try rmx.build(gpa, &s.world_maximal, m, &s.data, .{
-        .limits = s.limit_mode != .none,
-        .swing_twist_limits = s.limit_mode == .all,
-    });
-
-    dropPose(s);
-    try s.ragdoll.setPose(gpa, &s.world_maximal, &s.data);
-    s.world_reduced = try floorWorld(gpa);
-    s.bridge = try .init(gpa, &s.world_reduced, m, &s.data, 256);
-    s.bridge.listen(&s.world_reduced);
-    // Motors live on the constraints, which were just rebuilt.
-    s.motors_on = false;
-
-    s.accumulator = 0;
-    s.sim_time = 0;
-    s.window_time = 0;
-    s.reduced_timer = .{};
-    s.maximal_timer = .{};
-    s.joint_gap_peak = 0;
-}
-
-fn destroyWorlds(gpa: Allocator, s: *State) void {
-    s.bridge.deinit(&s.world_reduced);
-    s.world_reduced.deinit(gpa);
-    s.ragdoll.deinit();
-    s.world_maximal.deinit(gpa);
-}
-
-/// The model's `squat` keyframe, 1.2 m up and tipped onto its side - the drop `robot_physics`'
-/// ragdoll test uses. A body that lands upright makes few contacts and shows little.
-fn dropPose(s: *State) void {
+/// Torques toward the target pose: each hinge asks for an IMPLICIT critically damped spring's
+/// acceleration, and floating-base inverse dynamics turns that into torques with the free root
+/// allowed to respond (its rows are zero: it has no actuator). The fixed-base form - the joint
+/// rows of M a + c - threw the falling body off at the velocity cap.
+fn holdTorques(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-    _ = rmj.applyKeyframe(m, &s.data, s.robot.keyframes[0]);
-    s.data.pos[2] = 1.2;
-    const tipped: Quat = quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
-    s.data.pos[3] = tipped[0];
-    s.data.pos[4] = tipped[1];
-    s.data.pos[5] = tipped[2];
-    s.data.pos[6] = tipped[3];
-    @memset(s.data.vel, 0);
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
+    @memset(s.a_des, 0);
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] != .hinge) {
+            continue;
+        }
+        const q: u32 = m.jnt_qpos_adr[j];
+        const v: u32 = m.jnt_dof_adr[j];
+        s.a_des[v] = rmx.stableSpringAccel(
+            s.target.pos[q] - s.data.pos[q],
+            s.data.vel[v],
+            hold_frequency_reduced,
+            1.0,
+            m.opt.timestep,
+        );
+    }
+    rbt.biasForce(m, &s.data);
+    rmx.floatingBaseTorques(m, &s.data, s.a_des, s.dense_mass, s.full_accel, s.torque);
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] == .hinge) {
+            const v: u32 = m.jnt_dof_adr[j];
+            s.data.applied_force[v] = s.torque[v];
+        }
+    }
 }
 
 /// One step of each engine, each timed on its own.
@@ -303,34 +334,122 @@ fn stepBoth(s: *State) void {
     s.joint_gap_peak = @max(s.joint_gap_peak, s.ragdoll.jointError(&s.world_maximal));
 }
 
-/// Torques toward the target pose: each hinge asks for an IMPLICIT critically damped spring's
-/// acceleration, and floating-base inverse dynamics turns that into torques with the free root
-/// allowed to respond (its rows are zero: it has no actuator). The fixed-base form - the joint
-/// rows of M a + c - threw the falling body off at the velocity cap.
-fn holdTorques(s: *State) void {
-    const m: *const rbt.Model = &s.imported.model;
-    @memset(s.a_des, 0);
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
-            continue;
-        }
-        const q: u32 = m.jnt_qpos_adr[j];
-        const v: u32 = m.jnt_dof_adr[j];
-        s.a_des[v] = rmx.stableSpringAccel(
-            s.target.pos[q] - s.data.pos[q],
-            s.data.vel[v],
-            hold_frequency_reduced,
-            1.0,
-            m.opt.timestep,
-        );
+fn setRate(s: *State, rate: u32) void {
+    if (s.rate_hz != rate) {
+        s.rate_hz = rate;
+        s.want_reset = true;
     }
-    rbt.biasForce(m, &s.data);
-    rmx.floatingBaseTorques(m, &s.data, s.a_des, s.dense_mass, s.full_accel, s.torque);
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] == .hinge) {
-            const v: u32 = m.jnt_dof_adr[j];
-            s.data.applied_force[v] = s.torque[v];
+}
+
+fn reducedSpeed(s: *const State) f32 {
+    var fastest: f32 = 0;
+    for (0..s.imported.model.nv) |i| {
+        fastest = @max(fastest, @abs(s.data.vel[i]));
+    }
+    return fastest;
+}
+
+fn setLimitMode(s: *State, mode: LimitMode) void {
+    if (s.limit_mode != mode) {
+        s.limit_mode = mode;
+        s.want_reset = true;
+    }
+}
+
+fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    const captured: bool = u.wantCaptureMouse();
+    const narrow: bool = ui.Ui.isNarrow(viewport_w);
+    const panel_w: f32 = if (narrow) viewport_w - 16 else @min(470.0, viewport_w * 0.42);
+    u.setNextWindowPos(.{ 8, 8 }, .{});
+    // A height cap so a phone gets a scrollbar instead of a panel that runs off the screen.
+    u.setNextWindowSize(.{ panel_w, @min(470.0, viewport_h * 0.62) }, .{});
+    if (u.window("Ragdolls: reduced vs maximal", .{})) |window| {
+        defer window.close();
+        u.text("one humanoid, limp; same geoms, masses, floor", .{});
+        u.text("{d} steps/s   t = {d:.1} s", .{ s.rate_hz, s.sim_time });
+        for (rates) |rate| {
+            var label_buf: [16]u8 = undefined;
+            const label: []const u8 = bufPrint(&label_buf, "{d} Hz", .{rate}) catch "rate";
+            if (u.button(label, .{})) {
+                setRate(s, rate);
+            }
         }
+        u.separator();
+        u.text("REDUCED  robot.zig  (orange)", .{});
+        u.text("  {d:.0} us/step   speed {d:.2}", .{ s.reduced_timer.us_per_step, reducedSpeed(s) });
+        u.text("  contacts {d}   joint gap: none, by construction", .{s.data.contact_count});
+        u.separator();
+        u.text("MAXIMAL  zimrphysics  (blue)", .{});
+        u.text("  {d:.0} us/step   speed {d:.2}", .{
+            s.maximal_timer.us_per_step,
+            s.ragdoll.peakSpeed(&s.world_maximal),
+        });
+        u.text("  joint gap {d:.1} mm   (peak {d:.1} mm)", .{
+            s.ragdoll.jointError(&s.world_maximal) * 1000.0,
+            s.joint_gap_peak * 1000.0,
+        });
+        u.separator();
+        u.text("maximal joint limits (now: {t})", .{s.limit_mode});
+        if (u.button("all limits", .{})) {
+            setLimitMode(s, .all);
+        }
+        if (u.button("hinge limits only", .{})) {
+            setLimitMode(s, .hinges_only);
+        }
+        if (u.button("no limits", .{})) {
+            setLimitMode(s, .none);
+        }
+        u.separator();
+        _ = u.checkbox("hold the squat", &s.hold_pose);
+        u.text("  left: implicit CT 20 Hz; right: motors 10 Hz", .{});
+        u.separator();
+        if (u.button("drop again", .{})) {
+            s.want_reset = true;
+        }
+        _ = u.checkbox("pause", &s.paused);
+    }
+    return captured;
+}
+
+/// Draw one collision geom at a body pose, shifted sideways by `offset_x` (Z-up metres).
+fn drawGeom(
+    s: *State,
+    gl: *z.WgpuGl,
+    g: usize,
+    body_pos: Vec,
+    body_rot: Quat,
+    tint: Color,
+    offset_x: f32,
+) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_pos[g]) + vec(offset_x, 0, 0);
+    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+    const place: Mat = mulMat(
+        mulMat(zUpToYUp(), translation(world_pos[0], world_pos[1], world_pos[2])),
+        world_rot,
+    );
+    switch (m.geom_shape[g]) {
+        .sphere => |sph| {
+            s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+            z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+        },
+        .capsule => |cap| {
+            // The cylinder mesh runs along Y over [0, h] (see `humanoid`'s drawRobot), so a
+            // half-length shift centres it; two spheres close the ends.
+            s.transform[0] = mulMat(
+                mulMat(place, translation(0, -cap.half_height, 0)),
+                scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+            );
+            z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+            for ([_]f32{ -1.0, 1.0 }) |end| {
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, end * cap.half_height, 0)),
+                    scaling(cap.radius, cap.radius, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+            }
+        },
+        else => {},
     }
 }
 
@@ -394,125 +513,6 @@ fn update(f: *z.Frame, s: *State) void {
         drawGeom(s, gl, g, frame.pos, frame.rot, maximal_col, side_offset);
     }
     z.endMode3D(gl);
-}
-
-/// Draw one collision geom at a body pose, shifted sideways by `offset_x` (Z-up metres).
-fn drawGeom(
-    s: *State,
-    gl: *z.WgpuGl,
-    g: usize,
-    body_pos: Vec,
-    body_rot: Quat,
-    tint: Color,
-    offset_x: f32,
-) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_pos[g]) + vec(offset_x, 0, 0);
-    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
-    const place: Mat = mulMat(
-        mulMat(zUpToYUp(), translation(world_pos[0], world_pos[1], world_pos[2])),
-        world_rot,
-    );
-    switch (m.geom_shape[g]) {
-        .sphere => |sph| {
-            s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-            z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-        },
-        .capsule => |cap| {
-            // The cylinder mesh runs along Y over [0, h] (see `humanoid`'s drawRobot), so a
-            // half-length shift centres it; two spheres close the ends.
-            s.transform[0] = mulMat(
-                mulMat(place, translation(0, -cap.half_height, 0)),
-                scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-            );
-            z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-            for ([_]f32{ -1.0, 1.0 }) |end| {
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, end * cap.half_height, 0)),
-                    scaling(cap.radius, cap.radius, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-            }
-        },
-        else => {},
-    }
-}
-
-fn reducedSpeed(s: *const State) f32 {
-    var fastest: f32 = 0;
-    for (0..s.imported.model.nv) |i| {
-        fastest = @max(fastest, @abs(s.data.vel[i]));
-    }
-    return fastest;
-}
-
-fn setRate(s: *State, rate: u32) void {
-    if (s.rate_hz != rate) {
-        s.rate_hz = rate;
-        s.want_reset = true;
-    }
-}
-
-fn setLimitMode(s: *State, mode: LimitMode) void {
-    if (s.limit_mode != mode) {
-        s.limit_mode = mode;
-        s.want_reset = true;
-    }
-}
-
-fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    const captured: bool = u.wantCaptureMouse();
-    const narrow: bool = ui.Ui.isNarrow(viewport_w);
-    const panel_w: f32 = if (narrow) viewport_w - 16 else @min(470.0, viewport_w * 0.42);
-    u.setNextWindowPos(.{ 8, 8 }, .{});
-    // A height cap so a phone gets a scrollbar instead of a panel that runs off the screen.
-    u.setNextWindowSize(.{ panel_w, @min(470.0, viewport_h * 0.62) }, .{});
-    if (u.window("Ragdolls: reduced vs maximal", .{})) |window| {
-        defer window.close();
-        u.text("one humanoid, limp; same geoms, masses, floor", .{});
-        u.text("{d} steps/s   t = {d:.1} s", .{ s.rate_hz, s.sim_time });
-        for (rates) |rate| {
-            var label_buf: [16]u8 = undefined;
-            const label: []const u8 = bufPrint(&label_buf, "{d} Hz", .{rate}) catch "rate";
-            if (u.button(label, .{})) {
-                setRate(s, rate);
-            }
-        }
-        u.separator();
-        u.text("REDUCED  robot.zig  (orange)", .{});
-        u.text("  {d:.0} us/step   speed {d:.2}", .{ s.reduced_timer.us_per_step, reducedSpeed(s) });
-        u.text("  contacts {d}   joint gap: none, by construction", .{s.data.contact_count});
-        u.separator();
-        u.text("MAXIMAL  zimrphysics  (blue)", .{});
-        u.text("  {d:.0} us/step   speed {d:.2}", .{
-            s.maximal_timer.us_per_step,
-            s.ragdoll.peakSpeed(&s.world_maximal),
-        });
-        u.text("  joint gap {d:.1} mm   (peak {d:.1} mm)", .{
-            s.ragdoll.jointError(&s.world_maximal) * 1000.0,
-            s.joint_gap_peak * 1000.0,
-        });
-        u.separator();
-        u.text("maximal joint limits (now: {t})", .{s.limit_mode});
-        if (u.button("all limits", .{})) {
-            setLimitMode(s, .all);
-        }
-        if (u.button("hinge limits only", .{})) {
-            setLimitMode(s, .hinges_only);
-        }
-        if (u.button("no limits", .{})) {
-            setLimitMode(s, .none);
-        }
-        u.separator();
-        _ = u.checkbox("hold the squat", &s.hold_pose);
-        u.text("  left: implicit CT 20 Hz; right: motors 10 Hz", .{});
-        u.separator();
-        if (u.button("drop again", .{})) {
-            s.want_reset = true;
-        }
-        _ = u.checkbox("pause", &s.paused);
-    }
-    return captured;
 }
 
 pub const app: z.AppSpec(State) = .{

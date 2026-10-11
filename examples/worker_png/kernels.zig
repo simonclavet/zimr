@@ -30,6 +30,8 @@ const jobs = z.jobs;
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
 const expectEqualSlices = std.testing.expectEqualSlices;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
 
 /// `extern`, not a plain struct: these bytes are memcpy'd out of the app's wasm and into
 /// the kernel's - two separate compilations - and Zig's auto layout is free to reorder
@@ -56,7 +58,7 @@ pub fn encodePng(
     gpa: Allocator,
     hdr: Size,
     pixels: []const u8,
-    out: *std.Io.Writer,
+    out: *Io.Writer,
 ) !void {
     const png: []u8 = try codecs.png.encode(gpa, pixels, hdr.w, hdr.h);
     try out.writeAll(png);
@@ -84,10 +86,10 @@ pub const registry = jobs.Registry(job_kernels, .{
 // engine's problem, not yours.
 test "encodePng emits a valid PNG signature" {
     var out_buf: [1 << 16]u8 = undefined;
-    var out: std.Io.Writer = .fixed(&out_buf);
+    var out: Io.Writer = .fixed(&out_buf);
     const px: [4 * 4 * 4]u8 = @splat(255); // 4x4 RGBA, all white
 
-    try encodePng(std.testing.allocator, .{ .w = 4, .h = 4 }, &px, &out);
+    try encodePng(testing_allocator, .{ .w = 4, .h = 4 }, &px, &out);
 
     try expect(out.buffered().len > 8);
     try expectEqualSlices(u8, &[_]u8{ 0x89, 'P', 'N', 'G' }, out.buffered()[0..4]);

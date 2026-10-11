@@ -22,6 +22,7 @@
 //! * THE SLOPE SEPARATES THEM, and nothing else measured so far does.
 
 const std = @import("std");
+const eql = std.mem.eql;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -53,6 +54,7 @@ const scaling = zm.scaling;
 const mulMat = zm.mulMat;
 const pi = zm.pi;
 const atanRad = zm.atanRad;
+const Quat = zm.Quat;
 
 const sim_dt: f32 = 1.0 / 250.0;
 
@@ -96,6 +98,54 @@ const State = struct {
     transform: [1]Mat,
 };
 
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+
+fn restart(s: *State) void {
+    const m: *rbt.Model = &s.imported.model;
+
+    // -- * THE SLOPE IS THE GROUND ROTATED, NOT GRAVITY TILTED --
+    //
+    // Tilting gravity would give the same free-body diagram and a much easier contact problem:
+    // the normal would stay aligned with the box's face. Rotating the GROUND is the honest
+    // version, because it exercises the same oblique contact normals a real slope produces.
+    var body: *zp.Body = &s.world.bodies.data[s.ground.index()];
+    body.rot = zm.quatFromAxisAngle(vec(0, 1, 0), s.slope);
+    body.com_pos = zm.rotate(body.rot, vec(0, 0, -0.5));
+
+    // * FRICTION ON THE GROUND BODY. Contact friction combines the two bodies' values, so the
+    // slider has to move one of them and the robot's feet keep theirs - which is what a real
+    // surface change looks like.
+    body.friction = s.friction;
+
+    for (s.robot.keyframes) |key| {
+        if (eql(u8, key.name, "home")) {
+            if (!rmj.applyKeyframe(m, &s.data, key)) {
+                std.log.err("friction_slope: home keyframe refused", .{});
+            }
+        }
+    }
+    // Sit the robot ON the slope: rotate its base to match and lift it clear.
+    const tilt: Quat = zm.quatFromAxisAngle(vec(0, 1, 0), s.slope);
+    s.data.pos[3] = tilt[0];
+    s.data.pos[4] = tilt[1];
+    s.data.pos[5] = tilt[2];
+    s.data.pos[6] = tilt[3];
+    s.data.pos[2] = 0.30 + 0.25 * @sin(@abs(s.slope));
+    @memset(s.data.vel, 0);
+    @memset(s.data.applied_force, 0);
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+    @memcpy(s.home, s.data.pos[0..m.nq]);
+    s.bridge.teleported();
+
+    s.start_pos = s.data.body_xpos[1];
+    s.slid = 0;
+    s.elapsed = 0;
+    s.cone_worst = 0;
+    s.last_slope = s.slope;
+    s.last_friction = s.friction;
+}
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
     s.doc = try z.codecs.xml.parse(gpa, @embedFile("go1.xml"), null);
@@ -108,7 +158,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.data = try rbt.Data.init(gpa, &s.imported.model);
     s.act = try ctl.Actuation.init(gpa, &s.imported.model);
 
-    s.world = try .init(gpa, 256);
+    s.world = try zp.World.init(gpa, 256);
     s.world.gravity = vec(0, 0, -9.81);
     const shape: zp.ShapeId = try s.world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(8, 8, 0.5), .convex_radius = 0.01 },
@@ -118,7 +168,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .position = vec(0, 0, -0.5),
         .motion_type = .static,
     });
-    s.bridge = try .init(gpa, &s.world, &s.imported.model, &s.data, 256);
+    s.bridge = try rphys.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 256);
     s.bridge.listen(&s.world);
 
     s.home = try gpa.alloc(f32, s.imported.model.nq);
@@ -154,170 +204,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.imported.deinit();
     s.robot.deinit();
     s.doc.deinit();
-}
-
-fn restart(s: *State) void {
-    const m: *rbt.Model = &s.imported.model;
-
-    // -- * THE SLOPE IS THE GROUND ROTATED, NOT GRAVITY TILTED --
-    //
-    // Tilting gravity would give the same free-body diagram and a much easier contact problem:
-    // the normal would stay aligned with the box's face. Rotating the GROUND is the honest
-    // version, because it exercises the same oblique contact normals a real slope produces.
-    var body: *zp.Body = &s.world.bodies.data[s.ground.index()];
-    body.rot = zm.quatFromAxisAngle(vec(0, 1, 0), s.slope);
-    body.com_pos = zm.rotate(body.rot, vec(0, 0, -0.5));
-
-    // * FRICTION ON THE GROUND BODY. Contact friction combines the two bodies' values, so the
-    // slider has to move one of them and the robot's feet keep theirs - which is what a real
-    // surface change looks like.
-    body.friction = s.friction;
-
-    for (s.robot.keyframes) |key| {
-        if (std.mem.eql(u8, key.name, "home")) {
-            if (!rmj.applyKeyframe(m, &s.data, key)) {
-                std.log.err("friction_slope: home keyframe refused", .{});
-            }
-        }
-    }
-    // Sit the robot ON the slope: rotate its base to match and lift it clear.
-    const tilt: zm.Quat = zm.quatFromAxisAngle(vec(0, 1, 0), s.slope);
-    s.data.pos[3] = tilt[0];
-    s.data.pos[4] = tilt[1];
-    s.data.pos[5] = tilt[2];
-    s.data.pos[6] = tilt[3];
-    s.data.pos[2] = 0.30 + 0.25 * @sin(@abs(s.slope));
-    @memset(s.data.vel, 0);
-    @memset(s.data.applied_force, 0);
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
-    @memcpy(s.home, s.data.pos[0..m.nq]);
-    s.bridge.teleported();
-
-    s.start_pos = s.data.body_xpos[1];
-    s.slid = 0;
-    s.elapsed = 0;
-    s.cone_worst = 0;
-    s.last_slope = s.slope;
-    s.last_friction = s.friction;
-}
-
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    const was_frozen: bool = profiler.isFrozen();
-    profiler.freeze();
-    defer if (!was_frozen) profiler.unfreeze();
-
-    if (s.slope != s.last_slope or s.friction != s.last_friction) {
-        restart(s);
-    }
-
-    if (s.running) {
-        const m: *rbt.Model = &s.imported.model;
-        var step: u32 = 0;
-        while (step < 4) : (step += 1) {
-            (ctl.PoseHold{
-                .target = s.home,
-                .kp = 100,
-                .kv = 6,
-                .max_torque = 35,
-            }).apply(m, &s.data, s.act);
-            rbt.forward(m, &s.data);
-            // These two can only fail by running out of memory: the frame callback that contains them
-            // returns `void` by the engine's design, so there is nothing to propagate to. Swallowing
-            // leaves the world un-stepped for one frame, which is the least-bad outcome available here -
-            // and is why the rule wants it said out loud rather than written silently.
-            // lint:off catch-suppression: OOM only, void callback - see above
-            s.bridge.sync(&s.world, m, &s.data) catch {};
-            // lint:off catch-suppression: OOM only, void callback - see above
-            zp.step(&s.world, sim_dt) catch {};
-            s.bridge.harvest(&s.data);
-            rbt.step(m, &s.data);
-            s.elapsed += sim_dt;
-
-            // ** CONE OCCUPANCY, the number that separates "the limit is wrong" from "the solver
-            // creeps". A body sliding at 0.2 of its cone is not being held back by friction.
-            for (0..s.data.contact_count) |c| {
-                const base: usize = c * rbt.rows_per_contact;
-                var normal: f32 = 0;
-                for (0..rbt.rows_per_contact) |r| {
-                    normal += s.data.constraint_force[base + r];
-                }
-                if (normal < 1.0) {
-                    continue;
-                }
-                const t1: f32 = s.data.constraint_force[base] - s.data.constraint_force[base + 1];
-                const t2: f32 = s.data.constraint_force[base + 2] - s.data.constraint_force[base + 3];
-                const tang: f32 = @sqrt(t1 * t1 + t2 * t2);
-                const mu: f32 = @max(0.01, s.data.contacts[c].friction[0]);
-                s.cone_worst = @max(s.cone_worst, tang / (mu * normal));
-            }
-        }
-        rbt.forward(m, &s.data);
-        s.slid = length3(s.data.body_xpos[1] - s.start_pos);
-    }
-
-    z.clearViewport(f, background);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.6, .max_distance = 12.0 });
-    z.beginMode3D(gl, cam);
-    drawScene(s, gl);
-    z.endMode3D(gl);
-}
-
-fn drawScene(s: *State, gl: *z.WgpuGl) void {
-    const m: *const rbt.Model = &s.imported.model;
-
-    // The slope, drawn from the same rotation the solver is using.
-    const body: *const zp.Body = &s.world.bodies.data[s.ground.index()];
-    const centre: Vec = zm.zUpToYUpPoint(body.com_pos);
-    s.transform[0] = mulMat(
-        // -- *** THE RENDER AXIS IS DERIVED, NOT GUESSED --
-        //
-        // The solver tilts the ground about **Y in its Z-up frame**:
-        //
-        //     x' =  x*cos theta + z*sin theta
-        //     z' = -x*sin theta + z*cos theta
-        //
-        // The render swizzle is `(x,y,z)_zup -> (x,z,y)_yup`, so substituting:
-        //
-        //     x_r' =  x_r*cos theta + y_r*sin theta
-        //     y_r' = -x_r*sin theta + y_r*cos theta
-        //     z_r' =  z_r
-        //
-        // * THAT IS A ROTATION IN THE RENDER x-y PLANE - **about render Z**, not X. I guessed X
-        // and the ground drew tilted the wrong way while the robot, whose base quaternion is set
-        // in solver space, banked correctly. **The robot was right and the floor was wrong**,
-        // which reads as the robot leaning the wrong way.
-        //
-        // ** AND THE SIGN FOLLOWS THE SAME WAY: `rotationZ(phi)` gives `x' = x*cos phi - y*sin phi`, so
-        // matching the substitution above needs `phi = -theta`. A frame conversion is two lines of
-        // algebra; guessing it is two turns of looking at pictures.
-        mulMat(zm.rotationZ(-s.slope), scaling(16, 1, 16)),
-        translation(centre[0], centre[1], centre[2]),
-    );
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, slope_colour);
-
-    for (1..m.nbody) |b| {
-        const at: Vec = zm.zUpToYUpPoint(s.data.body_xpos[b]);
-        const parent: u32 = m.body_parent[b];
-        if (parent != rbt.world_body) {
-            z.drawLine3D(gl, zm.zUpToYUpPoint(s.data.body_xpos[parent]), at, robot_colour);
-        }
-        s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.05, 0.05, 0.05));
-        z.drawMeshInstanced(gl, &s.sphere, &s.transform, robot_colour);
-    }
-
-    // * WHERE IT STARTED, so the slide is visible rather than only reported.
-    const from: Vec = zm.zUpToYUpPoint(s.start_pos);
-    const now: Vec = zm.zUpToYUpPoint(s.data.body_xpos[1]);
-    const holding: bool = s.slid < 0.05;
-    z.drawLine3D(gl, from, now, if (holding) hold_colour else slip_colour);
-    s.transform[0] = mulMat(translation(from[0], from[1], from[2]), scaling(0.05, 0.05, 0.05));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, if (holding) hold_colour else slip_colour);
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -385,7 +271,123 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn drawScene(s: *State, gl: *z.WgpuGl) void {
+    const m: *const rbt.Model = &s.imported.model;
+
+    // The slope, drawn from the same rotation the solver is using.
+    const body: *const zp.Body = &s.world.bodies.data[s.ground.index()];
+    const centre: Vec = zm.zUpToYUpPoint(body.com_pos);
+    s.transform[0] = mulMat(
+        // -- *** THE RENDER AXIS IS DERIVED, NOT GUESSED --
+        //
+        // The solver tilts the ground about **Y in its Z-up frame**:
+        //
+        //     x' =  x*cos theta + z*sin theta
+        //     z' = -x*sin theta + z*cos theta
+        //
+        // The render swizzle is `(x,y,z)_zup -> (x,z,y)_yup`, so substituting:
+        //
+        //     x_r' =  x_r*cos theta + y_r*sin theta
+        //     y_r' = -x_r*sin theta + y_r*cos theta
+        //     z_r' =  z_r
+        //
+        // * THAT IS A ROTATION IN THE RENDER x-y PLANE - **about render Z**, not X. I guessed X
+        // and the ground drew tilted the wrong way while the robot, whose base quaternion is set
+        // in solver space, banked correctly. **The robot was right and the floor was wrong**,
+        // which reads as the robot leaning the wrong way.
+        //
+        // ** AND THE SIGN FOLLOWS THE SAME WAY: `rotationZ(phi)` gives `x' = x*cos phi - y*sin phi`, so
+        // matching the substitution above needs `phi = -theta`. A frame conversion is two lines of
+        // algebra; guessing it is two turns of looking at pictures.
+        mulMat(zm.rotationZ(-s.slope), scaling(16, 1, 16)),
+        translation(centre[0], centre[1], centre[2]),
+    );
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, slope_colour);
+
+    for (1..m.nbody) |b| {
+        const at: Vec = zm.zUpToYUpPoint(s.data.body_xpos[b]);
+        const parent: u32 = m.body_parent[b];
+        if (parent != rbt.world_body) {
+            z.drawLine3D(gl, zm.zUpToYUpPoint(s.data.body_xpos[parent]), at, robot_colour);
+        }
+        s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.05, 0.05, 0.05));
+        z.drawMeshInstanced(gl, &s.sphere, &s.transform, robot_colour);
+    }
+
+    // * WHERE IT STARTED, so the slide is visible rather than only reported.
+    const from: Vec = zm.zUpToYUpPoint(s.start_pos);
+    const now: Vec = zm.zUpToYUpPoint(s.data.body_xpos[1]);
+    const holding: bool = s.slid < 0.05;
+    z.drawLine3D(gl, from, now, if (holding) hold_colour else slip_colour);
+    s.transform[0] = mulMat(translation(from[0], from[1], from[2]), scaling(0.05, 0.05, 0.05));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, if (holding) hold_colour else slip_colour);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    const was_frozen: bool = profiler.isFrozen();
+    profiler.freeze();
+    defer if (!was_frozen) profiler.unfreeze();
+
+    if (s.slope != s.last_slope or s.friction != s.last_friction) {
+        restart(s);
+    }
+
+    if (s.running) {
+        const m: *rbt.Model = &s.imported.model;
+        var step: u32 = 0;
+        while (step < 4) : (step += 1) {
+            (ctl.PoseHold{
+                .target = s.home,
+                .kp = 100,
+                .kv = 6,
+                .max_torque = 35,
+            }).apply(m, &s.data, s.act);
+            rbt.forward(m, &s.data);
+            // These two can only fail by running out of memory: the frame callback that contains them
+            // returns `void` by the engine's design, so there is nothing to propagate to. Swallowing
+            // leaves the world un-stepped for one frame, which is the least-bad outcome available here -
+            // and is why the rule wants it said out loud rather than written silently.
+            // lint:off catch-suppression: OOM only, void callback - see above
+            s.bridge.sync(&s.world, m, &s.data) catch {};
+            // lint:off catch-suppression: OOM only, void callback - see above
+            zp.step(&s.world, sim_dt) catch {};
+            s.bridge.harvest(&s.data);
+            rbt.step(m, &s.data);
+            s.elapsed += sim_dt;
+
+            // ** CONE OCCUPANCY, the number that separates "the limit is wrong" from "the solver
+            // creeps". A body sliding at 0.2 of its cone is not being held back by friction.
+            for (0..s.data.contact_count) |c| {
+                const base: usize = c * rbt.rows_per_contact;
+                var normal: f32 = 0;
+                for (0..rbt.rows_per_contact) |r| {
+                    normal += s.data.constraint_force[base + r];
+                }
+                if (normal < 1.0) {
+                    continue;
+                }
+                const t1: f32 = s.data.constraint_force[base] - s.data.constraint_force[base + 1];
+                const t2: f32 = s.data.constraint_force[base + 2] - s.data.constraint_force[base + 3];
+                const tang: f32 = @sqrt(t1 * t1 + t2 * t2);
+                const mu: f32 = @max(0.01, s.data.contacts[c].friction[0]);
+                s.cone_worst = @max(s.cone_worst, tang / (mu * normal));
+            }
+        }
+        rbt.forward(m, &s.data);
+        s.slid = length3(s.data.body_xpos[1] - s.start_pos);
+    }
+
+    z.clearViewport(f, background);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.6, .max_distance = 12.0 });
+    z.beginMode3D(gl, cam);
+    drawScene(s, gl);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

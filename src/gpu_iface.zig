@@ -57,6 +57,7 @@
 // once Phase E lands.
 
 const std = @import("std");
+const sliceAsBytes = std.mem.sliceAsBytes;
 const gpu = @import("gpu.zig");
 const zm = @import("zm");
 const assert = zm.assert;
@@ -699,7 +700,7 @@ pub const WgpuBackend = struct {
             }
         }
         const vbyte_off: u64 = @as(u64, b.vbo_vertex_base) * @sizeOf(Vertex2D);
-        wgpu.queueWriteBuffer(ps.queue, b.vbo, vbyte_off, std.mem.sliceAsBytes(b.vertices[0..b.vertex_count]));
+        wgpu.queueWriteBuffer(ps.queue, b.vbo, vbyte_off, sliceAsBytes(b.vertices[0..b.vertex_count]));
 
         // Index buffer: u16 x N.  WebGPU requires `queueWriteBuffer`
         // size to be a multiple of 4, so odd index counts (e.g. 9
@@ -711,7 +712,7 @@ pub const WgpuBackend = struct {
         // drawIndexed call below uses `index_count`, so the extra
         // 0 index doesn't draw anything spurious.
         const ibyte_off: u64 = @as(u64, b.ibo_index_base) * 2;
-        const raw_indices_bytes: []const u8 = std.mem.sliceAsBytes(b.indices[0..b.index_count]);
+        const raw_indices_bytes: []const u8 = sliceAsBytes(b.indices[0..b.index_count]);
         const padded_len = (raw_indices_bytes.len + 3) & ~@as(usize, 3);
         if (padded_len == raw_indices_bytes.len) {
             wgpu.queueWriteBuffer(ps.queue, b.ibo, ibyte_off, raw_indices_bytes);
@@ -722,7 +723,7 @@ pub const WgpuBackend = struct {
             // and the trailing value is zeroed/ignored by the GPU
             // since `drawIndexed` uses `index_count`, not the
             // buffer's full byte length.
-            const padded_bytes: []const u8 = std.mem.sliceAsBytes(b.indices[0 .. b.index_count + 1]);
+            const padded_bytes: []const u8 = sliceAsBytes(b.indices[0 .. b.index_count + 1]);
             wgpu.queueWriteBuffer(ps.queue, b.ibo, ibyte_off, padded_bytes[0..padded_len]);
         }
 

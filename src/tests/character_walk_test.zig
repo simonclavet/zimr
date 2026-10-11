@@ -22,13 +22,16 @@ const zm = @import("zm");
 const vec = zm.vec;
 const Vec = zm.Vec;
 const expect = std.testing.expect;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 
 const speed: f32 = 5.0; // m/s, the fps_playground walk speed
 const dt: f32 = 1.0 / 60.0;
 
 /// Build a world with a large flat floor, and optionally a wall across z = 4.
-fn makeWorld(gpa: std.mem.Allocator, with_wall: bool) !zimrphysics.World {
-    var world: zimrphysics.World = try zimrphysics.World.init(gpa, 256);
+fn makeWorld(gpa: Allocator, with_wall: bool) !zimrphysics.World {
+    var world: zimrphysics.World = try .init(gpa, 256);
     errdefer world.deinit(gpa);
 
     const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
@@ -55,7 +58,7 @@ fn makeWorld(gpa: std.mem.Allocator, with_wall: bool) !zimrphysics.World {
 
 /// Walk a capsule character along -Z for `frames`, exactly as fps_playground
 /// drives it: caller-owned vertical velocity, engine-owned horizontal slide.
-fn walk(gpa: std.mem.Allocator, world: *zimrphysics.World, frames: u32) !Vec {
+fn walk(gpa: Allocator, world: *zimrphysics.World, frames: u32) !Vec {
     const cap: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
         .capsule = .{ .half_height = 0.6, .radius = 0.35 },
     });
@@ -65,7 +68,7 @@ fn walk(gpa: std.mem.Allocator, world: *zimrphysics.World, frames: u32) !Vec {
     };
     defer player.deinit(gpa);
 
-    var scratch: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var scratch: ArenaAllocator = .init(gpa);
     defer scratch.deinit();
 
     var vel_y: f32 = 0;
@@ -91,7 +94,7 @@ fn walk(gpa: std.mem.Allocator, world: *zimrphysics.World, frames: u32) !Vec {
 }
 
 test "character keeps walking after it lands on flat ground" {
-    const gpa: std.mem.Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var world: zimrphysics.World = try makeWorld(gpa, false);
     defer world.deinit(gpa);
 
@@ -104,7 +107,7 @@ test "character keeps walking after it lands on flat ground" {
 }
 
 test "character is still stopped by a wall" {
-    const gpa: std.mem.Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var world: zimrphysics.World = try makeWorld(gpa, true);
     defer world.deinit(gpa);
 
@@ -116,8 +119,8 @@ test "character is still stopped by a wall" {
 }
 
 test "character walks up a step" {
-    const gpa: std.mem.Allocator = std.testing.allocator;
-    var world: zimrphysics.World = try zimrphysics.World.init(gpa, 256);
+    const gpa: Allocator = testing_allocator;
+    var world: zimrphysics.World = try .init(gpa, 256);
     defer world.deinit(gpa);
 
     const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{

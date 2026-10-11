@@ -639,7 +639,11 @@ pub const AutomationEventList = extern struct {
 // override system.  Optional (`?*const fn`) so they can be set to null
 // to mean "use default behaviour".
 
-pub const TraceLogCallback = ?*const fn (logLevel: i32, text: [*c]const u8, args: ?*anyopaque) callconv(.c) void;
+pub const TraceLogCallback = ?*const fn (
+    logLevel: i32,
+    text: [*c]const u8,
+    args: ?*anyopaque,
+) callconv(.c) void;
 pub const LoadFileDataCallback = ?*const fn (fileName: [*c]const u8, dataSize: [*c]i32) callconv(.c) [*c]u8;
 pub const SaveFileDataCallback = ?*const fn (
     fileName: [*c]const u8,
@@ -1208,6 +1212,49 @@ const eps: f32 = 1e-5;
 // `.normalize`/`.rotate`/`.reflect`/`.lerp`/`.clamp`) was deleted
 // when the type flipped.  Use `zm.vec2(x, y)` to build values,
 // or the short literal `Vec2{x, y}`.
+
+/// What every 2D drawing function draws THROUGH - its `gl` argument: an immediate-mode triangle
+/// emitter in the rlgl style (begin a primitive, set a colour and texture coordinates, emit vertices,
+/// end), with a modelview matrix stack and a scissor rectangle. Pass any backend by pointer:
+///
+///     begin(mode: raster.DrawMode)            end()
+///     color4ub(r: u8, g: u8, b: u8, a: u8)    vertex2f(x: f32, y: f32)
+///     texCoord2f(u: f32, v: f32)              normal3f(x: f32, y: f32, z: f32)
+///     setTexture(id: u32)                     enable(cap: raster.Capability) / disable(cap)
+///     pushMatrix()  popMatrix()               translate(x: f32, y: f32, z: f32)
+///     rotate(angle_turns: f32, x: f32, y: f32, z: f32)     - TURNS: 1 is a full circle
+///     scissor(x: i32, y: i32, w: i32, h: i32) getMatrixTransform() Mat  - the current modelview
+///
+/// The backends to copy: `WgpuGl` (the GPU one), and `SwAdapter` over `raster.Context` (the software
+/// rasteriser - which also works directly). A backend that cannot do one of these still DECLARES it, as a
+/// function whose body is a `@compileError` saying why: drawing code that needs it then fails right
+/// there with the reason, and code that never calls it costs nothing (Zig analyses a body only when
+/// something calls it).
+///
+/// One OPTIONAL capability is deliberately not checked: on-demand glyph rasterization -
+/// glyphEntry, glyphDeviceMapping, bindGlyphPage. text2d probes it (`@hasDecl(glyphDeviceMapping)`) to
+/// choose between rasterizing glyphs as needed (WgpuGl) and the font's baked atlas (the software
+/// backends). A backend without it must simply not declare those three - a stub would flip the probe.
+///
+/// Every public 2D function that takes `gl` calls this first, so a type missing a method fails at that
+/// call, naming the method - not deep inside a shape routine.
+pub fn requireGl(gl: anytype) void {
+    const Gl: type = switch (@typeInfo(@TypeOf(gl))) {
+        .pointer => |pointer| pointer.child,
+        else => @TypeOf(gl),
+    };
+    const required: [15][]const u8 = .{
+        "begin",              "end",     "color4ub",   "vertex2f",  "texCoord2f", "normal3f", "setTexture",
+        "enable",             "disable", "pushMatrix", "popMatrix", "translate",  "rotate",   "scissor",
+        "getMatrixTransform",
+    };
+    inline for (required) |method| {
+        if (!@hasDecl(Gl, method)) {
+            @compileError("2D drawing: a gl needs `" ++ method ++ "`, and " ++ @typeName(Gl) ++
+                " has none - declare it, as a @compileError if this backend cannot do it (see types.requireGl)");
+        }
+    }
+}
 
 test "Vec2 constructors + arithmetic" {
     const a: Vec2 = .{ 3, 4 };

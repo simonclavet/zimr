@@ -18,6 +18,10 @@
 //! from `<position kp="100" forcerange="-35.55 35.55">` in `go1.xml`).
 
 const std = @import("std");
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
+const indexOfScalar = std.mem.indexOfScalar;
+const ArrayList = std.ArrayList;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -54,6 +58,7 @@ const translation = zm.translation;
 const scaling = zm.scaling;
 const quatToMat = zm.quatToMat;
 const identity = zm.identity;
+const Quat = zm.Quat;
 
 /// The Go1 runs at 500 Hz in Menagerie, and its contacts want it.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -103,7 +108,7 @@ const arm_motors =
 /// Splice the arm into the Go1's MJCF text. Caller owns the result.
 fn mjcfWithArm(gpa: Allocator) ![]u8 {
     const base: []const u8 = @embedFile("go1.xml");
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     // -- *** THE ARM GOES AFTER THE LEGS, AND THE POSITION IS THE WHOLE BUG --
     //
@@ -122,11 +127,11 @@ fn mjcfWithArm(gpa: Allocator) ![]u8 {
     //
     // Anchored on text rather than a line number so it survives the fixture being reformatted.
     const tail: []const u8 = "    </body>\n  </worldbody>";
-    const leg_at: usize = std.mem.indexOf(u8, base, tail) orelse return error.NoTrunkEnd;
+    const leg_at: usize = indexOf(u8, base, tail) orelse return error.NoTrunkEnd;
     try out.appendSlice(gpa, base[0..leg_at]);
     try out.appendSlice(gpa, arm_bodies);
     const tag: []const u8 = "  <actuator>\n";
-    const act_at: usize = std.mem.indexOf(u8, base[leg_at..], tag) orelse return error.NoActuators;
+    const act_at: usize = indexOf(u8, base[leg_at..], tag) orelse return error.NoActuators;
     const cut: usize = leg_at + act_at + tag.len;
     try out.appendSlice(gpa, base[leg_at..cut]);
     try out.appendSlice(gpa, arm_motors);
@@ -162,13 +167,13 @@ fn mjcfWithArm(gpa: Allocator) ![]u8 {
     // past it on the first arm joint: an out-of-bounds trap in the launcher.
     const owned: []u8 = try out.toOwnedSlice(gpa);
     defer gpa.free(owned);
-    const key_at: usize = std.mem.indexOf(u8, owned, "<key ") orelse return error.NoKeyframe;
+    const key_at: usize = indexOf(u8, owned, "<key ") orelse return error.NoKeyframe;
     const qpos_attr: []const u8 = "qpos=\"";
     const qpos_at: usize = key_at + qpos_attr.len +
-        (std.mem.indexOf(u8, owned[key_at..], qpos_attr) orelse return error.NoKeyframe);
+        (indexOf(u8, owned[key_at..], qpos_attr) orelse return error.NoKeyframe);
     const qpos_end: usize = qpos_at +
-        (std.mem.indexOfScalar(u8, owned[qpos_at..], '"') orelse return error.NoKeyframe);
-    var padded: std.ArrayList(u8) = .empty;
+        (indexOfScalar(u8, owned[qpos_at..], '"') orelse return error.NoKeyframe);
+    var padded: ArrayList(u8) = .empty;
     errdefer padded.deinit(gpa);
     try padded.appendSlice(gpa, owned[0..qpos_end]);
     try padded.appendSlice(gpa, arm_key);
@@ -278,7 +283,7 @@ const State = struct {
     gait_offset: [4]f32,
     pose_scratch: []f32,
     rest_height: f32,
-    rest_rot: zm.Quat,
+    rest_rot: Quat,
     /// The full qpos the sliders are relative to.
     stance: []f32,
     /// Last solved command, so the solve only runs when something changed.
@@ -426,7 +431,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
     s.data = try rbt.Data.init(gpa, &s.imported.model);
 
-    s.world = try .init(gpa, 128);
+    s.world = try zp.World.init(gpa, 128);
     s.world.gravity = vec(0, 0, -9.81);
     const ground: zp.ShapeId = try s.world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(5, 5, 0.5), .convex_radius = 0.01 },
@@ -446,7 +451,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         });
     }
     rbt.forward(&s.imported.model, &s.data);
-    s.bridge = try .init(gpa, &s.world, &s.imported.model, &s.data, 128);
+    s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 128);
     s.bridge.listen(&s.world);
 
     // -- *** A STIFFER CONTACT, WHICH CUTS THE FOOT CREEP 5.2x FOR FREE --
@@ -1074,7 +1079,7 @@ fn solveLegsInto(
     s: *State,
     seed: []const f32,
     ground: Vec,
-    attitude: zm.Quat,
+    attitude: Quat,
     height: f32,
     goals: [4]Vec,
 ) f32 {
@@ -1143,6 +1148,17 @@ fn harvestPose(s: *State) void {
     rbt.forward(m, &s.data);
 }
 
+/// The torso attitude the sliders and the routine are asking for.
+fn commandedAttitude(s: *const State) Quat {
+    return zm.qmul(
+        zm.qmul(
+            zm.quatFromAxisAngle(vec(0, 0, 1), s.body_yaw),
+            zm.quatFromAxisAngle(vec(0, 1, 0), s.body_pitch + s.trim_pitch),
+        ),
+        zm.qmul(zm.quatFromAxisAngle(vec(1, 0, 0), s.body_roll + s.trim_roll), s.rest_rot),
+    );
+}
+
 fn solveGait(s: *State, dt: f32) void {
     s.gait_phase += dt * s.gait_hz;
     s.gait_phase -= @floor(s.gait_phase);
@@ -1155,7 +1171,7 @@ fn solveGait(s: *State, dt: f32) void {
     // the first version did, and the robot walked 1.1 m and arrived on its belly, legs stretched
     // out behind toward targets that never moved.
     const torso_pos: Vec = s.data.body_xpos[1];
-    const torso_rot: zm.Quat = s.data.body_xrot[1];
+    const torso_rot: Quat = s.data.body_xrot[1];
     var goals: [4]Vec = undefined;
     for (0..4) |i| {
         const cycle: Vec = footOffsetInCycle(
@@ -1171,7 +1187,7 @@ fn solveGait(s: *State, dt: f32) void {
     // sliders ask for, and nothing measures the result and corrects it. That distinction is why
     // walking and posing can combine - the attitude TRIM, which does measure and correct, topples
     // the robot in under two seconds because a walking robot's pitch is not an error to remove.
-    const posed: zm.Quat = commandedAttitude(s);
+    const posed: Quat = commandedAttitude(s);
     // * THE LIVE GROUND POSITION: the body is travelling and the foot goals were built around
     // where it actually is.
     s.pose_error = solveLegsInto(s, s.home, torso_pos, posed, s.rest_height + s.body_height, goals);
@@ -1194,17 +1210,6 @@ fn solveGait(s: *State, dt: f32) void {
         s.data.pos[q] = shoulder;
     }
     harvestPose(s);
-}
-
-/// The torso attitude the sliders and the routine are asking for.
-fn commandedAttitude(s: *const State) zm.Quat {
-    return zm.qmul(
-        zm.qmul(
-            zm.quatFromAxisAngle(vec(0, 0, 1), s.body_yaw),
-            zm.quatFromAxisAngle(vec(0, 1, 0), s.body_pitch + s.trim_pitch),
-        ),
-        zm.qmul(zm.quatFromAxisAngle(vec(1, 0, 0), s.body_roll + s.trim_roll), s.rest_rot),
-    );
 }
 
 fn solveBodyPose(s: *State) void {
@@ -1307,404 +1312,6 @@ fn shove(s: *State) void {
             s.data.vel[v + 1] += 0.4;
             s.data.stage = .stale;
         }
-    }
-}
-
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-
-    // * ONCE PER FRAME, NOT PER SUBSTEP. It answers "what should the legs be doing", which
-    // only changes when a slider moves. Solving it inside the fixed-timestep loop recomputes
-    // the same answer for every substep and the cost multiplies - a lesson the KUKA demo paid
-    // for in frame rate.
-    if (s.posing) {
-        // * ONLY WHEN A SLIDER MOVED. The answer is a function of the command alone, so
-        // recomputing it every frame cannot improve it and - as the comment in `solveBodyPose`
-        // records - actively destabilises the robot.
-        if (s.routine) {
-            // * TWO INDEPENDENT RATES. Pitch and yaw in quadrature sweep the nose round a cone;
-            // roll rocks at a different frequency entirely.
-            s.routine_clock += f.time.delta_time;
-            const cone: f32 = s.routine_clock * s.cone_rate * 2.0 * pi;
-            const rock: f32 = s.routine_clock * s.roll_rate * 2.0 * pi;
-            s.body_pitch = s.cone_amount * @cos(cone);
-            s.body_yaw = s.cone_amount * @sin(cone);
-            s.body_roll = s.roll_amount * @sin(rock);
-            const bob: f32 = s.routine_clock * s.bob_rate * 2.0 * pi;
-            s.body_height = s.bob_amount * @sin(bob);
-        }
-        const cmd: [4]f32 = .{ s.body_roll, s.body_pitch, s.body_yaw, s.body_height };
-        var resolve: bool = !std.mem.eql(f32, &cmd, &s.last_cmd);
-
-        // -- *** CLOSE THE LOOP ON THE TORSO, NOT JUST ON THE JOINTS --
-        //
-        // Read what the torso is ACTUALLY doing relative to its own rest attitude, and integrate
-        // the shortfall into a trim. Comparing against world level instead would fold in whatever
-        // tilt the settled stance already had, which is not the slider's fault and not its job.
-        const seen: Vec = zm.quatToEulerXYZ(
-            zm.qmul(s.data.body_xrot[1], zm.conjugate(s.rest_rot)),
-        );
-        s.seen_roll = seen[0];
-        s.seen_pitch = seen[1];
-        // -- *** THE ATTITUDE TRIM IS OFF WHILE WALKING --
-        //
-        // The trim integrates measured pitch error and folds it into the commanded attitude. On
-        // a STANDING robot that is exactly right - it took the sliders from 16-32% short to
-        // under 3%. **On a walking one it fights the gait**, because a trot pitches by design
-        // every step and the integrator treats that as an error to remove.
-        //
-        // Measured, trot 10 s with the arm:
-        //
-        //     trim off   **0.957 m**, standing, pitch flat at -0.026
-        //     trim on      0.123 m, **FELL at 1.80 s**, pitch +0.229 in the first second
-        //
-        // * THAT IS SIMON'S OSCILLATION AND FALL, REPRODUCED AND ISOLATED. The probe walked
-        // forward for many turns while the demo toppled, and this loop is the entire difference
-        // between them - the fourth bug in this file caused by two controllers writing one
-        // array, and the one that had gone longest unfound.
-        //
-        // ** AN INTEGRATOR NEEDS A SETPOINT THAT IS ACTUALLY REACHABLE AND STEADY. Level is both
-        // while standing; neither while walking.
-        if (s.gait_on) {
-            s.trim_roll = 0;
-            s.trim_pitch = 0;
-        } else if (s.trim_countdown > 0) {
-            s.trim_countdown -= 1;
-        } else {
-            const roll_gap: f32 = s.body_roll - seen[0];
-            const pitch_gap: f32 = s.body_pitch - seen[1];
-            // * A GAIN WELL UNDER 1, because this integrator sits on top of a PD that is itself
-            // still settling. Correcting the whole gap at once fights the transient it is
-            // measuring and rings.
-            if (@abs(roll_gap) > 0.002 or @abs(pitch_gap) > 0.002) {
-                s.trim_roll = clamp(s.trim_roll + 0.5 * roll_gap, -0.4, 0.4);
-                s.trim_pitch = clamp(s.trim_pitch + 0.5 * pitch_gap, -0.4, 0.4);
-                resolve = true;
-            }
-            // *** FOUR, NOT TWELVE, AND BOTH ENDS ARE MEASURED. On the moving routine the
-            // trim's mean lag is 0.0182 rad at a cadence of 12 and **0.0098 at 4** - a free
-            // 1.9x. At a cadence of 1 the robot FALLS OVER (3.03 rad), which is
-            // `solveBodyPose`'s warning about re-solving every frame, confirmed rather than
-            // taken on trust. Four is measured to be inside that wall, not guessed to be.
-            s.trim_countdown = 4;
-        }
-
-        // -- *** THE ARM REACHES FOR A MOVING TARGET --
-        //
-        // A circle in front of the robot, in the trunk's own frame - so as the torso rolls and
-
-        // -- ** SLIP AND FRICTION DEMAND, MEASURED LIVE --
-        //
-        // `rows_per_contact` is a PYRAMID BASIS: the four rows sum to the normal load, and the
-        // tangential content is what the opposing pairs disagree about. The coefficient comes
-        // from the contact itself rather than a number typed here, so the ratio means what it
-        // says - and **above 1.0 is a foot being asked for force the ground does not have.**
-        {
-            var slip: f32 = 0;
-            for (0..4) |i| {
-                const at: Vec = s.data.body_xpos[s.foot_body[i]] +
-                    zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
-                slip += length3(at - s.planted[i]);
-            }
-            s.foot_slip = slip;
-            for (0..s.data.contact_count) |c| {
-                const base: usize = c * rbt.rows_per_contact;
-                var normal: f32 = 0;
-                for (0..rbt.rows_per_contact) |r| {
-                    normal += s.data.constraint_force[base + r];
-                }
-                if (normal < 1.0) {
-                    continue;
-                }
-                const t1: f32 = s.data.constraint_force[base] - s.data.constraint_force[base + 1];
-                const t2: f32 = s.data.constraint_force[base + 2] - s.data.constraint_force[base + 3];
-                const tang: f32 = @sqrt(t1 * t1 + t2 * t2);
-                const mu: f32 = @max(0.01, s.data.contacts[c].friction[0]);
-                const ratio: f32 = tang / (mu * normal);
-                s.cone_worst = @max(s.cone_worst, ratio);
-                if (ratio > 0.98) {
-                    s.cone_over += 1;
-                }
-            }
-        }
-
-        // ** THE LAG, SCORED. A routine that only looks impressive proves nothing; the number is
-        // what says whether the controller is keeping up with it.
-        if (s.routine and s.routine_clock > 1.5) {
-            const gap: f32 = @sqrt(
-                (s.body_roll - seen[0]) * (s.body_roll - seen[0]) +
-                    (s.body_pitch - seen[1]) * (s.body_pitch - seen[1]),
-            );
-            s.routine_error_sum += gap;
-            s.routine_error_count += 1;
-            s.routine_worst = @max(s.routine_worst, gap);
-        }
-
-        if (resolve) {
-            s.last_cmd = cmd;
-            solveBodyPose(s);
-        }
-
-        // -- *** THE ARM COUNTERS *AFTER* THE TORSO SOLVE, NOT BEFORE --
-        //
-        // `solveBodyPose` copies EVERY hinge joint from `stance`, arm included - so running the
-        // arm's IK before it meant the counter-animation was overwritten the instant the torso
-        // re-solved. **The arm was solving correctly and its answer was being thrown away**,
-        // which looks exactly like an arm that never counters at all.
-        //
-        // * ORDER IS PART OF A CONTROLLER'S DEFINITION. Two solves writing the same array is a
-        // sequencing bug, not a control one, and no amount of tuning either would have shown it.
-        // pitches, the world-space target moves with it and the arm must chase a point that is
-        // itself being thrown around. That coupling is the whole point: the arm's mass swings,
-        // the legs feel it, and neither controller is told about the other.
-        if (s.arm_on) {
-            s.arm_clock += f.time.delta_time;
-            // -- *** A FIXED POINT IN THE WORLD, NOT A CIRCLE IN THE BODY'S FRAME --
-            //
-            // Captured once, above where the robot is standing, and then held. Because the goal
-            // does not move, every joint motion the arm makes exists purely to CANCEL the base's
-            // - which is what makes the gimbal effect legible: the body weaves and the gripper
-            // does not.
-            // -- *** THE HELD POINT IS RELATIVE TO THE FEET, NOT TO THE WORLD --
-            //
-            // Pinned in absolute world coordinates it is a target the robot slowly walks away
-            // from: the feet slide, and over 30 s the gripper's mean error grew from 20 mm to
-            // 61 mm chasing a point that had not moved while the robot had.
-            //
-            // * THE FEET ARE WHERE THE ROBOT ACTUALLY IS. Anchoring to their average means the
-            // point travels with any drift the legs accumulate, so the arm counters the TORSO's
-            // motion - which is the thing it is for - instead of also fighting the base's slow
-            // walk. Simon's correction, and the same principle as anchoring the torso reference
-            // to current feet rather than to a stored stance.
-            var foot_mean: Vec = vec(0, 0, 0);
-            for (0..4) |i| {
-                foot_mean += s.data.body_xpos[s.foot_body[i]] +
-                    zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
-            }
-            foot_mean /= splat(4.0);
-            const goal: Vec = vec(
-                foot_mean[0] + s.hold_offset[0],
-                foot_mean[1] + s.hold_offset[1],
-                foot_mean[2] + s.hold_height,
-            );
-            s.hold_point = goal;
-
-            // * IK FROM THE ARM'S CURRENT POSE, restored afterwards - the solve must not leave
-            // the simulated state anywhere, only produce a target for the servo.
-            const keep_arm: []f32 = s.arm_target;
-            @memcpy(keep_arm, s.data.pos[0..s.imported.model.nq]);
-            _ = (ctl.Ik{ .max_iterations = 8, .max_step = 0.3 }).solve(
-                &s.imported.model,
-                &s.data,
-                s.arm_act,
-                .{ .body = s.gripper, .offset = vec(0, 0, 0), .goal = goal },
-                s.ik_scratch,
-            );
-            // Copy only the ARM joints into `home`; the legs belong to the torso controller.
-            for (0..s.imported.model.njnt) |j| {
-                const v: u32 = s.imported.model.jnt_dof_adr[j];
-                if (v >= s.imported.model.nv or !s.arm_act.powered[v]) {
-                    continue;
-                }
-                const q: u32 = s.imported.model.jnt_qpos_adr[j];
-                s.home[q] = s.data.pos[q];
-            }
-            @memcpy(s.data.pos[0..s.imported.model.nq], keep_arm);
-            s.data.stage = .stale;
-            rbt.forward(&s.imported.model, &s.data);
-            // * THE DRIFT IS THE SCORE. A gimbal that visibly wobbles is a gimbal that failed,
-            // and the number says by how much - which is the quantity a planner with preview
-            // would have to beat.
-            s.arm_error = length3(s.data.body_xpos[s.gripper] - goal);
-            s.hold_error = s.arm_error;
-            if (s.routine_clock > 1.5) {
-                s.hold_worst = @max(s.hold_worst, s.arm_error);
-            }
-        }
-    }
-    // * A GAIT RE-SOLVES EVERY FRAME, unlike a static pose, because its targets move by
-    // construction. The feedback loop `solveBodyPose` warns about is avoided the same way -
-    // seeding from the last command rather than from the measured robot.
-    if (s.gait_on) {
-        solveGait(s, @min(f.time.delta_time, 0.05));
-    }
-
-    s.accumulator += @min(f.time.delta_time, 0.1);
-    while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
-        // Kinematics, then collision, then solve - all at one `q`. See `robot_physics.sync`
-        // for why the order is not negotiable.
-        rbt.forward(&s.imported.model, &s.data);
-        if (s.physics_on) {
-            s.bridge.sync(&s.world, &s.imported.model, &s.data) catch |err| {
-                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
-            };
-            zp.step(&s.world, timestep) catch |err| {
-                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
-            };
-            s.bridge.harvest(&s.data);
-        }
-        control(s);
-        rbt.step(&s.imported.model, &s.data);
-    }
-    rbt.forward(&s.imported.model, &s.data);
-
-    var force: f32 = 0;
-    for (0..s.data.constraint_count) |row| {
-        force += s.data.constraint_force[row];
-    }
-    s.peak_force = @max(s.peak_force * 0.995, force);
-
-    // -- ** THE UI IS BUILT EARLY AND RENDERED LAST, AND BOTH HALVES MATTER --
-    //
-    // **Built early**, because the camera has to know whether the mouse belongs to a slider -
-    // otherwise dragging `kp` orbits the view at the same time.
-    //
-    // **Rendered last**, because `clearViewport` wipes whatever has been drawn. Keeping
-    // `begin`/`render` inside the panel function put the deferred `render` at the END OF THAT
-    // FUNCTION - before the clear - so the panel was drawn and then erased, every frame. The
-    // demo showed a robot and no controls at all, and looked like a build problem.
-    //
-    // `robot_3d` had it right by accident: its `begin` and its clear live in the same
-    // function, so the defer naturally lands after the 3D pass. Making that structural rather
-    // than incidental is the point of passing `u` in.
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s);
-
-    z.clearViewport(f, bg);
-    const cam: Camera3D = s.cam.update(f, captured, .{
-        .min_distance = 0.6,
-        .max_distance = 4.0,
-    });
-    // * THE THROW HAPPENS HERE, not in the panel, because it needs the camera - and the
-    // camera is not known until after the panel has said whether the mouse belongs to it.
-    if (s.want_throw) {
-        s.want_throw = false;
-        throwBall(s, cam);
-    }
-
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 16, 0.25);
-    drawRobot(s, gl);
-    z.endMode3D(gl);
-}
-
-/// Draw every collision geom the importer kept.
-///
-/// * THESE ARE THE COLLISION SHAPES, not the visual meshes - the Go1's 13 `<mesh>` geoms are
-/// skipped by the converter because their vertices live in an `<asset>` block that is not read
-/// yet. Which turns out to be the better picture for a physics demo: what you see IS what the
-/// solver sees, so a leg that looks like it is touching the ground is touching the ground.
-fn drawRobot(s: *State, gl: *z.WgpuGl) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const to_y_up: Mat = zm.zUpToYUp();
-
-    // -- *** THE HELD POINT, AND A LINE TO IT --
-    //
-    // "The gripper is not moving" is only legible against something that visibly is not moving
-    // either. The marker sits at the world point the arm is holding and the line measures the
-    // failure - so the gimbal's success is the SHORTNESS of that line while the body weaves.
-    if (s.arm_on and s.hold_point[2] != 0) {
-        const at: Vec = zm.zUpToYUpPoint(s.hold_point);
-        s.transform[0] = mulMat(
-            translation(at[0], at[1], at[2]),
-            scaling(0.045, 0.045, 0.045),
-        );
-        z.drawMeshInstanced(gl, &s.cube, &s.transform, .{ .r = 237, .g = 184, .b = 89, .a = 255 });
-        const tip: Vec = zm.zUpToYUpPoint(s.data.body_xpos[s.gripper]);
-        z.drawLine3D(gl, tip, at, .{ .r = 226, .g = 106, .b = 154, .a = 255 });
-        // * AND A CROSSHAIR, so the point reads as a fixed place in the world rather than as a
-        // small object that might itself be drifting.
-        inline for ([_]Vec{ vec(0.12, 0, 0), vec(0, 0.12, 0), vec(0, 0, 0.12) }) |axis| {
-            z.drawLine3D(gl, at - axis, at + axis, .{ .r = 120, .g = 100, .b = 60, .a = 255 });
-        }
-    }
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        // * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine
-        // stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -
-        // it never needs the product except when something is drawn or collided, so it does
-        // not keep one.
-        const body_rot: zm.Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
-        const place: Mat = mulMat(mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])), world_rot);
-        // Feet are the interesting part, so they get a brighter colour.
-        const tint: Color = if (body == 0) trunk_col else link_col;
-        switch (m.geom_shape[g]) {
-            .sphere => |sph| {
-                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-            },
-            .capsule => |cap| {
-                // -- ** THE MESH ALREADY RUNS ALONG Y. MEASURED, NOT DERIVED. --
-                //
-                //     genMeshCylinder(r=1, h=1) extent:
-                //       x: [-1.000, 1.000]   y: [0.000, 1.000]   z: [-1.000, 1.000]
-                //
-                // `cylinderUv` returns the axis in its third slot, which reads as Z - but
-                // `parametricMesh` REMAPS as it writes (`verts.y = p[2]`), so the finished
-                // mesh extends along zimr's **Y**, spanning [0, h] rather than [-h/2, +h/2].
-                //
-                // That is the same axis `GeomShape.capsule` uses, so no rotation is needed at
-                // all. A previous version read `cylinderUv` and concluded Z, then rotated by
-                // -90 deg to "correct" it; the non-uniform scale then landed across the shape and
-                // flattened every limb into a wide curved ribbon. **Reading the generator was
-                // not enough - the answer was two functions away, and printing the mesh's
-                // bounds took one command.**
-                //
-                // Only the [0, h] span needs correcting, with a half-length shift along Y.
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-                inline for ([_]f32{ -1.0, 1.0 }) |end| {
-                    s.transform[0] = mulMat(
-                        mulMat(place, translation(0, end * cap.half_height, 0)),
-                        scaling(cap.radius, cap.radius, cap.radius),
-                    );
-                    z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-                }
-            },
-            .cylinder => |cyl| {
-                // Same axis and the same [0, h] span as the capsule above.
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cyl.half_height, 0)),
-                    scaling(cyl.radius, 2.0 * cyl.half_height, cyl.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-            },
-            .box => |box| {
-                s.transform[0] = mulMat(place, scaling(
-                    2.0 * box.half_extent[0],
-                    2.0 * box.half_extent[1],
-                    2.0 * box.half_extent[2],
-                ));
-                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
-            },
-            else => {},
-        }
-    }
-
-    // The projectiles, drawn from the tree like everything else.
-    for (0..ball_count) |i| {
-        const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
-        const p: Vec = s.data.body_xpos[body];
-        s.transform[0] = mulMat(
-            mulMat(to_y_up, translation(p[0], p[1], p[2])),
-            scaling(ball_radius, ball_radius, ball_radius),
-        );
-        z.drawMeshInstanced(gl, &s.sphere, &s.transform, ball_col);
-    }
-
-    // Contact points, so "is it actually standing" is answerable by looking.
-    for (0..s.data.contact_count) |c| {
-        const p: Vec = s.data.contacts[c].position;
-        // Z-up to Y-up is a coordinate swap, and writing it as one is clearer here than
-        // pushing a point through a matrix: (x, y, z) becomes (x, z, -y).
-        const at: Vec = vec(p[0], p[2], -p[1]);
-        z.drawSphere(gl, at, .{ .radius = 0.012, .color = contact_col });
     }
 }
 
@@ -1957,6 +1564,404 @@ fn drawPanel(u: ui.Ui, s: *State) bool {
         }
     }
     return captured;
+}
+
+/// Draw every collision geom the importer kept.
+///
+/// * THESE ARE THE COLLISION SHAPES, not the visual meshes - the Go1's 13 `<mesh>` geoms are
+/// skipped by the converter because their vertices live in an `<asset>` block that is not read
+/// yet. Which turns out to be the better picture for a physics demo: what you see IS what the
+/// solver sees, so a leg that looks like it is touching the ground is touching the ground.
+fn drawRobot(s: *State, gl: *z.WgpuGl) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const to_y_up: Mat = zm.zUpToYUp();
+
+    // -- *** THE HELD POINT, AND A LINE TO IT --
+    //
+    // "The gripper is not moving" is only legible against something that visibly is not moving
+    // either. The marker sits at the world point the arm is holding and the line measures the
+    // failure - so the gimbal's success is the SHORTNESS of that line while the body weaves.
+    if (s.arm_on and s.hold_point[2] != 0) {
+        const at: Vec = zm.zUpToYUpPoint(s.hold_point);
+        s.transform[0] = mulMat(
+            translation(at[0], at[1], at[2]),
+            scaling(0.045, 0.045, 0.045),
+        );
+        z.drawMeshInstanced(gl, &s.cube, &s.transform, .{ .r = 237, .g = 184, .b = 89, .a = 255 });
+        const tip: Vec = zm.zUpToYUpPoint(s.data.body_xpos[s.gripper]);
+        z.drawLine3D(gl, tip, at, .{ .r = 226, .g = 106, .b = 154, .a = 255 });
+        // * AND A CROSSHAIR, so the point reads as a fixed place in the world rather than as a
+        // small object that might itself be drifting.
+        inline for ([_]Vec{ vec(0.12, 0, 0), vec(0, 0.12, 0), vec(0, 0, 0.12) }) |axis| {
+            z.drawLine3D(gl, at - axis, at + axis, .{ .r = 120, .g = 100, .b = 60, .a = 255 });
+        }
+    }
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        // * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine
+        // stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -
+        // it never needs the product except when something is drawn or collided, so it does
+        // not keep one.
+        const body_rot: Quat = s.data.body_xrot[body];
+        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const place: Mat = mulMat(mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])), world_rot);
+        // Feet are the interesting part, so they get a brighter colour.
+        const tint: Color = if (body == 0) trunk_col else link_col;
+        switch (m.geom_shape[g]) {
+            .sphere => |sph| {
+                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+            },
+            .capsule => |cap| {
+                // -- ** THE MESH ALREADY RUNS ALONG Y. MEASURED, NOT DERIVED. --
+                //
+                //     genMeshCylinder(r=1, h=1) extent:
+                //       x: [-1.000, 1.000]   y: [0.000, 1.000]   z: [-1.000, 1.000]
+                //
+                // `cylinderUv` returns the axis in its third slot, which reads as Z - but
+                // `parametricMesh` REMAPS as it writes (`verts.y = p[2]`), so the finished
+                // mesh extends along zimr's **Y**, spanning [0, h] rather than [-h/2, +h/2].
+                //
+                // That is the same axis `GeomShape.capsule` uses, so no rotation is needed at
+                // all. A previous version read `cylinderUv` and concluded Z, then rotated by
+                // -90 deg to "correct" it; the non-uniform scale then landed across the shape and
+                // flattened every limb into a wide curved ribbon. **Reading the generator was
+                // not enough - the answer was two functions away, and printing the mesh's
+                // bounds took one command.**
+                //
+                // Only the [0, h] span needs correcting, with a half-length shift along Y.
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cap.half_height, 0)),
+                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+                inline for ([_]f32{ -1.0, 1.0 }) |end| {
+                    s.transform[0] = mulMat(
+                        mulMat(place, translation(0, end * cap.half_height, 0)),
+                        scaling(cap.radius, cap.radius, cap.radius),
+                    );
+                    z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+                }
+            },
+            .cylinder => |cyl| {
+                // Same axis and the same [0, h] span as the capsule above.
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cyl.half_height, 0)),
+                    scaling(cyl.radius, 2.0 * cyl.half_height, cyl.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+            },
+            .box => |box| {
+                s.transform[0] = mulMat(place, scaling(
+                    2.0 * box.half_extent[0],
+                    2.0 * box.half_extent[1],
+                    2.0 * box.half_extent[2],
+                ));
+                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
+            },
+            else => {},
+        }
+    }
+
+    // The projectiles, drawn from the tree like everything else.
+    for (0..ball_count) |i| {
+        const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
+        const p: Vec = s.data.body_xpos[body];
+        s.transform[0] = mulMat(
+            mulMat(to_y_up, translation(p[0], p[1], p[2])),
+            scaling(ball_radius, ball_radius, ball_radius),
+        );
+        z.drawMeshInstanced(gl, &s.sphere, &s.transform, ball_col);
+    }
+
+    // Contact points, so "is it actually standing" is answerable by looking.
+    for (0..s.data.contact_count) |c| {
+        const p: Vec = s.data.contacts[c].position;
+        // Z-up to Y-up is a coordinate swap, and writing it as one is clearer here than
+        // pushing a point through a matrix: (x, y, z) becomes (x, z, -y).
+        const at: Vec = vec(p[0], p[2], -p[1]);
+        z.drawSphere(gl, at, .{ .radius = 0.012, .color = contact_col });
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+
+    // * ONCE PER FRAME, NOT PER SUBSTEP. It answers "what should the legs be doing", which
+    // only changes when a slider moves. Solving it inside the fixed-timestep loop recomputes
+    // the same answer for every substep and the cost multiplies - a lesson the KUKA demo paid
+    // for in frame rate.
+    if (s.posing) {
+        // * ONLY WHEN A SLIDER MOVED. The answer is a function of the command alone, so
+        // recomputing it every frame cannot improve it and - as the comment in `solveBodyPose`
+        // records - actively destabilises the robot.
+        if (s.routine) {
+            // * TWO INDEPENDENT RATES. Pitch and yaw in quadrature sweep the nose round a cone;
+            // roll rocks at a different frequency entirely.
+            s.routine_clock += f.time.delta_time;
+            const cone: f32 = s.routine_clock * s.cone_rate * 2.0 * pi;
+            const rock: f32 = s.routine_clock * s.roll_rate * 2.0 * pi;
+            s.body_pitch = s.cone_amount * @cos(cone);
+            s.body_yaw = s.cone_amount * @sin(cone);
+            s.body_roll = s.roll_amount * @sin(rock);
+            const bob: f32 = s.routine_clock * s.bob_rate * 2.0 * pi;
+            s.body_height = s.bob_amount * @sin(bob);
+        }
+        const cmd: [4]f32 = .{ s.body_roll, s.body_pitch, s.body_yaw, s.body_height };
+        var resolve: bool = !eql(f32, &cmd, &s.last_cmd);
+
+        // -- *** CLOSE THE LOOP ON THE TORSO, NOT JUST ON THE JOINTS --
+        //
+        // Read what the torso is ACTUALLY doing relative to its own rest attitude, and integrate
+        // the shortfall into a trim. Comparing against world level instead would fold in whatever
+        // tilt the settled stance already had, which is not the slider's fault and not its job.
+        const seen: Vec = zm.quatToEulerXYZ(
+            zm.qmul(s.data.body_xrot[1], zm.conjugate(s.rest_rot)),
+        );
+        s.seen_roll = seen[0];
+        s.seen_pitch = seen[1];
+        // -- *** THE ATTITUDE TRIM IS OFF WHILE WALKING --
+        //
+        // The trim integrates measured pitch error and folds it into the commanded attitude. On
+        // a STANDING robot that is exactly right - it took the sliders from 16-32% short to
+        // under 3%. **On a walking one it fights the gait**, because a trot pitches by design
+        // every step and the integrator treats that as an error to remove.
+        //
+        // Measured, trot 10 s with the arm:
+        //
+        //     trim off   **0.957 m**, standing, pitch flat at -0.026
+        //     trim on      0.123 m, **FELL at 1.80 s**, pitch +0.229 in the first second
+        //
+        // * THAT IS SIMON'S OSCILLATION AND FALL, REPRODUCED AND ISOLATED. The probe walked
+        // forward for many turns while the demo toppled, and this loop is the entire difference
+        // between them - the fourth bug in this file caused by two controllers writing one
+        // array, and the one that had gone longest unfound.
+        //
+        // ** AN INTEGRATOR NEEDS A SETPOINT THAT IS ACTUALLY REACHABLE AND STEADY. Level is both
+        // while standing; neither while walking.
+        if (s.gait_on) {
+            s.trim_roll = 0;
+            s.trim_pitch = 0;
+        } else if (s.trim_countdown > 0) {
+            s.trim_countdown -= 1;
+        } else {
+            const roll_gap: f32 = s.body_roll - seen[0];
+            const pitch_gap: f32 = s.body_pitch - seen[1];
+            // * A GAIN WELL UNDER 1, because this integrator sits on top of a PD that is itself
+            // still settling. Correcting the whole gap at once fights the transient it is
+            // measuring and rings.
+            if (@abs(roll_gap) > 0.002 or @abs(pitch_gap) > 0.002) {
+                s.trim_roll = clamp(s.trim_roll + 0.5 * roll_gap, -0.4, 0.4);
+                s.trim_pitch = clamp(s.trim_pitch + 0.5 * pitch_gap, -0.4, 0.4);
+                resolve = true;
+            }
+            // *** FOUR, NOT TWELVE, AND BOTH ENDS ARE MEASURED. On the moving routine the
+            // trim's mean lag is 0.0182 rad at a cadence of 12 and **0.0098 at 4** - a free
+            // 1.9x. At a cadence of 1 the robot FALLS OVER (3.03 rad), which is
+            // `solveBodyPose`'s warning about re-solving every frame, confirmed rather than
+            // taken on trust. Four is measured to be inside that wall, not guessed to be.
+            s.trim_countdown = 4;
+        }
+
+        // -- *** THE ARM REACHES FOR A MOVING TARGET --
+        //
+        // A circle in front of the robot, in the trunk's own frame - so as the torso rolls and
+
+        // -- ** SLIP AND FRICTION DEMAND, MEASURED LIVE --
+        //
+        // `rows_per_contact` is a PYRAMID BASIS: the four rows sum to the normal load, and the
+        // tangential content is what the opposing pairs disagree about. The coefficient comes
+        // from the contact itself rather than a number typed here, so the ratio means what it
+        // says - and **above 1.0 is a foot being asked for force the ground does not have.**
+        {
+            var slip: f32 = 0;
+            for (0..4) |i| {
+                const at: Vec = s.data.body_xpos[s.foot_body[i]] +
+                    zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+                slip += length3(at - s.planted[i]);
+            }
+            s.foot_slip = slip;
+            for (0..s.data.contact_count) |c| {
+                const base: usize = c * rbt.rows_per_contact;
+                var normal: f32 = 0;
+                for (0..rbt.rows_per_contact) |r| {
+                    normal += s.data.constraint_force[base + r];
+                }
+                if (normal < 1.0) {
+                    continue;
+                }
+                const t1: f32 = s.data.constraint_force[base] - s.data.constraint_force[base + 1];
+                const t2: f32 = s.data.constraint_force[base + 2] - s.data.constraint_force[base + 3];
+                const tang: f32 = @sqrt(t1 * t1 + t2 * t2);
+                const mu: f32 = @max(0.01, s.data.contacts[c].friction[0]);
+                const ratio: f32 = tang / (mu * normal);
+                s.cone_worst = @max(s.cone_worst, ratio);
+                if (ratio > 0.98) {
+                    s.cone_over += 1;
+                }
+            }
+        }
+
+        // ** THE LAG, SCORED. A routine that only looks impressive proves nothing; the number is
+        // what says whether the controller is keeping up with it.
+        if (s.routine and s.routine_clock > 1.5) {
+            const gap: f32 = @sqrt(
+                (s.body_roll - seen[0]) * (s.body_roll - seen[0]) +
+                    (s.body_pitch - seen[1]) * (s.body_pitch - seen[1]),
+            );
+            s.routine_error_sum += gap;
+            s.routine_error_count += 1;
+            s.routine_worst = @max(s.routine_worst, gap);
+        }
+
+        if (resolve) {
+            s.last_cmd = cmd;
+            solveBodyPose(s);
+        }
+
+        // -- *** THE ARM COUNTERS *AFTER* THE TORSO SOLVE, NOT BEFORE --
+        //
+        // `solveBodyPose` copies EVERY hinge joint from `stance`, arm included - so running the
+        // arm's IK before it meant the counter-animation was overwritten the instant the torso
+        // re-solved. **The arm was solving correctly and its answer was being thrown away**,
+        // which looks exactly like an arm that never counters at all.
+        //
+        // * ORDER IS PART OF A CONTROLLER'S DEFINITION. Two solves writing the same array is a
+        // sequencing bug, not a control one, and no amount of tuning either would have shown it.
+        // pitches, the world-space target moves with it and the arm must chase a point that is
+        // itself being thrown around. That coupling is the whole point: the arm's mass swings,
+        // the legs feel it, and neither controller is told about the other.
+        if (s.arm_on) {
+            s.arm_clock += f.time.delta_time;
+            // -- *** A FIXED POINT IN THE WORLD, NOT A CIRCLE IN THE BODY'S FRAME --
+            //
+            // Captured once, above where the robot is standing, and then held. Because the goal
+            // does not move, every joint motion the arm makes exists purely to CANCEL the base's
+            // - which is what makes the gimbal effect legible: the body weaves and the gripper
+            // does not.
+            // -- *** THE HELD POINT IS RELATIVE TO THE FEET, NOT TO THE WORLD --
+            //
+            // Pinned in absolute world coordinates it is a target the robot slowly walks away
+            // from: the feet slide, and over 30 s the gripper's mean error grew from 20 mm to
+            // 61 mm chasing a point that had not moved while the robot had.
+            //
+            // * THE FEET ARE WHERE THE ROBOT ACTUALLY IS. Anchoring to their average means the
+            // point travels with any drift the legs accumulate, so the arm counters the TORSO's
+            // motion - which is the thing it is for - instead of also fighting the base's slow
+            // walk. Simon's correction, and the same principle as anchoring the torso reference
+            // to current feet rather than to a stored stance.
+            var foot_mean: Vec = vec(0, 0, 0);
+            for (0..4) |i| {
+                foot_mean += s.data.body_xpos[s.foot_body[i]] +
+                    zm.rotate(s.data.body_xrot[s.foot_body[i]], s.foot_offset[i]);
+            }
+            foot_mean /= splat(4.0);
+            const goal: Vec = vec(
+                foot_mean[0] + s.hold_offset[0],
+                foot_mean[1] + s.hold_offset[1],
+                foot_mean[2] + s.hold_height,
+            );
+            s.hold_point = goal;
+
+            // * IK FROM THE ARM'S CURRENT POSE, restored afterwards - the solve must not leave
+            // the simulated state anywhere, only produce a target for the servo.
+            const keep_arm: []f32 = s.arm_target;
+            @memcpy(keep_arm, s.data.pos[0..s.imported.model.nq]);
+            _ = (ctl.Ik{ .max_iterations = 8, .max_step = 0.3 }).solve(
+                &s.imported.model,
+                &s.data,
+                s.arm_act,
+                .{ .body = s.gripper, .offset = vec(0, 0, 0), .goal = goal },
+                s.ik_scratch,
+            );
+            // Copy only the ARM joints into `home`; the legs belong to the torso controller.
+            for (0..s.imported.model.njnt) |j| {
+                const v: u32 = s.imported.model.jnt_dof_adr[j];
+                if (v >= s.imported.model.nv or !s.arm_act.powered[v]) {
+                    continue;
+                }
+                const q: u32 = s.imported.model.jnt_qpos_adr[j];
+                s.home[q] = s.data.pos[q];
+            }
+            @memcpy(s.data.pos[0..s.imported.model.nq], keep_arm);
+            s.data.stage = .stale;
+            rbt.forward(&s.imported.model, &s.data);
+            // * THE DRIFT IS THE SCORE. A gimbal that visibly wobbles is a gimbal that failed,
+            // and the number says by how much - which is the quantity a planner with preview
+            // would have to beat.
+            s.arm_error = length3(s.data.body_xpos[s.gripper] - goal);
+            s.hold_error = s.arm_error;
+            if (s.routine_clock > 1.5) {
+                s.hold_worst = @max(s.hold_worst, s.arm_error);
+            }
+        }
+    }
+    // * A GAIT RE-SOLVES EVERY FRAME, unlike a static pose, because its targets move by
+    // construction. The feedback loop `solveBodyPose` warns about is avoided the same way -
+    // seeding from the last command rather than from the measured robot.
+    if (s.gait_on) {
+        solveGait(s, @min(f.time.delta_time, 0.05));
+    }
+
+    s.accumulator += @min(f.time.delta_time, 0.1);
+    while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
+        // Kinematics, then collision, then solve - all at one `q`. See `robot_physics.sync`
+        // for why the order is not negotiable.
+        rbt.forward(&s.imported.model, &s.data);
+        if (s.physics_on) {
+            s.bridge.sync(&s.world, &s.imported.model, &s.data) catch |err| {
+                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
+            };
+            zp.step(&s.world, timestep) catch |err| {
+                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
+            };
+            s.bridge.harvest(&s.data);
+        }
+        control(s);
+        rbt.step(&s.imported.model, &s.data);
+    }
+    rbt.forward(&s.imported.model, &s.data);
+
+    var force: f32 = 0;
+    for (0..s.data.constraint_count) |row| {
+        force += s.data.constraint_force[row];
+    }
+    s.peak_force = @max(s.peak_force * 0.995, force);
+
+    // -- ** THE UI IS BUILT EARLY AND RENDERED LAST, AND BOTH HALVES MATTER --
+    //
+    // **Built early**, because the camera has to know whether the mouse belongs to a slider -
+    // otherwise dragging `kp` orbits the view at the same time.
+    //
+    // **Rendered last**, because `clearViewport` wipes whatever has been drawn. Keeping
+    // `begin`/`render` inside the panel function put the deferred `render` at the END OF THAT
+    // FUNCTION - before the clear - so the panel was drawn and then erased, every frame. The
+    // demo showed a robot and no controls at all, and looked like a build problem.
+    //
+    // `robot_3d` had it right by accident: its `begin` and its clear live in the same
+    // function, so the defer naturally lands after the 3D pass. Making that structural rather
+    // than incidental is the point of passing `u` in.
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s);
+
+    z.clearViewport(f, bg);
+    const cam: Camera3D = s.cam.update(f, captured, .{
+        .min_distance = 0.6,
+        .max_distance = 4.0,
+    });
+    // * THE THROW HAPPENS HERE, not in the panel, because it needs the camera - and the
+    // camera is not known until after the panel has said whether the mouse belongs to it.
+    if (s.want_throw) {
+        s.want_throw = false;
+        throwBall(s, cam);
+    }
+
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 16, 0.25);
+    drawRobot(s, gl);
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

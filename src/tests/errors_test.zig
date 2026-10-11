@@ -5,13 +5,14 @@
 // pure CPU.  We exercise both happy and failure paths.
 
 const std = @import("std");
+const testing_allocator = std.testing.allocator;
 const Allocator = std.mem.Allocator;
 const errors = @import("../errors.zig");
 const png_mod = @import("../codecs.zig").png;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
-const allocator = std.testing.allocator;
+const allocator = testing_allocator;
 
 // libc allocator stubs - png.zig itself doesn't use them, but the
 // global `extern fn malloc/calloc/free` symbols still need to resolve

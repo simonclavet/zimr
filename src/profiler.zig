@@ -167,27 +167,107 @@ pub const Zone = struct {
 
     pub inline fn end(self: Zone) void {
         if (enabled) {
-            endZone(self);
+            self.recordEnd();
         }
     }
     pub inline fn text(self: Zone, s: []const u8) void {
         if (enabled) {
-            annotateText(self, s);
+            self.recordText(s);
         }
     }
     pub inline fn value(self: Zone, v: u64) void {
         if (enabled) {
-            annotateValue(self, v);
+            self.recordValue(v);
         }
     }
     pub inline fn setColor(self: Zone, c: u32) void {
         if (enabled) {
-            annotateColor(self, c);
+            self.recordColor(c);
         }
+    }
+
+    // The recording itself, out of line: the `inline` methods above are what callers see, and they fold to
+    // nothing when the profiler is off; with it on, each call site pays one call, not a copy of the body.
+    fn recordEnd(self: Zone) void {
+        if (self.idx == no_zone) {
+            return;
+        }
+        if (store.depth > 0) {
+            store.depth -= 1;
+        }
+        store.zones[self.idx].t1 = clock_fn();
+    }
+
+    fn recordText(self: Zone, s: []const u8) void {
+        if (self.idx == no_zone) {
+            return;
+        }
+        const n: usize = @min(s.len, text_inline);
+        @memcpy(store.zones[self.idx].text[0..n], s[0..n]);
+        store.zones[self.idx].text_len = @intCast(n);
+    }
+
+    fn recordValue(self: Zone, v: u64) void {
+        if (self.idx == no_zone) {
+            return;
+        }
+        store.zones[self.idx].value = v;
+        store.zones[self.idx].has_value = true;
+    }
+
+    fn recordColor(self: Zone, c: u32) void {
+        if (self.idx == no_zone) {
+            return;
+        }
+        store.zones[self.idx].color = c;
     }
 };
 
 // ---- public API (inline, folds to nothing when disabled) ----
+
+fn ptrEq(a: []const u8, b: []const u8) bool {
+    return a.ptr == b.ptr and a.len == b.len;
+}
+
+fn internSrc(src: std.builtin.SourceLocation, name: []const u8, color: u32) u32 {
+    var i: u32 = 0;
+    while (i < store.src_count) : (i += 1) {
+        const s: *const SourceLoc = &store.srcs[i];
+        if (s.line == src.line and ptrEq(s.file, src.file) and ptrEq(s.name, name)) {
+            return i;
+        }
+    }
+    if (store.src_count >= src_cap) {
+        return 0; // registry full: bucket everything further into slot 0
+    }
+    const id: u32 = store.src_count;
+    store.srcs[id] = .{ .name = name, .file = src.file, .line = src.line, .color = color };
+    store.src_count += 1;
+    return id;
+}
+
+fn beginZone(src: std.builtin.SourceLocation, name: []const u8, color: u32) Zone {
+    if (store.frozen or !store.started) {
+        return .{ .idx = no_zone };
+    }
+    const sid: u32 = internSrc(src, name, color);
+    const slot: u32 = @intCast(store.zone_seq % zone_cap);
+    const t: f64 = clock_fn();
+    store.zones[slot] = .{
+        .src = sid,
+        .t0 = t,
+        .t1 = t,
+        .depth = store.depth,
+        .color = color,
+        .value = 0,
+        .has_value = false,
+        .text_len = 0,
+        .text = undefined,
+    };
+    store.zone_seq += 1;
+    store.depth += 1;
+    return .{ .idx = slot };
+}
 
 /// Begin a zone auto-named from the enclosing function.
 pub inline fn zone(src: std.builtin.SourceLocation) Zone {
@@ -203,6 +283,64 @@ pub inline fn zoneNamed(src: std.builtin.SourceLocation, name: []const u8) Zone 
         return beginZone(src, name, 0);
     }
     return .{};
+}
+
+// ---- auto-freeze-on-spike ----
+var auto_armed: bool = false; // lint:off module-var: auto-freeze armed by the app
+
+var dur_ema: f64 = 0; // lint:off module-var: smoothed frame-duration baseline
+
+var spike_factor: f64 = 2.0; // lint:off module-var: spike = dur > factor * baseline
+
+var spike_floor_ms: f64 = 4.0; // lint:off module-var: ignore spikes under this (ms)
+
+var auto_froze: bool = false; // lint:off module-var: set when a spike auto-froze
+
+fn markFrame() void {
+    const t: f64 = clock_fn();
+    if (!store.started) {
+        store.started = true;
+        store.cur_t0 = t;
+        store.cur_first = store.zone_seq;
+        return;
+    }
+    if (store.frozen) {
+        return;
+    }
+    const slot: usize = store.frame_head;
+    store.frames[slot] = .{
+        .index = store.frame_seq,
+        .t0 = store.cur_t0,
+        .t1 = t,
+        .dur = t - store.cur_t0,
+        .zone_first = store.cur_first,
+        .zone_count = @intCast(store.zone_seq - store.cur_first),
+    };
+    store.frame_head = (slot + 1) % frame_cap;
+    if (store.frame_count < frame_cap) {
+        store.frame_count += 1;
+    }
+    store.frame_seq += 1;
+    // Auto-freeze on a relative spike: a frame much worse than the smoothed
+    // baseline (and over an absolute floor) freezes the rings so the hitch is
+    // captured without racing to hit a button. Steady-slow scenes don't trip it
+    // (the baseline tracks them); only genuine outliers do.
+    const cur_dur: f64 = t - store.cur_t0;
+    if (auto_armed and store.frame_count > 20 and dur_ema > 0) {
+        if (cur_dur > spike_factor * dur_ema and cur_dur > spike_floor_ms) {
+            store.frozen = true;
+            auto_froze = true;
+        }
+    }
+    if (dur_ema <= 0) {
+        dur_ema = cur_dur;
+    } else {
+        dur_ema = dur_ema * 0.9 + cur_dur * 0.1;
+    }
+    // open the next frame
+    store.cur_t0 = t;
+    store.cur_first = store.zone_seq;
+    store.depth = 0; // safety: never let an unbalanced zone leak across frames
 }
 
 /// Close the current frame and open the next.  Call once per rendered frame.
@@ -231,13 +369,6 @@ pub fn isFrozen() bool {
     }
     return false;
 }
-
-// ---- auto-freeze-on-spike ----
-var auto_armed: bool = false; // lint:off module-var: auto-freeze armed by the app
-var auto_froze: bool = false; // lint:off module-var: set when a spike auto-froze
-var spike_factor: f64 = 2.0; // lint:off module-var: spike = dur > factor * baseline
-var spike_floor_ms: f64 = 4.0; // lint:off module-var: ignore spikes under this (ms)
-var dur_ema: f64 = 0; // lint:off module-var: smoothed frame-duration baseline
 
 /// Arm auto-freeze: the next frame whose duration exceeds `factor` x the smoothed
 /// baseline (and is at least `floor_ms`) freezes the profiler automatically. Stays
@@ -354,6 +485,27 @@ pub fn frameCount() usize {
         return store.frame_count;
     }
     return 0;
+}
+
+fn findWorst() ?Frame {
+    if (store.frame_count == 0) {
+        return null;
+    }
+    const newest_slot: usize = (store.frame_head + frame_cap - 1) % frame_cap;
+    const now_t: f64 = store.frames[newest_slot].t1;
+    var best: ?Frame = null;
+    var i: usize = 0;
+    while (i < store.frame_count) : (i += 1) {
+        const slot: usize = (store.frame_head + frame_cap - 1 - i) % frame_cap;
+        const f: Frame = store.frames[slot];
+        if (now_t - f.t1 > window_ms) {
+            break; // iterating newest -> oldest; everything past here is older
+        }
+        if (best == null or f.dur > best.?.dur) {
+            best = f;
+        }
+    }
+    return best;
 }
 
 /// The longest frame within the rolling ~2s window, or null if none yet.
@@ -499,152 +651,6 @@ pub fn frameSeriesFor(src: u32, out: []f64) usize {
 }
 
 // ---- implementation (analyzed only when enabled) ----
-
-fn ptrEq(a: []const u8, b: []const u8) bool {
-    return a.ptr == b.ptr and a.len == b.len;
-}
-
-fn internSrc(src: std.builtin.SourceLocation, name: []const u8, color: u32) u32 {
-    var i: u32 = 0;
-    while (i < store.src_count) : (i += 1) {
-        const s: *const SourceLoc = &store.srcs[i];
-        if (s.line == src.line and ptrEq(s.file, src.file) and ptrEq(s.name, name)) {
-            return i;
-        }
-    }
-    if (store.src_count >= src_cap) {
-        return 0; // registry full: bucket everything further into slot 0
-    }
-    const id: u32 = store.src_count;
-    store.srcs[id] = .{ .name = name, .file = src.file, .line = src.line, .color = color };
-    store.src_count += 1;
-    return id;
-}
-
-fn beginZone(src: std.builtin.SourceLocation, name: []const u8, color: u32) Zone {
-    if (store.frozen or !store.started) {
-        return .{ .idx = no_zone };
-    }
-    const sid: u32 = internSrc(src, name, color);
-    const slot: u32 = @intCast(store.zone_seq % zone_cap);
-    const t: f64 = clock_fn();
-    store.zones[slot] = .{
-        .src = sid,
-        .t0 = t,
-        .t1 = t,
-        .depth = store.depth,
-        .color = color,
-        .value = 0,
-        .has_value = false,
-        .text_len = 0,
-        .text = undefined,
-    };
-    store.zone_seq += 1;
-    store.depth += 1;
-    return .{ .idx = slot };
-}
-
-fn endZone(z: Zone) void {
-    if (z.idx == no_zone) {
-        return;
-    }
-    if (store.depth > 0) {
-        store.depth -= 1;
-    }
-    store.zones[z.idx].t1 = clock_fn();
-}
-
-fn annotateText(z: Zone, s: []const u8) void {
-    if (z.idx == no_zone) {
-        return;
-    }
-    const n: usize = @min(s.len, text_inline);
-    @memcpy(store.zones[z.idx].text[0..n], s[0..n]);
-    store.zones[z.idx].text_len = @intCast(n);
-}
-
-fn annotateValue(z: Zone, v: u64) void {
-    if (z.idx == no_zone) {
-        return;
-    }
-    store.zones[z.idx].value = v;
-    store.zones[z.idx].has_value = true;
-}
-
-fn annotateColor(z: Zone, c: u32) void {
-    if (z.idx == no_zone) {
-        return;
-    }
-    store.zones[z.idx].color = c;
-}
-
-fn markFrame() void {
-    const t: f64 = clock_fn();
-    if (!store.started) {
-        store.started = true;
-        store.cur_t0 = t;
-        store.cur_first = store.zone_seq;
-        return;
-    }
-    if (store.frozen) {
-        return;
-    }
-    const slot: usize = store.frame_head;
-    store.frames[slot] = .{
-        .index = store.frame_seq,
-        .t0 = store.cur_t0,
-        .t1 = t,
-        .dur = t - store.cur_t0,
-        .zone_first = store.cur_first,
-        .zone_count = @intCast(store.zone_seq - store.cur_first),
-    };
-    store.frame_head = (slot + 1) % frame_cap;
-    if (store.frame_count < frame_cap) {
-        store.frame_count += 1;
-    }
-    store.frame_seq += 1;
-    // Auto-freeze on a relative spike: a frame much worse than the smoothed
-    // baseline (and over an absolute floor) freezes the rings so the hitch is
-    // captured without racing to hit a button. Steady-slow scenes don't trip it
-    // (the baseline tracks them); only genuine outliers do.
-    const cur_dur: f64 = t - store.cur_t0;
-    if (auto_armed and store.frame_count > 20 and dur_ema > 0) {
-        if (cur_dur > spike_factor * dur_ema and cur_dur > spike_floor_ms) {
-            store.frozen = true;
-            auto_froze = true;
-        }
-    }
-    if (dur_ema <= 0) {
-        dur_ema = cur_dur;
-    } else {
-        dur_ema = dur_ema * 0.9 + cur_dur * 0.1;
-    }
-    // open the next frame
-    store.cur_t0 = t;
-    store.cur_first = store.zone_seq;
-    store.depth = 0; // safety: never let an unbalanced zone leak across frames
-}
-
-fn findWorst() ?Frame {
-    if (store.frame_count == 0) {
-        return null;
-    }
-    const newest_slot: usize = (store.frame_head + frame_cap - 1) % frame_cap;
-    const now_t: f64 = store.frames[newest_slot].t1;
-    var best: ?Frame = null;
-    var i: usize = 0;
-    while (i < store.frame_count) : (i += 1) {
-        const slot: usize = (store.frame_head + frame_cap - 1 - i) % frame_cap;
-        const f: Frame = store.frames[slot];
-        if (now_t - f.t1 > window_ms) {
-            break; // iterating newest -> oldest; everything past here is older
-        }
-        if (best == null or f.dur > best.?.dur) {
-            best = f;
-        }
-    }
-    return best;
-}
 
 // ---- tests (deterministic fake clock) ----
 var test_now: f64 = 0; // lint:off module-var: test-only fake clock

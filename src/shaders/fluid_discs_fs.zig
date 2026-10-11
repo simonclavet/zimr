@@ -14,6 +14,8 @@
 const zm = @import("zm");
 const length = zm.length;
 const smoothstep = zm.smoothstep;
+const Vec = zm.Vec;
+const Vec2 = zm.Vec2;
 const shader_externs = @import("fluid_discs_fs_externs");
 
 pub const Io = shader_externs.IoT(void);
@@ -22,10 +24,10 @@ pub const Out = shader_externs.Out;
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
-    const corner: zm.Vec2 = io_in.corner;
+    const corner: Vec2 = io_in.corner;
     const r: f32 = length(corner);
     const edge: f32 = if (r > 1.0) 0.0 else 1.0 - smoothstep(0.8, 1.0, r);
-    const c: zm.Vec = io_in.col;
+    const c: Vec = io_in.col;
     out.final_color = .{ c[0], c[1], c[2], c[3] * edge };
 
     return out;

@@ -31,6 +31,7 @@ const splat = zm.splat;
 const identity = zm.identity;
 const float = zm.float;
 const bufPrint = std.fmt.bufPrint;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const si = @import("shader_interface");
 
 const vs_io = @import("lightmap_vs_io.zig");
@@ -298,6 +299,11 @@ fn faceColor(
     return acc / (acc + splat(1.0)); // tone-map, keep hue
 }
 
+fn toU8(x: f32) u8 {
+    const c: f32 = if (x < 0) 0 else if (x > 1) 1 else x;
+    return @round(c * 255.0);
+}
+
 /// Draw a cube as 6 flat-shaded faces, each with its baked colour, via the
 /// immediate 3D path (shares the floor's pass + depth).
 fn drawLitCube(gl: *z.WgpuGl, cube: Cube) void {
@@ -313,11 +319,6 @@ fn drawLitCube(gl: *z.WgpuGl, cube: Cube) void {
         z.drawTriangle3D(gl, c0, c1, c2, .{ .r = r, .g = g, .b = b, .a = 255 });
         z.drawTriangle3D(gl, c0, c2, c3, .{ .r = r, .g = g, .b = b, .a = 255 });
     }
-}
-
-fn toU8(x: f32) u8 {
-    const c: f32 = if (x < 0) 0 else if (x > 1) 1 else x;
-    return @round(c * 255.0);
 }
 
 /// A near-white checker so the baked light colour dominates the look.
@@ -397,17 +398,17 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "lightmap_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(verts[0..]));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(verts[0..]));
     const ibo: z.wgpu.BufferHandle = z.wgpu.createBuffer(f.gpu.device, .{
         .size = idx.len * @sizeOf(u16),
         .usage = .{ .index = true, .copy_dst = true },
         .label = "lightmap_ibo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, ibo, 0, std.mem.sliceAsBytes(idx[0..]));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, ibo, 0, sliceAsBytes(idx[0..]));
 
     const base_px: []u8 = try makeBasePixels(gpa);
     defer gpa.free(base_px);
-    const base_tex: z.WgpuTexture = z.WgpuTexture.createFromPixels(f.gpu.device, f.gpu.queue, .{
+    const base_tex: z.WgpuTexture = .createFromPixels(f.gpu.device, f.gpu.queue, .{
         .width = tex_dim,
         .height = tex_dim,
         .pixels = base_px,
@@ -419,7 +420,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     const lm_px: []u8 = try bakeLightmapPixels(gpa, &lights, &cubes);
     defer gpa.free(lm_px);
-    const lightmap_tex: z.WgpuTexture = z.WgpuTexture.createFromPixels(f.gpu.device, f.gpu.queue, .{
+    const lightmap_tex: z.WgpuTexture = .createFromPixels(f.gpu.device, f.gpu.queue, .{
         .width = tex_dim,
         .height = tex_dim,
         .pixels = lm_px,

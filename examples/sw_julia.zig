@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 // GL-retirement P2: migrated off the GL `zimr` umbrella onto the native
 // SW bundle (raster + raster_shader + codecs + math + the typed-pipeline pieces).
 const sw = @import("sw_runtime");
@@ -24,6 +25,7 @@ const zm = @import("zm");
 const float64 = zm.float64;
 const float = zm.float;
 const inf = zm.inf;
+const clamp = zm.clamp;
 
 const width: u32 = 1280;
 const height: u32 = 720;
@@ -47,7 +49,7 @@ fn monotonicNs() i128 {
 }
 
 fn juliaPixel(zx0: f32, zy0: f32) [4]u8 {
-    const BAIL_R2: f32 = 256.0;
+    const bail_r2: f32 = 256.0;
     var zx: f32 = zx0;
     var zy: f32 = zy0;
     var iter: u32 = 0;
@@ -56,7 +58,7 @@ fn juliaPixel(zx0: f32, zy0: f32) [4]u8 {
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) {
+        if (zx2 + zy2 > bail_r2) {
             break;
         }
         const zxy_new: f32 = 2 * zx * zy + c_y;
@@ -74,17 +76,18 @@ fn juliaPixel(zx0: f32, zy0: f32) [4]u8 {
     const nu: f32 = float(iter) + 1.0 - @log2(log_mag);
     const t: f32 = nu * 0.04; // palette period - tweak by eye
 
-    const PI2: f32 = 6.28318530718;
+    const pi2: f32 = 6.28318530718;
     // Three-channel cosine palette, phase-shifted.  Different phase
     // offsets than sw_mandelbrot to give Julia its own visual identity.
-    const r: f32 = 0.5 + 0.5 * @cos(PI2 * (t + 0.00));
-    const g: f32 = 0.5 + 0.5 * @cos(PI2 * (t + 0.33));
-    const b: f32 = 0.5 + 0.5 * @cos(PI2 * (t + 0.67));
+    const r: f32 = 0.5 + 0.5 * @cos(pi2 * (t + 0.00));
+    const g: f32 = 0.5 + 0.5 * @cos(pi2 * (t + 0.33));
+    const b: f32 = 0.5 + 0.5 * @cos(pi2 * (t + 0.67));
 
+    // Each channel rounds to the nearest step - truncating would bias every shade darker.
     return .{
-        @trunc(@max(0, @min(255, r * 255))),
-        @trunc(@max(0, @min(255, g * 255))),
-        @trunc(@max(0, @min(255, b * 255))),
+        @round(clamp(r * 255, 0, 255)),
+        @round(clamp(g * 255, 0, 255)),
+        @round(clamp(b * 255, 0, 255)),
         255,
     };
 }
@@ -131,10 +134,10 @@ pub fn main() !void {
     defer gpa.free(png_bytes);
 
     const out_path: []const u8 = "julia.png";
-    var io_threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
-    var f: std.Io.File = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+    const io: Io = io_threaded.io();
+    var f: Io.File = try Io.Dir.cwd().createFile(io, out_path, .{});
     defer f.close(io);
     try f.writeStreamingAll(io, png_bytes);
 

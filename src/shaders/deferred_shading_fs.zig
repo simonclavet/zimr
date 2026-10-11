@@ -40,6 +40,17 @@ const quadratic_falloff: f32 = 0.032;
 /// Ambient floor so unlit geometry still reads as shape, not void.
 const ambient_strength: f32 = 0.1;
 
+/// x^32 as five squarings - `pow` with a runtime exponent is a
+/// transcendental on some GPUs; the fixed raylib shininess of 32 is a
+/// power of two, so multiply it out.
+fn pow32(x: f32) f32 {
+    const x2: f32 = x * x;
+    const x4: f32 = x2 * x2;
+    const x8: f32 = x4 * x4;
+    const x16: f32 = x8 * x8;
+    return x16 * x16;
+}
+
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
@@ -98,17 +109,6 @@ pub fn shaderMain(io_in: Io) Out {
 
     out.final_color = .{ lit[0], lit[1], lit[2], 1.0 };
     return out;
-}
-
-/// x^32 as five squarings - `pow` with a runtime exponent is a
-/// transcendental on some GPUs; the fixed raylib shininess of 32 is a
-/// power of two, so multiply it out.
-fn pow32(x: f32) f32 {
-    const x2: f32 = x * x;
-    const x4: f32 = x2 * x2;
-    const x8: f32 = x4 * x4;
-    const x16: f32 = x8 * x8;
-    return x16 * x16;
 }
 
 comptime {

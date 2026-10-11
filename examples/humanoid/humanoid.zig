@@ -21,6 +21,8 @@
 //! **Shove** it, and pick a keyframe - the model ships four, including standing on one leg.
 
 const std = @import("std");
+const copyForwards = std.mem.copyForwards;
+const eql = std.mem.eql;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -39,6 +41,11 @@ const bridge_mod = z.robot_physics;
 const ctl = z.robot_control;
 const mpc = z.robot_mpc;
 const clamp = zm.clamp;
+
+const Vec = zm.Vec;
+
+const vec = zm.vec;
+const Quat = zm.Quat;
 
 /// -- *** A CAPSULE'S SEGMENT RUNS ALONG LOCAL **Y** IN ZIMR, NOT Z --
 ///
@@ -59,9 +66,7 @@ const cross = zm.cross;
 const pi = zm.pi;
 const Color = zm.Color;
 
-const Vec = zm.Vec;
 const Mat = zm.Mat;
-const vec = zm.vec;
 const normalize3 = zm.normalize3;
 const splat = zm.splat;
 const float = zm.float;
@@ -275,7 +280,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         s.robot_dof_count = s.imported.model.jnt_dof_adr[joint];
     }
 
-    s.world = try .init(gpa, 128);
+    s.world = try zp.World.init(gpa, 128);
     s.world.gravity = vec(0, 0, -9.81);
     const ground: zp.ShapeId = try s.world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(5, 5, 0.5), .convex_radius = 0.01 },
@@ -290,7 +295,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // stands it up, this model's four keyframes are squat / one-legged / prone / supine - all
     // interesting and none of them the pose to hold. `qpos0` is upright.
     rbt.forward(&s.imported.model, &s.data);
-    s.bridge = try .init(gpa, &s.world, &s.imported.model, &s.data, 128);
+    s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 128);
     s.bridge.listen(&s.world);
 
     s.home = try gpa.dupe(f32, s.data.pos);
@@ -514,6 +519,258 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.doc.deinit();
 }
 
+/// The model carries no name table; `mjcf.Robot` does, and the joints are built in that order.
+fn jointIndex(s: *State, want: []const u8) ?u32 {
+    for (s.robot.joints, 0..) |joint, j| {
+        if (eql(u8, joint.name, want)) {
+            return @intCast(j);
+        }
+    }
+    return null;
+}
+
+fn setJoint(s: *State, name: []const u8, angle: f32) void {
+    if (jointIndex(s, name)) |j| {
+        s.data.pos[s.imported.model.jnt_qpos_adr[j]] = angle;
+    }
+}
+
+/// Rotate the WHOLE robot so the support foot's sole lies flat on the ground.
+///
+/// -- *** THE STEP THAT WAS MISSING, AND IT IS A GLOBAL ONE --
+///
+/// Setting joint angles gets every bone right RELATIVE to its parent and says nothing about
+/// where the chain ends up pointing. Bending the support hip rotates the leg against a torso
+/// that stays bolt upright, so the foot meets the ground at whatever angle the chain leaves it.
+/// Measured on the first version: **13.2 degrees**, the sole touching on ONE CORNER with the
+/// other three between 27 and 49 mm in the air.
+///
+/// **That is not a stance, it is a pose caught mid-fall** - and no controller holds it, because
+/// a foot on a corner has no support polygon to work with at all. Levelling brings the foot's
+/// up-axis to (-0.010, 0.001, 1.000) and puts two sole points on the ground instead of one.
+/// The 5.5 degrees that remain are the foot model's own rake, not an error.
+fn levelFoot(s: *State, foot: u32) void {
+    const m: *const rbt.Model = &s.imported.model;
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+    const up: Vec = zm.rotate(s.data.body_xrot[foot], vec(0, 0, 1));
+    const axis: Vec = cross(up, vec(0, 0, 1));
+    const sine: f32 = length3(axis);
+    if (sine < 1.0e-6) {
+        return;
+    }
+    const angle: f32 = atan2Rad(sine, dot3(up, vec(0, 0, 1)));
+    const fix: Quat = zm.quatFromAxisAngle(axis / splat(sine), angle);
+    const root: u32 = m.jnt_qpos_adr[0];
+    const current: Quat = .{
+        s.data.pos[root + 3], s.data.pos[root + 4],
+        s.data.pos[root + 5], s.data.pos[root + 6],
+    };
+    const fixed: Quat = zm.qmul(fix, current);
+    s.data.pos[root + 3] = fixed[0];
+    s.data.pos[root + 4] = fixed[1];
+    s.data.pos[root + 5] = fixed[2];
+    s.data.pos[root + 6] = fixed[3];
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+}
+
+/// Drop the root until the support foot's lowest point rests on the ground.
+fn settleFoot(s: *State, foot: u32) void {
+    const m: *const rbt.Model = &s.imported.model;
+    // * LEVEL BEFORE SETTLING. Rotating the robot changes which point is lowest, so dropping
+    // first and levelling second leaves the foot either buried or floating.
+    levelFoot(s, foot);
+    var lowest: f32 = 1.0e9;
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] != foot) {
+            continue;
+        }
+        const half: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.half_height,
+            else => 0,
+        };
+        const radius: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.radius,
+            .sphere => |sp| sp.radius,
+            else => continue,
+        };
+        const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
+        const centre: Vec = s.data.body_xpos[foot] + zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
+        inline for ([_]f32{ -1.0, 1.0 }) |end| {
+            lowest = @min(lowest, (centre + axis * splat(end * half))[2] - radius);
+        }
+    }
+    s.data.pos[m.jnt_qpos_adr[0] + 2] -= lowest;
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+}
+
+/// How far the centre of mass sits from the middle of the SOLE - not from the foot body's
+/// origin, which is a different place.
+///
+/// -- *** THE SOLE RUNS FROM -0.07 TO +0.14 IN THE FOOT'S FRAME --
+///
+/// Its middle is therefore **0.035 m forward** of the body origin: a third of the way to the toe
+/// on a 0.21 m foot. Targeting the origin put the mass that far behind the middle of its own
+/// support before the robot had done anything.
+///
+/// * AND A ONE-LEGGED STAND HAS NO MARGIN TO SPEND. The sole can supply about `f_z x 0.105`
+/// ~ 42 N*m of restoring moment against `m*g*h*theta` ~ 360*theta, so a stiff ankle holds it out to
+/// roughly **6.7 degrees** of lean - and 3.5 cm at 0.9 m is 2.2 of those degrees given away for
+/// nothing. That is why it fell forward rather than simply wobbling.
+fn comOverFoot(s: *State, foot: u32) [2]f32 {
+    const m: *const rbt.Model = &s.imported.model;
+    const com: Vec = s.data.subtree_com[rbt.world_body];
+    var total: Vec = vec(0, 0, 0);
+    var count: f32 = 0;
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] != foot) {
+            continue;
+        }
+        const half: f32 = switch (m.geom_shape[g]) {
+            .capsule => |c| c.half_height,
+            else => continue,
+        };
+        const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
+        const mid: Vec = s.data.body_xpos[foot] +
+            zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
+        inline for ([_]f32{ -1.0, 1.0 }) |end| {
+            total += mid + axis * splat(end * half);
+            count += 1;
+        }
+    }
+    const at: Vec = if (count > 0) total / splat(count) else s.data.body_xpos[foot];
+    return .{ com[0] - at[0], com[1] - at[1] };
+}
+
+/// Build a stand-on-the-right-leg pose: left leg lifted, arms out at 45 degrees, and the centre
+/// of mass placed exactly over the support foot. Writes into `out` (length `nq`).
+///
+/// -- *** WHY PROCEDURAL RATHER THAN THE SHIPPED KEYFRAME --
+///
+/// `stand_on_left_leg` puts the mass **0.040 m** from its foot, so a balance controller opens by
+/// fighting an offset instead of at equilibrium. And it keeps the arms at the sides, where the
+/// flywheel is worth far less than it could be. Measured on this model:
+///
+///     arms EXTENDED   15.54 kg*m^2/s   -> arrests 0.428 m/s
+///     arms folded      7.92 kg*m^2/s   -> arrests 0.218 m/s
+///
+/// **Nearly double**, because the orbital part of the angular momentum goes as `m*r^2*omega` and
+/// extending the arm takes `r` from about 0.3 m to 0.6. The arms ARE the flywheel, and folded
+/// arms throw most of it away.
+fn buildOneLegPose(s: *State) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const right_foot: u32 = s.imported.bodyIndex("foot_right") orelse return;
+    const hand_right: u32 = s.imported.bodyIndex("hand_right") orelse return;
+    const hand_left: u32 = s.imported.bodyIndex("hand_left") orelse return;
+    const arm_r: u32 = s.imported.bodyIndex("upper_arm_right") orelse return;
+    const arm_l: u32 = s.imported.bodyIndex("upper_arm_left") orelse return;
+    const root: u32 = m.jnt_qpos_adr[0];
+
+    // * LEAVES THE POSE IN `data.pos` RATHER THAN RESTORING. An earlier version saved the
+    // current pose into `pose_scratch` and restored on exit - then the caller passed
+    // `pose_scratch` as the OUTPUT, so the save buffer and the result were the same array. It
+    // happened to work and was one edit away from not. The only caller is `restorePose`, which
+    // wants the pose applied anyway.
+    @memcpy(s.data.pos, m.qpos0);
+    // Lift the left leg clear.
+    setJoint(s, "hip_y_left", -0.85);
+    setJoint(s, "knee_left", -1.30);
+    setJoint(s, "hip_x_left", -0.10);
+    s.data.stage = .stale;
+    rbt.forward(m, &s.data);
+
+    // -- *** THE STANCE COMES FIRST, THE ARMS LAST --
+    //
+    // Levelling rotates the WHOLE robot, so anything placed in world coordinates before it is
+    // rotated too. Reaching first left the arms visibly lopsided - right hand at z 1.166, left
+    // at 1.677, from a step meant to be symmetric. Settle the stance, then reach: the targets
+    // are relative to the shoulders, so they land right the first time.
+    // * AND A 2x2 NEWTON PUTS THE MASS OVER THE FOOT. Translating the root moves foot and mass
+    // together, so their offset is set by the joints alone - `hip_x` swings it sideways,
+    // `hip_y` fore-and-aft. Measured, this converges in ONE step to 0.6 mm.
+    const hip_x: u32 = m.jnt_qpos_adr[jointIndex(s, "hip_x_right") orelse return];
+    const hip_y: u32 = m.jnt_qpos_adr[jointIndex(s, "hip_y_right") orelse return];
+    for (0..14) |_| {
+        settleFoot(s, right_foot);
+        const err: [2]f32 = comOverFoot(s, right_foot);
+        if (@sqrt(err[0] * err[0] + err[1] * err[1]) < 0.003) {
+            break;
+        }
+        var jac: [4]f32 = undefined;
+        const eps: f32 = 0.01;
+        inline for (.{ hip_x, hip_y }, 0..) |q, col| {
+            const keep: f32 = s.data.pos[q];
+            s.data.pos[q] = keep + eps;
+            settleFoot(s, right_foot);
+            const moved: [2]f32 = comOverFoot(s, right_foot);
+            jac[0 * 2 + col] = (moved[0] - err[0]) / eps;
+            jac[1 * 2 + col] = (moved[1] - err[1]) / eps;
+            s.data.pos[q] = keep;
+        }
+        const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
+        if (@abs(det) < 1.0e-6) {
+            break;
+        }
+        const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
+        const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
+        s.data.pos[hip_x] = clamp(s.data.pos[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
+        s.data.pos[hip_y] = clamp(s.data.pos[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
+    }
+    // * THE ARMS GO OUT BY IK, NOT BY ANGLE. The shoulder axes are `2 1 1` and `0 -1 1` - not
+    // orthogonal and not aligned with anything, so "45 degrees" in joint space would mean
+    // whatever those axes made of it. A hand POSITION is unambiguous.
+    const diag: f32 = 0.52 * 0.7071;
+    for (0..12) |_| {
+        _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
+            m,
+            &s.data,
+            s.arm_act_right,
+            .{ .body = hand_right, .offset = vec(0, 0, 0), .goal = s.data.body_xpos[arm_r] + vec(diag, -diag, 0) },
+            s.ik_scratch,
+        );
+        _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
+            m,
+            &s.data,
+            s.arm_act_left,
+            .{ .body = hand_left, .offset = vec(0, 0, 0), .goal = s.data.body_xpos[arm_l] + vec(diag, diag, 0) },
+            s.ik_scratch,
+        );
+    }
+
+    // * AND ONE MORE PASS, BECAUSE THE ARMS MOVED THE MASS. Reaching shifts roughly 5 kg out
+    // to 0.5 m; measured, that took the centre of mass from 0.6 mm off the foot to 21 mm.
+    for (0..6) |_| {
+        settleFoot(s, right_foot);
+        const err: [2]f32 = comOverFoot(s, right_foot);
+        if (@sqrt(err[0] * err[0] + err[1] * err[1]) < 0.004) {
+            break;
+        }
+        var jac: [4]f32 = undefined;
+        const eps: f32 = 0.01;
+        inline for (.{ hip_x, hip_y }, 0..) |q, col| {
+            const keep: f32 = s.data.pos[q];
+            s.data.pos[q] = keep + eps;
+            settleFoot(s, right_foot);
+            const moved: [2]f32 = comOverFoot(s, right_foot);
+            jac[0 * 2 + col] = (moved[0] - err[0]) / eps;
+            jac[1 * 2 + col] = (moved[1] - err[1]) / eps;
+            s.data.pos[q] = keep;
+        }
+        const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
+        if (@abs(det) < 1.0e-6) {
+            break;
+        }
+        const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
+        const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
+        s.data.pos[hip_x] = clamp(s.data.pos[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
+        s.data.pos[hip_y] = clamp(s.data.pos[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
+    }
+    settleFoot(s, right_foot);
+    _ = root;
+}
+
 /// Hold the standing pose.
 ///
 /// -- * THIS IS NOW THREE LINES, AND THAT IS THE POINT --
@@ -578,6 +835,29 @@ fn restorePose(s: *State, keyframe: ?u32) void {
     // across the gap finds the floor and fires the robot away - see `Bridge.teleported`.
     s.bridge.teleported();
     s.pose_label = if (keyframe) |k| s.robot.keyframes[k].name else if (s.one_leg) "right leg (built)" else "standing";
+}
+
+/// Cost weights for the balancing planner, in state order
+/// `[com_x, com_y, vel_x, vel_y, momentum_x, momentum_y]`.
+fn balanceWeights() mpc.Weights {
+    // *** THE MOMENTUM WEIGHT IS THE ONLY BRAKE ON HOW MUCH THE PLANNER SPENDS. Excursion is a
+    // STATE limit and `boxQP` bounds controls only, so there is no constraint to write - the
+    // cost is the whole mechanism. At 0.02 the planner treated momentum as nearly free and
+    // planned 16.4 kg*m^2/s, which is 2.1x what two arms can carry. Raising it to 2.0 keeps the
+    // plan inside the body: measured, a 0.3 m/s push then peaks at 0.54.
+    const state_w = [_]f32{ 400, 400, 40, 40, 2.0, 2.0 };
+    const control_w = [_]f32{ 1.0, 1.0, 0.002, 0.002 };
+    const terminal_w = [_]f32{ 4000, 4000, 400, 400, 20.0, 20.0 };
+    const holder = struct {
+        const s = state_w;
+        const c = control_w;
+        const t = terminal_w;
+    };
+    return .{ .state = &holder.s, .control = &holder.c, .terminal = &holder.t };
+}
+
+fn plan_cop(plan: *const mpc.BalancePlan, axis: usize) f32 {
+    return plan.ctrl[mpc.lipm_cop_offset + axis];
 }
 
 fn control(s: *State) void {
@@ -796,29 +1076,6 @@ fn control(s: *State) void {
     }
 }
 
-fn plan_cop(plan: *const mpc.BalancePlan, axis: usize) f32 {
-    return plan.ctrl[mpc.lipm_cop_offset + axis];
-}
-
-/// Cost weights for the balancing planner, in state order
-/// `[com_x, com_y, vel_x, vel_y, momentum_x, momentum_y]`.
-fn balanceWeights() mpc.Weights {
-    // *** THE MOMENTUM WEIGHT IS THE ONLY BRAKE ON HOW MUCH THE PLANNER SPENDS. Excursion is a
-    // STATE limit and `boxQP` bounds controls only, so there is no constraint to write - the
-    // cost is the whole mechanism. At 0.02 the planner treated momentum as nearly free and
-    // planned 16.4 kg*m^2/s, which is 2.1x what two arms can carry. Raising it to 2.0 keeps the
-    // plan inside the body: measured, a 0.3 m/s push then peaks at 0.54.
-    const state_w = [_]f32{ 400, 400, 40, 40, 2.0, 2.0 };
-    const control_w = [_]f32{ 1.0, 1.0, 0.002, 0.002 };
-    const terminal_w = [_]f32{ 4000, 4000, 400, 400, 20.0, 20.0 };
-    const holder = struct {
-        const s = state_w;
-        const c = control_w;
-        const t = terminal_w;
-    };
-    return .{ .state = &holder.s, .control = &holder.c, .terminal = &holder.t };
-}
-
 /// Throw a ball at the robot, from wherever the camera is looking from.
 ///
 /// * AIMED FROM THE CAMERA, so "throw" means what it looks like it means: the ball leaves the
@@ -875,258 +1132,6 @@ fn throwBall(s: *State, cam: Camera3D) void {
     s.data.forgetWarmStart();
 }
 
-/// Build a stand-on-the-right-leg pose: left leg lifted, arms out at 45 degrees, and the centre
-/// of mass placed exactly over the support foot. Writes into `out` (length `nq`).
-///
-/// -- *** WHY PROCEDURAL RATHER THAN THE SHIPPED KEYFRAME --
-///
-/// `stand_on_left_leg` puts the mass **0.040 m** from its foot, so a balance controller opens by
-/// fighting an offset instead of at equilibrium. And it keeps the arms at the sides, where the
-/// flywheel is worth far less than it could be. Measured on this model:
-///
-///     arms EXTENDED   15.54 kg*m^2/s   -> arrests 0.428 m/s
-///     arms folded      7.92 kg*m^2/s   -> arrests 0.218 m/s
-///
-/// **Nearly double**, because the orbital part of the angular momentum goes as `m*r^2*omega` and
-/// extending the arm takes `r` from about 0.3 m to 0.6. The arms ARE the flywheel, and folded
-/// arms throw most of it away.
-fn buildOneLegPose(s: *State) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const right_foot: u32 = s.imported.bodyIndex("foot_right") orelse return;
-    const hand_right: u32 = s.imported.bodyIndex("hand_right") orelse return;
-    const hand_left: u32 = s.imported.bodyIndex("hand_left") orelse return;
-    const arm_r: u32 = s.imported.bodyIndex("upper_arm_right") orelse return;
-    const arm_l: u32 = s.imported.bodyIndex("upper_arm_left") orelse return;
-    const root: u32 = m.jnt_qpos_adr[0];
-
-    // * LEAVES THE POSE IN `data.pos` RATHER THAN RESTORING. An earlier version saved the
-    // current pose into `pose_scratch` and restored on exit - then the caller passed
-    // `pose_scratch` as the OUTPUT, so the save buffer and the result were the same array. It
-    // happened to work and was one edit away from not. The only caller is `restorePose`, which
-    // wants the pose applied anyway.
-    @memcpy(s.data.pos, m.qpos0);
-    // Lift the left leg clear.
-    setJoint(s, "hip_y_left", -0.85);
-    setJoint(s, "knee_left", -1.30);
-    setJoint(s, "hip_x_left", -0.10);
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
-
-    // -- *** THE STANCE COMES FIRST, THE ARMS LAST --
-    //
-    // Levelling rotates the WHOLE robot, so anything placed in world coordinates before it is
-    // rotated too. Reaching first left the arms visibly lopsided - right hand at z 1.166, left
-    // at 1.677, from a step meant to be symmetric. Settle the stance, then reach: the targets
-    // are relative to the shoulders, so they land right the first time.
-    // * AND A 2x2 NEWTON PUTS THE MASS OVER THE FOOT. Translating the root moves foot and mass
-    // together, so their offset is set by the joints alone - `hip_x` swings it sideways,
-    // `hip_y` fore-and-aft. Measured, this converges in ONE step to 0.6 mm.
-    const hip_x: u32 = m.jnt_qpos_adr[jointIndex(s, "hip_x_right") orelse return];
-    const hip_y: u32 = m.jnt_qpos_adr[jointIndex(s, "hip_y_right") orelse return];
-    for (0..14) |_| {
-        settleFoot(s, right_foot);
-        const err: [2]f32 = comOverFoot(s, right_foot);
-        if (@sqrt(err[0] * err[0] + err[1] * err[1]) < 0.003) {
-            break;
-        }
-        var jac: [4]f32 = undefined;
-        const eps: f32 = 0.01;
-        inline for (.{ hip_x, hip_y }, 0..) |q, col| {
-            const keep: f32 = s.data.pos[q];
-            s.data.pos[q] = keep + eps;
-            settleFoot(s, right_foot);
-            const moved: [2]f32 = comOverFoot(s, right_foot);
-            jac[0 * 2 + col] = (moved[0] - err[0]) / eps;
-            jac[1 * 2 + col] = (moved[1] - err[1]) / eps;
-            s.data.pos[q] = keep;
-        }
-        const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
-        if (@abs(det) < 1.0e-6) {
-            break;
-        }
-        const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
-        const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
-        s.data.pos[hip_x] = clamp(s.data.pos[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
-        s.data.pos[hip_y] = clamp(s.data.pos[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
-    }
-    // * THE ARMS GO OUT BY IK, NOT BY ANGLE. The shoulder axes are `2 1 1` and `0 -1 1` - not
-    // orthogonal and not aligned with anything, so "45 degrees" in joint space would mean
-    // whatever those axes made of it. A hand POSITION is unambiguous.
-    const diag: f32 = 0.52 * 0.7071;
-    for (0..12) |_| {
-        _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
-            m,
-            &s.data,
-            s.arm_act_right,
-            .{ .body = hand_right, .offset = vec(0, 0, 0), .goal = s.data.body_xpos[arm_r] + vec(diag, -diag, 0) },
-            s.ik_scratch,
-        );
-        _ = (ctl.Ik{ .max_iterations = 10, .max_step = 0.20 }).solve(
-            m,
-            &s.data,
-            s.arm_act_left,
-            .{ .body = hand_left, .offset = vec(0, 0, 0), .goal = s.data.body_xpos[arm_l] + vec(diag, diag, 0) },
-            s.ik_scratch,
-        );
-    }
-
-    // * AND ONE MORE PASS, BECAUSE THE ARMS MOVED THE MASS. Reaching shifts roughly 5 kg out
-    // to 0.5 m; measured, that took the centre of mass from 0.6 mm off the foot to 21 mm.
-    for (0..6) |_| {
-        settleFoot(s, right_foot);
-        const err: [2]f32 = comOverFoot(s, right_foot);
-        if (@sqrt(err[0] * err[0] + err[1] * err[1]) < 0.004) {
-            break;
-        }
-        var jac: [4]f32 = undefined;
-        const eps: f32 = 0.01;
-        inline for (.{ hip_x, hip_y }, 0..) |q, col| {
-            const keep: f32 = s.data.pos[q];
-            s.data.pos[q] = keep + eps;
-            settleFoot(s, right_foot);
-            const moved: [2]f32 = comOverFoot(s, right_foot);
-            jac[0 * 2 + col] = (moved[0] - err[0]) / eps;
-            jac[1 * 2 + col] = (moved[1] - err[1]) / eps;
-            s.data.pos[q] = keep;
-        }
-        const det: f32 = jac[0] * jac[3] - jac[1] * jac[2];
-        if (@abs(det) < 1.0e-6) {
-            break;
-        }
-        const dx: f32 = (-err[0] * jac[3] + err[1] * jac[1]) / det;
-        const dy: f32 = (-jac[0] * err[1] + jac[2] * err[0]) / det;
-        s.data.pos[hip_x] = clamp(s.data.pos[hip_x] + clamp(dx, -0.15, 0.15), -0.52, 0.17);
-        s.data.pos[hip_y] = clamp(s.data.pos[hip_y] + clamp(dy, -0.15, 0.15), -2.6, 0.35);
-    }
-    settleFoot(s, right_foot);
-    _ = root;
-}
-
-fn setJoint(s: *State, name: []const u8, angle: f32) void {
-    if (jointIndex(s, name)) |j| {
-        s.data.pos[s.imported.model.jnt_qpos_adr[j]] = angle;
-    }
-}
-
-/// The model carries no name table; `mjcf.Robot` does, and the joints are built in that order.
-fn jointIndex(s: *State, want: []const u8) ?u32 {
-    for (s.robot.joints, 0..) |joint, j| {
-        if (std.mem.eql(u8, joint.name, want)) {
-            return @intCast(j);
-        }
-    }
-    return null;
-}
-
-/// Rotate the WHOLE robot so the support foot's sole lies flat on the ground.
-///
-/// -- *** THE STEP THAT WAS MISSING, AND IT IS A GLOBAL ONE --
-///
-/// Setting joint angles gets every bone right RELATIVE to its parent and says nothing about
-/// where the chain ends up pointing. Bending the support hip rotates the leg against a torso
-/// that stays bolt upright, so the foot meets the ground at whatever angle the chain leaves it.
-/// Measured on the first version: **13.2 degrees**, the sole touching on ONE CORNER with the
-/// other three between 27 and 49 mm in the air.
-///
-/// **That is not a stance, it is a pose caught mid-fall** - and no controller holds it, because
-/// a foot on a corner has no support polygon to work with at all. Levelling brings the foot's
-/// up-axis to (-0.010, 0.001, 1.000) and puts two sole points on the ground instead of one.
-/// The 5.5 degrees that remain are the foot model's own rake, not an error.
-fn levelFoot(s: *State, foot: u32) void {
-    const m: *const rbt.Model = &s.imported.model;
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
-    const up: Vec = zm.rotate(s.data.body_xrot[foot], vec(0, 0, 1));
-    const axis: Vec = cross(up, vec(0, 0, 1));
-    const sine: f32 = length3(axis);
-    if (sine < 1.0e-6) {
-        return;
-    }
-    const angle: f32 = atan2Rad(sine, dot3(up, vec(0, 0, 1)));
-    const fix: zm.Quat = zm.quatFromAxisAngle(axis / splat(sine), angle);
-    const root: u32 = m.jnt_qpos_adr[0];
-    const current: zm.Quat = .{
-        s.data.pos[root + 3], s.data.pos[root + 4],
-        s.data.pos[root + 5], s.data.pos[root + 6],
-    };
-    const fixed: zm.Quat = zm.qmul(fix, current);
-    s.data.pos[root + 3] = fixed[0];
-    s.data.pos[root + 4] = fixed[1];
-    s.data.pos[root + 5] = fixed[2];
-    s.data.pos[root + 6] = fixed[3];
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
-}
-
-/// Drop the root until the support foot's lowest point rests on the ground.
-fn settleFoot(s: *State, foot: u32) void {
-    const m: *const rbt.Model = &s.imported.model;
-    // * LEVEL BEFORE SETTLING. Rotating the robot changes which point is lowest, so dropping
-    // first and levelling second leaves the foot either buried or floating.
-    levelFoot(s, foot);
-    var lowest: f32 = 1.0e9;
-    for (0..m.ngeom) |g| {
-        if (m.geom_body[g] != foot) {
-            continue;
-        }
-        const half: f32 = switch (m.geom_shape[g]) {
-            .capsule => |c| c.half_height,
-            else => 0,
-        };
-        const radius: f32 = switch (m.geom_shape[g]) {
-            .capsule => |c| c.radius,
-            .sphere => |sp| sp.radius,
-            else => continue,
-        };
-        const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
-        const centre: Vec = s.data.body_xpos[foot] + zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
-        inline for ([_]f32{ -1.0, 1.0 }) |end| {
-            lowest = @min(lowest, (centre + axis * splat(end * half))[2] - radius);
-        }
-    }
-    s.data.pos[m.jnt_qpos_adr[0] + 2] -= lowest;
-    s.data.stage = .stale;
-    rbt.forward(m, &s.data);
-}
-
-/// How far the centre of mass sits from the middle of the SOLE - not from the foot body's
-/// origin, which is a different place.
-///
-/// -- *** THE SOLE RUNS FROM -0.07 TO +0.14 IN THE FOOT'S FRAME --
-///
-/// Its middle is therefore **0.035 m forward** of the body origin: a third of the way to the toe
-/// on a 0.21 m foot. Targeting the origin put the mass that far behind the middle of its own
-/// support before the robot had done anything.
-///
-/// * AND A ONE-LEGGED STAND HAS NO MARGIN TO SPEND. The sole can supply about `f_z x 0.105`
-/// ~ 42 N*m of restoring moment against `m*g*h*theta` ~ 360*theta, so a stiff ankle holds it out to
-/// roughly **6.7 degrees** of lean - and 3.5 cm at 0.9 m is 2.2 of those degrees given away for
-/// nothing. That is why it fell forward rather than simply wobbling.
-fn comOverFoot(s: *State, foot: u32) [2]f32 {
-    const m: *const rbt.Model = &s.imported.model;
-    const com: Vec = s.data.subtree_com[rbt.world_body];
-    var total: Vec = vec(0, 0, 0);
-    var count: f32 = 0;
-    for (0..m.ngeom) |g| {
-        if (m.geom_body[g] != foot) {
-            continue;
-        }
-        const half: f32 = switch (m.geom_shape[g]) {
-            .capsule => |c| c.half_height,
-            else => continue,
-        };
-        const axis: Vec = zm.rotate(zm.qmul(s.data.body_xrot[foot], m.geom_rot[g]), capsule_axis);
-        const mid: Vec = s.data.body_xpos[foot] +
-            zm.rotate(s.data.body_xrot[foot], m.geom_pos[g]);
-        inline for ([_]f32{ -1.0, 1.0 }) |end| {
-            total += mid + axis * splat(end * half);
-            count += 1;
-        }
-    }
-    const at: Vec = if (count > 0) total / splat(count) else s.data.body_xpos[foot];
-    return .{ com[0] - at[0], com[1] - at[1] };
-}
-
 /// Shove the trunk, at the slider's magnitude and in a random horizontal direction.
 ///
 /// -- ** THE MAGNITUDE MATTERS MORE THAN IT LOOKS --
@@ -1156,255 +1161,6 @@ fn shove(s: *State) void {
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-
-    // -- * IK RUNS ONCE PER FRAME, NOT PER PHYSICS SUBSTEP --
-    //
-    // It answers "where should the arm be aiming", and that only changes when a slider moves.
-    // Solving it inside the fixed-timestep loop recomputes the same answer for every substep,
-    // and the cost multiplies by however many the accumulator owes - which feeds back, because
-    // a slower frame owes more substeps. The KUKA demo learned this the expensive way.
-    if (s.ik_on) {
-        // The solve is destructive: it writes joint angles straight into `data`. Here that is
-        // exactly what is wanted - the result IS the pose the controller then holds - but the
-        // free joint must be preserved, or IK would decide where the pelvis goes.
-        const result: ctl.BalancedIk.Result = (ctl.BalancedIk{
-            .com_goal = s.com_goal,
-            .com_gain = if (s.hold_com) 0.5 else 0.0,
-            .reach = .{ .max_iterations = 6 },
-        }).solve(&s.imported.model, &s.data, s.actuation, .{
-            .body = s.hand,
-            .goal = s.ik_goal,
-        }, s.ik_scratch);
-        s.ik_error = result.reach.error_distance;
-        s.com_error = result.com_error;
-        // The solved pose becomes the target the PD controller drives toward, so the arm still
-        // travels there under its torque limits and can be knocked off course.
-        @memcpy(s.home, s.data.pos);
-    }
-
-    s.accumulator += @min(f.time.delta_time, 0.1);
-    while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
-        // Kinematics, then collision, then solve - all at one `q`. See `robot_physics.sync`
-        // for why the order is not negotiable.
-        rbt.forward(&s.imported.model, &s.data);
-        if (s.physics_on) {
-            s.bridge.sync(&s.world, &s.imported.model, &s.data) catch |err| {
-                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
-            };
-            zp.step(&s.world, timestep) catch |err| {
-                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
-            };
-            s.bridge.harvest(&s.data);
-        }
-        control(s);
-        rbt.step(&s.imported.model, &s.data);
-    }
-    rbt.forward(&s.imported.model, &s.data);
-
-    // * THE TWITCH AS A NUMBER. The difference between the two solvers on a limp body is a
-    // residual velocity - 2.67 against 0.41, measured - and a viewer cannot eyeball that. A
-    // rolling peak makes it readable, and resets each second so it tracks the present rather
-    // than remembering the landing.
-    var fastest: f32 = 0;
-    for (0..s.imported.model.nv) |i| {
-        fastest = @max(fastest, @abs(s.data.vel[i]));
-    }
-    s.recent_peak_speed = @max(s.recent_peak_speed, fastest);
-
-    // * 1/2*v^TMv, THE HONEST TOTAL. `mulM` is the dynamics' own routine, so this uses the model's
-    // real mass matrix rather than a sum over bodies that would ignore the coupling between
-    // them.
-    // ** THE ROBOT'S DOFs ONLY. This summed over the whole model, and the model carries six
-    // throwable balls - so the figure described the balls as much as the humanoid. It is a
-    // readout about the robot; it should read the robot.
-    var momentum: [80]f32 = undefined;
-    const nv: usize = s.imported.model.nv;
-    if (nv <= momentum.len) {
-        rbt.mulM(&s.imported.model, &s.data, s.data.vel, momentum[0..nv]);
-        var energy: f32 = 0;
-        for (0..s.robot_dof_count) |i| {
-            energy += 0.5 * s.data.vel[i] * momentum[i];
-        }
-        s.kinetic_energy = energy;
-        s.energy_clock += f.time.delta_time;
-        if (s.energy_clock >= 0.1) {
-            s.energy_clock = 0;
-            if (s.energy_len < s.energy_history.len) {
-                s.energy_history[s.energy_len] = energy;
-                s.energy_len += 1;
-            } else {
-                std.mem.copyForwards(
-                    f32,
-                    s.energy_history[0 .. s.energy_history.len - 1],
-                    s.energy_history[1..],
-                );
-                s.energy_history[s.energy_history.len - 1] = energy;
-            }
-        }
-    }
-    s.speed_window += f.time.delta_time;
-    if (s.speed_window >= 1.0) {
-        s.speed_window = 0;
-        s.recent_peak_speed = fastest;
-    }
-
-    var force: f32 = 0;
-    for (0..s.data.constraint_count) |row| {
-        force += s.data.constraint_force[row];
-    }
-    s.peak_force = @max(s.peak_force * 0.995, force);
-
-    // -- ** THE UI IS BUILT EARLY AND RENDERED LAST, AND BOTH HALVES MATTER --
-    //
-    // **Built early**, because the camera has to know whether the mouse belongs to a slider -
-    // otherwise dragging `kp` orbits the view at the same time.
-    //
-    // **Rendered last**, because `clearViewport` wipes whatever has been drawn. Keeping
-    // `begin`/`render` inside the panel function put the deferred `render` at the END OF THAT
-    // FUNCTION - before the clear - so the panel was drawn and then erased, every frame. The
-    // demo showed a robot and no controls at all, and looked like a build problem.
-    //
-    // `robot_3d` had it right by accident: its `begin` and its clear live in the same
-    // function, so the defer naturally lands after the 3D pass. Making that structural rather
-    // than incidental is the point of passing `u` in.
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    z.clearViewport(f, bg);
-    const cam: Camera3D = s.cam.update(f, captured, .{
-        .min_distance = 0.6,
-        .max_distance = 4.0,
-    });
-    // * THE THROW HAPPENS HERE, not in the panel, because it needs the camera - and the
-    // camera is not known until after the panel has said whether the mouse belongs to it.
-    if (s.want_throw) {
-        s.want_throw = false;
-        throwBall(s, cam);
-    }
-
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 16, 0.25);
-    drawRobot(s, gl);
-    z.endMode3D(gl);
-}
-
-/// Draw every collision geom the importer kept.
-///
-/// * THESE ARE THE COLLISION SHAPES, not the visual meshes - the Go1's 13 `<mesh>` geoms are
-/// skipped by the converter because their vertices live in an `<asset>` block that is not read
-/// yet. Which turns out to be the better picture for a physics demo: what you see IS what the
-/// solver sees, so a leg that looks like it is touching the ground is touching the ground.
-fn drawRobot(s: *State, gl: *z.WgpuGl) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        // * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine
-        // stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -
-        // it never needs the product except when something is drawn or collided, so it does
-        // not keep one.
-        const body_rot: zm.Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
-        const place: Mat = mulMat(mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])), world_rot);
-        // Feet are the interesting part, so they get a brighter colour.
-        const tint: Color = if (body == 0) trunk_col else link_col;
-        switch (m.geom_shape[g]) {
-            .sphere => |sph| {
-                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-            },
-            .capsule => |cap| {
-                // -- ** THE MESH ALREADY RUNS ALONG Y. MEASURED, NOT DERIVED. --
-                //
-                //     genMeshCylinder(r=1, h=1) extent:
-                //       x: [-1.000, 1.000]   y: [0.000, 1.000]   z: [-1.000, 1.000]
-                //
-                // `cylinderUv` returns the axis in its third slot, which reads as Z - but
-                // `parametricMesh` REMAPS as it writes (`verts.y = p[2]`), so the finished
-                // mesh extends along zimr's **Y**, spanning [0, h] rather than [-h/2, +h/2].
-                //
-                // That is the same axis `GeomShape.capsule` uses, so no rotation is needed at
-                // all. A previous version read `cylinderUv` and concluded Z, then rotated by
-                // -90 deg to "correct" it; the non-uniform scale then landed across the shape and
-                // flattened every limb into a wide curved ribbon. **Reading the generator was
-                // not enough - the answer was two functions away, and printing the mesh's
-                // bounds took one command.**
-                //
-                // Only the [0, h] span needs correcting, with a half-length shift along Y.
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-                inline for ([_]f32{ -1.0, 1.0 }) |end| {
-                    s.transform[0] = mulMat(
-                        mulMat(place, translation(0, end * cap.half_height, 0)),
-                        scaling(cap.radius, cap.radius, cap.radius),
-                    );
-                    z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-                }
-            },
-            .cylinder => |cyl| {
-                // Same axis and the same [0, h] span as the capsule above.
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cyl.half_height, 0)),
-                    scaling(cyl.radius, 2.0 * cyl.half_height, cyl.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-            },
-            .box => |box| {
-                s.transform[0] = mulMat(place, scaling(
-                    2.0 * box.half_extent[0],
-                    2.0 * box.half_extent[1],
-                    2.0 * box.half_extent[2],
-                ));
-                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
-            },
-            else => {},
-        }
-    }
-
-    // The projectiles, drawn from the tree like everything else.
-    for (0..ball_count) |i| {
-        const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
-        const p: Vec = s.data.body_xpos[body];
-        s.transform[0] = mulMat(
-            mulMat(to_y_up, translation(p[0], p[1], p[2])),
-            scaling(ball_radius, ball_radius, ball_radius),
-        );
-        z.drawMeshInstanced(gl, &s.sphere, &s.transform, ball_col);
-    }
-
-    // * THE REACH TARGET AND A LINE TO IT. The line is the useful part: it shrinks to nothing
-    // when the hand arrives and grows when the goal moves out of reach, which is the same
-    // number the panel prints, where the eye already is.
-    if (s.ik_on) {
-        const goal_y_up: Vec = vec(s.ik_goal[0], s.ik_goal[2], -s.ik_goal[1]);
-        const hand_at: Vec = s.data.body_xpos[s.hand];
-        const hand_y_up: Vec = vec(hand_at[0], hand_at[2], -hand_at[1]);
-        z.drawSphere(gl, goal_y_up, .{
-            .radius = 0.04,
-            .rings = 8,
-            .slices = 12,
-            .color = if (s.ik_error < 0.02) goal_reached_col else goal_straining_col,
-        });
-        z.drawLine3D(gl, hand_y_up, goal_y_up, goal_straining_col);
-    }
-
-    // Contact points, so "is it actually standing" is answerable by looking.
-    for (0..s.data.contact_count) |c| {
-        const p: Vec = s.data.contacts[c].position;
-        // Z-up to Y-up is a coordinate swap, and writing it as one is clearer here than
-        // pushing a point through a matrix: (x, y, z) becomes (x, z, -y).
-        const at: Vec = vec(p[0], p[2], -p[1]);
-        z.drawSphere(gl, at, .{ .radius = 0.012, .color = contact_col });
-    }
-}
-
 /// Lift the humanoid, tip it over, and let go.
 ///
 /// * TIPPED, NOT UPRIGHT. A body dropped on its feet makes three or four contacts and settles
@@ -1413,7 +1169,7 @@ fn drawRobot(s: *State, gl: *z.WgpuGl) void {
 fn dropLimp(s: *State) void {
     _ = rmj.applyKeyframe(&s.imported.model, &s.data, s.robot.keyframes[0]);
     s.data.pos[2] = 1.2;
-    const tipped: zm.Quat = zm.quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
+    const tipped: Quat = zm.quatFromAxisAngle(normalize3(vec(1, 0.3, 0)), 1.4);
     s.data.pos[3] = tipped[0];
     s.data.pos[4] = tipped[1];
     s.data.pos[5] = tipped[2];
@@ -1682,6 +1438,255 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         }
     }
     return captured;
+}
+
+/// Draw every collision geom the importer kept.
+///
+/// * THESE ARE THE COLLISION SHAPES, not the visual meshes - the Go1's 13 `<mesh>` geoms are
+/// skipped by the converter because their vertices live in an `<asset>` block that is not read
+/// yet. Which turns out to be the better picture for a physics demo: what you see IS what the
+/// solver sees, so a leg that looks like it is touching the ground is touching the ground.
+fn drawRobot(s: *State, gl: *z.WgpuGl) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const to_y_up: Mat = zm.zUpToYUp();
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        // * A GEOM'S WORLD POSE IS ITS BODY'S, COMPOSED WITH ITS OWN OFFSET. The engine
+        // stores the offset (`geom_pos`/`geom_rot`) and the body's world pose separately -
+        // it never needs the product except when something is drawn or collided, so it does
+        // not keep one.
+        const body_rot: Quat = s.data.body_xrot[body];
+        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const place: Mat = mulMat(mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])), world_rot);
+        // Feet are the interesting part, so they get a brighter colour.
+        const tint: Color = if (body == 0) trunk_col else link_col;
+        switch (m.geom_shape[g]) {
+            .sphere => |sph| {
+                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+            },
+            .capsule => |cap| {
+                // -- ** THE MESH ALREADY RUNS ALONG Y. MEASURED, NOT DERIVED. --
+                //
+                //     genMeshCylinder(r=1, h=1) extent:
+                //       x: [-1.000, 1.000]   y: [0.000, 1.000]   z: [-1.000, 1.000]
+                //
+                // `cylinderUv` returns the axis in its third slot, which reads as Z - but
+                // `parametricMesh` REMAPS as it writes (`verts.y = p[2]`), so the finished
+                // mesh extends along zimr's **Y**, spanning [0, h] rather than [-h/2, +h/2].
+                //
+                // That is the same axis `GeomShape.capsule` uses, so no rotation is needed at
+                // all. A previous version read `cylinderUv` and concluded Z, then rotated by
+                // -90 deg to "correct" it; the non-uniform scale then landed across the shape and
+                // flattened every limb into a wide curved ribbon. **Reading the generator was
+                // not enough - the answer was two functions away, and printing the mesh's
+                // bounds took one command.**
+                //
+                // Only the [0, h] span needs correcting, with a half-length shift along Y.
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cap.half_height, 0)),
+                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+                inline for ([_]f32{ -1.0, 1.0 }) |end| {
+                    s.transform[0] = mulMat(
+                        mulMat(place, translation(0, end * cap.half_height, 0)),
+                        scaling(cap.radius, cap.radius, cap.radius),
+                    );
+                    z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+                }
+            },
+            .cylinder => |cyl| {
+                // Same axis and the same [0, h] span as the capsule above.
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cyl.half_height, 0)),
+                    scaling(cyl.radius, 2.0 * cyl.half_height, cyl.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+            },
+            .box => |box| {
+                s.transform[0] = mulMat(place, scaling(
+                    2.0 * box.half_extent[0],
+                    2.0 * box.half_extent[1],
+                    2.0 * box.half_extent[2],
+                ));
+                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
+            },
+            else => {},
+        }
+    }
+
+    // The projectiles, drawn from the tree like everything else.
+    for (0..ball_count) |i| {
+        const body: u32 = s.imported.bodyIndex(ball_names[i]) orelse continue;
+        const p: Vec = s.data.body_xpos[body];
+        s.transform[0] = mulMat(
+            mulMat(to_y_up, translation(p[0], p[1], p[2])),
+            scaling(ball_radius, ball_radius, ball_radius),
+        );
+        z.drawMeshInstanced(gl, &s.sphere, &s.transform, ball_col);
+    }
+
+    // * THE REACH TARGET AND A LINE TO IT. The line is the useful part: it shrinks to nothing
+    // when the hand arrives and grows when the goal moves out of reach, which is the same
+    // number the panel prints, where the eye already is.
+    if (s.ik_on) {
+        const goal_y_up: Vec = vec(s.ik_goal[0], s.ik_goal[2], -s.ik_goal[1]);
+        const hand_at: Vec = s.data.body_xpos[s.hand];
+        const hand_y_up: Vec = vec(hand_at[0], hand_at[2], -hand_at[1]);
+        z.drawSphere(gl, goal_y_up, .{
+            .radius = 0.04,
+            .rings = 8,
+            .slices = 12,
+            .color = if (s.ik_error < 0.02) goal_reached_col else goal_straining_col,
+        });
+        z.drawLine3D(gl, hand_y_up, goal_y_up, goal_straining_col);
+    }
+
+    // Contact points, so "is it actually standing" is answerable by looking.
+    for (0..s.data.contact_count) |c| {
+        const p: Vec = s.data.contacts[c].position;
+        // Z-up to Y-up is a coordinate swap, and writing it as one is clearer here than
+        // pushing a point through a matrix: (x, y, z) becomes (x, z, -y).
+        const at: Vec = vec(p[0], p[2], -p[1]);
+        z.drawSphere(gl, at, .{ .radius = 0.012, .color = contact_col });
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+
+    // -- * IK RUNS ONCE PER FRAME, NOT PER PHYSICS SUBSTEP --
+    //
+    // It answers "where should the arm be aiming", and that only changes when a slider moves.
+    // Solving it inside the fixed-timestep loop recomputes the same answer for every substep,
+    // and the cost multiplies by however many the accumulator owes - which feeds back, because
+    // a slower frame owes more substeps. The KUKA demo learned this the expensive way.
+    if (s.ik_on) {
+        // The solve is destructive: it writes joint angles straight into `data`. Here that is
+        // exactly what is wanted - the result IS the pose the controller then holds - but the
+        // free joint must be preserved, or IK would decide where the pelvis goes.
+        const result: ctl.BalancedIk.Result = (ctl.BalancedIk{
+            .com_goal = s.com_goal,
+            .com_gain = if (s.hold_com) 0.5 else 0.0,
+            .reach = .{ .max_iterations = 6 },
+        }).solve(&s.imported.model, &s.data, s.actuation, .{
+            .body = s.hand,
+            .goal = s.ik_goal,
+        }, s.ik_scratch);
+        s.ik_error = result.reach.error_distance;
+        s.com_error = result.com_error;
+        // The solved pose becomes the target the PD controller drives toward, so the arm still
+        // travels there under its torque limits and can be knocked off course.
+        @memcpy(s.home, s.data.pos);
+    }
+
+    s.accumulator += @min(f.time.delta_time, 0.1);
+    while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
+        // Kinematics, then collision, then solve - all at one `q`. See `robot_physics.sync`
+        // for why the order is not negotiable.
+        rbt.forward(&s.imported.model, &s.data);
+        if (s.physics_on) {
+            s.bridge.sync(&s.world, &s.imported.model, &s.data) catch |err| {
+                zm.assertUnreachable(@src(), "proxy sync failed: {t}", .{err});
+            };
+            zp.step(&s.world, timestep) catch |err| {
+                zm.assertUnreachable(@src(), "world step failed: {t}", .{err});
+            };
+            s.bridge.harvest(&s.data);
+        }
+        control(s);
+        rbt.step(&s.imported.model, &s.data);
+    }
+    rbt.forward(&s.imported.model, &s.data);
+
+    // * THE TWITCH AS A NUMBER. The difference between the two solvers on a limp body is a
+    // residual velocity - 2.67 against 0.41, measured - and a viewer cannot eyeball that. A
+    // rolling peak makes it readable, and resets each second so it tracks the present rather
+    // than remembering the landing.
+    var fastest: f32 = 0;
+    for (0..s.imported.model.nv) |i| {
+        fastest = @max(fastest, @abs(s.data.vel[i]));
+    }
+    s.recent_peak_speed = @max(s.recent_peak_speed, fastest);
+
+    // * 1/2*v^TMv, THE HONEST TOTAL. `mulM` is the dynamics' own routine, so this uses the model's
+    // real mass matrix rather than a sum over bodies that would ignore the coupling between
+    // them.
+    // ** THE ROBOT'S DOFs ONLY. This summed over the whole model, and the model carries six
+    // throwable balls - so the figure described the balls as much as the humanoid. It is a
+    // readout about the robot; it should read the robot.
+    var momentum: [80]f32 = undefined;
+    const nv: usize = s.imported.model.nv;
+    if (nv <= momentum.len) {
+        rbt.mulM(&s.imported.model, &s.data, s.data.vel, momentum[0..nv]);
+        var energy: f32 = 0;
+        for (0..s.robot_dof_count) |i| {
+            energy += 0.5 * s.data.vel[i] * momentum[i];
+        }
+        s.kinetic_energy = energy;
+        s.energy_clock += f.time.delta_time;
+        if (s.energy_clock >= 0.1) {
+            s.energy_clock = 0;
+            if (s.energy_len < s.energy_history.len) {
+                s.energy_history[s.energy_len] = energy;
+                s.energy_len += 1;
+            } else {
+                copyForwards(
+                    f32,
+                    s.energy_history[0 .. s.energy_history.len - 1],
+                    s.energy_history[1..],
+                );
+                s.energy_history[s.energy_history.len - 1] = energy;
+            }
+        }
+    }
+    s.speed_window += f.time.delta_time;
+    if (s.speed_window >= 1.0) {
+        s.speed_window = 0;
+        s.recent_peak_speed = fastest;
+    }
+
+    var force: f32 = 0;
+    for (0..s.data.constraint_count) |row| {
+        force += s.data.constraint_force[row];
+    }
+    s.peak_force = @max(s.peak_force * 0.995, force);
+
+    // -- ** THE UI IS BUILT EARLY AND RENDERED LAST, AND BOTH HALVES MATTER --
+    //
+    // **Built early**, because the camera has to know whether the mouse belongs to a slider -
+    // otherwise dragging `kp` orbits the view at the same time.
+    //
+    // **Rendered last**, because `clearViewport` wipes whatever has been drawn. Keeping
+    // `begin`/`render` inside the panel function put the deferred `render` at the END OF THAT
+    // FUNCTION - before the clear - so the panel was drawn and then erased, every frame. The
+    // demo showed a robot and no controls at all, and looked like a build problem.
+    //
+    // `robot_3d` had it right by accident: its `begin` and its clear live in the same
+    // function, so the defer naturally lands after the 3D pass. Making that structural rather
+    // than incidental is the point of passing `u` in.
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    z.clearViewport(f, bg);
+    const cam: Camera3D = s.cam.update(f, captured, .{
+        .min_distance = 0.6,
+        .max_distance = 4.0,
+    });
+    // * THE THROW HAPPENS HERE, not in the panel, because it needs the camera - and the
+    // camera is not known until after the panel has said whether the mouse belongs to it.
+    if (s.want_throw) {
+        s.want_throw = false;
+        throwBall(s, cam);
+    }
+
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 16, 0.25);
+    drawRobot(s, gl);
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

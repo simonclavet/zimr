@@ -1,6 +1,6 @@
 //! zm_namedimports - migrate `zm.X` bodies to named imports (reserved-math P4).
 //!
-//! Usage: zm_namedimports <file>...
+//! Usage: zig build zm-namedimports -- <file>...   (`--help` for more)
 //!
 //! For each file with exactly ONE top-level (column-0) `const zm = @import("zm");`:
 //!   1. collect the distinct body-level `zm.X` member accesses (skipping the
@@ -16,10 +16,13 @@
 //! namespace-local `zm`s in runtime.zig (each indented inside a `struct`) opt
 //! out automatically. Same `std.Io` conventions as rename_local.
 const std = @import("std");
+const cli = @import("cli");
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
+const Io = std.Io;
+const sortSlice = std.mem.sort;
 
 const Edit = struct {
     start: usize,
@@ -60,14 +63,14 @@ fn ltEdit(_: void, a: Edit, b: Edit) bool {
 }
 
 /// Returns true if the file was rewritten.
-fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
-    const raw: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
+fn processFile(gpa: Allocator, io: Io, path: []const u8) !bool {
+    const raw: []u8 = try Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
     defer gpa.free(raw);
     const buf: [:0]u8 = try gpa.allocSentinel(u8, raw.len, 0);
     defer gpa.free(buf);
     @memcpy(buf, raw);
 
-    var ast: Ast = try Ast.parse(gpa, buf, .{ .mode = .zig });
+    var ast: Ast = try .parse(gpa, buf, .{ .mode = .zig });
     defer ast.deinit(gpa);
     if (ast.errors.len != 0) {
         std.debug.print("{s}: parse errors, skipping\n", .{path});
@@ -202,7 +205,7 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
     }
 
     // 4) New bindings to add = distinct(used) - already_bound, sorted.
-    std.mem.sort([]const u8, used.items, {}, ltStr);
+    sortSlice([]const u8, used.items, {}, ltStr);
     var to_add: ArrayList([]const u8) = .empty;
     defer to_add.deinit(gpa);
     for (used.items, 0..) |name, idx| {
@@ -226,11 +229,13 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
         try block.appendSlice(gpa, ";\n");
     }
     if (block.items.len != 0) {
-        try edits.append(gpa, .{ .start = insert_at, .end = insert_at, .text = try gpa.dupe(u8, block.items) });
+        // `block` lives to the end of this function, past step 6 where the edits are applied - so the edit can
+        // point at it. A dupe here was never freed: the edit list owns no text (the others slice the source).
+        try edits.append(gpa, .{ .start = insert_at, .end = insert_at, .text = block.items });
     }
 
     // 6) Apply edits in ascending order.
-    std.mem.sort(Edit, edits.items, {}, ltEdit);
+    sortSlice(Edit, edits.items, {}, ltEdit);
     var out: ArrayList(u8) = .empty;
     defer out.deinit(gpa);
     var cursor: usize = 0;
@@ -245,25 +250,35 @@ fn processFile(gpa: Allocator, io: std.Io, path: []const u8) !bool {
     }
     try out.appendSlice(gpa, buf[cursor..buf.len]);
 
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
     const rewrite_count: usize = edits.items.len - @as(usize, if (block.items.len != 0) 1 else 0);
     std.debug.print("{s}: +{d} bindings, {d} rewrites\n", .{ path, to_add.items.len, rewrite_count });
     return true;
 }
 
+/// The command line (std's cli, `src/command_line.zig`): `zig build zm-namedimports -- <file>...`.
+const MigrateArgs = struct {
+    files: []const [:0]const u8 = &.{},
+};
+
+const migrate_cli: cli.Config(MigrateArgs) = .{
+    .prog = "zig build zm-namedimports --",
+    .description = "Migrates `zm.X` bodies to named imports (reserved-math P4).",
+    .args = .{ .files = .{ .description = "the .zig files to migrate, in place - at least one" } },
+};
+
 pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = init.gpa;
-    const arena: Allocator = init.arena.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    const argv: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
-    if (argv.len < 2) {
-        std.debug.print("usage: zm_namedimports <file>...\n", .{});
+    const args: MigrateArgs = cli.args(&init, MigrateArgs, migrate_cli);
+    if (args.files.len == 0) {
+        std.debug.print("zm_namedimports: no file to migrate (--help)\n", .{});
         return error.BadArgs;
     }
     var changed: usize = 0;
     var skipped: usize = 0;
-    for (argv[1..]) |path| {
+    for (args.files) |path| {
         const did: bool = processFile(gpa, io, path) catch |e| {
             std.debug.print("{s}: error {s}\n", .{ path, @errorName(e) });
             continue;

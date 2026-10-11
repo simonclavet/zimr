@@ -1,0 +1,13 @@
+# st_bench on dance_5_15, seed 1: scale 0.600 rad, sigma 0.100, world noise 0.200, filter 0.20, decide every 2, sees applied true, clip normaliser true, grace 48 steps
+# sizes: 8 characters x 4 steps an iteration, replay 256 each; policy 64 wide, window 16, batch 32; world 64 wide, 8 steps, batch 32
+# servo alone, 20 starts: mttf 1.532 s, 1 to the end, reward 0.4987
+# build: fast
+iteration,wall_s,samples,world_loss,policy_loss,mttf_s,share_to_end,reward,trust,exploitation
+0,0.0,0,,,1.5237,0.050,0.49686,3.14102,0.01594
+100,36.2,3200,3.125045,8.713282,0.6526,0.050,0.31357,0.96595,60.43499
+200,71.6,6400,22.983147,9.151011,0.4561,0.050,0.17332,0.86299,132.42615
+300,106.9,9600,62.067250,46.896650,0.3200,0.000,0.11679,0.72009,296.64087
+400,142.0,12800,56.185482,65.145320,0.3175,0.000,0.12518,0.55802,289.28790
+500,177.5,16000,48.072487,67.074615,0.2967,0.000,0.12809,0.48406,291.38310
+600,212.8,19200,30.154030,52.249180,0.3233,0.000,0.14395,0.38918,176.87625
+678,240.2,21696,24.088648,53.220646,0.3308,0.000,0.14667,0.36556,161.94200

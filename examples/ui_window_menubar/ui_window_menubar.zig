@@ -194,11 +194,11 @@ fn update(f: *z.Frame, s: *State) void {
     const sh_f: f32 = f.window.heightf();
 
     // Overlay palette - named Colors instead of packed-wire hex.
-    const panel_bg: Color = Color.fromWire(0xEE111827);
-    const status_bg: Color = Color.fromWire(0xCC0F172A);
-    const text_light: Color = Color.fromWire(0xFFE2E8F0);
-    const text_muted: Color = Color.fromWire(0xFF94A3B8);
-    const text_dim: Color = Color.fromWire(0xFF64748B);
+    const panel_bg: Color = .fromWire(0xEE111827);
+    const status_bg: Color = .fromWire(0xCC0F172A);
+    const text_light: Color = .fromWire(0xFFE2E8F0);
+    const text_muted: Color = .fromWire(0xFF94A3B8);
+    const text_dim: Color = .fromWire(0xFF64748B);
 
     if (s.show_about) {
         const panel_w: f32 = 360;

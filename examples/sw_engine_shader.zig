@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 // GL-retirement P2: pulled via sw_runtime (one module owns renderer_2d.zig
 // & friends; a separate default_shapes_bundle module now collides).
 const sw_runtime = @import("sw_runtime");
@@ -417,10 +418,10 @@ pub fn main() !void {
     defer gpa.free(png_bytes);
 
     const out_path: []const u8 = "sw_engine_shader.png";
-    var io_threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const tio: std.Io = io_threaded.io();
-    var f: std.Io.File = try std.Io.Dir.cwd().createFile(tio, out_path, .{});
+    const tio: Io = io_threaded.io();
+    var f: Io.File = try Io.Dir.cwd().createFile(tio, out_path, .{});
     defer f.close(tio);
     try f.writeStreamingAll(tio, png_bytes);
 

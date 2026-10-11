@@ -158,7 +158,7 @@ const State = struct {
 };
 
 fn makeKeeper(gpa: Allocator, model: *const rbt.Model, planned: bool) !Keeper {
-    const plan: mpc.Plan = try mpc.Plan.init(gpa, model, max_horizon);
+    const plan: mpc.Plan = try .init(gpa, model, max_horizon);
     return .{
         .data = try rbt.Data.init(gpa, model),
         .plan = plan,
@@ -179,87 +179,7 @@ fn makeKeeper(gpa: Allocator, model: *const rbt.Model, planned: bool) !Keeper {
     };
 }
 
-fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.gpa = gpa;
-    s.doc = try z.codecs.xml.parse(gpa, @embedFile("keeper.xml"), null);
-    s.robot = try mjcf.readRobot(gpa, &s.doc);
-    s.imported = try rmj.build(gpa, &s.robot, .{
-        .max_contacts = 16,
-        .timestep = sim_dt,
-        .gravity = vec(0, 0, -gravity),
-    });
-    s.model = s.imported.model;
-    s.hand = s.imported.bodyIndex("hand") orelse 0;
-
-    s.servo = try makeKeeper(gpa, &s.model, false);
-    s.planner = try makeKeeper(gpa, &s.model, true);
-    rbt.forward(&s.model, &s.servo.data);
-    s.rest = try gpa.dupe(f32, s.servo.data.pos);
-
-    s.arm_act = try ctl.limbActuation(gpa, &s.model, s.hand);
-    s.all_act = try ctl.Actuation.init(gpa, &s.model);
-    s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.model));
-
-    s.state_w = try gpa.alloc(f32, s.planner.plan.ndx);
-    s.term_w = try gpa.alloc(f32, s.planner.plan.ndx);
-    s.ctrl_w = try gpa.alloc(f32, s.model.nu);
-    // * POSITION AND VELOCITY BLOCKS SEPARATELY. `ndx` is nv positions THEN nv velocities, and
-    // the joint speeds that match 4.7 m/s of hand travel are large - one number for both lets
-    // the velocity term swamp everything else in the problem.
-    for (0..s.model.nv) |i| {
-        s.state_w[i] = 0.5;
-        s.state_w[s.model.nv + i] = 0.02;
-        s.term_w[i] = 60.0;
-        s.term_w[s.model.nv + i] = 4.0;
-    }
-    @memset(s.ctrl_w, 1.0e-4);
-
-    s.throw_speed = 3.4;
-    s.throw_side = 0.0;
-    s.seed = 0x2545f491;
-    s.in_flight = false;
-    s.flight = 0;
-    s.accumulator = 0;
-    s.running = true;
-    s.idle = 0;
-    s.time_scale = 0.35;
-
-    s.cam = z.OrbitCamera.init(vec(0, 0.9, 0), 6.5);
-    s.font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
-    s.ui_host = z.UiHost.init(gpa, s.font);
-    s.cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0);
-    s.sphere = try z.genMeshSphere(gpa, 1.0, 14, 12);
-    s.transform = .{identity()};
-    // *** THROW ON START, AND THAT IS A GATE AS MUCH AS A COURTESY. The smoke run executes 60
-    // frames; with no ball in flight it never entered `optimize` at all, so the reference-length
-    // assert that fires in the browser could not fire there. A demo that idles until clicked
-    // has an automated check that verifies almost nothing.
-    throwBall(s);
-}
-
-fn deinit(gpa: Allocator, s: *State) void {
-    z.unloadMesh(gpa, s.sphere);
-    z.unloadMesh(gpa, s.cube);
-    z.unloadFont(gpa, s.font);
-    s.ui_host.deinit();
-    inline for (.{ &s.planner, &s.servo }) |k| {
-        gpa.free(k.reference);
-        gpa.free(k.meet_qvel);
-        gpa.free(k.meet_pose);
-        k.plan.deinit();
-        k.data.deinit();
-    }
-    gpa.free(s.ctrl_w);
-    gpa.free(s.term_w);
-    gpa.free(s.state_w);
-    gpa.free(s.ik_scratch);
-    s.all_act.deinit();
-    s.arm_act.deinit();
-    gpa.free(s.rest);
-    s.imported.deinit();
-    s.robot.deinit();
-    s.doc.deinit();
-}
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 fn resetArms(s: *State) void {
     inline for (.{ &s.servo, &s.planner }) |k| {
@@ -373,6 +293,88 @@ fn throwBall(s: *State) void {
     s.in_flight = true;
 }
 
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.gpa = gpa;
+    s.doc = try z.codecs.xml.parse(gpa, @embedFile("keeper.xml"), null);
+    s.robot = try mjcf.readRobot(gpa, &s.doc);
+    s.imported = try rmj.build(gpa, &s.robot, .{
+        .max_contacts = 16,
+        .timestep = sim_dt,
+        .gravity = vec(0, 0, -gravity),
+    });
+    s.model = s.imported.model;
+    s.hand = s.imported.bodyIndex("hand") orelse 0;
+
+    s.servo = try makeKeeper(gpa, &s.model, false);
+    s.planner = try makeKeeper(gpa, &s.model, true);
+    rbt.forward(&s.model, &s.servo.data);
+    s.rest = try gpa.dupe(f32, s.servo.data.pos);
+
+    s.arm_act = try ctl.limbActuation(gpa, &s.model, s.hand);
+    s.all_act = try ctl.Actuation.init(gpa, &s.model);
+    s.ik_scratch = try gpa.alloc(Vec, ctl.Ik.scratchSize(&s.model));
+
+    s.state_w = try gpa.alloc(f32, s.planner.plan.ndx);
+    s.term_w = try gpa.alloc(f32, s.planner.plan.ndx);
+    s.ctrl_w = try gpa.alloc(f32, s.model.nu);
+    // * POSITION AND VELOCITY BLOCKS SEPARATELY. `ndx` is nv positions THEN nv velocities, and
+    // the joint speeds that match 4.7 m/s of hand travel are large - one number for both lets
+    // the velocity term swamp everything else in the problem.
+    for (0..s.model.nv) |i| {
+        s.state_w[i] = 0.5;
+        s.state_w[s.model.nv + i] = 0.02;
+        s.term_w[i] = 60.0;
+        s.term_w[s.model.nv + i] = 4.0;
+    }
+    @memset(s.ctrl_w, 1.0e-4);
+
+    s.throw_speed = 3.4;
+    s.throw_side = 0.0;
+    s.seed = 0x2545f491;
+    s.in_flight = false;
+    s.flight = 0;
+    s.accumulator = 0;
+    s.running = true;
+    s.idle = 0;
+    s.time_scale = 0.35;
+
+    s.cam = z.OrbitCamera.init(vec(0, 0.9, 0), 6.5);
+    s.font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
+    s.ui_host = z.UiHost.init(gpa, s.font);
+    s.cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0);
+    s.sphere = try z.genMeshSphere(gpa, 1.0, 14, 12);
+    s.transform = .{identity()};
+    // *** THROW ON START, AND THAT IS A GATE AS MUCH AS A COURTESY. The smoke run executes 60
+    // frames; with no ball in flight it never entered `optimize` at all, so the reference-length
+    // assert that fires in the browser could not fire there. A demo that idles until clicked
+    // has an automated check that verifies almost nothing.
+    throwBall(s);
+}
+
+fn deinit(gpa: Allocator, s: *State) void {
+    z.unloadMesh(gpa, s.sphere);
+    z.unloadMesh(gpa, s.cube);
+    z.unloadFont(gpa, s.font);
+    s.ui_host.deinit();
+    inline for (.{ &s.planner, &s.servo }) |k| {
+        gpa.free(k.reference);
+        gpa.free(k.meet_qvel);
+        gpa.free(k.meet_pose);
+        k.plan.deinit();
+        k.data.deinit();
+    }
+    gpa.free(s.ctrl_w);
+    gpa.free(s.term_w);
+    gpa.free(s.state_w);
+    gpa.free(s.ik_scratch);
+    s.all_act.deinit();
+    s.arm_act.deinit();
+    gpa.free(s.rest);
+    s.imported.deinit();
+    s.robot.deinit();
+    s.doc.deinit();
+}
+
 fn advance(s: *State, k: *Keeper, tick: u32) void {
     const m: *rbt.Model = &s.model;
     if (k.meet_time <= 0) {
@@ -462,56 +464,67 @@ fn advance(s: *State, k: *Keeper, tick: u32) void {
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+fn report(u: ui.Ui, label: []const u8, k: *const Keeper) void {
+    if (k.best_gap > 1.0e8) {
+        u.text("{s}  ready", .{label});
+        return;
+    }
+    u.text("{s} {d:>5.3}m {d:>5.2}m/s  {d}/{d}/{d}", .{
+        label, k.best_gap, k.best_relative, k.caught, k.swatted, k.missed,
+    });
+}
 
-    // *** PROFILING OFF ACROSS THE PLANNER. `optimize` at 220 knots with six iterations executes
-    // an enormous amount of instrumented code per frame, and each zone costs two timestamps -
-    // on wasm, two JS boundary crossings. Measured here: the smoke runner exhausted Node's
-    // 2 GB heap before finishing sixty frames. The cartpole hit this exact wall and the fix is
-    // the same: the instrument is priced for a frame that does a few things, and a frame that
-    // solves a trajectory optimisation is not that.
-    const was_frozen: bool = profiler.isFrozen();
-    profiler.freeze();
-    defer if (!was_frozen) profiler.unfreeze();
+fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    const captured: bool = u.wantCaptureMouse();
+    const narrow: bool = ui.Ui.isNarrow(viewport_w);
 
-    // * AUTO-REPEAT, so the thing loops and can be WATCHED rather than clicked at. A demo whose
-    // interesting second requires a button press gets seen once.
-    if (s.running and !s.in_flight) {
-        s.idle += f.time.delta_time;
-        if (s.idle > 1.6) {
+    // -- * THE CONTROLS STAY SMALL AND THE PROSE LEAVES THE BOX --
+    //
+    // On a phone the panel had grown to most of the screen and the robots were a sliver at the
+    // bottom - which is backwards for a demo whose entire argument is something you WATCH. The
+    // window now holds only what needs a widget; the explanation is drawn as a borderless
+    // overlay below, where it costs no interactive area at all.
+    const panel_w: f32 = if (narrow) @min(viewport_w - 16, 340.0) else @min(380.0, viewport_w * 0.32);
+
+    u.setNextWindowPos(.{ 8, 8 }, .{});
+    u.setNextWindowSize(.{ panel_w, 0 }, .{});
+    if (u.window("catching, not swatting", .{ .flags = .{ .always_auto_resize = true } })) |window| {
+        defer window.close();
+
+        report(u, "IK+PD", &s.servo);
+        report(u, "MPC  ", &s.planner);
+        u.separator();
+
+        _ = u.slider("speed", &s.throw_speed, .{ .min = 2.6, .max = 4.4, .fmt = "{d:.2}" });
+        _ = u.slider("side", &s.throw_side, .{ .min = -1.0, .max = 1.0, .fmt = "{d:.2}" });
+        if (u.button("THROW", .{})) {
             throwBall(s);
         }
-    }
-    if (s.running and s.in_flight) {
-        s.accumulator += @min(f.time.delta_time, 0.1) * s.time_scale;
-        var tick: u32 = 0;
-        while (s.accumulator >= sim_dt) : (s.accumulator -= sim_dt) {
-            advance(s, &s.servo, tick);
-            advance(s, &s.planner, tick);
-            s.flight += sim_dt;
-            tick += 1;
-            if (ballAt(s.ball_p0, s.ball_v0, s.flight)[2] < 0.05) {
-                score(s, &s.servo);
-                score(s, &s.planner);
-                s.in_flight = false;
-                break;
-            }
-        }
+        _ = u.slider("slowmo", &s.time_scale, .{ .min = 0.08, .max = 1.0, .fmt = "{d:.2}" });
+        _ = u.checkbox("run", &s.running);
     }
 
-    z.clearViewport(f, background);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 3.0, .max_distance = 16.0 });
-    z.beginMode3D(gl, cam);
-    s.transform[0] = mulMat(translation(0, -0.05, 0), scaling(12, 0.1, 8));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_colour);
-    drawKeeper(s, gl, &s.servo, -1.3);
-    drawKeeper(s, gl, &s.planner, 1.3);
-    drawBall(s, gl);
-    z.endMode3D(gl);
+    // * BORDERLESS, NON-INTERACTIVE, AND OUT OF THE WAY - the recipe `ui.zig` names for an
+    // overlay. `no_inputs` matters as much as `no_background`: prose that silently eats taps is
+    // worse than prose in a box.
+    u.setNextWindowPos(.{ 8, viewport_h - 118 }, .{});
+    u.setNextWindowSize(.{ viewport_w - 16, 110 }, .{});
+    if (u.window("catch_help", .{ .flags = .{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_background = true,
+        .no_inputs = true,
+        .no_scrollbar = true,
+    } })) |help| {
+        defer help.close();
+        u.text("a catch needs the hand MOVING with the ball:", .{});
+        u.text("   gap < 5 cm  AND  relative < 0.5 m/s", .{});
+        u.text("the line held after each throw is the verdict:", .{});
+        u.text("   green caught / pink swatted / grey missed", .{});
+        u.text("near arm = IK+PD,  far arm = MPC.  blue = path.", .{});
+    }
+    return captured;
 }
 
 fn score(s: *State, k: *Keeper) void {
@@ -614,70 +627,57 @@ fn drawBall(s: *State, gl: *z.WgpuGl) void {
     }
 }
 
-fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    const captured: bool = u.wantCaptureMouse();
-    const narrow: bool = ui.Ui.isNarrow(viewport_w);
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
 
-    // -- * THE CONTROLS STAY SMALL AND THE PROSE LEAVES THE BOX --
-    //
-    // On a phone the panel had grown to most of the screen and the robots were a sliver at the
-    // bottom - which is backwards for a demo whose entire argument is something you WATCH. The
-    // window now holds only what needs a widget; the explanation is drawn as a borderless
-    // overlay below, where it costs no interactive area at all.
-    const panel_w: f32 = if (narrow) @min(viewport_w - 16, 340.0) else @min(380.0, viewport_w * 0.32);
+    // *** PROFILING OFF ACROSS THE PLANNER. `optimize` at 220 knots with six iterations executes
+    // an enormous amount of instrumented code per frame, and each zone costs two timestamps -
+    // on wasm, two JS boundary crossings. Measured here: the smoke runner exhausted Node's
+    // 2 GB heap before finishing sixty frames. The cartpole hit this exact wall and the fix is
+    // the same: the instrument is priced for a frame that does a few things, and a frame that
+    // solves a trajectory optimisation is not that.
+    const was_frozen: bool = profiler.isFrozen();
+    profiler.freeze();
+    defer if (!was_frozen) profiler.unfreeze();
 
-    u.setNextWindowPos(.{ 8, 8 }, .{});
-    u.setNextWindowSize(.{ panel_w, 0 }, .{});
-    if (u.window("catching, not swatting", .{ .flags = .{ .always_auto_resize = true } })) |window| {
-        defer window.close();
-
-        report(u, "IK+PD", &s.servo);
-        report(u, "MPC  ", &s.planner);
-        u.separator();
-
-        _ = u.slider("speed", &s.throw_speed, .{ .min = 2.6, .max = 4.4, .fmt = "{d:.2}" });
-        _ = u.slider("side", &s.throw_side, .{ .min = -1.0, .max = 1.0, .fmt = "{d:.2}" });
-        if (u.button("THROW", .{})) {
+    // * AUTO-REPEAT, so the thing loops and can be WATCHED rather than clicked at. A demo whose
+    // interesting second requires a button press gets seen once.
+    if (s.running and !s.in_flight) {
+        s.idle += f.time.delta_time;
+        if (s.idle > 1.6) {
             throwBall(s);
         }
-        _ = u.slider("slowmo", &s.time_scale, .{ .min = 0.08, .max = 1.0, .fmt = "{d:.2}" });
-        _ = u.checkbox("run", &s.running);
+    }
+    if (s.running and s.in_flight) {
+        s.accumulator += @min(f.time.delta_time, 0.1) * s.time_scale;
+        var tick: u32 = 0;
+        while (s.accumulator >= sim_dt) : (s.accumulator -= sim_dt) {
+            advance(s, &s.servo, tick);
+            advance(s, &s.planner, tick);
+            s.flight += sim_dt;
+            tick += 1;
+            if (ballAt(s.ball_p0, s.ball_v0, s.flight)[2] < 0.05) {
+                score(s, &s.servo);
+                score(s, &s.planner);
+                s.in_flight = false;
+                break;
+            }
+        }
     }
 
-    // * BORDERLESS, NON-INTERACTIVE, AND OUT OF THE WAY - the recipe `ui.zig` names for an
-    // overlay. `no_inputs` matters as much as `no_background`: prose that silently eats taps is
-    // worse than prose in a box.
-    u.setNextWindowPos(.{ 8, viewport_h - 118 }, .{});
-    u.setNextWindowSize(.{ viewport_w - 16, 110 }, .{});
-    if (u.window("catch_help", .{ .flags = .{
-        .no_title_bar = true,
-        .no_resize = true,
-        .no_move = true,
-        .no_background = true,
-        .no_inputs = true,
-        .no_scrollbar = true,
-    } })) |help| {
-        defer help.close();
-        u.text("a catch needs the hand MOVING with the ball:", .{});
-        u.text("   gap < 5 cm  AND  relative < 0.5 m/s", .{});
-        u.text("the line held after each throw is the verdict:", .{});
-        u.text("   green caught / pink swatted / grey missed", .{});
-        u.text("near arm = IK+PD,  far arm = MPC.  blue = path.", .{});
-    }
-    return captured;
+    z.clearViewport(f, background);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 3.0, .max_distance = 16.0 });
+    z.beginMode3D(gl, cam);
+    s.transform[0] = mulMat(translation(0, -0.05, 0), scaling(12, 0.1, 8));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_colour);
+    drawKeeper(s, gl, &s.servo, -1.3);
+    drawKeeper(s, gl, &s.planner, 1.3);
+    drawBall(s, gl);
+    z.endMode3D(gl);
 }
-
-fn report(u: ui.Ui, label: []const u8, k: *const Keeper) void {
-    if (k.best_gap > 1.0e8) {
-        u.text("{s}  ready", .{label});
-        return;
-    }
-    u.text("{s} {d:>5.3}m {d:>5.2}m/s  {d}/{d}/{d}", .{
-        label, k.best_gap, k.best_relative, k.caught, k.swatted, k.missed,
-    });
-}
-
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

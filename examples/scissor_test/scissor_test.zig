@@ -35,6 +35,7 @@ const zm = @import("zm");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
+const Vec2 = zm.Vec2;
 const c = Color;
 const clamp = zm.clamp;
 
@@ -56,6 +57,15 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
     z.unloadFont(gpa, s.ui_font);
     s.ui_host.deinit();
+}
+
+fn drawClipped(f: *z.Frame, s: *State, sw: f32, sh: f32) void {
+    f.gl.rect(.{ .x = 0, .y = 0, .width = sw, .height = sh }, .{ .color = c.red });
+    f.gl.text(
+        .{ 20, sh * 0.55 },
+        "Clipped by the GPU scissor",
+        .{ .size = 20, .color = c.raywhite, .font = &s.font },
+    );
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -93,7 +103,7 @@ fn update(f: *z.Frame, s: *State) void {
     // would lag to one side near the screen edges. Frozen while the pointer is
     // over the UI, so tapping a button doesn't drag the box along with it.
     if (!u.wantCaptureMouse()) {
-        const p: zm.Vec2 = z.getMousePosition(f.input);
+        const p: Vec2 = z.getMousePosition(f.input);
         s.box = .{
             .x = p[0] - box_size * 0.5,
             .y = p[1] - box_size * 0.5,
@@ -132,15 +142,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     s.ui_host.render(f);
     z.endDrawing(f.gl);
-}
-
-fn drawClipped(f: *z.Frame, s: *State, sw: f32, sh: f32) void {
-    f.gl.rect(.{ .x = 0, .y = 0, .width = sw, .height = sh }, .{ .color = c.red });
-    f.gl.text(
-        .{ 20, sh * 0.55 },
-        "Clipped by the GPU scissor",
-        .{ .size = 20, .color = c.raywhite, .font = &s.font },
-    );
 }
 
 pub const app: z.AppSpec(State) = .{

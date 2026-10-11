@@ -37,7 +37,7 @@ fn juliaEscape(
     max_iter: u32,
 ) ?f32 {
     @setRuntimeSafety(false);
-    const BAIL_R2: f32 = 256.0;
+    const bail_r2: f32 = 256.0;
     var zx: f32 = zx0;
     var zy: f32 = zy0;
     var iter: u32 = 0;
@@ -46,7 +46,7 @@ fn juliaEscape(
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) {
+        if (zx2 + zy2 > bail_r2) {
             break;
         }
         const zxy_new: f32 = 2 * zx * zy + cy;

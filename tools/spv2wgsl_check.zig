@@ -39,6 +39,7 @@
 //!   2 - usage / setup error
 
 const std = @import("std");
+const cli = @import("cli");
 const ArrayList = std.ArrayList;
 const allocPrint = std.fmt.allocPrint;
 const expect = std.testing.expect;
@@ -46,6 +47,14 @@ const endsWith = std.mem.endsWith;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const indexOfPos = std.mem.indexOfPos;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const splitScalar = std.mem.splitScalar;
+const sortSlice = std.mem.sort;
 const spv2wgsl = @import("spv2wgsl");
 
 const cache_dir = ".zig-cache/o";
@@ -207,9 +216,9 @@ fn checkWgslStructural(wgsl: []const u8) ?[]const u8 {
     // Must contain at least one entry-point attribute.  Without this
     // the WGSL is unusable; Dawn will reject it.
     const has_entry =
-        std.mem.indexOf(u8, wgsl, "@vertex") != null or
-        std.mem.indexOf(u8, wgsl, "@fragment") != null or
-        std.mem.indexOf(u8, wgsl, "@compute") != null;
+        indexOf(u8, wgsl, "@vertex") != null or
+        indexOf(u8, wgsl, "@fragment") != null or
+        indexOf(u8, wgsl, "@compute") != null;
     if (!has_entry) {
         return "no entry-point attribute (@vertex / @fragment / @compute)";
     }
@@ -280,7 +289,7 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
 
     var lines: ArrayList([]const u8) = .empty;
     defer lines.deinit(arena);
-    var line_it = std.mem.splitScalar(u8, wgsl, '\n');
+    var line_it = splitScalar(u8, wgsl, '\n');
     while (line_it.next()) |l| {
         try lines.append(arena, l);
     }
@@ -359,7 +368,7 @@ fn scanKnownBugs(arena: Allocator, wgsl: []const u8) ![]Diag {
 fn countUnresolved(wgsl: []const u8) u32 {
     var n: u32 = 0;
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, wgsl, i, "__unresolved_")) |pos| {
+    while (indexOfPos(u8, wgsl, i, "__unresolved_")) |pos| {
         // Confirm pattern: __unresolved_<digits>__
         var k: usize = pos + "__unresolved_".len;
         const start: usize = k;
@@ -374,12 +383,12 @@ fn countUnresolved(wgsl: []const u8) u32 {
 
 fn scanErrorMarkers(arena: Allocator, wgsl: []const u8) ![]Diag {
     var out: ArrayList(Diag) = .empty;
-    var it = std.mem.splitScalar(u8, wgsl, '\n');
+    var it = splitScalar(u8, wgsl, '\n');
     var line_no: u32 = 1;
     while (it.next()) |line| : (line_no += 1) {
         const trimmed: []const u8 = trim(line);
-        if (std.mem.indexOf(u8, trimmed, "// ERROR:") != null or
-            std.mem.indexOf(u8, trimmed, "UNHANDLED") != null)
+        if (indexOf(u8, trimmed, "// ERROR:") != null or
+            indexOf(u8, trimmed, "UNHANDLED") != null)
         {
             try out.append(arena, .{ .line = line_no, .text = try arena.dupe(u8, trimmed) });
         }
@@ -410,7 +419,7 @@ fn parseUintAt(wgsl: []const u8, start: usize) ?UintParse {
 /// Extract the variable name that follows a `@group@binding` attribute pair:
 /// `... var[<...>] NAME :`.  Best-effort; returns "?" if it can't find one.
 fn varNameAfter(wgsl: []const u8, from: usize) []const u8 {
-    const v = std.mem.indexOfPos(u8, wgsl, from, "var") orelse return "?";
+    const v = indexOfPos(u8, wgsl, from, "var") orelse return "?";
     var i: usize = v + 3;
     // Skip an optional `<...>` address-space qualifier.
     while (i < wgsl.len and (wgsl[i] == ' ' or wgsl[i] == '\t')) : (i += 1) {}
@@ -457,18 +466,18 @@ fn checkWgslBindings(arena: Allocator, wgsl: []const u8) !?[]const u8 {
     }
 
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, wgsl, i, "@group(")) |g_at| {
+    while (indexOfPos(u8, wgsl, i, "@group(")) |g_at| {
         const g: UintParse = parseUintAt(wgsl, g_at + "@group(".len) orelse {
             i = g_at + 1;
             continue;
         };
-        const b_kw = std.mem.indexOfPos(u8, wgsl, g.end, "@binding(") orelse {
+        const b_kw = indexOfPos(u8, wgsl, g.end, "@binding(") orelse {
             i = g_at + 1;
             continue;
         };
         // The @binding must belong to THIS @group (same declaration): reject if
         // another @group intervenes.
-        if (std.mem.indexOfPos(u8, wgsl, g.end, "@group(")) |next_g| {
+        if (indexOfPos(u8, wgsl, g.end, "@group(")) |next_g| {
             if (next_g < b_kw) {
                 i = g_at + 1;
                 continue;
@@ -499,9 +508,45 @@ fn checkWgslBindings(arena: Allocator, wgsl: []const u8) !?[]const u8 {
     return null;
 }
 
+fn isIdentByte(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+        (c >= '0' and c <= '9') or c == '_';
+}
+
+/// Pull a shader's own name out of its SPIR-V, for failure reporting.
+///
+/// * THE CACHE NAMES EVERY SHADER BY CONTENT HASH, which is exactly no help when one fails:
+/// `ERR-MARKER ... 13f8626c97ee8878e34ed80e22be531d` says nothing about WHICH shader is
+/// broken. Attributing three failures in the SSAO session meant running
+/// `strings <hash>/shader.spv | grep` by hand, and the missing attribution is what made a
+/// wrong conclusion easy to reach in the first place.
+///
+/// SPIR-V keeps `OpName`/`OpSource` debug strings in the module, so the source name is sitting
+/// right there in the bytes. This scans for the first identifier-shaped run ending in `_fs`,
+/// `_vs` or `_io` - deliberately lexical rather than a real SPIR-V parse, because this runs
+/// only on the failure path and must never itself fail.
+fn guessShaderName(spv: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < spv.len) : (i += 1) {
+        if (!isIdentByte(spv[i])) {
+            continue;
+        }
+        var j: usize = i;
+        while (j < spv.len and isIdentByte(spv[j])) : (j += 1) {}
+        const word: []const u8 = spv[i..j];
+        if (word.len >= 5 and word.len <= 64 and
+            (endsWith(u8, word, "_fs") or endsWith(u8, word, "_vs") or endsWith(u8, word, "_io")))
+        {
+            return word;
+        }
+        i = j;
+    }
+    return null;
+}
+
 fn checkOne(
     arena: Allocator,
-    io: std.Io,
+    io: Io,
     name: []const u8,
     path: []const u8,
 ) !Result {
@@ -512,7 +557,7 @@ fn checkOne(
         .trans_ok = false,
     };
 
-    const bytes: []u8 = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch |err| {
+    const bytes: []u8 = Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch |err| {
         r.trans_error = try allocPrint(arena, "read failed: {s}", .{@errorName(err)});
         return r;
     };
@@ -528,7 +573,7 @@ fn checkOne(
     // aborted the standalone run before this fix). Allocating a `[]u32` is
     // naturally 4-aligned; copy the bytes in and read words from there.
     const words: []u32 = try arena.alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes);
+    @memcpy(sliceAsBytes(words), bytes);
 
     const wgsl: []const u8 = spv2wgsl.convertSpirvToWgsl(arena, words) catch |err| {
         r.trans_error = try allocPrint(arena, "convertSpirvToWgsl: {s}", .{@errorName(err)});
@@ -579,10 +624,10 @@ fn checkOne(
 ///
 /// An empty `.spv` is never interesting to this gate: whatever produced it already failed
 /// loudly at compile time.
-fn statFile(io: std.Io, path: []const u8) bool {
-    var f: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+fn statFile(io: Io, path: []const u8) bool {
+    var f: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch return false;
     defer f.close(io);
-    const st: std.Io.File.Stat = f.stat(io) catch return false;
+    const st: Io.File.Stat = f.stat(io) catch return false;
     return st.size > 0;
 }
 
@@ -615,19 +660,19 @@ fn lessThanStr(
 /// The breadth is deliberate: scanning everything the build ever emitted is what makes this a
 /// corpus rather than a spot check, and it catches shaders no example currently draws. But the
 /// price is that a result here is evidence about the CACHE, not about the working tree.
-fn listOurCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
+fn listOurCorpus(arena: Allocator, io: Io) ![][]const u8 {
     // Walk .zig-cache/o/<hash>/ for shader.opt.spv, shader.spv, or compute.spv.
     // `compute.spv` is the kompute compute-kernel output (addCompute) - without
     // it the kernels' WGSL was never reached by this gate, so the fluid_sort
     // struct-dedup failure had no build-time tripwire at all.
     var out: ArrayList([]const u8) = .empty;
-    var dir: std.Io.Dir = std.Io.Dir.cwd().openDir(io, cache_dir, .{ .iterate = true }) catch |err| switch (err) {
+    var dir: Io.Dir = Io.Dir.cwd().openDir(io, cache_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return out.toOwnedSlice(arena),
         else => return err,
     };
     defer dir.close(io);
 
-    var it: std.Io.Dir.Iterator = dir.iterate();
+    var it: Io.Dir.Iterator = dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .directory) {
             continue;
@@ -647,18 +692,18 @@ fn listOurCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
             try out.append(arena, compute_path);
         }
     }
-    std.mem.sort([]const u8, out.items, {}, lessThanStr);
+    sortSlice([]const u8, out.items, {}, lessThanStr);
     return out.toOwnedSlice(arena);
 }
 
-fn listTintCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
+fn listTintCorpus(arena: Allocator, io: Io) ![][]const u8 {
     var out: ArrayList([]const u8) = .empty;
-    var dir: std.Io.Dir = std.Io.Dir.cwd().openDir(io, tint_dir, .{ .iterate = true }) catch |err| switch (err) {
+    var dir: Io.Dir = Io.Dir.cwd().openDir(io, tint_dir, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return out.toOwnedSlice(arena),
         else => return err,
     };
     defer dir.close(io);
-    var it: std.Io.Dir.Iterator = dir.iterate();
+    var it: Io.Dir.Iterator = dir.iterate();
     while (try it.next(io)) |entry| {
         if (entry.kind != .file) {
             continue;
@@ -669,7 +714,7 @@ fn listTintCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
         const p: []u8 = try std.fs.path.join(arena, &.{ tint_dir, entry.name });
         try out.append(arena, p);
     }
-    std.mem.sort([]const u8, out.items, {}, lessThanStr);
+    sortSlice([]const u8, out.items, {}, lessThanStr);
     return out.toOwnedSlice(arena);
 }
 
@@ -677,45 +722,9 @@ fn listTintCorpus(arena: Allocator, io: std.Io) ![][]const u8 {
 // Reporting
 // ============================================================================
 
-/// Pull a shader's own name out of its SPIR-V, for failure reporting.
-///
-/// * THE CACHE NAMES EVERY SHADER BY CONTENT HASH, which is exactly no help when one fails:
-/// `ERR-MARKER ... 13f8626c97ee8878e34ed80e22be531d` says nothing about WHICH shader is
-/// broken. Attributing three failures in the SSAO session meant running
-/// `strings <hash>/shader.spv | grep` by hand, and the missing attribution is what made a
-/// wrong conclusion easy to reach in the first place.
-///
-/// SPIR-V keeps `OpName`/`OpSource` debug strings in the module, so the source name is sitting
-/// right there in the bytes. This scans for the first identifier-shaped run ending in `_fs`,
-/// `_vs` or `_io` - deliberately lexical rather than a real SPIR-V parse, because this runs
-/// only on the failure path and must never itself fail.
-fn guessShaderName(spv: []const u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i < spv.len) : (i += 1) {
-        if (!isIdentByte(spv[i])) {
-            continue;
-        }
-        var j: usize = i;
-        while (j < spv.len and isIdentByte(spv[j])) : (j += 1) {}
-        const word: []const u8 = spv[i..j];
-        if (word.len >= 5 and word.len <= 64 and
-            (endsWith(u8, word, "_fs") or endsWith(u8, word, "_vs") or endsWith(u8, word, "_io")))
-        {
-            return word;
-        }
-        i = j;
-    }
-    return null;
-}
-
-fn isIdentByte(c: u8) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
-        (c >= '0' and c <= '9') or c == '_';
-}
-
 fn printRow(
-    io: std.Io,
-    stdout_w: *std.Io.File.Writer,
+    io: Io,
+    stdout_w: *Io.File.Writer,
     r: Result,
 ) !void {
     const status: []const u8 = switch (r.outcome()) {
@@ -764,25 +773,27 @@ fn printRow(
 // Entry point
 // ============================================================================
 
+/// The command line (std's cli, `src/command_line.zig`).
+const CheckArgs = struct {
+    targets: []const []const u8 = &.{},
+};
+
+const check_cli: cli.Config(CheckArgs) = .{
+    .prog = "spv2wgsl_check",
+    .description = "Differential validator for spv2wgsl: transpiles SPIR-V and checks the WGSL it gives back.",
+    .args = .{
+        .targets = .{ .description = "'all', 'our-corpus', 'tint-corpus', a .spv, or a directory - at least one" },
+    },
+};
+
 pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = init.gpa;
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    var args_list: ArrayList([]u8) = .empty;
-    defer {
-        for (args_list.items) |a| gpa.free(a);
-        args_list.deinit(gpa);
-    }
-    var arg_it: std.process.Args.Iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
-    defer arg_it.deinit();
-    while (arg_it.next()) |arg| {
-        try args_list.append(gpa, try gpa.dupe(u8, arg));
-    }
-    const args: [][]u8 = args_list.items;
-
-    if (args.len < 2) {
+    const args: CheckArgs = cli.args(&init, CheckArgs, check_cli);
+    if (args.targets.len == 0) {
         var stderr_buf: [512]u8 = undefined;
-        var stderr_w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &stderr_buf);
+        var stderr_w: Io.File.Writer = Io.File.stderr().writer(io, &stderr_buf);
         try stderr_w.interface.print(
             "usage: spv2wgsl_check <target>...\n" ++
                 "       target: 'all' | 'our-corpus' | 'tint-corpus' | <path-to-spv> | <directory>\n",
@@ -792,15 +803,13 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(2);
     }
 
-    var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
 
     // Resolve target list.
     var targets: ArrayList(struct { name: []const u8, path: []const u8 }) = .empty;
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const a: []const u8 = args[i];
+    for (args.targets) |a| {
         if (eql(u8, a, "all")) {
             for (try listOurCorpus(arena, io)) |p| {
                 const name: []const u8 = std.fs.path.basename(std.fs.path.dirname(p) orelse p);
@@ -822,15 +831,15 @@ pub fn main(init: std.process.Init) !void {
             try targets.append(arena, .{ .name = std.fs.path.basename(a), .path = try arena.dupe(u8, a) });
         } else {
             // Try as directory.
-            var dir: std.Io.Dir = std.Io.Dir.cwd().openDir(io, a, .{ .iterate = true }) catch {
+            var dir: Io.Dir = Io.Dir.cwd().openDir(io, a, .{ .iterate = true }) catch {
                 var stderr_buf: [512]u8 = undefined;
-                var stderr_w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &stderr_buf);
+                var stderr_w: Io.File.Writer = Io.File.stderr().writer(io, &stderr_buf);
                 try stderr_w.interface.print("unknown target: {s}\n", .{a});
                 try stderr_w.interface.flush();
                 std.process.exit(2);
             };
             defer dir.close(io);
-            var it: std.Io.Dir.Iterator = dir.iterate();
+            var it: Io.Dir.Iterator = dir.iterate();
             while (try it.next(io)) |entry| {
                 if (entry.kind != .file) {
                     continue;
@@ -846,7 +855,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Run + print.
     var stdout_buf: [4096]u8 = undefined;
-    var stdout_w: std.Io.File.Writer = std.Io.File.stdout().writer(io, &stdout_buf);
+    var stdout_w: Io.File.Writer = Io.File.stdout().writer(io, &stdout_buf);
 
     try stdout_w.interface.print("\nspv2wgsl_check — {d} shader(s)\n\n", .{targets.items.len});
     try stdout_w.interface.print(
@@ -861,7 +870,7 @@ pub fn main(init: std.process.Init) !void {
     var fail_count: u32 = 0;
     var bug_count: u32 = 0;
     for (targets.items) |t| {
-        var per_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+        var per_state: ArenaAllocator = .init(gpa);
         defer per_state.deinit();
         const per_arena: Allocator = per_state.allocator();
         const r: Result = try checkOne(per_arena, io, t.name, t.path);
@@ -894,7 +903,7 @@ test "checkWgslBindings: clean interleaved bindings pass" {
         \\@group(1) @binding(2) var metallic_roughness: texture_2d<f32>;
         \\@group(1) @binding(3) var metallic_roughness_sampler: sampler;
     ;
-    const r: ?[]const u8 = try checkWgslBindings(std.testing.allocator, wgsl);
+    const r: ?[]const u8 = try checkWgslBindings(testing_allocator, wgsl);
     try expect(r == null);
 }
 
@@ -903,7 +912,7 @@ test "checkWgslBindings: a lone shadow sampler at binding 0 is fine" {
         \\@group(1) @binding(0) var shadow_sampler: sampler;
         \\@group(2) @binding(0) var<uniform> fs: FsUbo;
     ;
-    const r: ?[]const u8 = try checkWgslBindings(std.testing.allocator, wgsl);
+    const r: ?[]const u8 = try checkWgslBindings(testing_allocator, wgsl);
     try expect(r == null);
 }
 
@@ -914,10 +923,10 @@ test "checkWgslBindings: duplicate (group,binding) is caught and names both vars
         \\@group(1) @binding(1) var texture0_sampler: sampler;
         \\@group(1) @binding(1) var metallic_roughness: texture_2d<f32>;
     ;
-    const r: ?[]const u8 = try checkWgslBindings(std.testing.allocator, wgsl);
-    defer if (r) |m| std.testing.allocator.free(m);
+    const r: ?[]const u8 = try checkWgslBindings(testing_allocator, wgsl);
+    defer if (r) |m| testing_allocator.free(m);
     try expect(r != null);
-    try expect(std.mem.indexOf(u8, r.?, "texture0_sampler") != null);
-    try expect(std.mem.indexOf(u8, r.?, "metallic_roughness") != null);
-    try expect(std.mem.indexOf(u8, r.?, "@group(1) @binding(1)") != null);
+    try expect(indexOf(u8, r.?, "texture0_sampler") != null);
+    try expect(indexOf(u8, r.?, "metallic_roughness") != null);
+    try expect(indexOf(u8, r.?, "@group(1) @binding(1)") != null);
 }

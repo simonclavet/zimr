@@ -48,6 +48,10 @@ const atan2Rad = zm.atan2Rad;
 const length3 = zm.length3;
 const assertf = zm.assertf;
 const expect = std.testing.expect;
+const Random = std.Random;
+const testing_allocator = std.testing.allocator;
+const ArrayList = std.ArrayList;
+const eql = std.mem.eql;
 
 /// The bodies a policy watches and the joints it may nudge, as indices into the model.
 pub const Subset = struct {
@@ -98,14 +102,21 @@ pub const Bodies = struct {
     actuated: []const []const u8 = &actuated_bodies,
 };
 
-/// Resolve those names against a model. Fails loudly: a policy quietly actuating the wrong joints
-/// is a very long debugging session.
-pub fn defaultSubset(
-    gpa: Allocator,
-    m: *const rbt.Model,
-    body_names: []const []const u8,
-) !Subset {
-    return subsetFor(gpa, m, body_names, &watched_bodies, &actuated_bodies);
+fn indexOfName(names: []const []const u8, want: []const u8) ?usize {
+    for (names, 0..) |name, i| {
+        if (eql(u8, name, want)) {
+            return i;
+        }
+    }
+    return null;
+}
+
+fn dofsOf(m: *const rbt.Model, joint: usize) usize {
+    return switch (m.jnt_type[joint]) {
+        .free => 6,
+        .ball => 3,
+        .hinge, .slide => 1,
+    };
 }
 
 /// The same choice for any robot: DReCon's watched and actuated bodies, named in THAT robot's words.
@@ -127,7 +138,7 @@ pub fn subsetFor(
     }
     // Every joint belonging to an actuated body, in model order - so the policy's outputs line up
     // with the model's degrees of freedom without a lookup table to get wrong.
-    var joint_list: std.ArrayList(usize) = .empty;
+    var joint_list: ArrayList(usize) = .empty;
     errdefer joint_list.deinit(gpa);
     var dofs: usize = 0;
     for (actuated) |want| {
@@ -147,21 +158,14 @@ pub fn subsetFor(
     return .{ .bodies = bodies, .joints = try joint_list.toOwnedSlice(gpa), .dofs = dofs };
 }
 
-fn indexOfName(names: []const []const u8, want: []const u8) ?usize {
-    for (names, 0..) |name, i| {
-        if (std.mem.eql(u8, name, want)) {
-            return i;
-        }
-    }
-    return null;
-}
-
-fn dofsOf(m: *const rbt.Model, joint: usize) usize {
-    return switch (m.jnt_type[joint]) {
-        .free => 6,
-        .ball => 3,
-        .hinge, .slide => 1,
-    };
+/// Resolve those names against a model. Fails loudly: a policy quietly actuating the wrong joints
+/// is a very long debugging session.
+pub fn defaultSubset(
+    gpa: Allocator,
+    m: *const rbt.Model,
+    body_names: []const []const u8,
+) !Subset {
+    return subsetFor(gpa, m, body_names, &watched_bodies, &actuated_bodies);
 }
 
 /// A frame that turns with the character but does not tilt with it, sitting at its centre of mass.
@@ -263,26 +267,11 @@ pub const Views = struct {
     }
 };
 
-/// The observation of a character in state `sim` tracking `clip`, its state at `frame`: the reference where
-/// the coming action aims (`frame + 1`) and further ahead (`lookahead_frames`), posed through the fleet - which
-/// knows how its clips are lifted and placed. Every caller builds its observation here (the trainer, its judge,
-/// its bootstrap from a terminal state, the teacher's recorder), so they cannot disagree.
-pub fn observeFrom(
-    m: *const rbt.Model,
-    subset: Subset,
-    fleet: *track.Fleet,
-    clip: *const dance.Clip,
-    frame: u32,
-    sim: track.State,
-    views: *Views,
-    previous_action: []const f32,
-    out: []f32,
-) void {
-    fleet.referenceStateInto(clip, frame + 1, &views.probe, &views.reference);
-    for (lookahead_frames, &views.ahead) |k, *state| {
-        fleet.referenceStateInto(clip, frame + k, &views.probe, state);
-    }
-    observe(m, subset, sim, views.reference, &views.ahead, fleet.root, previous_action, out);
+fn writeVec(out: []f32, at: *usize, v: Vec) void {
+    out[at.*] = v[0];
+    out[at.* + 1] = v[1];
+    out[at.* + 2] = v[2];
+    at.* += 3;
 }
 
 /// Build one observation from two states. Pure, so the invariance below can be tested on it
@@ -357,11 +346,26 @@ pub fn observe(
     @memcpy(out[at..][0..previous_action.len], previous_action);
 }
 
-fn writeVec(out: []f32, at: *usize, v: Vec) void {
-    out[at.*] = v[0];
-    out[at.* + 1] = v[1];
-    out[at.* + 2] = v[2];
-    at.* += 3;
+/// The observation of a character in state `sim` tracking `clip`, its state at `frame`: the reference where
+/// the coming action aims (`frame + 1`) and further ahead (`lookahead_frames`), posed through the fleet - which
+/// knows how its clips are lifted and placed. Every caller builds its observation here (the trainer, its judge,
+/// its bootstrap from a terminal state, the teacher's recorder), so they cannot disagree.
+pub fn observeFrom(
+    m: *const rbt.Model,
+    subset: Subset,
+    fleet: *track.Fleet,
+    clip: *const dance.Clip,
+    frame: u32,
+    sim: track.State,
+    views: *Views,
+    previous_action: []const f32,
+    out: []f32,
+) void {
+    fleet.referenceStateInto(clip, frame + 1, &views.probe, &views.reference);
+    for (lookahead_frames, &views.ahead) |k, *state| {
+        fleet.referenceStateInto(clip, frame + k, &views.probe, state);
+    }
+    observe(m, subset, sim, views.reference, &views.ahead, fleet.root, previous_action, out);
 }
 
 /// The policy's hands on the controls: filtering what it asks for, holding it for a few steps, and
@@ -502,22 +506,22 @@ test "robot_policy: the observation does not move with the character" {
     // same numbers - otherwise it has to learn the same balance correction again in every corner
     // of the room, facing every direction. TILT is deliberately NOT removed: a leaning character
     // must look different from an upright one, because that difference is the policy's whole job.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
     const subset: Subset = try defaultSubset(gpa, m, rig.imported.names);
     defer subset.deinit(gpa);
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
-    var sim: track.State = try track.State.init(gpa, m.nbody);
+    var sim: track.State = try .init(gpa, m.nbody);
     defer sim.deinit(gpa);
-    var reference: track.State = try track.State.init(gpa, m.nbody);
+    var reference: track.State = try .init(gpa, m.nbody);
     defer reference.deinit(gpa);
-    var moved_sim: track.State = try track.State.init(gpa, m.nbody);
+    var moved_sim: track.State = try .init(gpa, m.nbody);
     defer moved_sim.deinit(gpa);
-    var moved_reference: track.State = try track.State.init(gpa, m.nbody);
+    var moved_reference: track.State = try .init(gpa, m.nbody);
     defer moved_reference.deinit(gpa);
     // The reference further ahead: three more poses, each a little further on.
     var ahead: [lookahead_frames.len]track.State = undefined;
@@ -532,8 +536,8 @@ test "robot_policy: the observation does not move with the character" {
     };
     const root: usize = track.rootBody(m);
 
-    var rng: std.Random.DefaultPrng = .init(4);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(4);
+    const random: Random = rng.random();
     data.reset(m);
     for (data.pos[7..]) |*q| {
         q.* += 0.3 * random.floatNorm(f32);
@@ -640,7 +644,7 @@ test "robot_policy: the observation does not move with the character" {
 }
 
 test "robot_policy: the filter, and a zero action that changes nothing" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa);
     defer rig.deinit();

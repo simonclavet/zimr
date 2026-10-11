@@ -14,19 +14,22 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const testing_allocator = std.testing.allocator;
 // GL-retirement P5a: retargeted at the LIVE umbrella - the namespace
 // shape these tests guard is now zimr's.
 const z = @import("../zimr.zig");
+const zm = @import("zm");
+const Vec2 = zm.Vec2;
 
 test "Q2 extension pattern: get-or-put + mutate + read next frame" {
-    var ctx: z.ui.UiContext = z.ui.UiContext.init(std.testing.allocator);
+    var ctx: z.ui.UiContext = .init(testing_allocator);
     defer ctx.deinit();
     const u: z.ui.Ui = .{ .ctx = &ctx };
 
     // Hypothetical extension widget state.
     const KnobState = struct {
         angle: f32 = 0,
-        drag_origin: ?@Vector(2, f32) = null,
+        drag_origin: ?Vec2 = null,
     };
 
     // Frame 1: first call to the hypothetical knob() - no prior
@@ -46,7 +49,7 @@ test "Q2 extension pattern: get-or-put + mutate + read next frame" {
 }
 
 test "extension pattern: StateOpts reachable through z.ui namespace" {
-    var ctx: z.ui.UiContext = z.ui.UiContext.init(std.testing.allocator);
+    var ctx: z.ui.UiContext = .init(testing_allocator);
     defer ctx.deinit();
     const u: z.ui.Ui = .{ .ctx = &ctx };
 

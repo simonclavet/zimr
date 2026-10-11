@@ -23,6 +23,7 @@ const gpu = @import("gpu.zig");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const zm = @import("zm");
 const assert = zm.assert;
 const wgpu = @import("wgpu.zig");
@@ -494,7 +495,7 @@ test "WgpuTexture.createCheckerboard produces correct pattern bytes" {
     // We can't actually upload from a host test (no JS bridge), but
     // we can test the helper that constructs the pixel pattern.
     // Extract the inner pattern-generation code into a testable fn:
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const a: [4]u8 = .{ 0xff, 0x00, 0x00, 0xff };
     const b: [4]u8 = .{ 0x00, 0xff, 0x00, 0xff };
     const size: u32 = 4;

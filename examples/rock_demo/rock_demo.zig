@@ -11,6 +11,7 @@ const zm = @import("zm");
 
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
+const Vec = zm.Vec;
 
 const rock_count: usize = 7;
 
@@ -21,7 +22,7 @@ const State = struct {
 
 // where each rock sits, how big it is, and its earthy tint
 const RockPlacement = struct {
-    position: zm.Vec,
+    position: Vec,
     scale: f32,
     seed: i32,
     tint: [3]u8,

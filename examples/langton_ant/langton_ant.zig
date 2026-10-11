@@ -19,6 +19,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const tau = zm.tau;
@@ -29,6 +30,7 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const float = zm.float;
 const atan2Rad = zm.atan2Rad;
+const pi = zm.pi;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const grid_w = 200;
@@ -86,7 +88,7 @@ const Turn = struct {
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     gestures: z.GesturesState = .{},
 
     /// The board: false = black, true = white. Everything starts white.
@@ -188,7 +190,7 @@ fn reset(s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
     };
 }
 
@@ -256,6 +258,16 @@ fn dirBetween(ax: i32, ay: i32, bx: i32, by: i32) Vec2 {
     return .{ signf(bx - ax), signf(by - ay) };
 }
 
+/// Cell coordinates -> screen pixels, through the camera.
+fn worldToScreen(s: *const State, f: *z.Frame, cx: f32, cy: f32) Vec2 {
+    const sw: f32 = f.window.widthf();
+    const sh: f32 = f.window.heightf();
+    return .{
+        sw / 2.0 + (cx - s.cam_x) * s.zoom,
+        sh / 2.0 + (cy - s.cam_y) * s.zoom,
+    };
+}
+
 /// Straight half-cell stroke from cell centre `cx,cy` outward (toward=true) or back
 /// (toward=false) along direction `d`. Used for straight-through cells and for the
 /// two half-cells that lead into and out of a rounded corner.
@@ -296,10 +308,10 @@ fn drawCornerArc(
     const entry_ang: f32 = atan2Rad(cyf - 0.5 * ind[1] - oy, cxf - 0.5 * ind[0] - ox);
     const exit_ang: f32 = atan2Rad(cyf + 0.5 * outd[1] - oy, cxf + 0.5 * outd[0] - ox);
     var sweep: f32 = exit_ang - entry_ang;
-    while (sweep > zm.pi) {
+    while (sweep > pi) {
         sweep -= tau;
     }
-    while (sweep < -zm.pi) {
+    while (sweep < -pi) {
         sweep += tau;
     }
 
@@ -313,16 +325,6 @@ fn drawCornerArc(
         f.gl.line(prev_pt, pt, .{ .color = col, .thickness = 3.0 });
         prev_pt = pt;
     }
-}
-
-/// Cell coordinates -> screen pixels, through the camera.
-fn worldToScreen(s: *const State, f: *z.Frame, cx: f32, cy: f32) Vec2 {
-    const sw: f32 = f.window.widthf();
-    const sh: f32 = f.window.heightf();
-    return .{
-        sw / 2.0 + (cx - s.cam_x) * s.zoom,
-        sh / 2.0 + (cy - s.cam_y) * s.zoom,
-    };
 }
 
 /// Screen pixels -> cell coordinates: the exact inverse of worldToScreen. Pan and

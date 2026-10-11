@@ -15,6 +15,7 @@ const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
+const distance = zm.distance;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bufPrint = std.fmt.bufPrint;
 
@@ -161,7 +162,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.press = mouse;
         s.dragged = false;
     }
-    if (down and zm.distance(mouse, s.press) > 8.0) {
+    if (down and distance(mouse, s.press) > 8.0) {
         s.dragged = true;
     }
     if (z.isMouseButtonReleased(f.input, .left) and !s.dragged) {

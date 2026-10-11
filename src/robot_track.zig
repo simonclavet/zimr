@@ -71,6 +71,13 @@ const assertf = zm.assertf;
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const Io = std.Io;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const indexOfScalar = std.mem.indexOfScalar;
+const sortSlice = std.mem.sort;
+const eql = std.mem.eql;
 
 /// Every body's world pose and velocity: the whole state a tracker cares about.
 ///
@@ -132,6 +139,17 @@ pub const State = struct {
     }
 };
 
+/// A body's index by name. The empty name never matches (it is the world's, and every anonymous body's). One
+/// search for every per-robot name a task carries (`contact_exempt`, `head_body`).
+fn bodyIndexByName(body_names: []const []const u8, wanted: []const u8) ?usize {
+    for (body_names, 0..) |name, b| {
+        if (name.len > 0 and eql(u8, name, wanted)) {
+            return b;
+        }
+    }
+    return null;
+}
+
 /// Read the state out of a forward-current `Data` - the simulator's, or a clip frame's after
 /// `rbt.forward`.
 /// Which bodies are exempt from `unexpected_contact`: `exempt` names resolved against `body_names` (indexed like the
@@ -167,17 +185,6 @@ pub fn headBody(head_body: []const u8, body_names: []const []const u8) !?usize {
     return bodyIndexByName(body_names, head_body) orelse error.UnknownHeadBody;
 }
 
-/// A body's index by name. The empty name never matches (it is the world's, and every anonymous body's). One
-/// search for every per-robot name a task carries (`contact_exempt`, `head_body`).
-fn bodyIndexByName(body_names: []const []const u8, wanted: []const u8) ?usize {
-    for (body_names, 0..) |name, b| {
-        if (name.len > 0 and std.mem.eql(u8, name, wanted)) {
-            return b;
-        }
-    }
-    return null;
-}
-
 /// Take the exempt bodies out of contact judgement: their lowest point reads as "no shape", which never touches.
 /// Applied to the CHARACTER's state only - the reference's heights stay, for the bodies that are judged.
 pub fn exemptFromContact(state: *State, exempt: []const bool) void {
@@ -210,6 +217,27 @@ pub fn stateOf(m: *const rbt.Model, d: *const rbt.Data, out: *State) void {
 /// numbers it costs once this is being sliced up inside a kernel.
 pub fn localSize(bodies: usize) usize {
     return (bodies - 1) * (3 + 6 + 3 + 3 + 1) + 3;
+}
+
+fn writeVec(out: []f32, at: *usize, v: Vec) void {
+    out[at.*] = v[0];
+    out[at.* + 1] = v[1];
+    out[at.* + 2] = v[2];
+    at.* += 3;
+}
+
+/// A rotation as two axes: the first two columns of its matrix, which is what a network should
+/// predict instead of a quaternion (continuous, and no sign ambiguity).
+pub fn twoAxis(q: Quat) [6]f32 {
+    const x: Vec = rotate(q, vec(1, 0, 0));
+    const y: Vec = rotate(q, vec(0, 1, 0));
+    return .{ x[0], x[1], x[2], y[0], y[1], y[2] };
+}
+
+fn writeTwoAxis(out: []f32, at: *usize, q: Quat) void {
+    const axes: [6]f32 = twoAxis(q);
+    @memcpy(out[at.*..][0..6], &axes);
+    at.* += 6;
 }
 
 /// The state as a network sees it: everything in the root's frame, heights and up kept in world.
@@ -248,47 +276,6 @@ pub fn local(state: State, root: usize, out: []f32) void {
     writeVec(out, &at, rotate(to_local, vec(0, 0, 1)));
 }
 
-fn writeVec(out: []f32, at: *usize, v: Vec) void {
-    out[at.*] = v[0];
-    out[at.* + 1] = v[1];
-    out[at.* + 2] = v[2];
-    at.* += 3;
-}
-
-fn writeTwoAxis(out: []f32, at: *usize, q: Quat) void {
-    const axes: [6]f32 = twoAxis(q);
-    @memcpy(out[at.*..][0..6], &axes);
-    at.* += 6;
-}
-
-/// A rotation as two axes: the first two columns of its matrix, which is what a network should
-/// predict instead of a quaternion (continuous, and no sign ambiguity).
-pub fn twoAxis(q: Quat) [6]f32 {
-    const x: Vec = rotate(q, vec(1, 0, 0));
-    const y: Vec = rotate(q, vec(0, 1, 0));
-    return .{ x[0], x[1], x[2], y[0], y[1], y[2] };
-}
-
-/// Two axes back to a rotation. They needn't be unit or perpendicular - whatever a network hands
-/// over gets orthonormalised: the first axis is taken as it is, the second is straightened against
-/// it, and the third follows from the cross product.
-pub fn fromTwoAxis(axes: [6]f32) Quat {
-    // Total, on purpose. The axes come from a network, and early in training a network happily
-    // outputs two near-zero vectors, or two parallel ones - either of which would divide by zero
-    // here and hand NaN to everything downstream, where it is very hard to trace back. So a
-    // degenerate axis falls back to a fixed one, which is wrong but finite, and training moves on.
-    const first: Vec = vec(axes[0], axes[1], axes[2]);
-    const a: Vec = if (length3(first) > 1.0e-6) normalize3(first) else vec(1, 0, 0);
-    const raw: Vec = vec(axes[3], axes[4], axes[5]);
-    const across: Vec = raw - a * splat(dot3(raw, a));
-    const b: Vec = if (length3(across) > 1.0e-6)
-        normalize3(across)
-    else
-        normalize3(orthogonalTo(a));
-    const c: Vec = cross(a, b);
-    return quatFromColumns(a, b, c);
-}
-
 /// Some unit vector perpendicular to `a` - whichever axis `a` leans on least, crossed with it.
 fn orthogonalTo(a: Vec) Vec {
     const axis: Vec = if (@abs(a[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
@@ -316,6 +303,35 @@ fn quatFromColumns(x: Vec, y: Vec, z: Vec) Quat {
     return normalize4(q);
 }
 
+/// Two axes back to a rotation. They needn't be unit or perpendicular - whatever a network hands
+/// over gets orthonormalised: the first axis is taken as it is, the second is straightened against
+/// it, and the third follows from the cross product.
+pub fn fromTwoAxis(axes: [6]f32) Quat {
+    // Total, on purpose. The axes come from a network, and early in training a network happily
+    // outputs two near-zero vectors, or two parallel ones - either of which would divide by zero
+    // here and hand NaN to everything downstream, where it is very hard to trace back. So a
+    // degenerate axis falls back to a fixed one, which is wrong but finite, and training moves on.
+    const first: Vec = vec(axes[0], axes[1], axes[2]);
+    const a: Vec = if (length3(first) > 1.0e-6) normalize3(first) else vec(1, 0, 0);
+    const raw: Vec = vec(axes[3], axes[4], axes[5]);
+    const across: Vec = raw - a * splat(dot3(raw, a));
+    const b: Vec = if (length3(across) > 1.0e-6)
+        normalize3(across)
+    else
+        normalize3(orthogonalTo(a));
+    const c: Vec = cross(a, b);
+    return quatFromColumns(a, b, c);
+}
+
+/// The rotation an angular velocity produces over `dt` (exact for a constant `w`).
+fn rotationOver(w: Vec, dt: f32) Quat {
+    const speed: f32 = length3(w);
+    if (speed < 1.0e-12) {
+        return .{ 0, 0, 0, 1 };
+    }
+    return quatFromNormAxisAngle(w / splat(speed), speed * dt);
+}
+
 /// Move a state forward by `dt` under per-body accelerations, in world axes.
 ///
 /// Velocity first, then position with the NEW velocity - the same semi-implicit order robot.zig
@@ -335,15 +351,6 @@ pub fn integrate(state: *State, linear: []const Vec, angular: []const Vec, dt: f
         state.positions[b] += state.velocities[b] * splat(dt);
         state.rotations[b] = normalize4(qmul(rotationOver(state.angular[b], dt), state.rotations[b]));
     }
-}
-
-/// The rotation an angular velocity produces over `dt` (exact for a constant `w`).
-fn rotationOver(w: Vec, dt: f32) Quat {
-    const speed: f32 = length3(w);
-    if (speed < 1.0e-12) {
-        return .{ 0, 0, 0, 1 };
-    }
-    return quatFromNormAxisAngle(w / splat(speed), speed * dt);
 }
 
 /// The accelerations that carry `from` to `to` over `dt` - the velocity differences, in world axes.
@@ -500,42 +507,36 @@ pub fn referenceVelocity(
     rbt.differentiatePos(m, out, clip.pose(f)[root_len..], clip.pose(f + 1)[root_len..], clip.frame_time);
 }
 
-/// The torques that drive the robot toward `target` - the law the policy acts through.
+/// The helping hand, when `gains.assist` asks for one: the root's rows of full-body inverse
+/// dynamics, `M a + c`, with the root given a spring toward the reference like every joint - the
+/// external wrench that would hold it there - scaled by `assist` into `out`'s root rows.
 ///
-/// It is a spring, and a spring alone: no feedforward, no knowledge of where the reference is
-/// going next, only "you are here, you should be there". What the policy adds on top of that is
-/// the whole point of the offsets.
-///
-/// Two steps, and the second one matters more than it looks. First, the acceleration a critically
-/// damped spring asks for, evaluated at the END of the step (`robot_maximal.stableSpringAccel`)
-/// rather than the start, because an explicit spring stiffer than about 8 Hz explodes at 60 Hz and
-/// 20 Hz is where a character servo wants to be. Then the torque that actually PRODUCES that
-/// acceleration, through the model - inverse dynamics, or its floating-base cousin when the root
-/// is free, since a policy cannot push on the world.
-///
-/// The obvious shortcut - scale the acceleration by the mass matrix's DIAGONAL and call it a PD
-/// gain - does not work here, and fails in an interesting way: for a chain, a given torque buys
-/// MORE acceleration than the diagonal predicts, so the damping the spring asked to apply
-/// implicitly gets applied explicitly and amplified. At 20 Hz with a 60 Hz step that is
-/// unconditionally unstable; measured on a walking clip, the robot passes 100 rad/s within twenty
-/// frames. A game engine's per-joint PD avoids this with Tan's stable PD, which solves with the
-/// mass matrix anyway - so we may as well use the one the simulator already computes.
-///
-/// `d` must be forward-current with `rbt.biasForce` already called. `scratch` is `m.nv`, `dense`
-/// is `m.nv * m.nv`, `full` is `m.nv` (both are only touched when the root is free).
-pub fn pdTorques(
+/// Only called with assist > 0, so the unassisted path is untouched to the bit. `scratch` holds the
+/// velocity-space error toward the target (the root's six entries included), `accel_scratch` the
+/// joints' spring accelerations; `dense` is overwritten with the mass matrix.
+fn rootAssist(
     m: *const rbt.Model,
     d: *rbt.Data,
-    target: []const f32,
     gains: Gains,
     dt: f32,
+    scratch: []const f32,
     accel_scratch: []f32,
-    scratch: []f32,
     dense: []f32,
-    full: []f32,
     out: []f32,
 ) void {
-    pdTorquesToward(m, d, target, null, gains, dt, accel_scratch, scratch, dense, full, out);
+    const root: usize = rootDofs(m);
+    for (0..root) |k| {
+        const want: f32 = rmx.stableSpringAccel(scratch[k], d.vel[k], gains.frequency, gains.damping, dt);
+        accel_scratch[k] = clamp(want, -gains.max_acceleration, gains.max_acceleration);
+    }
+    rbt.massMatrixDense(m, d, dense);
+    for (0..root) |row| {
+        var wrench: f32 = d.bias_force[row];
+        for (0..m.nv) |col| {
+            wrench += dense[row * m.nv + col] * accel_scratch[col];
+        }
+        out[row] = gains.assist * wrench;
+    }
 }
 
 /// `pdTorques` with VELOCITY FEEDFORWARD when `target_velocity` is given (`m.nv` long, the velocity the body
@@ -579,36 +580,42 @@ pub fn pdTorquesToward(
     }
 }
 
-/// The helping hand, when `gains.assist` asks for one: the root's rows of full-body inverse
-/// dynamics, `M a + c`, with the root given a spring toward the reference like every joint - the
-/// external wrench that would hold it there - scaled by `assist` into `out`'s root rows.
+/// The torques that drive the robot toward `target` - the law the policy acts through.
 ///
-/// Only called with assist > 0, so the unassisted path is untouched to the bit. `scratch` holds the
-/// velocity-space error toward the target (the root's six entries included), `accel_scratch` the
-/// joints' spring accelerations; `dense` is overwritten with the mass matrix.
-fn rootAssist(
+/// It is a spring, and a spring alone: no feedforward, no knowledge of where the reference is
+/// going next, only "you are here, you should be there". What the policy adds on top of that is
+/// the whole point of the offsets.
+///
+/// Two steps, and the second one matters more than it looks. First, the acceleration a critically
+/// damped spring asks for, evaluated at the END of the step (`robot_maximal.stableSpringAccel`)
+/// rather than the start, because an explicit spring stiffer than about 8 Hz explodes at 60 Hz and
+/// 20 Hz is where a character servo wants to be. Then the torque that actually PRODUCES that
+/// acceleration, through the model - inverse dynamics, or its floating-base cousin when the root
+/// is free, since a policy cannot push on the world.
+///
+/// The obvious shortcut - scale the acceleration by the mass matrix's DIAGONAL and call it a PD
+/// gain - does not work here, and fails in an interesting way: for a chain, a given torque buys
+/// MORE acceleration than the diagonal predicts, so the damping the spring asked to apply
+/// implicitly gets applied explicitly and amplified. At 20 Hz with a 60 Hz step that is
+/// unconditionally unstable; measured on a walking clip, the robot passes 100 rad/s within twenty
+/// frames. A game engine's per-joint PD avoids this with Tan's stable PD, which solves with the
+/// mass matrix anyway - so we may as well use the one the simulator already computes.
+///
+/// `d` must be forward-current with `rbt.biasForce` already called. `scratch` is `m.nv`, `dense`
+/// is `m.nv * m.nv`, `full` is `m.nv` (both are only touched when the root is free).
+pub fn pdTorques(
     m: *const rbt.Model,
     d: *rbt.Data,
+    target: []const f32,
     gains: Gains,
     dt: f32,
-    scratch: []const f32,
     accel_scratch: []f32,
+    scratch: []f32,
     dense: []f32,
+    full: []f32,
     out: []f32,
 ) void {
-    const root: usize = rootDofs(m);
-    for (0..root) |k| {
-        const want: f32 = rmx.stableSpringAccel(scratch[k], d.vel[k], gains.frequency, gains.damping, dt);
-        accel_scratch[k] = clamp(want, -gains.max_acceleration, gains.max_acceleration);
-    }
-    rbt.massMatrixDense(m, d, dense);
-    for (0..root) |row| {
-        var wrench: f32 = d.bias_force[row];
-        for (0..m.nv) |col| {
-            wrench += dense[row * m.nv + col] * accel_scratch[col];
-        }
-        out[row] = gains.assist * wrench;
-    }
+    pdTorquesToward(m, d, target, null, gains, dt, accel_scratch, scratch, dense, full, out);
 }
 
 /// How far the simulated character is from the reference, in the eight ways that matter.
@@ -662,10 +669,14 @@ pub const TrackingError = struct {
 /// centimetre up is clearly not bearing on it.
 pub const contact_band: f32 = 0.01;
 
-/// Measure one against the other. Both states are whole-body states in world space (`stateOf`);
-/// `root` is the character's root body.
-pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
-    return trackingErrorWithHead(sim, reference, root, null);
+/// The angle between two rotations, taken from the vector part of their difference so that small
+/// angles stay accurate in f32 (`acos` of a w near 1 loses half its digits).
+fn angleBetween(a: Quat, b: Quat) f32 {
+    var rel: Quat = qmul(a, conjugate(b));
+    if (rel[3] < 0.0) {
+        rel = -rel;
+    }
+    return 2.0 * asinRad(@min(1.0, length3(vec(rel[0], rel[1], rel[2]))));
 }
 
 /// `trackingError` with the head's height gap measured too (`TrackingError.head_height`) - what a judge asks, having
@@ -727,14 +738,10 @@ pub fn trackingErrorWithHead(
     return out;
 }
 
-/// The angle between two rotations, taken from the vector part of their difference so that small
-/// angles stay accurate in f32 (`acos` of a w near 1 loses half its digits).
-fn angleBetween(a: Quat, b: Quat) f32 {
-    var rel: Quat = qmul(a, conjugate(b));
-    if (rel[3] < 0.0) {
-        rel = -rel;
-    }
-    return 2.0 * asinRad(@min(1.0, length3(vec(rel[0], rel[1], rel[2]))));
+/// Measure one against the other. Both states are whole-body states in world space (`stateOf`);
+/// `root` is the character's root body.
+pub fn trackingError(sim: State, reference: State, root: usize) TrackingError {
+    return trackingErrorWithHead(sim, reference, root, null);
 }
 
 /// What each part of being wrong costs. Every term is `weight * exp(-error / scale)`, so a term at
@@ -889,7 +896,7 @@ pub fn perturbStart(
     m: *const rbt.Model,
     d: *rbt.Data,
     noise: StartNoise,
-    random: std.Random,
+    random: Random,
     scratch: []f32,
 ) void {
     if (noise.pose == 0.0 and noise.velocity == 0.0) {
@@ -960,6 +967,12 @@ pub const Replay = struct {
     frames: []u32,
     clips: []u16,
     segments: []u32,
+    /// How far into its EPISODE each record's step was - 0 on an episode's first step - or null for a record that
+    /// is not a step of a rollout at all (a teacher's label, a probe's state: `append`). The segment cannot stand in
+    /// for it: a segment ends at a SHOVE as well as at a restart, and a shove ends neither the episode nor what the
+    /// controller is applying. This can say what was being applied before a record: rest on an episode's first
+    /// step, otherwise the action recorded one step earlier, shove or no shove.
+    episode_steps: []?u32,
     /// How many records this environment has ever written. The ring holds the last `capacity`.
     written: []u64,
 
@@ -987,6 +1000,8 @@ pub const Replay = struct {
         errdefer gpa.free(clips);
         const segments: []u32 = try gpa.alloc(u32, slots);
         errdefer gpa.free(segments);
+        const episode_steps: []?u32 = try gpa.alloc(?u32, slots);
+        errdefer gpa.free(episode_steps);
         const written: []u64 = try gpa.alloc(u64, envs);
         @memset(written, 0);
         return .{
@@ -1002,6 +1017,7 @@ pub const Replay = struct {
             .frames = frames,
             .clips = clips,
             .segments = segments,
+            .episode_steps = episode_steps,
             .written = written,
         };
     }
@@ -1013,6 +1029,7 @@ pub const Replay = struct {
         self.gpa.free(self.frames);
         self.gpa.free(self.clips);
         self.gpa.free(self.segments);
+        self.gpa.free(self.episode_steps);
         self.gpa.free(self.written);
     }
 
@@ -1020,8 +1037,10 @@ pub const Replay = struct {
         return env * self.capacity + @as(usize, @intCast(index % self.capacity));
     }
 
-    /// Append one frame of experience for `env`: the state it was in, the action taken from it, the
-    /// reference frame it was tracking, and the segment it belongs to.
+    /// Append one frame of experience for `env` that is NOT a step of a rollout - a teacher's label, a probe's
+    /// state: the state, the action taken from it, the reference frame it was tracking, and its segment. What was
+    /// being applied before it is unknown, and `episodeStepAt` says so (null). A fleet's own steps go through
+    /// `appendStep`, which knows.
     pub fn append(
         self: *Replay,
         env: usize,
@@ -1031,6 +1050,22 @@ pub const Replay = struct {
         frame: u32,
         clip: u16,
         segment: u32,
+    ) void {
+        self.appendStep(env, pose, velocity, action, frame, clip, segment, null);
+    }
+
+    /// Append one STEP of a rollout for `env`, `episode_step` steps into its episode (0 on its first step): the
+    /// state it was in, the action applied from it, the reference frame it was tracking, and its segment.
+    pub fn appendStep(
+        self: *Replay,
+        env: usize,
+        pose: []const f32,
+        velocity: []const f32,
+        action: []const f32,
+        frame: u32,
+        clip: u16,
+        segment: u32,
+        episode_step: ?u32,
     ) void {
         assertf(
             env < self.envs and pose.len == self.nq and velocity.len == self.nv and action.len == self.action_size,
@@ -1045,6 +1080,7 @@ pub const Replay = struct {
         self.frames[at] = frame;
         self.clips[at] = clip;
         self.segments[at] = segment;
+        self.episode_steps[at] = episode_step;
         self.written[env] += 1;
     }
 
@@ -1073,6 +1109,12 @@ pub const Replay = struct {
         return self.segments[self.slot(env, index)];
     }
 
+    /// How far into its episode the record's step was (0 on an episode's first step), or null when the record is
+    /// not a step of a rollout (`append`).
+    pub fn episodeStepAt(self: Replay, env: usize, index: u64) ?u32 {
+        return self.episode_steps[self.slot(env, index)];
+    }
+
     /// A stretch of unbroken motion from one environment: `steps` transitions, which is `steps + 1`
     /// records, all in one segment.
     ///
@@ -1097,7 +1139,7 @@ pub const Replay = struct {
     /// since a segment id only ever increases, so equal ends mean an equal middle. A few dozen
     /// tries are plenty: segments are long compared with a window, and a ring full of short
     /// segments deserves to fail rather than to loop.
-    pub fn sampleWindow(self: Replay, random: std.Random, steps: usize) ?Window {
+    pub fn sampleWindow(self: Replay, random: Random, steps: usize) ?Window {
         assertf(steps > 0, @src(), "a window of no transitions is not a window", .{});
         const frames: usize = steps + 1;
         for (0..64) |_| {
@@ -1195,7 +1237,7 @@ pub const Fleet = struct {
     /// Everything the fleet owns comes from here, and goes back in one call. A dozen buffers
     /// allocated one at a time is a dozen chances to leak the previous eleven when the thirteenth
     /// fails; an arena has one.
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     m: *rbt.Model,
     /// The clips themselves are BORROWED - they must outlive the fleet, and they are read every
     /// step - but the list of them is COPIED into the fleet's own memory. A caller naturally builds
@@ -1219,7 +1261,7 @@ pub const Fleet = struct {
     segment: []u32,
     steps: []u32,
     next_segment: u32,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     replay: Replay,
     /// Per-environment scratch, allocated once.
     reference_data: rbt.Data,
@@ -1322,7 +1364,7 @@ pub const Fleet = struct {
             .terminal_frame = undefined,
             .terminal_clip = undefined,
         };
-        fleet.arena = .init(gpa);
+        fleet.arena = ArenaAllocator.init(gpa);
         errdefer fleet.arena.deinit();
         const owned: Allocator = fleet.arena.allocator();
         fleet.* = .{
@@ -1347,8 +1389,8 @@ pub const Fleet = struct {
             .terminal_frame = try owned.alloc(u32, options.envs),
             .terminal_clip = try owned.alloc(usize, options.envs),
             .next_segment = 0,
-            .rng = .init(options.seed),
-            .replay = try .init(owned, m, options.envs, options.capacity),
+            .rng = Random.DefaultPrng.init(options.seed),
+            .replay = try Replay.init(owned, m, options.envs, options.capacity),
             .reference_data = try rbt.Data.init(owned, m),
             .sim_state = try State.init(owned, m.nbody),
             .reference_state = try State.init(owned, m.nbody),
@@ -1397,7 +1439,7 @@ pub const Fleet = struct {
     /// Start an environment somewhere new: a random clip, a random frame, a fresh segment.
     /// A new episode for `env` at a RANDOM clip and frame - reference-state initialisation (`startAt`).
     fn restart(self: *Fleet, env: usize) void {
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         const clip_index: usize = random.uintLessThan(usize, self.clips.len);
         const frame: usize = 1 + random.uintLessThan(usize, self.clips[clip_index].frame_count - 2);
         self.startAt(env, clip_index, frame);
@@ -1628,7 +1670,7 @@ pub const Fleet = struct {
             actions.len,
             self.options.envs * size,
         });
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         var reward_total: f32 = 0.0;
         for (0..self.options.envs) |env| {
             const clip: *const dance.Clip = self.clips[self.clip_of[env]];
@@ -1638,7 +1680,17 @@ pub const Fleet = struct {
 
             // Record the state the action was taken FROM, so a window reads as
             // (state, action) -> the next record's state.
-            self.replay.append(env, d.pos, d.vel, action, at, @intCast(self.clip_of[env]), self.segment[env]);
+            // And how far into its episode this step is, which is what says what was being applied before it.
+            self.replay.appendStep(
+                env,
+                d.pos,
+                d.vel,
+                action,
+                at,
+                @intCast(self.clip_of[env]),
+                self.segment[env],
+                self.steps[env],
+            );
 
             // Loudly: a collision world that quietly stops working leaves a character quietly
             // falling through the floor, which is exactly the failure this coupling was added for.
@@ -1877,7 +1929,7 @@ pub fn measureDrift(
     source: Source,
     draws: usize,
     steps: usize,
-    random: std.Random,
+    random: Random,
 ) !Drift {
     const m: *rbt.Model = fleet.m;
     const position: []f32 = try gpa.alloc(f32, steps);
@@ -1890,9 +1942,9 @@ pub fn measureDrift(
     @memset(rotation, 0.0);
     @memset(pose, 0.0);
 
-    var predicted: State = try State.init(gpa, m.nbody);
+    var predicted: State = try .init(gpa, m.nbody);
     defer predicted.deinit(gpa);
-    var actual: State = try State.init(gpa, m.nbody);
+    var actual: State = try .init(gpa, m.nbody);
     defer actual.deinit(gpa);
     const input: []f32 = try gpa.alloc(f32, worldInputSize(m));
     defer gpa.free(input);
@@ -1906,10 +1958,10 @@ pub fn measureDrift(
     defer gpa.free(targets);
     const scratch: []f32 = try gpa.alloc(f32, m.nv);
     defer gpa.free(scratch);
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
 
-    var held: State = try State.init(gpa, m.nbody);
+    var held: State = try .init(gpa, m.nbody);
     defer held.deinit(gpa);
     const held_linear: []Vec = try gpa.alloc(Vec, m.nbody);
     defer gpa.free(held_linear);
@@ -2029,7 +2081,7 @@ const Rig = struct {
     }
 
     /// A pose and velocity that are nothing special: off the rest pose, moving, in the air.
-    fn scatter(rig: *Rig, random: std.Random, reach: f32) void {
+    fn scatter(rig: *Rig, random: Random, reach: f32) void {
         const m: *rbt.Model = rig.model();
         const d: *rbt.Data = &rig.data;
         d.reset(m);
@@ -2094,6 +2146,25 @@ pub const Judgement = struct {
         return @floatCast(self.reward_sum / float64(@max(self.watched_steps, 1)));
     }
 };
+
+/// The judge's fleet options: the caller's task, action scale and body names; one environment per start, no
+/// perturbation, no shoves, no grace (the task's rule from the first step - a training window's grace is a learner's
+/// aid, not part of the rule), no step cap before the clip's end. One definition, so every judged fleet - `Judging`'s
+/// and a learner's diagnostics' - is the same fleet.
+pub fn judgeOptions(
+    options: Fleet.Options,
+    envs: usize,
+    clip: *const dance.Clip,
+) Fleet.Options {
+    var judged: Fleet.Options = options;
+    judged.envs = envs;
+    judged.capacity = 16;
+    judged.start_noise = .{};
+    judged.shove_every = 0;
+    judged.max_steps = @intCast(clip.frame_count);
+    judged.task.termination.grace_steps = 0;
+    return judged;
+}
 
 /// A judgement IN PROGRESS - so a page can spread one over frames (`advance` with a step budget each frame) instead of
 /// stalling for the second or more a whole judgement takes on a phone. `judge` is the same thing run to the end.
@@ -2181,25 +2252,6 @@ pub const Judging = struct {
     }
 };
 
-/// The judge's fleet options: the caller's task, action scale and body names; one environment per start, no
-/// perturbation, no shoves, no grace (the task's rule from the first step - a training window's grace is a learner's
-/// aid, not part of the rule), no step cap before the clip's end. One definition, so every judged fleet - `Judging`'s
-/// and a learner's diagnostics' - is the same fleet.
-pub fn judgeOptions(
-    options: Fleet.Options,
-    envs: usize,
-    clip: *const dance.Clip,
-) Fleet.Options {
-    var judged: Fleet.Options = options;
-    judged.envs = envs;
-    judged.capacity = 16;
-    judged.start_noise = .{};
-    judged.shove_every = 0;
-    judged.max_steps = @intCast(clip.frame_count);
-    judged.task.termination.grace_steps = 0;
-    return judged;
-}
-
 /// Judge `actor` - or, with `actor` null, the SERVO ALONE (zero offsets) - on `clip` from `starts` (frames), start to
 /// finish (`Judging`, run to the end).
 pub fn judge(
@@ -2231,13 +2283,111 @@ pub fn evenStarts(gpa: Allocator, clip: *const dance.Clip, every: usize) ![]usiz
     return starts;
 }
 
+fn readAll(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const info: Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    errdefer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    return bytes;
+}
+
+/// Any clip in `assets/lafan1/`, retargeted onto a floating flex2 and filtered at 5 Hz.
+fn loadClip(gpa: Allocator, io: Io, path: []const u8, seconds: f32) !dance.Clip {
+    const capture_bytes: []u8 = try readAll(gpa, io, path);
+    defer gpa.free(capture_bytes);
+    const rest_bytes: []u8 = try readAll(gpa, io, "assets/lafan1/Geno_stance.bvh");
+    defer gpa.free(rest_bytes);
+    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, capture_bytes, null);
+    defer capture.deinit();
+    var rest: codecs.bvh.Data = try codecs.bvh.parse(gpa, rest_bytes, null);
+    defer rest.deinit();
+    var floating: Rig = undefined;
+    try floating.init(gpa, 1.0 / 60.0);
+    defer floating.deinit();
+    var raw: dance.Clip = try dance.retargetClip(
+        gpa,
+        floating.model(),
+        floating.imported.names,
+        &capture,
+        &rest,
+        .{ .seconds = seconds },
+    );
+    defer raw.deinit();
+    return raw.smoothed(floating.model(), 5.0);
+}
+
+/// Raise each FRAME by what that frame needs to clear the floor, smoothed in time.
+///
+/// A clip's grounding puts the feet on the floor in the typical frame, which leaves the deepest
+/// frames underneath it. Raising the whole clip by the deepest of them fixes that and breaks the
+/// opposite thing: lift a get-up by the eleven centimetres its lying-down frames need, and its
+/// standing frames now float eleven centimetres in the air. Neither a simulation can reproduce.
+///
+/// So each frame is raised by what it needs and no more - and then the sequence of lifts is
+/// smoothed (a Gaussian at `smooth_hz`), because a per-frame correction applied raw is a new source
+/// of jitter, and jitter in a reference is force in a tracker. Smoothing gives a little penetration
+/// back at the sharpest moments, which is the point of measuring both sides afterwards.
+///
+/// Returns the largest lift applied. `d` is scratch.
+pub fn liftPerFrame(
+    gpa: Allocator,
+    m: *const rbt.Model,
+    clip: *dance.Clip,
+    d: *rbt.Data,
+    smooth_hz: f32,
+) !f32 {
+    assertf(
+        clip.nq == m.nq and m.njnt > 0 and m.jnt_type[0] == .free,
+        @src(),
+        "lifting moves the root's height, so the clip must be this model's and the model must have a free root",
+        .{},
+    );
+    const frames: usize = clip.frame_count;
+    const needed: []f32 = try gpa.alloc(f32, frames);
+    defer gpa.free(needed);
+    for (0..frames) |f| {
+        @memcpy(d.pos, clip.pose(f));
+        d.stage = .stale;
+        rbt.kinematics(m, d);
+        needed[f] = @max(0.0, -dance.lowestBodyPoint(m, d));
+    }
+    // A Gaussian over time, the same shape `Clip.smoothed` uses on velocities: sigma frames for a
+    // cutoff at `smooth_hz`, truncated where the weight stops mattering.
+    const sigma: f32 = 1.0 / (2.0 * pi * smooth_hz * clip.frame_time);
+    const reach: usize = @ceil(3.0 * sigma);
+    var largest: f32 = 0.0;
+    for (0..frames) |f| {
+        var sum: f32 = 0.0;
+        var weight: f32 = 0.0;
+        const from: usize = f -| reach;
+        const to: usize = @min(frames - 1, f + reach);
+        for (from..to + 1) |k| {
+            const dx: f32 = float(@as(i64, @intCast(k)) - @as(i64, @intCast(f))) / sigma;
+            const w: f32 = @exp(-0.5 * dx * dx);
+            sum += w * needed[k];
+            weight += w;
+        }
+        const lift: f32 = sum / weight;
+        clip.targets[f * clip.nq + 2] += lift;
+        largest = @max(largest, lift);
+    }
+    return largest;
+}
+
 test "robot_track: the judge - the same starts every time, identical twice, every start counted once" {
     // Plan F1's known answers, on the rig and the walk. Evenly spaced starts land where they should; two judgements
     // of the same controller are IDENTICAL (nothing in the judge is random); every start's first episode is counted
     // exactly once, ended by the rule or by the clip (the judge caps nothing before the clip's end); and the servo
     // alone (no actor) is exactly an actor that asks for no offsets.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 10.0) catch
         return error.SkipZigTest;
@@ -2246,7 +2396,7 @@ test "robot_track: the judge - the same starts every time, identical twice, ever
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     _ = try liftPerFrame(gpa, m, &walk, &scratch_data, 3.0);
 
@@ -2284,8 +2434,8 @@ test "robot_track: the judge - the same starts every time, identical twice, ever
 }
 
 test "robot_track: two axes and back" {
-    var rng: std.Random.DefaultPrng = .init(4);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(4);
+    const random: Random = rng.random();
     var worst: f32 = 0.0;
     for (0..2000) |_| {
         const axis: Vec = normalize3(vec(random.floatNorm(f32), random.floatNorm(f32), random.floatNorm(f32)));
@@ -2300,7 +2450,7 @@ test "robot_track: two axes and back" {
 }
 
 test "robot_track: local is blind to where you stand and which way you face - and to nothing else" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
@@ -2314,8 +2464,8 @@ test "robot_track: local is blind to where you stand and which way you face - an
     defer gpa.free(before);
     const after: []f32 = try gpa.alloc(f32, localSize(m.nbody));
     defer gpa.free(after);
-    var rng: std.Random.DefaultPrng = .init(11);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(11);
+    const random: Random = rng.random();
 
     var worst_invariant: f32 = 0.0;
     var weakest_control: f32 = 1.0e9;
@@ -2380,7 +2530,7 @@ test "robot_track: local is blind to where you stand and which way you face - an
 }
 
 test "robot_track: the integrator reproduces the simulator's next state" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var coarse: f32 = 0.0;
     var fine: f32 = 0.0;
     for ([_]f32{ 1.0 / 60.0, 1.0 / 120.0 }, 0..) |dt, pass| {
@@ -2398,8 +2548,8 @@ test "robot_track: the integrator reproduces the simulator's next state" {
         defer gpa.free(linear);
         const angular: []Vec = try gpa.alloc(Vec, m.nbody);
         defer gpa.free(angular);
-        var rng: std.Random.DefaultPrng = .init(23);
-        const random: std.Random = rng.random();
+        var rng: Random.DefaultPrng = .init(23);
+        const random: Random = rng.random();
         var worst_position: f32 = 0.0;
         var worst_rotation: f32 = 0.0;
         var worst_velocity: f32 = 0.0;
@@ -2456,13 +2606,13 @@ test "robot_track: the integrator reproduces the simulator's next state" {
 }
 
 test "robot_track: a zero action is the reference, exactly" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
     try expect(actionSize(m) == m.nv - 6);
-    var rng: std.Random.DefaultPrng = .init(5);
+    var rng: Random.DefaultPrng = .init(5);
     rig.scatter(rng.random(), 0.5);
     const reference: []f32 = try gpa.dupe(f32, rig.data.pos);
     defer gpa.free(reference);
@@ -2482,7 +2632,7 @@ test "robot_track: a zero action is the reference, exactly" {
 }
 
 test "robot_track: a bounded action moves every body a bounded amount" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
@@ -2491,18 +2641,18 @@ test "robot_track: a bounded action moves every body a bounded amount" {
     defer gpa.free(reference_pose);
     const reference_xpos: []Vec = try gpa.alloc(Vec, m.nbody);
     defer gpa.free(reference_xpos);
-    var moved: rbt.Data = try rbt.Data.init(gpa, m);
+    var moved: rbt.Data = try .init(gpa, m);
     defer moved.deinit();
     const scratch: []f32 = try gpa.alloc(f32, m.nv);
     defer gpa.free(scratch);
     const action: []f32 = try gpa.alloc(f32, actionSize(m));
     defer gpa.free(action);
-    var rng: std.Random.DefaultPrng = .init(9);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(9);
+    const random: Random = rng.random();
     var worst: [2]f32 = .{ 0.0, 0.0 };
     for ([_]f32{ 0.2, 0.1 }, 0..) |scale, pass| {
-        var inner: std.Random.DefaultPrng = .init(17);
-        const inner_random: std.Random = inner.random();
+        var inner: Random.DefaultPrng = .init(17);
+        const inner_random: Random = inner.random();
         for (0..32) |_| {
             rig.scatter(random, 0.5);
             @memcpy(reference_pose, rig.data.pos);
@@ -2529,6 +2679,11 @@ test "robot_track: a bounded action moves every body a bounded amount" {
     try expect(worst[1] < 0.62 * worst[0]);
 }
 
+/// The walk clip, retargeted onto flex2 and filtered, as every tracking test wants it.
+fn loadWalk(gpa: Allocator, io: Io) !dance.Clip {
+    return loadClip(gpa, io, "assets/lafan1/walk1_subject2.bvh", 10.0);
+}
+
 test "robot_track: the servo on a fixed base - computed torque against the PD law" {
     // What the policy inherits. Same walk, same targets, two ways of turning them into torque:
     // exact computed torque (which knows the whole model and follows the clip to a hundredth of a
@@ -2539,10 +2694,10 @@ test "robot_track: the servo on a fixed base - computed torque against the PD la
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var clip: dance.Clip = loadWalk(gpa, io) catch return error.SkipZigTest;
     defer clip.deinit();
 
@@ -2553,7 +2708,7 @@ test "robot_track: the servo on a fixed base - computed torque against the PD la
     dance.limpKeepArmature(m);
     const root_len: usize = clip.nq - m.nq;
     try expect(root_len == 7);
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -2623,7 +2778,7 @@ test "robot_track: the servo on a fixed base - computed torque against the PD la
 }
 
 test "robot_track: the reward is 1 on the reference and falls from there" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
@@ -2637,8 +2792,8 @@ test "robot_track: the reward is 1 on the reference and falls from there" {
     defer gpa.free(scratch);
     const action: []f32 = try gpa.alloc(f32, actionSize(m));
     defer gpa.free(action);
-    var rng: std.Random.DefaultPrng = .init(31);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(31);
+    const random: Random = rng.random();
     rig.scatter(random, 0.5);
     stateOf(m, &rig.data, &reference);
     const reference_pose: []f32 = try gpa.dupe(f32, rig.data.pos);
@@ -2677,7 +2832,7 @@ test "robot_track: worst_body - one limb far off, which the mean cannot see, end
     // root, 2..5 limbs), every rotation the identity; the simulation is the reference with ONE body moved 0.8 m
     // along x. In the root's frame that body is 0.8 m off and the rest exact, so the mean is 0.8 / 5 = 0.16 -
     // comfortably inside the default pose limit (0.35) - while the worst body is 0.8. Height and tilt unchanged.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bodies: usize = 6;
     var reference: State = try .init(gpa, bodies);
     defer reference.deinit(gpa);
@@ -2717,7 +2872,7 @@ test "robot_track: unexpected contact - a knee down while the reference stands, 
     // root (hips), 2 a thigh, 3 a hand, 4 a foot. Standing, the reference holds the thigh's lowest point (its knee
     // end) at 0.45 m, the hand at 0.75 m, the foot on the floor. Frames and rotations match exactly, so every
     // other term is zero and only the floor heights differ between the cases.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bodies: usize = 5;
     var reference: State = try .init(gpa, bodies);
     defer reference.deinit(gpa);
@@ -2787,7 +2942,7 @@ test "robot_track: filterAction - a fifth of the new, four fifths of the old; 1 
 test "robot_track: head height - SuperTrack's rule, on the head alone" {
     // Plan F3b's known answers, on synthetic states: the head's height gap is exact and flips the verdict at the
     // limit; any OTHER body's height leaves it at zero; without a head (`trackingError`) there is no head term.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bodies: usize = 5;
     var reference: State = try .init(gpa, bodies);
     defer reference.deinit(gpa);
@@ -2820,7 +2975,7 @@ test "robot_track: head height - SuperTrack's rule, on the head alone" {
 }
 
 test "robot_track: contactExemptMask resolves names, refuses a typo, never matches the world's empty name" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const names = [_][]const u8{ "", "Hips", "LeftFoot", "RightFoot" };
     const mask: []bool = try contactExemptMask(gpa, names.len, &.{ "LeftFoot", "RightFoot" }, &names);
     defer gpa.free(mask);
@@ -2832,18 +2987,18 @@ test "robot_track: contactExemptMask resolves names, refuses a typo, never match
     // Nothing to exempt needs no names at all.
     const none: []bool = try contactExemptMask(gpa, names.len, &.{}, &.{});
     defer gpa.free(none);
-    try expect(std.mem.indexOfScalar(bool, none, true) == null);
+    try expect(indexOfScalar(bool, none, true) == null);
 }
 
 test "robot_track: stateOf's per-body lowest points agree with the whole body's lowest point" {
     // The geometry is ONE function (`rbt.geomLowestPoint`); the per-body split must not change what the
     // whole-model minimum is, on a real posed model.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var rng: std.Random.DefaultPrng = .init(7);
+    var rng: Random.DefaultPrng = .init(7);
     rig.scatter(rng.random(), 0.5);
     var state: State = try .init(gpa, m.nbody);
     defer state.deinit(gpa);
@@ -2875,8 +3030,8 @@ test "robot_track: reference-state initialisation lands on the clip" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var clip: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 4.0) catch
         return error.SkipZigTest;
@@ -2902,6 +3057,35 @@ test "robot_track: reference-state initialisation lands on the clip" {
     }
 }
 
+/// Raise a whole clip until no part of the robot is below the floor, and say by how much.
+///
+/// The clip's own grounding puts the feet on the floor in the TYPICAL frame, which leaves the
+/// deepest frames underneath it - a pose a simulation cannot reproduce, because the floor pushes
+/// back. `d` is scratch.
+pub fn liftAboveFloor(m: *const rbt.Model, clip: *dance.Clip, d: *rbt.Data) f32 {
+    assertf(
+        clip.nq == m.nq and m.njnt > 0 and m.jnt_type[0] == .free,
+        @src(),
+        "lifting moves the root's height, so the clip must be this model's and the model must have a free root",
+        .{},
+    );
+    var deepest: f32 = 0.0;
+    for (0..clip.frame_count) |f| {
+        @memcpy(d.pos, clip.pose(f));
+        d.stage = .stale;
+        rbt.kinematics(m, d);
+        deepest = @min(deepest, dance.lowestBodyPoint(m, d));
+    }
+    if (deepest >= 0.0) {
+        return 0.0;
+    }
+    const lift: f32 = -deepest;
+    for (0..clip.frame_count) |f| {
+        clip.targets[f * clip.nq + 2] += lift;
+    }
+    return lift;
+}
+
 test "robot_track: D8 - the reference through the floor, left alone or lifted clear" {
     // THE FLOOR DECISION. Grounding shifts a clip by the median lowest FOOT point, which is a fair
     // rule for walking and a poor one for a clip that lies down: the walk ends up 3 cm through the
@@ -2918,15 +3102,15 @@ test "robot_track: D8 - the reference through the floor, left alone or lifted cl
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var reference_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var reference_data: rbt.Data = try .init(gpa, m);
     defer reference_data.deinit();
     var sim: State = try .init(gpa, m.nbody);
     defer sim.deinit(gpa);
@@ -2966,7 +3150,7 @@ test "robot_track: D8 - the reference through the floor, left alone or lifted cl
                 floats[f] = dance.lowestBodyPoint(m, &reference_data);
                 reference_deepest = @min(reference_deepest, floats[f]);
             }
-            std.mem.sort(f32, floats, {}, std.sort.asc(f32));
+            sortSlice(f32, floats, {}, std.sort.asc(f32));
             const typical: f32 = floats[floats.len / 2];
             var mean_error: f32 = 0.0;
             var deepest_sim: f32 = 0.0;
@@ -3028,97 +3212,10 @@ test "robot_track: D8 - the reference through the floor, left alone or lifted cl
     }
 }
 
-/// Raise each FRAME by what that frame needs to clear the floor, smoothed in time.
-///
-/// A clip's grounding puts the feet on the floor in the typical frame, which leaves the deepest
-/// frames underneath it. Raising the whole clip by the deepest of them fixes that and breaks the
-/// opposite thing: lift a get-up by the eleven centimetres its lying-down frames need, and its
-/// standing frames now float eleven centimetres in the air. Neither a simulation can reproduce.
-///
-/// So each frame is raised by what it needs and no more - and then the sequence of lifts is
-/// smoothed (a Gaussian at `smooth_hz`), because a per-frame correction applied raw is a new source
-/// of jitter, and jitter in a reference is force in a tracker. Smoothing gives a little penetration
-/// back at the sharpest moments, which is the point of measuring both sides afterwards.
-///
-/// Returns the largest lift applied. `d` is scratch.
-pub fn liftPerFrame(
-    gpa: Allocator,
-    m: *const rbt.Model,
-    clip: *dance.Clip,
-    d: *rbt.Data,
-    smooth_hz: f32,
-) !f32 {
-    assertf(
-        clip.nq == m.nq and m.njnt > 0 and m.jnt_type[0] == .free,
-        @src(),
-        "lifting moves the root's height, so the clip must be this model's and the model must have a free root",
-        .{},
-    );
-    const frames: usize = clip.frame_count;
-    const needed: []f32 = try gpa.alloc(f32, frames);
-    defer gpa.free(needed);
-    for (0..frames) |f| {
-        @memcpy(d.pos, clip.pose(f));
-        d.stage = .stale;
-        rbt.kinematics(m, d);
-        needed[f] = @max(0.0, -dance.lowestBodyPoint(m, d));
-    }
-    // A Gaussian over time, the same shape `Clip.smoothed` uses on velocities: sigma frames for a
-    // cutoff at `smooth_hz`, truncated where the weight stops mattering.
-    const sigma: f32 = 1.0 / (2.0 * pi * smooth_hz * clip.frame_time);
-    const reach: usize = @ceil(3.0 * sigma);
-    var largest: f32 = 0.0;
-    for (0..frames) |f| {
-        var sum: f32 = 0.0;
-        var weight: f32 = 0.0;
-        const from: usize = f -| reach;
-        const to: usize = @min(frames - 1, f + reach);
-        for (from..to + 1) |k| {
-            const dx: f32 = float(@as(i64, @intCast(k)) - @as(i64, @intCast(f))) / sigma;
-            const w: f32 = @exp(-0.5 * dx * dx);
-            sum += w * needed[k];
-            weight += w;
-        }
-        const lift: f32 = sum / weight;
-        clip.targets[f * clip.nq + 2] += lift;
-        largest = @max(largest, lift);
-    }
-    return largest;
-}
-
-/// Raise a whole clip until no part of the robot is below the floor, and say by how much.
-///
-/// The clip's own grounding puts the feet on the floor in the TYPICAL frame, which leaves the
-/// deepest frames underneath it - a pose a simulation cannot reproduce, because the floor pushes
-/// back. `d` is scratch.
-pub fn liftAboveFloor(m: *const rbt.Model, clip: *dance.Clip, d: *rbt.Data) f32 {
-    assertf(
-        clip.nq == m.nq and m.njnt > 0 and m.jnt_type[0] == .free,
-        @src(),
-        "lifting moves the root's height, so the clip must be this model's and the model must have a free root",
-        .{},
-    );
-    var deepest: f32 = 0.0;
-    for (0..clip.frame_count) |f| {
-        @memcpy(d.pos, clip.pose(f));
-        d.stage = .stale;
-        rbt.kinematics(m, d);
-        deepest = @min(deepest, dance.lowestBodyPoint(m, d));
-    }
-    if (deepest >= 0.0) {
-        return 0.0;
-    }
-    const lift: f32 = -deepest;
-    for (0..clip.frame_count) |f| {
-        clip.targets[f * clip.nq + 2] += lift;
-    }
-    return lift;
-}
-
 test "robot_track: the awkward cases a network will find" {
     // Everything here is something a half-trained network, or a caller in a hurry, will do sooner
     // or later. None of it may produce a NaN, an infinity, or a silently wrong answer.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // Two axes that are zero, parallel, tiny or enormous: still a unit rotation, every time.
     const nasty = [_][6]f32{
@@ -3162,7 +3259,7 @@ test "robot_track: the awkward cases a network will find" {
     for (0..40) |k| {
         replay.append(0, pose, velocity, action, @intCast(k), 0, 0);
     }
-    var rng: std.Random.DefaultPrng = .init(2);
+    var rng: Random.DefaultPrng = .init(2);
     const window: Replay.Window = replay.sampleWindow(rng.random(), 8) orelse return error.NoWindow;
     try expect(window.steps == 8);
     try expect(window.frames() == 9);
@@ -3196,7 +3293,7 @@ test "robot_track: a sampled window never crosses a segment" {
     // - and every window that comes back has to be one unbroken stretch: the same segment
     // throughout, and consecutive frames, which is what a learner assumes when it rolls a model
     // forward through one.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var rig: Rig = undefined;
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
@@ -3213,8 +3310,8 @@ test "robot_track: a sampled window never crosses a segment" {
     @memset(velocity, 0.0);
     @memset(action, 0.0);
 
-    var rng: std.Random.DefaultPrng = .init(77);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(77);
+    const random: Random = rng.random();
     var segment: u32 = 0;
     for (0..replay.envs) |env| {
         var frame: u32 = 0;
@@ -3258,8 +3355,8 @@ test "robot_track: a fleet tracks, falls, is shoved, and records all of it" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 10.0) catch
         return error.SkipZigTest;
@@ -3268,7 +3365,7 @@ test "robot_track: a fleet tracks, falls, is shoved, and records all of it" {
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     _ = try liftPerFrame(gpa, m, &walk, &scratch_data, 3.0);
     const clips = [_]*const dance.Clip{&walk};
@@ -3279,8 +3376,8 @@ test "robot_track: a fleet tracks, falls, is shoved, and records all of it" {
     defer gpa.free(actions);
     const observations: []f32 = try gpa.alloc(f32, 8 * observationSize(m));
     defer gpa.free(observations);
-    var rng: std.Random.DefaultPrng = .init(3);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(3);
+    const random: Random = rng.random();
 
     // No policy yet - noise in its place, which is what the first collection of any of these
     // methods looks like anyway.
@@ -3359,10 +3456,10 @@ test "robot_track: a record remembers which clip it was tracking" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var short: dance.Clip = loadClip(gpa, io, "assets/lafan1/walk1_subject2.bvh", 3.0) catch
         return error.SkipZigTest;
     defer short.deinit();
@@ -3379,8 +3476,8 @@ test "robot_track: a record remembers which clip it was tracking" {
     defer fleet.deinit();
     const actions: []f32 = try gpa.alloc(f32, 8 * actionSize(m));
     defer gpa.free(actions);
-    var rng: std.Random.DefaultPrng = .init(41);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(41);
+    const random: Random = rng.random();
     for (0..500) |_| {
         for (actions) |*a| {
             a.* = 0.3 * (2.0 * random.float(f32) - 1.0);
@@ -3435,8 +3532,8 @@ test "robot_track: the drift harness, checked with sources that need no training
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 12.0) catch
         return error.SkipZigTest;
@@ -3445,7 +3542,7 @@ test "robot_track: the drift harness, checked with sources that need no training
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     _ = try liftPerFrame(gpa, m, &walk, &scratch_data, 3.0);
     const clips = [_]*const dance.Clip{&walk};
@@ -3454,8 +3551,8 @@ test "robot_track: the drift harness, checked with sources that need no training
 
     const actions: []f32 = try gpa.alloc(f32, 8 * actionSize(m));
     defer gpa.free(actions);
-    var rng: std.Random.DefaultPrng = .init(19);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(19);
+    const random: Random = rng.random();
     for (0..400) |_| {
         for (actions) |*a| {
             a.* = 0.3 * (2.0 * random.float(f32) - 1.0);
@@ -3467,8 +3564,8 @@ test "robot_track: the drift harness, checked with sources that need no training
     // sources differ and for no other reason. (Sharing one generator would have drawn a different
     // sample for the second - which is how the first-step agreement below stopped holding.)
     const steps: usize = 8;
-    var oracle_rng: std.Random.DefaultPrng = .init(101);
-    var baseline_rng: std.Random.DefaultPrng = .init(101);
+    var oracle_rng: Random.DefaultPrng = .init(101);
+    var baseline_rng: Random.DefaultPrng = .init(101);
     const oracle: Drift = try measureDrift(gpa, fleet, .oracle, 200, steps, oracle_rng.random());
     defer freeDrift(gpa, oracle);
     const baseline: Drift = try measureDrift(gpa, fleet, .hold_first, 200, steps, baseline_rng.random());
@@ -3508,8 +3605,8 @@ test "robot_track: skipping a forward pass that is already current changes nothi
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 6.0) catch
         return error.SkipZigTest;
@@ -3518,7 +3615,7 @@ test "robot_track: skipping a forward pass that is already current changes nothi
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     _ = try liftPerFrame(gpa, m, &walk, &scratch_data, 3.0);
     const clips = [_]*const dance.Clip{&walk};
@@ -3528,8 +3625,8 @@ test "robot_track: skipping a forward pass that is already current changes nothi
     defer quick.deinit();
     const actions: []f32 = try gpa.alloc(f32, 4 * actionSize(m));
     defer gpa.free(actions);
-    var rng: std.Random.DefaultPrng = .init(8);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(8);
+    const random: Random = rng.random();
     for (0..300) |_| {
         for (actions) |*a| {
             a.* = 0.3 * (2.0 * random.float(f32) - 1.0);
@@ -3561,8 +3658,8 @@ test "robot_track: the root assist holds the character up, and nothing at zero" 
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var walk: dance.Clip = loadClip(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", 8.0) catch
         return error.SkipZigTest;
@@ -3571,7 +3668,7 @@ test "robot_track: the root assist holds the character up, and nothing at zero" 
     try rig.init(gpa, 1.0 / 60.0);
     defer rig.deinit();
     const m: *rbt.Model = rig.model();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     _ = try liftPerFrame(gpa, m, &walk, &scratch_data, 3.0);
     const zero: []f32 = try gpa.alloc(f32, 4 * actionSize(m));
@@ -3597,51 +3694,11 @@ test "robot_track: the root assist holds the character up, and nothing at zero" 
     try expect(ended[1] * 2 < ended[0]);
 }
 
-/// The walk clip, retargeted onto flex2 and filtered, as every tracking test wants it.
-fn loadWalk(gpa: Allocator, io: std.Io) !dance.Clip {
-    return loadClip(gpa, io, "assets/lafan1/walk1_subject2.bvh", 10.0);
-}
-
-/// Any clip in `assets/lafan1/`, retargeted onto a floating flex2 and filtered at 5 Hz.
-fn loadClip(gpa: Allocator, io: std.Io, path: []const u8, seconds: f32) !dance.Clip {
-    const capture_bytes: []u8 = try readAll(gpa, io, path);
-    defer gpa.free(capture_bytes);
-    const rest_bytes: []u8 = try readAll(gpa, io, "assets/lafan1/Geno_stance.bvh");
-    defer gpa.free(rest_bytes);
-    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, capture_bytes, null);
-    defer capture.deinit();
-    var rest: codecs.bvh.Data = try codecs.bvh.parse(gpa, rest_bytes, null);
-    defer rest.deinit();
-    var floating: Rig = undefined;
-    try floating.init(gpa, 1.0 / 60.0);
-    defer floating.deinit();
-    var raw: dance.Clip = try dance.retargetClip(
-        gpa,
-        floating.model(),
-        floating.imported.names,
-        &capture,
-        &rest,
-        .{ .seconds = seconds },
-    );
-    defer raw.deinit();
-    return raw.smoothed(floating.model(), 5.0);
-}
-
-fn readAll(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
-    const bytes: []u8 = try gpa.alloc(u8, info.size);
-    errdefer gpa.free(bytes);
-    _ = try file.readPositionalAll(io, bytes, 0);
-    return bytes;
-}
-
 test "robot_track: the gravity gate - a body lying with the right joint angles no longer scores like one standing" {
     // Known answer, built so every root-frame term is EXACTLY zero: a standing pose, then the same pose turned
     // 90 degrees as a rigid whole about its root and lowered to the floor. The old reward cannot tell them apart
     // beyond its two root terms (~0.80); the gated one must, and the height limit must end the episode.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var standing: State = try .init(gpa, 4);
     defer standing.deinit(gpa);
     var lying: State = try .init(gpa, 4);

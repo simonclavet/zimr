@@ -31,6 +31,7 @@ const Allocator = std.mem.Allocator;
 const Vec2 = zm.Vec2;
 const float = zm.float;
 const clamp = zm.clamp;
+const Color = zm.Color;
 const bufPrint = std.fmt.bufPrint;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -216,6 +217,129 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.worker = Pipe.initWorker(gpa) catch null;
 }
 
+fn drawPanel(
+    f: *z.Frame,
+    s: *State,
+    m: Machine,
+    at: Vec2,
+    size: Vec2,
+    fsz: f32,
+) void {
+    f.gl.rect(
+        .{ .x = at[0], .y = at[1], .width = size[0], .height = size[1] },
+        .{ .color = z.colors.slate_700, .outline = 1.0 },
+    );
+
+    const title: []const u8 = switch (m) {
+        .comptime_ => "comptime",
+        .cpu => "CPU - main thread",
+        .worker => "CPU - worker",
+        .gpu => "GPU - compute",
+    };
+    // Short, because they are now twice the size and the panel is half the width.
+    const caption: []const u8 = switch (m) {
+        .comptime_ => "ran in the COMPILER",
+        .cpu => "BLOCKS the frame",
+        .worker => "another core. NO hitch",
+        .gpu => "SPIR-V. 12288 at once",
+    };
+    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + fsz * 0.3 }, title, .{
+        .size = fsz,
+        .color = z.colors.sky_300,
+        .font = &s.font,
+    });
+    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + fsz * 1.3 }, caption, .{
+        .size = fsz * 0.75,
+        .color = z.colors.slate_500,
+        .font = &s.font,
+    });
+
+    const body_y: f32 = at[1] + fsz * 2.6;
+
+    if (m == .comptime_) {
+        // The binary holds these characters. There is no loop for them anywhere in the
+        // program - the answer existed before the program did.
+        const cw: f32 = @min(size[0] / float(ascii_w + 1), fsz * 0.5);
+        var yy: f32 = body_y;
+        for (ascii_art) |row| {
+            f.gl.text(.{ at[0] + fsz * 0.4, yy }, &row, .{
+                .size = cw * 1.6,
+                .color = z.colors.emerald_400,
+                .font = &s.font,
+            });
+            yy += cw * 1.5;
+        }
+        f.gl.text(.{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 }, "no loop in the binary", .{
+            .size = fsz * 0.85,
+            .color = z.colors.slate_500,
+            .font = &s.font,
+        });
+        return;
+    }
+
+    const i: usize = slot(m);
+    if (!s.got[i]) {
+        const msg: []const u8 = if (s.running == m) "working..." else "tap RUN";
+        f.gl.text(.{ at[0] + fsz * 0.4, body_y }, msg, .{
+            .size = fsz,
+            .color = z.colors.slate_500,
+            .font = &s.font,
+        });
+        return;
+    }
+
+    // Draw the fractal as a grid of cells. Deliberately dumb - the interesting thing is the
+    // number underneath, not the rendering.
+    const cell: f32 = @min(
+        (size[0] - fsz) / float(fk.width),
+        (size[1] - fsz * 3.5) / float(fk.height),
+    );
+    for (0..fk.height) |py| {
+        for (0..fk.width) |px| {
+            const it: u32 = s.img[i][py * fk.width + px];
+            if (it >= s.max_iter) {
+                continue; // in the set - leave it black
+            }
+            const t: f32 = float(it) / float(s.max_iter);
+            const c: Color = .{
+                .r = @round(clamp(t * 3.0, 0, 1) * 90.0),
+                .g = @round(clamp(t * 2.0, 0, 1) * 190.0),
+                .b = @round(clamp(0.35 + t, 0, 1) * 255.0),
+                .a = 255,
+            };
+            f.gl.rect(.{
+                .x = at[0] + fsz * 0.4 + float(@as(u32, @intCast(px))) * cell,
+                .y = body_y + float(@as(u32, @intCast(py))) * cell,
+                .width = cell + 0.6,
+                .height = cell + 0.6,
+            }, .{ .color = c });
+        }
+    }
+
+    // THE HONEST NUMBER. Not "how fast", but "did it cost you a frame".
+    const gap: f32 = s.worst_gap_ms[i];
+    const bad: bool = gap > 34.0; // two dropped frames at 60 Hz
+    var buf: [96]u8 = undefined;
+
+    // An INLINE worker is not a worker. Rather than let the panel imply a contrast it is not
+    // making, it says so - a green 0 ms here with no real thread behind it would be a lie.
+    if (m == .worker and !z.jobs.parallel()) {
+        f.gl.text(
+            .{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 },
+            "NO WORKER - inline",
+            .{ .size = fsz * 0.9, .color = z.colors.amber_400, .font = &s.font },
+        );
+        return;
+    }
+
+    const txt: []const u8 = bufPrint(&buf, "frame gap {d:.0} ms", .{gap}) catch "?";
+    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 }, txt, .{
+        .size = fsz,
+        .color = if (bad) z.colors.red_400 else z.colors.emerald_400,
+        .font = &s.font,
+    });
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const t_frame: f32 = f.time.delta_time * 1000.0;
 
@@ -363,132 +487,10 @@ fn update(f: *z.Frame, s: *State) void {
     s.ui_host.render(f);
 }
 
-fn drawPanel(
-    f: *z.Frame,
-    s: *State,
-    m: Machine,
-    at: Vec2,
-    size: Vec2,
-    fsz: f32,
-) void {
-    f.gl.rect(
-        .{ .x = at[0], .y = at[1], .width = size[0], .height = size[1] },
-        .{ .color = z.colors.slate_700, .outline = 1.0 },
-    );
-
-    const title: []const u8 = switch (m) {
-        .comptime_ => "comptime",
-        .cpu => "CPU - main thread",
-        .worker => "CPU - worker",
-        .gpu => "GPU - compute",
-    };
-    // Short, because they are now twice the size and the panel is half the width.
-    const caption: []const u8 = switch (m) {
-        .comptime_ => "ran in the COMPILER",
-        .cpu => "BLOCKS the frame",
-        .worker => "another core. NO hitch",
-        .gpu => "SPIR-V. 12288 at once",
-    };
-    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + fsz * 0.3 }, title, .{
-        .size = fsz,
-        .color = z.colors.sky_300,
-        .font = &s.font,
-    });
-    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + fsz * 1.3 }, caption, .{
-        .size = fsz * 0.75,
-        .color = z.colors.slate_500,
-        .font = &s.font,
-    });
-
-    const body_y: f32 = at[1] + fsz * 2.6;
-
-    if (m == .comptime_) {
-        // The binary holds these characters. There is no loop for them anywhere in the
-        // program - the answer existed before the program did.
-        const cw: f32 = @min(size[0] / float(ascii_w + 1), fsz * 0.5);
-        var yy: f32 = body_y;
-        for (ascii_art) |row| {
-            f.gl.text(.{ at[0] + fsz * 0.4, yy }, &row, .{
-                .size = cw * 1.6,
-                .color = z.colors.emerald_400,
-                .font = &s.font,
-            });
-            yy += cw * 1.5;
-        }
-        f.gl.text(.{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 }, "no loop in the binary", .{
-            .size = fsz * 0.85,
-            .color = z.colors.slate_500,
-            .font = &s.font,
-        });
-        return;
-    }
-
-    const i: usize = slot(m);
-    if (!s.got[i]) {
-        const msg: []const u8 = if (s.running == m) "working..." else "tap RUN";
-        f.gl.text(.{ at[0] + fsz * 0.4, body_y }, msg, .{
-            .size = fsz,
-            .color = z.colors.slate_500,
-            .font = &s.font,
-        });
-        return;
-    }
-
-    // Draw the fractal as a grid of cells. Deliberately dumb - the interesting thing is the
-    // number underneath, not the rendering.
-    const cell: f32 = @min(
-        (size[0] - fsz) / float(fk.width),
-        (size[1] - fsz * 3.5) / float(fk.height),
-    );
-    for (0..fk.height) |py| {
-        for (0..fk.width) |px| {
-            const it: u32 = s.img[i][py * fk.width + px];
-            if (it >= s.max_iter) {
-                continue; // in the set - leave it black
-            }
-            const t: f32 = float(it) / float(s.max_iter);
-            const c: zm.Color = .{
-                .r = @intFromFloat(clamp(t * 3.0, 0, 1) * 90.0),
-                .g = @intFromFloat(clamp(t * 2.0, 0, 1) * 190.0),
-                .b = @intFromFloat(clamp(0.35 + t, 0, 1) * 255.0),
-                .a = 255,
-            };
-            f.gl.rect(.{
-                .x = at[0] + fsz * 0.4 + float(@as(u32, @intCast(px))) * cell,
-                .y = body_y + float(@as(u32, @intCast(py))) * cell,
-                .width = cell + 0.6,
-                .height = cell + 0.6,
-            }, .{ .color = c });
-        }
-    }
-
-    // THE HONEST NUMBER. Not "how fast", but "did it cost you a frame".
-    const gap: f32 = s.worst_gap_ms[i];
-    const bad: bool = gap > 34.0; // two dropped frames at 60 Hz
-    var buf: [96]u8 = undefined;
-
-    // An INLINE worker is not a worker. Rather than let the panel imply a contrast it is not
-    // making, it says so - a green 0 ms here with no real thread behind it would be a lie.
-    if (m == .worker and !z.jobs.parallel()) {
-        f.gl.text(
-            .{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 },
-            "NO WORKER - inline",
-            .{ .size = fsz * 0.9, .color = z.colors.amber_400, .font = &s.font },
-        );
-        return;
-    }
-
-    const txt: []const u8 = bufPrint(&buf, "frame gap {d:.0} ms", .{gap}) catch "?";
-    f.gl.text(.{ at[0] + fsz * 0.4, at[1] + size[1] - fsz * 1.5 }, txt, .{
-        .size = fsz,
-        .color = if (bad) z.colors.red_400 else z.colors.emerald_400,
-        .font = &s.font,
-    });
-}
-
 fn deinit(gpa: Allocator, s: *State) void {
-    _ = gpa;
     s.gpu.deinit();
+    s.ui_host.deinit();
+    z.unloadFont(gpa, s.font);
     if (s.worker) |*wk| {
         wk.deinit();
     }

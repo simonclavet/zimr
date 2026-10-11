@@ -1,462 +1,442 @@
-//! cheatsheet - pure-Zig generator for zimr's public API cheatsheet.
+//! cheatsheet - zimr's public API as one page, generated from the source on every build.
 //!
-//! Walks every `src/*.zig`, extracts each `pub fn` (with its enclosing
-//! `pub const X = struct {` namespace path and leading `///` doc), and emits a
-//! single self-contained `cheatsheet.html` grouped by module. Replaces the old
-//! `scripts/build_cheatsheet.py`, whose hardcoded module list went stale after
-//! the module-collapse (it still named `rlgl.zig`/`gpu.zig`/`scene.zig` and
-//! missed `zimrphysics.zig`/`plot3d.zig`) and cross-referenced raylib/imgui -
-//! a mapping zimr has long since drifted away from. Auto-discovery means new
-//! modules appear with zero edits here.
-//!
-//! Usage: cheatsheet [src_dir] [out_html]   (defaults: src  cheatsheet.html)
+//! The surface is what `src/zimr.zig` exports - what a program reaches through `z.` - read with Zig's own parser:
+//!   * `z`: every function, type, constant and re-export zimr.zig declares public. A re-export
+//!     (`pub const drawCircle = shapes2d.drawCircle;`) is FOLLOWED to the declaration it names - through files,
+//!     containers and aliases - and shown as that declaration, under the name `z.` gives it.
+//!   * `z.<namespace>`: for each module zimr.zig exports whole (`pub const ui = @import("ui.zig");`), every public
+//!     declaration in it.
+//! An entry is the first sentence of its doc comment and its declaration as one line of Zig: a function's
+//! signature, a type's kind (`struct`, `enum(u8)`), a constant's type. Each section is one `<code class="zig">`
+//! block, so docfmt highlights it with Zig's tokenizer like every other page. One of the doc pages: built on every
+//! build, styled by docfmt, checked by the doc gate, carried by `publish`.
 
 const std = @import("std");
+const cli = @import("cli");
+const Ast = std.zig.Ast;
 const Allocator = std.mem.Allocator;
+const Index = Ast.Node.Index;
+const eql = std.mem.eql;
+const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const indexOf = std.mem.indexOf;
+const endsWith = std.mem.endsWith;
+const splitScalar = std.mem.splitScalar;
+const trim = std.mem.trim;
+const sortSlice = std.mem.sort;
 const ArrayList = std.ArrayList;
-const Writer = std.Io.Writer;
 
-const Fn = struct {
-    ns: []const u8, // namespace path, e.g. "Vec3" ("" for file scope)
-    name: []const u8,
-    sig: []const u8, // full signature, whitespace-collapsed, no body brace
-    doc: []const u8, // joined /// lines (may be empty)
+/// The command line (std's cli, `src/command_line.zig`). The build passes both; `zig build cheatsheet` runs it.
+const CheatArgs = struct {
+    src: []const u8 = "src",
+    output: []const u8 = "cheatsheet.html",
 };
 
-const Module = struct {
-    name: []const u8, // file basename without .zig
-    fns: ArrayList(Fn) = .empty,
+const cheat_cli: cli.Config(CheatArgs) = .{
+    .prog = "cheatsheet",
+    .description = "zimr's public API as one page: what src/zimr.zig exports, read with Zig's parser.",
+    .args = .{
+        .src = .{ .description = "the directory holding zimr.zig" },
+        .output = .{ .description = "the page to write" },
+    },
 };
 
-// A struct namespace currently open on the brace stack.
-const NsFrame = struct {
-    name: []const u8,
-    depth: usize, // brace depth at which this struct's body opened
-    is_pub: bool, // the declaring `const` was `pub` (reachable from outside)
+/// Modules imported by NAME rather than by path, and the file each one is (relative to the source directory).
+const named_modules = [_][2][]const u8{
+    .{ "zm", "zimrmath.zig" },
+    .{ "zn", "zimrnum.zig" },
+    .{ "kompute", "kompute.zig" },
+    .{ "shader_builtins", "shader_builtins.zig" },
 };
 
-fn isFlag(a: []const u8) bool {
-    return std.mem.startsWith(u8, a, "--");
-}
+/// Past this many hops a path is treated as unreadable: re-exports that loop, or chains nobody writes on purpose.
+const max_depth: u8 = 12;
+/// A constant's value is shown when it is short; a long one reads as `...`.
+const max_value_len: usize = 72;
+/// A doc comment is cut to its first sentence, and to this many characters.
+const max_doc_len: usize = 160;
 
-/// Positional arg `idx` (1-based among argv) if present and not a `--flag`, else `dflt`.
-fn posArg(args: []const []u8, idx: usize, dflt: []const u8) []const u8 {
-    if (args.len > idx and !isFlag(args[idx])) {
-        return args[idx];
-    }
-    return dflt;
-}
+/// A parsed file, kept for the whole run: every slice this tool hands out points into its text.
+const Source = struct { path: []const u8, ast: Ast };
+/// Where a declaration lives: its file, and its node there.
+const Found = struct { source: *Source, node: Index };
+/// Where a path can continue: a file's top level, or a container's members.
+const Scope = struct { source: *Source, members: []const Index };
+const Entry = struct { doc: []const u8, line: []const u8 };
+const Section = struct { name: []const u8, entries: []const Entry };
 
-fn lessStr(_: void, a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
-}
+/// Every file read, by path - so a file two namespaces share is parsed once.
+const Files = struct {
+    arena: Allocator,
+    io: Io,
+    dir: []const u8,
+    by_path: std.StringHashMapUnmanaged(*Source) = .empty,
 
-fn isPubFn(trimmed: []const u8) bool {
-    if (!std.mem.startsWith(u8, trimmed, "pub ")) {
-        return false;
-    }
-    var rest: []const u8 = trimmed[4..];
-    inline for (.{ "inline ", "export ", "noinline " }) |kw| {
-        if (std.mem.startsWith(u8, rest, kw)) {
-            rest = rest[kw.len..];
+    fn load(self: *Files, path: []const u8) ?*Source {
+        if (self.by_path.get(path)) |source| {
+            return source;
         }
+        const text: []u8 = Io.Dir.cwd().readFileAlloc(self.io, path, self.arena, .unlimited) catch return null;
+        const text_z: [:0]u8 = self.arena.allocSentinel(u8, text.len, 0) catch return null;
+        @memcpy(text_z, text);
+        const source: *Source = self.arena.create(Source) catch return null;
+        source.* = .{ .path = path, .ast = Ast.parse(self.arena, text_z, .{ .mode = .zig }) catch return null };
+        self.by_path.put(self.arena, path, source) catch return null;
+        return source;
     }
-    return std.mem.startsWith(u8, rest, "fn ");
-}
 
-fn allFramesPub(frames: []const NsFrame) bool {
-    for (frames) |fr| {
-        if (!fr.is_pub) {
-            return false;
+    /// The file an `@import("...")` call in `from` names: a path relative to `from`, or a named module.
+    fn imported(self: *Files, from: *Source, call: Index) ?*Source {
+        const ast: *const Ast = &from.ast;
+        const tag: Ast.Node.Tag = ast.nodeTag(call);
+        const is_call: bool = tag == .builtin_call_two or tag == .builtin_call_two_comma;
+        if (!is_call or !eql(u8, ast.tokenSlice(ast.nodeMainToken(call)), "@import")) {
+            return null;
         }
-    }
-    return true;
-}
-
-fn nsPath(gpa: Allocator, frames: []const NsFrame) ![]const u8 {
-    if (frames.len == 0) {
-        return "";
-    }
-    var out: ArrayList(u8) = .empty;
-    for (frames, 0..) |f, idx| {
-        if (idx != 0) {
-            try out.append(gpa, '.');
-        }
-        try out.appendSlice(gpa, f.name);
-    }
-    return out.items;
-}
-
-/// Capture the full signature from a `pub fn` start: collapse interior
-/// whitespace, stop at the body-opening `{` (paren-depth 0).
-fn captureSig(
-    gpa: Allocator,
-    text: []const u8,
-    next_line_start: usize,
-    first_line: []const u8,
-) ![]const u8 {
-    const start: usize = next_line_start - (first_line.len + 1);
-    var out: ArrayList(u8) = .empty;
-    var paren: i32 = 0;
-    var seen_open: bool = false;
-    var prev_space: bool = false;
-    var i: usize = start;
-    while (i < text.len) : (i += 1) {
-        const c: u8 = text[i];
-        if (c == '(') {
-            paren += 1;
-            seen_open = true;
-        } else if (c == ')') {
-            paren -= 1;
-        } else if (c == '{' and seen_open and paren == 0) {
-            break;
-        } else if (c == ';' and seen_open and paren == 0) {
-            break;
-        }
-        if (c == '\n' or c == '\r' or c == ' ' or c == '\t') {
-            if (!prev_space and out.items.len > 0) {
-                try out.append(gpa, ' ');
-                prev_space = true;
+        const arg: Index = ast.nodeData(call).opt_node_and_opt_node[0].unwrap() orelse return null;
+        const quoted: []const u8 = ast.tokenSlice(ast.nodeMainToken(arg));
+        const name: []const u8 = trim(u8, quoted, "\"");
+        for (named_modules) |module| {
+            if (eql(u8, name, module[0])) {
+                return self.load(std.fs.path.join(self.arena, &.{ self.dir, module[1] }) catch return null);
             }
-            continue;
         }
-        prev_space = false;
-        try out.append(gpa, c);
-    }
-    return std.mem.trimEnd(u8, out.items, " ");
-}
-
-fn fnName(sig: []const u8) []const u8 {
-    const fn_kw: usize = std.mem.indexOf(u8, sig, "fn ") orelse return sig;
-    const after: []const u8 = sig[fn_kw + 3 ..];
-    const paren: usize = std.mem.indexOfScalar(u8, after, '(') orelse return after;
-    return std.mem.trim(u8, after[0..paren], " ");
-}
-
-fn containerOpen(line: []const u8) bool {
-    inline for (.{
-        "= struct {",        "= struct{", "= packed struct {",
-        "= extern struct {", "= union(",  "= union {",
-        "= enum(",           "= enum {",  "= opaque {",
-    }) |pat| {
-        if (std.mem.indexOf(u8, line, pat) != null) {
-            return true;
+        if (!endsWith(u8, name, ".zig")) {
+            return null;
         }
+        const here: []const u8 = std.fs.path.dirname(from.path) orelse ".";
+        return self.load(std.fs.path.join(self.arena, &.{ here, name }) catch return null);
     }
-    return false;
+};
+
+/// A declaration's name - a constant's or a function's - or null for anything else (a test, a field).
+fn declName(ast: *const Ast, node: Index) ?[]const u8 {
+    if (ast.fullVarDecl(node)) |var_decl| {
+        return ast.tokenSlice(var_decl.ast.mut_token + 1);
+    }
+    var buf: [1]Index = undefined;
+    const proto: Ast.full.FnProto = ast.fullFnProto(&buf, node) orelse return null;
+    return if (proto.name_token) |name| ast.tokenSlice(name) else null;
 }
 
-fn declName(trimmed: []const u8) ?[]const u8 {
-    var s: []const u8 = trimmed;
-    if (std.mem.startsWith(u8, s, "pub ")) {
-        s = s[4..];
+fn isPublic(ast: *const Ast, node: Index) bool {
+    if (ast.fullVarDecl(node)) |var_decl| {
+        return var_decl.visib_token != null;
     }
-    inline for (.{ "const ", "var " }) |kw| {
-        if (std.mem.startsWith(u8, s, kw)) {
-            const rest: []const u8 = s[kw.len..];
-            var end: usize = 0;
-            while (end < rest.len and (std.ascii.isAlphanumeric(rest[end]) or rest[end] == '_')) {
-                end += 1;
-            }
-            if (end == 0) {
-                return null;
-            }
-            return rest[0..end];
+    var buf: [1]Index = undefined;
+    const proto: Ast.full.FnProto = ast.fullFnProto(&buf, node) orelse return false;
+    return proto.visib_token != null;
+}
+
+fn findDecl(ast: *const Ast, members: []const Index, name: []const u8) ?Index {
+    for (members) |member| {
+        const member_name: []const u8 = declName(ast, member) orelse continue;
+        if (eql(u8, member_name, name)) {
+            return member;
         }
     }
     return null;
 }
 
-/// Parse one module's source: track struct-namespace nesting by brace depth and
-/// emit a `Fn` for every `pub fn`, carrying any immediately-preceding `///` doc.
-fn parseModule(gpa: Allocator, text: []const u8, mod: *Module) !void {
-    var stack: ArrayList(NsFrame) = .empty;
-    defer stack.deinit(gpa);
+/// What an expression OPENS onto, for a path to continue in: an imported file, a container's members, or - for a
+/// name or `a.b` - whatever the declaration it names opens onto.
+fn scopeOfExpr(files: *Files, source: *Source, expr: Index, depth: u8) ?Scope {
+    if (depth > max_depth) {
+        return null;
+    }
+    if (files.imported(source, expr)) |file| {
+        return .{ .source = file, .members = file.ast.rootDecls() };
+    }
+    var buf: [2]Index = undefined;
+    if (source.ast.fullContainerDecl(&buf, expr)) |container| {
+        // A container of two members or fewer hands its members back IN `buf`, which dies with this frame - so the
+        // scope keeps a copy.
+        const members: []const Index = files.arena.dupe(Index, container.ast.members) catch return null;
+        return .{ .source = source, .members = members };
+    }
+    // lint:off decl-order: `a.b` is looked up in the scope `a` opens onto, and `a` is a name - resolution recurses
+    const found: Found = declOfExpr(files, source, expr, depth + 1) orelse return null;
+    const var_decl: Ast.full.VarDecl = found.source.ast.fullVarDecl(found.node) orelse return null;
+    const init: Index = var_decl.ast.init_node.unwrap() orelse return null;
+    return scopeOfExpr(files, found.source, init, depth + 1);
+}
 
-    var depth: usize = 0;
-    var doc: ArrayList(u8) = .empty;
-    defer doc.deinit(gpa);
+/// Which declaration an expression NAMES: a top-level name, or `lhs.name` looked up where `lhs` opens onto.
+fn declOfExpr(files: *Files, source: *Source, expr: Index, depth: u8) ?Found {
+    const ast: *const Ast = &source.ast;
+    switch (ast.nodeTag(expr)) {
+        .identifier => {
+            const name: []const u8 = ast.tokenSlice(ast.nodeMainToken(expr));
+            const node: Index = findDecl(ast, ast.rootDecls(), name) orelse return null;
+            return .{ .source = source, .node = node };
+        },
+        .field_access => {
+            const lhs: Index, const name_token: Ast.TokenIndex = ast.nodeData(expr).node_and_token;
+            const scope: Scope = scopeOfExpr(files, source, lhs, depth + 1) orelse return null;
+            const name: []const u8 = ast.tokenSlice(name_token);
+            const node: Index = findDecl(&scope.source.ast, scope.members, name) orelse return null;
+            return .{ .source = scope.source, .node = node };
+        },
+        else => return null,
+    }
+}
 
-    var lines: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, text, '\n');
+/// A node's source text on one line: `//` comments dropped, every run of whitespace one space, `( ` and `, )`
+/// tidied - so a signature written over twelve lines reads as one.
+fn oneLine(
+    arena: Allocator,
+    ast: *const Ast,
+    first: Ast.TokenIndex,
+    end_byte: usize,
+) ![]const u8 {
+    const text: []const u8 = ast.source[ast.tokenStart(first)..end_byte];
+    var out: ArrayList(u8) = .empty;
+    var lines = splitScalar(u8, text, '\n');
     while (lines.next()) |raw| {
-        const line: []const u8 = std.mem.trimEnd(u8, raw, "\r");
-        const trimmed: []const u8 = std.mem.trimStart(u8, line, " \t");
-
-        // Accumulate doc comments (/// ...).
-        if (std.mem.startsWith(u8, trimmed, "///")) {
-            const d: []const u8 = std.mem.trimStart(u8, trimmed[3..], " ");
-            if (doc.items.len > 0) {
-                try doc.append(gpa, ' ');
+        const code: []const u8 = raw[0 .. indexOf(u8, raw, "//") orelse raw.len];
+        var words = std.mem.tokenizeAny(u8, code, " \t\r");
+        while (words.next()) |word| {
+            const glue: bool = out.items.len == 0 or out.items[out.items.len - 1] == '(' or word[0] == ')';
+            if (!glue) {
+                try out.append(arena, ' ');
             }
-            try doc.appendSlice(gpa, d);
+            try out.appendSlice(arena, word);
+        }
+    }
+    const tidy: []u8 = try std.mem.replaceOwned(u8, arena, out.items, ",)", ")");
+    return tidy;
+}
+
+/// The first sentence of the doc comment above `node`, or "" when it has none.
+fn docOf(arena: Allocator, ast: *const Ast, node: Index) ![]const u8 {
+    const first: Ast.TokenIndex = ast.firstToken(node);
+    var start: Ast.TokenIndex = first;
+    while (start > 0 and ast.tokenTag(start - 1) == .doc_comment) {
+        start -= 1;
+    }
+    var text: ArrayList(u8) = .empty;
+    var token: Ast.TokenIndex = start;
+    while (token < first) : (token += 1) {
+        const line: []const u8 = trim(u8, ast.tokenSlice(token)[3..], " \t");
+        if (line.len == 0 and text.items.len > 0) {
+            break;
+        }
+        if (text.items.len > 0) {
+            try text.append(arena, ' ');
+        }
+        try text.appendSlice(arena, line);
+        const sentence_ends: bool = indexOf(u8, text.items, ". ") != null or endsWith(u8, line, ".");
+        if (sentence_ends) {
+            break;
+        }
+    }
+    const period: usize = if (indexOf(u8, text.items, ". ")) |at| at + 1 else text.items.len;
+    if (period <= max_doc_len) {
+        return text.items[0..period];
+    }
+    // Only a sentence too long to show whole is marked as cut.
+    return allocPrint(arena, "{s}...", .{text.items[0..max_doc_len]});
+}
+
+/// The byte just past `token`.
+fn tokenEnd(ast: *const Ast, token: Ast.TokenIndex) usize {
+    return ast.tokenStart(token) + ast.tokenSlice(token).len;
+}
+
+/// A whole node's source on one line.
+fn nodeText(arena: Allocator, ast: *const Ast, node: Index) ![]const u8 {
+    return oneLine(arena, ast, ast.firstToken(node), tokenEnd(ast, ast.lastToken(node)));
+}
+
+/// One declaration as one line of Zig, under `name` (the name `z.` gives it, which a re-export may change).
+/// An alias is followed to what it names; what cannot be followed is shown as written.
+fn render(files: *Files, found: Found, name: []const u8, depth: u8) !Entry {
+    const arena: Allocator = files.arena;
+    const ast: *const Ast = &found.source.ast;
+    const doc: []const u8 = try docOf(arena, ast, found.node);
+    var buf: [1]Index = undefined;
+    if (ast.fullFnProto(&buf, found.node)) |proto| {
+        const has_body: bool = ast.nodeTag(found.node) == .fn_decl;
+        const proto_node: Index = if (has_body) ast.nodeData(found.node).node_and_node[0] else found.node;
+        const end: usize = tokenEnd(ast, ast.lastToken(proto_node));
+        const signature: []const u8 = try oneLine(arena, ast, ast.firstToken(found.node), end);
+        const own_name: []const u8 = if (proto.name_token) |token| ast.tokenSlice(token) else name;
+        if (eql(u8, own_name, name)) {
+            return .{ .doc = doc, .line = signature };
+        }
+        const from: []const u8 = try allocPrint(arena, "fn {s}(", .{own_name});
+        const to: []const u8 = try allocPrint(arena, "fn {s}(", .{name});
+        return .{ .doc = doc, .line = try std.mem.replaceOwned(u8, arena, signature, from, to) };
+    }
+    const var_decl: Ast.full.VarDecl = ast.fullVarDecl(found.node) orelse return .{ .doc = doc, .line = name };
+    const keyword: []const u8 = ast.tokenSlice(var_decl.ast.mut_token);
+    const head: []const u8 = try allocPrint(arena, "pub {s} {s}", .{ keyword, name });
+    if (var_decl.ast.type_node.unwrap()) |type_node| {
+        const type_text: []const u8 = try nodeText(arena, ast, type_node);
+        return .{ .doc = doc, .line = try allocPrint(arena, "{s}: {s}", .{ head, type_text }) };
+    }
+    const init: Index = var_decl.ast.init_node.unwrap() orelse return .{ .doc = doc, .line = head };
+    var container_buf: [2]Index = undefined;
+    if (ast.fullContainerDecl(&container_buf, init)) |container| {
+        // The kind, up to its `{`: `struct`, `extern struct`, `enum(u8)`, `union(enum)`.
+        var brace: Ast.TokenIndex = container.ast.main_token;
+        while (ast.tokenTag(brace) != .l_brace) {
+            brace += 1;
+        }
+        const kind: []const u8 = try oneLine(arena, ast, ast.firstToken(init), ast.tokenStart(brace));
+        return .{ .doc = doc, .line = try allocPrint(arena, "{s} = {s}", .{ head, kind }) };
+    }
+    const is_alias: bool = ast.nodeTag(init) == .identifier or ast.nodeTag(init) == .field_access;
+    if (is_alias and depth < max_depth) {
+        if (declOfExpr(files, found.source, init, depth + 1)) |target| {
+            const followed: Entry = try render(files, target, name, depth + 1);
+            return .{ .doc = if (doc.len > 0) doc else followed.doc, .line = followed.line };
+        }
+    }
+    const value: []const u8 = try nodeText(arena, ast, init);
+    const shown: []const u8 = if (value.len <= max_value_len) value else "...";
+    return .{ .doc = doc, .line = try allocPrint(arena, "{s} = {s}", .{ head, shown }) };
+}
+
+/// Every public declaration a scope holds - a file's top level, or a container's members - in source order.
+fn scopeEntries(files: *Files, scope: Scope) ![]const Entry {
+    var entries: ArrayList(Entry) = .empty;
+    for (scope.members) |node| {
+        if (!isPublic(&scope.source.ast, node)) {
             continue;
         }
+        const name: []const u8 = declName(&scope.source.ast, node) orelse continue;
+        try entries.append(files.arena, try render(files, .{ .source = scope.source, .node = node }, name, 0));
+    }
+    return entries.items;
+}
 
-        if (isPubFn(trimmed) and allFramesPub(stack.items)) {
-            const ns: []const u8 = try nsPath(gpa, stack.items);
-            const sig: []const u8 = try captureSig(gpa, text, lines.index orelse text.len, line);
-            try mod.fns.append(gpa, .{
-                .ns = ns,
-                .name = try gpa.dupe(u8, fnName(sig)),
-                .sig = sig,
-                .doc = try gpa.dupe(u8, doc.items),
-            });
+/// What a `z.` export opens onto when it is a NAMESPACE: a whole module (`= @import("ui.zig")`), or a lowercase
+/// name for a container of declarations (`z.rng`, `z.waves`). Zig's own convention tells the two apart from a type:
+/// a namespace is named in lowercase, a type in TitleCase - and a type stays one line.
+fn namespaceOf(files: *Files, root: *Source, node: Index, name: []const u8) ?Scope {
+    const var_decl: Ast.full.VarDecl = root.ast.fullVarDecl(node) orelse return null;
+    const value: Index = var_decl.ast.init_node.unwrap() orelse return null;
+    if (files.imported(root, value)) |file| {
+        return .{ .source = file, .members = file.ast.rootDecls() };
+    }
+    const lowercase: bool = name[0] >= 'a' and name[0] <= 'z';
+    if (!lowercase) {
+        return null;
+    }
+    const scope: Scope = scopeOfExpr(files, root, value, 0) orelse return null;
+    for (scope.members) |member| {
+        if (isPublic(&scope.source.ast, member)) {
+            return scope;
         }
+    }
+    return null;
+}
 
-        // Namespace push: a named decl whose value is a container type.
-        if (containerOpen(line)) {
-            if (declName(trimmed)) |nm| {
-                const is_pub: bool = std.mem.startsWith(u8, trimmed, "pub ");
-                try stack.append(gpa, .{ .name = try gpa.dupe(u8, nm), .depth = depth, .is_pub = is_pub });
-            }
-        }
+/// Name order, ignoring case: `BindGroupCache` among the B's, not ahead of `analyser` with every TitleCase name.
+fn sectionBefore(_: void, a: Section, b: Section) bool {
+    return std.ascii.lessThanIgnoreCase(a.name, b.name);
+}
 
-        // Brace accounting + pop closed namespaces.
-        for (line) |c| {
-            if (c == '{') {
-                depth += 1;
-            } else if (c == '}') {
-                if (depth > 0) {
-                    depth -= 1;
-                }
-                while (stack.items.len > 0 and stack.items[stack.items.len - 1].depth >= depth) {
-                    _ = stack.pop();
-                }
-            }
-        }
-
-        if (trimmed.len != 0) {
-            doc.clearRetainingCapacity();
+fn appendEscaped(arena: Allocator, html: *ArrayList(u8), text: []const u8) !void {
+    for (text) |char| {
+        switch (char) {
+            '&' => try html.appendSlice(arena, "&amp;"),
+            '<' => try html.appendSlice(arena, "&lt;"),
+            '>' => try html.appendSlice(arena, "&gt;"),
+            else => try html.append(arena, char),
         }
     }
 }
 
-/// Parse zimr.zig's top-level `pub const NAME = RHS;` re-exports into the flat
-/// (lower-case = fn) and type (upper-case) name sets. Whole-module namespace
-/// re-exports (`pub const ns = @import("x.zig");`) are escape hatches, skipped.
-fn parseCurated(
-    gpa: Allocator,
-    src: []const u8,
-    flat: *std.StringHashMapUnmanaged(void),
-    types: *std.StringHashMapUnmanaged(void),
+/// A section: a heading, and one `<code class="zig">` block of `/// doc` + declaration pairs for docfmt to highlight.
+fn appendSection(
+    arena: Allocator,
+    html: *ArrayList(u8),
+    id: []const u8,
+    title: []const u8,
+    entries: []const Entry,
 ) !void {
-    var lines: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, src, '\n');
-    while (lines.next()) |line| {
-        if (!std.mem.startsWith(u8, line, "pub const ")) {
-            continue;
+    try html.appendSlice(arena, try allocPrint(arena, "<section id=\"{s}\"><h2>{s}</h2>", .{ id, title }));
+    try html.appendSlice(arena, "<pre><code class=\"zig\">");
+    for (entries) |entry| {
+        if (entry.doc.len > 0) {
+            try html.appendSlice(arena, "/// ");
+            try appendEscaped(arena, html, entry.doc);
+            try html.append(arena, '\n');
         }
-        const rest: []const u8 = line["pub const ".len..];
-        const eq: usize = std.mem.indexOf(u8, rest, " = ") orelse continue;
-        const name: []const u8 = std.mem.trim(u8, rest[0..eq], " ");
-        if (name.len == 0) {
-            continue;
-        }
-        var rhs: []const u8 = std.mem.trimStart(u8, rest[eq + 3 ..], " ");
-        if (std.mem.indexOfScalar(u8, rhs, ';')) |sc| {
-            rhs = rhs[0..sc];
-        }
-        if (std.mem.startsWith(u8, rhs, "@import(\"") and std.mem.endsWith(u8, rhs, ".zig\")")) {
-            continue; // whole-module namespace escape hatch
-        }
-        const set: *std.StringHashMapUnmanaged(void) = if (name[0] >= 'a' and name[0] <= 'z') flat else types;
-        try set.put(gpa, try gpa.dupe(u8, name), {});
+        try appendEscaped(arena, html, entry.line);
+        try html.appendSlice(arena, "\n\n");
     }
+    try html.appendSlice(arena, "</code></pre></section>\n");
 }
 
-/// First dot-separated segment of a namespace path ("Vec3.Inner" -> "Vec3").
-fn firstSeg(ns: []const u8) []const u8 {
-    const dot: usize = std.mem.indexOfScalar(u8, ns, '.') orelse return ns;
-    return ns[0..dot];
-}
-
-fn writeEscaped(w: *Writer, s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '<' => try w.writeAll("&lt;"),
-            '>' => try w.writeAll("&gt;"),
-            '&' => try w.writeAll("&amp;"),
-            else => try w.writeByte(c),
-        }
+/// The page: the shared-style MARKER (docfmt injects the stylesheet every doc page shares), a header with the
+/// counts, a nav of sections, then `z` and each namespace in name order.
+fn writePage(
+    arena: Allocator,
+    io: Io,
+    path: []const u8,
+    flat: []const Entry,
+    sections: []const Section,
+) !void {
+    var total: usize = flat.len;
+    for (sections) |section| {
+        total += section.entries.len;
     }
-}
-
-fn emitSig(w: *Writer, f: Fn) !void {
-    var sig: []const u8 = f.sig;
-    if (std.mem.startsWith(u8, sig, "pub ")) {
-        sig = sig[4..];
-    }
-    const fn_kw: usize = std.mem.indexOf(u8, sig, "fn ") orelse {
-        try writeEscaped(w, sig);
-        return;
-    };
-    try w.writeAll("<span class=\"k\">");
-    try writeEscaped(w, sig[0 .. fn_kw + 2]);
-    try w.writeAll("</span> ");
-    const after: []const u8 = sig[fn_kw + 3 ..];
-    const paren: usize = std.mem.indexOfScalar(u8, after, '(') orelse {
-        try writeEscaped(w, after);
-        return;
-    };
-    if (f.ns.len > 0) {
-        try w.writeAll("<span class=\"ns\">");
-        try writeEscaped(w, f.ns);
-        try w.writeAll(".</span>");
-    }
-    try w.writeAll("<span class=\"nm\">");
-    try writeEscaped(w, std.mem.trim(u8, after[0..paren], " "));
-    try w.writeAll("</span>");
-    try writeEscaped(w, after[paren..]);
-}
-
-fn emitHtml(w: *Writer, modules: []const Module, total_fns: usize) !void {
-    try w.writeAll(
+    var html: ArrayList(u8) = .empty;
+    try html.appendSlice(arena,
         \\<!DOCTYPE html>
         \\<html lang="en"><head><meta charset="utf-8">
         \\<meta name="viewport" content="width=device-width, initial-scale=1">
         \\<title>zimr cheatsheet</title>
-        \\<style>
-        \\:root{--bg:#0b0b0c;--fg:#e8e6e3;--mut:#8a8784;--acc:#7dd3fc;--card:#141416;--bd:#26262a}
-        \\*{box-sizing:border-box}
-        \\body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}
-        \\header{padding:24px 20px;border-bottom:1px solid var(--bd)}
-        \\h1{margin:0;font-size:20px;letter-spacing:.04em}
-        \\.sub{color:var(--mut);margin-top:6px}
-        \\nav{display:flex;flex-wrap:wrap;gap:6px;padding:14px 20px;border-bottom:1px solid var(--bd)}
-        \\nav a{color:var(--acc);text-decoration:none;padding:2px 8px}
-        \\nav a{border:1px solid var(--bd);border-radius:5px;font-size:12px}
-        \\main{padding:8px 20px 60px;max-width:1100px}
-        \\section{margin-top:28px}
-        \\h2{font-size:15px;color:var(--acc);border-bottom:1px solid var(--bd);padding-bottom:6px}
-        \\.fn{padding:8px 10px;margin:6px 0;background:var(--card);border:1px solid var(--bd);border-radius:6px}
-        \\.sig{white-space:pre-wrap;word-break:break-word}
-        \\.ns{color:var(--mut)}.nm{color:#fff;font-weight:600}.k{color:#c792ea}
-        \\.doc{color:var(--mut);margin-top:4px;font-size:12.5px}
-        \\</style></head><body>
+        \\<!--docfmt:style-->
+        \\</head><body>
         \\
     );
-    try w.print(
-        "<header><h1>zimr cheatsheet</h1>" ++
-            "<div class=\"sub\">{d} public functions \u{00b7} {d} modules \u{00b7} " ++
-            "generated by tools/cheatsheet.zig</div></header>\n",
-        .{ total_fns, modules.len },
-    );
-    try w.writeAll("<nav>");
-    for (modules) |m| {
-        try w.print("<a href=\"#{s}\">{s}</a>", .{ m.name, m.name });
+    try html.appendSlice(arena, try allocPrint(arena, "<header><h1>zimr cheatsheet</h1><div class=\"sub\">" ++
+        "{d} declarations \u{00b7} <code>z</code> and {d} namespaces \u{00b7} generated from src/zimr.zig by " ++
+        "tools/cheatsheet.zig</div></header>\n<nav>\n<a href=\"#z\">z</a>", .{ total, sections.len }));
+    // One link per line, as the readme writes its nav: the whitespace between links is what lets them space out
+    // and wrap - the shared stylesheet gives `nav` no layout of its own, and links written back to back read as one
+    // unbreakable word.
+    for (sections) |section| {
+        const short: []const u8 = section.name["z.".len..];
+        try html.appendSlice(arena, try allocPrint(arena, "\n<a href=\"#ns-{s}\">{s}</a>", .{ short, short }));
     }
-    try w.writeAll("</nav>\n<main>\n");
-    for (modules) |m| {
-        try w.print("<section id=\"{s}\"><h2>{s}.zig \u{2014} {d} fns</h2>\n", .{ m.name, m.name, m.fns.items.len });
-        for (m.fns.items) |f| {
-            try w.writeAll("<div class=\"fn\"><div class=\"sig\">");
-            try emitSig(w, f);
-            try w.writeAll("</div>");
-            if (f.doc.len > 0) {
-                try w.writeAll("<div class=\"doc\">");
-                try writeEscaped(w, f.doc);
-                try w.writeAll("</div>");
-            }
-            try w.writeAll("</div>\n");
-        }
-        try w.writeAll("</section>\n");
+    try html.append(arena, '\n');
+    try html.appendSlice(arena, "</nav>\n<main>\n");
+    try appendSection(arena, &html, "z", "z - what zimr.zig exports itself", flat);
+    for (sections) |section| {
+        const id: []const u8 = try allocPrint(arena, "ns-{s}", .{section.name["z.".len..]});
+        try appendSection(arena, &html, id, section.name, section.entries);
     }
-    try w.writeAll("</main></body></html>\n");
+    try html.appendSlice(arena, "</main>\n</body></html>\n");
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = html.items });
 }
 
 pub fn main(init: std.process.Init) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(init.gpa);
-    defer arena_state.deinit();
-    const gpa: Allocator = arena_state.allocator();
-    const io: std.Io = init.io;
+    const arena: Allocator = init.arena.allocator();
+    const args: CheatArgs = cli.args(&init, CheatArgs, cheat_cli);
+    var files: Files = .{ .arena = arena, .io = init.io, .dir = args.src };
+    const root_path: []const u8 = try std.fs.path.join(arena, &.{ args.src, "zimr.zig" });
+    const root: *Source = files.load(root_path) orelse return error.ZimrNotFound;
 
-    var args_list: ArrayList([]u8) = .empty;
-    var arg_it: std.process.Args.Iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
-    while (arg_it.next()) |arg| {
-        try args_list.append(gpa, try gpa.dupe(u8, arg));
-    }
-    const src_dir: []const u8 = posArg(args_list.items, 1, "src");
-    const out_path: []const u8 = posArg(args_list.items, 2, "cheatsheet.html");
-    var show_all: bool = false;
-    for (args_list.items) |a| {
-        if (std.mem.eql(u8, a, "--all")) {
-            show_all = true;
+    // `z` itself: what zimr.zig declares public - except namespaces, each of which is a section of its own.
+    var flat: ArrayList(Entry) = .empty;
+    var sections: ArrayList(Section) = .empty;
+    for (root.ast.rootDecls()) |node| {
+        if (!isPublic(&root.ast, node)) {
+            continue;
         }
-    }
-
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
-
-    // Collect + sort top-level *.zig names for stable output.
-    var names: ArrayList([]const u8) = .empty;
-    {
-        var dir: std.Io.Dir = try cwd.openDir(io, src_dir, .{ .iterate = true });
-        defer dir.close(io);
-        var it: std.Io.Dir.Iterator = dir.iterate();
-        while (try it.next(io)) |entry| {
-            if (entry.kind != .file) {
-                continue;
-            }
-            if (!std.mem.endsWith(u8, entry.name, ".zig")) {
-                continue;
-            }
-            try names.append(gpa, try gpa.dupe(u8, entry.name));
+        const name: []const u8 = declName(&root.ast, node) orelse continue;
+        if (namespaceOf(&files, root, node, name)) |scope| {
+            const title: []const u8 = try allocPrint(arena, "z.{s}", .{name});
+            try sections.append(arena, .{ .name = title, .entries = try scopeEntries(&files, scope) });
+            continue;
         }
+        try flat.append(arena, try render(&files, .{ .source = root, .node = node }, name, 0));
     }
-    std.mem.sort([]const u8, names.items, {}, lessStr);
-
-    var modules: ArrayList(Module) = .empty;
-    var total_fns: usize = 0;
-    for (names.items) |fname| {
-        const path: []const u8 = try std.fs.path.join(gpa, &.{ src_dir, fname });
-        const text: []const u8 = cwd.readFileAlloc(io, path, gpa, .unlimited) catch continue;
-        var mod: Module = .{ .name = fname[0 .. fname.len - ".zig".len] };
-        try parseModule(gpa, text, &mod);
-        if (mod.fns.items.len > 0) {
-            total_fns += mod.fns.items.len;
-            try modules.append(gpa, mod);
-        }
-    }
-
-    // The cheatsheet publishes only the user-facing API: a fn is kept if its
-    // name is a flat re-export in zimr.zig (`pub const drawCircle = ...`) or its
-    // outermost enclosing type is a re-exported type (`pub const Rectangle =
-    // ...`). `--all` shows every pub fn instead (debugging / coverage).
-    if (!show_all) {
-        const zimr_path: []const u8 = try std.fs.path.join(gpa, &.{ src_dir, "zimr.zig" });
-        const zimr_src: []const u8 = cwd.readFileAlloc(io, zimr_path, gpa, .unlimited) catch "";
-        var flat: std.StringHashMapUnmanaged(void) = .empty;
-        var types: std.StringHashMapUnmanaged(void) = .empty;
-        try parseCurated(gpa, zimr_src, &flat, &types);
-        total_fns = 0;
-        for (modules.items) |*mod| {
-            var kept: ArrayList(Fn) = .empty;
-            for (mod.fns.items) |f| {
-                const outer: []const u8 = if (f.ns.len > 0) firstSeg(f.ns) else "";
-                if (flat.contains(f.name) or (outer.len > 0 and types.contains(outer))) {
-                    try kept.append(gpa, f);
-                }
-            }
-            mod.fns = kept;
-            total_fns += kept.items.len;
-        }
-    }
-
-    var modules_out: ArrayList(Module) = .empty;
-    for (modules.items) |mod| {
-        if (mod.fns.items.len > 0) {
-            try modules_out.append(gpa, mod);
-        }
-    }
-
-    var aw: Writer.Allocating = .init(gpa);
-    const w: *Writer = &aw.writer;
-    try emitHtml(w, modules_out.items, total_fns);
-    try cwd.writeFile(io, .{ .sub_path = out_path, .data = aw.written() });
-
-    var err_buf: [256]u8 = undefined;
-    var ew: std.Io.File.Writer = std.Io.File.stderr().writer(io, &err_buf);
-    try ew.interface.print(
-        "cheatsheet: {d} {s} fns across {d} modules -> {s}\n",
-        .{ total_fns, if (show_all) "pub" else "user-facing", modules_out.items.len, out_path },
-    );
-    try ew.interface.flush();
+    sortSlice(Section, sections.items, {}, sectionBefore);
+    try writePage(arena, init.io, args.output, flat.items, sections.items);
 }

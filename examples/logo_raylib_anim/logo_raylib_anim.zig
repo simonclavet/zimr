@@ -59,54 +59,6 @@ fn fade(a: f32) Color {
     return .{ .r = base.r, .g = base.g, .b = base.b, .a = al };
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const w: f32 = f.window.widthf();
-    const h: f32 = f.window.heightf();
-    const dt: f32 = f.time.delta_time;
-    z.clearViewport(f, common.palette.bg);
-
-    const tapped: bool = z.isMouseButtonReleased(f.input, .left);
-    if (tapped) {
-        reset(s);
-    }
-    s.t += dt;
-
-    // --- state machine ---
-    switch (s.state) {
-        st_blink => if (s.t > 1.2) {
-            s.state = st_grow1;
-            s.t = 0;
-        },
-        st_grow1 => if (s.t >= grow_time) {
-            s.state = st_grow2;
-            s.t = 0;
-        },
-        st_grow2 => if (s.t >= grow_time) {
-            s.state = st_letters;
-            s.t = 0;
-        },
-        st_letters => {
-            const idx: usize = @floor(s.t / letter_step);
-            s.letters = @min(idx, word.len);
-            const fade_start: f32 = @as(f32, word.len) * letter_step + fade_hold;
-            if (s.t > fade_start) {
-                s.alpha = clamp(1.0 - (s.t - fade_start) / fade_time, 0.0, 1.0);
-                if (s.alpha <= 0.0) {
-                    s.state = st_replay;
-                    s.t = 0;
-                }
-            }
-        },
-        else => if (s.t > 0.8) {
-            reset(s);
-        },
-    }
-
-    drawLogo(f, s, w, h);
-    common.caption(f.gl, s.font, "logo animation - tap to replay");
-    z.endDrawing(f.gl);
-}
-
 fn drawLogo(f: *z.Frame, s: *State, w: f32, h: f32) void {
     const size: f32 = @min(w, h) * 0.52;
     const thick: f32 = size * 0.0625;
@@ -172,6 +124,54 @@ fn drawLogo(f: *z.Frame, s: *State, w: f32, h: f32) void {
             );
         },
     }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const w: f32 = f.window.widthf();
+    const h: f32 = f.window.heightf();
+    const dt: f32 = f.time.delta_time;
+    z.clearViewport(f, common.palette.bg);
+
+    const tapped: bool = z.isMouseButtonReleased(f.input, .left);
+    if (tapped) {
+        reset(s);
+    }
+    s.t += dt;
+
+    // --- state machine ---
+    switch (s.state) {
+        st_blink => if (s.t > 1.2) {
+            s.state = st_grow1;
+            s.t = 0;
+        },
+        st_grow1 => if (s.t >= grow_time) {
+            s.state = st_grow2;
+            s.t = 0;
+        },
+        st_grow2 => if (s.t >= grow_time) {
+            s.state = st_letters;
+            s.t = 0;
+        },
+        st_letters => {
+            const idx: usize = @floor(s.t / letter_step);
+            s.letters = @min(idx, word.len);
+            const fade_start: f32 = @as(f32, word.len) * letter_step + fade_hold;
+            if (s.t > fade_start) {
+                s.alpha = clamp(1.0 - (s.t - fade_start) / fade_time, 0.0, 1.0);
+                if (s.alpha <= 0.0) {
+                    s.state = st_replay;
+                    s.t = 0;
+                }
+            }
+        },
+        else => if (s.t > 0.8) {
+            reset(s);
+        },
+    }
+
+    drawLogo(f, s, w, h);
+    common.caption(f.gl, s.font, "logo animation - tap to replay");
+    z.endDrawing(f.gl);
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

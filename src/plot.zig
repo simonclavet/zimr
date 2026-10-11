@@ -29,6 +29,9 @@ const expect = std.testing.expect;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const swap = std.mem.swap;
 const zm = @import("zm");
 const float64 = zm.float64;
 const draw2d = @import("draw2d.zig");
@@ -333,8 +336,36 @@ pub const Colormap = plot_core.Colormap;
 /// continuous maps interpolate between control colors.
 const sampleColormap = plot_core.sampleBuiltinColormap;
 
+/// What a plot draws INTO - the `sink` argument of every drawing function here. Any type with these six methods
+/// works, passed by value or by pointer, so one plot draws to the UI's draw list, to an SVG file, or into a test
+/// recorder:
+///
+///     line(a: Vec2, b: Vec2, opts: draw2d.LineOpts)
+///     text(pos: Vec2, s: []const u8, opts: draw2d.TextOpts)
+///     fillRect(r: Rect, col: Color)
+///     triangleFilled(a: Vec2, b: Vec2, c: Vec2, col: Color)
+///     circleFilled(c: Vec2, radius: f32, col: Color)
+///     texturedQuad(dst: Rect, tex_id: u32, uv0: Vec2, uv1: Vec2, tint: Color)
+///
+/// The two real ones to copy: `plot_ui.DrawListSink`, which records into ui's draw list, and `SvgSink` below, which
+/// writes an SVG document. Every public function that takes a sink calls this first, so a type missing a method
+/// fails right at that call, naming the method - not somewhere deep inside a plot routine.
+pub fn requireGraphicsSink(sink: anytype) void {
+    const Sink: type = switch (@typeInfo(@TypeOf(sink))) {
+        .pointer => |pointer| pointer.child,
+        else => @TypeOf(sink),
+    };
+    inline for (.{ "line", "text", "fillRect", "triangleFilled", "circleFilled", "texturedQuad" }) |method| {
+        if (!@hasDecl(Sink, method)) {
+            @compileError("plot: a graphics sink needs `" ++ method ++ "`, and " ++ @typeName(Sink) ++
+                " has none (see requireGraphicsSink)");
+        }
+    }
+}
+
 /// Draw a horizontal gradient strip of `cmap` filling `rect` (t=0 at left).
 pub fn drawColormapBar(sink: anytype, rect: Rect, cmap: Colormap, segments: usize) void {
+    requireGraphicsSink(sink);
     const seg: usize = @max(segments, 1);
     const w: f32 = rect.w / float(seg);
     for (0..seg) |i| {
@@ -410,6 +441,7 @@ fn formatNumber(buf: []u8, value: f64, decimals: u8, fmt: NumberFormat) []const 
 /// must leave roughly 46px of clear space there. Pairs with `HeatmapSpec`
 /// (use the same `cmap`/`min`/`max`) to annotate a heatmap's value scale.
 pub fn drawColorbar(sink: anytype, bar: Rect, spec: ColorbarSpec) void {
+    requireGraphicsSink(sink);
     assertf(spec.ticks >= 2, @src(), "colorbar needs >= 2 ticks, got {d}", .{spec.ticks});
     // Gradient, painted bottom (min, t=0) to top (max, t=1).
     const seg: usize = 64;
@@ -1164,13 +1196,13 @@ pub const Plot = struct {
         self.x.px_min = self.area.x;
         self.x.px_max = self.area.right();
         if (self.x.flags.invert) {
-            std.mem.swap(f32, &self.x.px_min, &self.x.px_max);
+            swap(f32, &self.x.px_min, &self.x.px_max);
         }
         // Y: data-min at the bottom, data-max at the top (screen +y down).
         self.y.px_min = self.area.bottom();
         self.y.px_max = self.area.y;
         if (self.y.flags.invert) {
-            std.mem.swap(f32, &self.y.px_min, &self.y.px_max);
+            swap(f32, &self.y.px_min, &self.y.px_max);
         }
         self.x_ticks.generate(self.x, self.area.w, false);
         self.y_ticks.generate(self.y, self.area.h, true);
@@ -1178,7 +1210,7 @@ pub const Plot = struct {
             self.y2.px_min = self.area.bottom();
             self.y2.px_max = self.area.y;
             if (self.y2.flags.invert) {
-                std.mem.swap(f32, &self.y2.px_min, &self.y2.px_max);
+                swap(f32, &self.y2.px_min, &self.y2.px_max);
             }
             self.y2_ticks.generate(self.y2, self.area.h, true);
         }
@@ -1186,7 +1218,7 @@ pub const Plot = struct {
             self.x2.px_min = self.area.x;
             self.x2.px_max = self.area.right();
             if (self.x2.flags.invert) {
-                std.mem.swap(f32, &self.x2.px_min, &self.x2.px_max);
+                swap(f32, &self.x2.px_min, &self.x2.px_max);
             }
             self.x2_ticks.generate(self.x2, self.area.w, false);
         }
@@ -1215,6 +1247,7 @@ pub const Plot = struct {
     }
 
     pub fn drawFrame(self: *const Plot, sink: anytype) void {
+        requireGraphicsSink(sink);
         sink.fillRect(self.area, self.style.bg);
         // Grid: minor lines faint, major lines brighter.
         if (!self.x.flags.no_grid) {
@@ -1232,6 +1265,7 @@ pub const Plot = struct {
     }
 
     pub fn drawDecorations(self: *const Plot, sink: anytype) void {
+        requireGraphicsSink(sink);
         // Border.
         const a: Vec2 = .{ self.area.x, self.area.y };
         const b: Vec2 = .{ self.area.right(), self.area.y };
@@ -1393,6 +1427,7 @@ pub const Plot = struct {
         lay: LegendLayout,
         hidden: ?[]const bool,
     ) void {
+        requireGraphicsSink(sink);
         if (entries.len == 0) {
             return;
         }
@@ -1433,6 +1468,7 @@ pub const Plot = struct {
         sink: anytype,
         entries: []const LegendEntry,
     ) void {
+        requireGraphicsSink(sink);
         self.drawLegendEx(sink, entries, self.legendLayout(entries, .ne, false), null);
     }
 
@@ -1443,6 +1479,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: LineSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const n: usize = sampleCount(xs, ys);
@@ -1483,6 +1520,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: LineSpec,
     ) void {
+        requireGraphicsSink(sink);
         var s: LineSpec = spec;
         s.markers_only = true;
         if (s.marker == .none) {
@@ -1498,6 +1536,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: BarsSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const n: usize = @min(xs.len, ys.len);
@@ -1556,6 +1595,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: ShadedSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const n: usize = sampleCount(xs, ys);
@@ -1589,6 +1629,7 @@ pub const Plot = struct {
         ys2: []const f64,
         spec: ShadedSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const n: usize = @min(xs.len, @min(ys1.len, ys2.len));
@@ -1618,6 +1659,7 @@ pub const Plot = struct {
         group_count: usize,
         spec: BarGroupsSpec,
     ) void {
+        requireGraphicsSink(sink);
         if (item_count == 0 or group_count == 0) {
             return;
         }
@@ -1686,6 +1728,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: LineSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const n: usize = sampleCount(xs, ys);
@@ -1717,6 +1760,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: LineSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const n: usize = sampleCount(xs, ys);
@@ -1745,6 +1789,7 @@ pub const Plot = struct {
         values: []const f64,
         spec: InfLinesSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         for (values) |v| {
@@ -1776,6 +1821,7 @@ pub const Plot = struct {
         err: []const f64,
         spec: ErrorBarsSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const dn: usize = @min(xs.len, ys.len);
@@ -1802,6 +1848,7 @@ pub const Plot = struct {
         pos: []const f64,
         spec: ErrorBarsSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse autoColor(self.series_count);
         self.series_count += 1;
         const dn: usize = @min(xs.len, ys.len);
@@ -1831,6 +1878,7 @@ pub const Plot = struct {
         y: f64,
         spec: TextSpec,
     ) void {
+        requireGraphicsSink(sink);
         const col: Color = spec.color orelse text_color;
         const px: f32 = self.x.plotToPixel(x);
         const py: f32 = self.y.plotToPixel(y);
@@ -1853,6 +1901,7 @@ pub const Plot = struct {
         y: f64,
         spec: AnnotationSpec,
     ) void {
+        requireGraphicsSink(sink);
         const px: f32 = self.x.plotToPixel(x) + spec.offset[0];
         const py: f32 = self.y.plotToPixel(y) + spec.offset[1];
         const padx: f32 = 5;
@@ -1884,6 +1933,7 @@ pub const Plot = struct {
         s: []const u8,
         spec: TagSpec,
     ) void {
+        requireGraphicsSink(sink);
         const px: f32 = self.x.plotToPixel(value);
         const padx: f32 = 4;
         const pady: f32 = 2;
@@ -1905,6 +1955,7 @@ pub const Plot = struct {
         s: []const u8,
         spec: TagSpec,
     ) void {
+        requireGraphicsSink(sink);
         const py: f32 = self.y.plotToPixel(value);
         const padx: f32 = 4;
         const pady: f32 = 2;
@@ -1929,6 +1980,7 @@ pub const Plot = struct {
         cols: usize,
         spec: HeatmapSpec,
     ) void {
+        requireGraphicsSink(sink);
         assertf(
             values.len >= rows * cols,
             @src(),
@@ -2042,6 +2094,7 @@ pub const Plot = struct {
 
     /// Pie / donut chart of `values` (each >= 0). Center/radius in data coords.
     pub fn plotPie(self: *Plot, sink: anytype, values: []const f64, spec: PieSpec) void {
+        requireGraphicsSink(sink);
         assertf(values.len > 0, @src(), "plotPie: need at least one value", .{});
         self.series_count += 1;
         var total: f64 = 0;
@@ -2101,6 +2154,7 @@ pub const Plot = struct {
         sizes: []const f64,
         spec: BubbleSpec,
     ) void {
+        requireGraphicsSink(sink);
         const dn: usize = @min(xs.len, ys.len);
         assertf(sizes.len >= dn, @src(), "plotBubbles: sizes {d} < points {d}", .{ sizes.len, dn });
         const n: usize = @min(dn, sizes.len);
@@ -2132,6 +2186,7 @@ pub const Plot = struct {
         closes: []const f64,
         spec: CandleSpec,
     ) void {
+        requireGraphicsSink(sink);
         assertf(
             opens.len >= xs.len and highs.len >= xs.len and lows.len >= xs.len and closes.len >= xs.len,
             @src(),
@@ -2170,6 +2225,7 @@ pub const Plot = struct {
         ys: []const f64,
         spec: DigitalSpec,
     ) void {
+        requireGraphicsSink(sink);
         const n: usize = @min(xs.len, ys.len);
         assertf(ys.len >= xs.len, @src(), "plotDigital: ys {d} < xs {d}", .{ ys.len, xs.len });
         const col: Color = spec.color orelse autoColor(self.series_count);
@@ -2205,6 +2261,7 @@ pub const Plot = struct {
         y1: f64,
         spec: ImageSpec,
     ) void {
+        requireGraphicsSink(sink);
         self.series_count += 1;
         const ax: f32 = self.x.plotToPixel(x0);
         const bx: f32 = self.x.plotToPixel(x1);
@@ -2575,9 +2632,9 @@ test "plot.renderDemoSvg produces non-trivial svg" {
     const svg: []u8 = try renderDemoSvg(testing.allocator);
     defer testing.allocator.free(svg);
     try testing.expect(svg.len > 500);
-    try testing.expect(std.mem.indexOf(u8, svg, "<svg") != null);
-    try testing.expect(std.mem.indexOf(u8, svg, "<polyline") == null); // we use <line> segments
-    try testing.expect(std.mem.indexOf(u8, svg, "</svg>") != null);
+    try testing.expect(indexOf(u8, svg, "<svg") != null);
+    try testing.expect(indexOf(u8, svg, "<polyline") == null); // we use <line> segments
+    try testing.expect(indexOf(u8, svg, "</svg>") != null);
 }
 
 test "plot.histogramBins" {
@@ -2656,8 +2713,8 @@ test "symlog + custom transform round-trips" {
 }
 
 test "colorbar renders gradient, outline, and labels" {
-    const gpa: Allocator = std.testing.allocator;
-    var sink: SvgSink = SvgSink.init(gpa, 140, 220);
+    const gpa: Allocator = testing_allocator;
+    var sink: SvgSink = .init(gpa, 140, 220);
     defer sink.deinit();
     sink.begin();
     drawColorbar(&sink, .{ .x = 24, .y = 20, .w = 16, .h = 160 }, .{
@@ -2671,14 +2728,14 @@ test "colorbar renders gradient, outline, and labels" {
     sink.end();
     const svg: []u8 = sink.toOwned();
     defer gpa.free(svg);
-    try expect(std.mem.indexOf(u8, svg, "ZCBAR") != null);
-    try expect(std.mem.indexOf(u8, svg, "100") != null);
+    try expect(indexOf(u8, svg, "ZCBAR") != null);
+    try expect(indexOf(u8, svg, "100") != null);
     try expect(svg.len > 1000);
 }
 
 test "secondary x2 axis lays out and draws on top" {
-    const gpa: Allocator = std.testing.allocator;
-    var sink: SvgSink = SvgSink.init(gpa, 300, 220);
+    const gpa: Allocator = testing_allocator;
+    var sink: SvgSink = .init(gpa, 300, 220);
     defer sink.deinit();
     sink.begin();
     var p: Plot = .{};
@@ -2695,12 +2752,12 @@ test "secondary x2 axis lays out and draws on top" {
     sink.end();
     const svg: []u8 = sink.toOwned();
     defer gpa.free(svg);
-    try expect(std.mem.indexOf(u8, svg, "ZX2") != null);
+    try expect(indexOf(u8, svg, "ZX2") != null);
 }
 
 test "style themes the plot-area background" {
-    const gpa: Allocator = std.testing.allocator;
-    var sink: SvgSink = SvgSink.init(gpa, 200, 150);
+    const gpa: Allocator = testing_allocator;
+    var sink: SvgSink = .init(gpa, 200, 150);
     defer sink.deinit();
     sink.begin();
     var p: Plot = .{ .style = .{ .bg = .{ .r = 246, .g = 246, .b = 249, .a = 255 } } };
@@ -2711,12 +2768,12 @@ test "style themes the plot-area background" {
     sink.end();
     const svg: []u8 = sink.toOwned();
     defer gpa.free(svg);
-    try expect(std.mem.indexOf(u8, svg, "#f6f6f9ff") != null);
+    try expect(indexOf(u8, svg, "#f6f6f9ff") != null);
 }
 
 test "line breaks at NaN samples (gap)" {
-    const gpa: Allocator = std.testing.allocator;
-    var sink: SvgSink = SvgSink.init(gpa, 200, 150);
+    const gpa: Allocator = testing_allocator;
+    var sink: SvgSink = .init(gpa, 200, 150);
     defer sink.deinit();
     sink.begin();
     var p: Plot = .{};
@@ -2740,8 +2797,8 @@ test "line breaks at NaN samples (gap)" {
 }
 
 test "implicit-x: ys-only series plots over sample indices" {
-    const gpa: Allocator = std.testing.allocator;
-    var sink: SvgSink = SvgSink.init(gpa, 200, 150);
+    const gpa: Allocator = testing_allocator;
+    var sink: SvgSink = .init(gpa, 200, 150);
     defer sink.deinit();
     sink.begin();
     var p: Plot = .{};
@@ -2806,6 +2863,19 @@ test "plotImage maps data bounds to a pixel rect" {
     const Cap = struct {
         dst: Rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
         id: u32 = 0,
+        // plotImage draws only the textured quad; these five complete the graphics-sink shape
+        // (requireGraphicsSink) and record nothing.
+        pub fn line(_: *@This(), _: Vec2, _: Vec2, _: draw2d.LineOpts) void {}
+        pub fn text(_: *@This(), _: Vec2, _: []const u8, _: draw2d.TextOpts) void {}
+        pub fn fillRect(_: *@This(), _: Rect, _: Color) void {}
+        pub fn triangleFilled(
+            _: *@This(),
+            _: Vec2,
+            _: Vec2,
+            _: Vec2,
+            _: Color,
+        ) void {}
+        pub fn circleFilled(_: *@This(), _: Vec2, _: f32, _: Color) void {}
         pub fn texturedQuad(
             self: *@This(),
             dst: Rect,
@@ -2836,4 +2906,9 @@ test "plotImage maps data bounds to a pixel rect" {
     try expect(@abs(cap.dst.w - @abs(x8 - x2)) < 0.01);
     try expect(@abs(cap.dst.y - @min(y2, y8)) < 0.01);
     try expect(@abs(cap.dst.h - @abs(y8 - y2)) < 0.01);
+}
+
+test "SvgSink is a graphics sink" {
+    var sink: SvgSink = undefined;
+    requireGraphicsSink(&sink);
 }

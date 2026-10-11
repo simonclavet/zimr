@@ -42,6 +42,9 @@ const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const indexOf = std.mem.indexOf;
+const asBytes = std.mem.asBytes;
+const eql = std.mem.eql;
 
 /// Material-map slot indices.  These define the conventional slot
 /// numbers used by the typed shader pipeline's `Sampler2D(.X)` markers
@@ -582,7 +585,7 @@ pub fn merge(comptime structs: anytype) type {
             for (si.field_names, si.field_types, si.field_attrs) |f_name, f_type, f_attrs| {
                 // Collision check against already-collected names.
                 for (names[0..idx]) |existing| {
-                    if (std.mem.eql(u8, existing, f_name)) {
+                    if (eql(u8, existing, f_name)) {
                         @compileError(
                             "merge: field name collision: '" ++ f_name ++
                                 "' appears in multiple source structs",
@@ -628,7 +631,7 @@ pub const reserved_names = [_][]const u8{
 /// Comptime check: is the given name in the reserved set?
 pub fn isReservedName(comptime name: []const u8) bool {
     inline for (reserved_names) |r| {
-        if (comptime std.mem.eql(u8, r, name)) {
+        if (comptime eql(u8, r, name)) {
             return true;
         }
     }
@@ -712,7 +715,7 @@ pub fn wireOffsetOf(comptime T: type, comptime field_name: []const u8) comptime_
     comptime var off: comptime_int = 0;
     inline for (info.field_names, info.field_types) |name, FieldT| {
         off = wireAlignUp(off, wireAlignOf(FieldT));
-        if (comptime std.mem.eql(u8, name, field_name)) {
+        if (comptime eql(u8, name, field_name)) {
             return off;
         }
         off += wireFieldSize(FieldT);
@@ -795,7 +798,7 @@ test "assertValidUniform: [N]f32/[N]vec2 rejected, vec fields accepted" {
     // The pre-fix points_vs layout - array<f32,N> in a uniform block is illegal.
     try expect(uniformFieldError([2]f32) != null);
     try expect(uniformFieldError([4]f32) != null);
-    try expect(std.mem.indexOf(u8, uniformFieldError([2]f32).?, "16") != null);
+    try expect(indexOf(u8, uniformFieldError([2]f32).?, "16") != null);
     // [N]vec2 illegal (stride 8), [N]vec4 legal (stride 16).
     try expect(uniformFieldError([4]Vec2) != null);
     try expect(uniformFieldError([4]Vec) == null);
@@ -812,11 +815,11 @@ test "assertValidUniform: [N]f32/[N]vec2 rejected, vec fields accepted" {
 fn writeWireField(comptime FieldT: type, ptr: *const FieldT, out: []u8) void {
     switch (@typeInfo(FieldT)) {
         .float, .int => {
-            @memcpy(out[0..4], std.mem.asBytes(ptr));
+            @memcpy(out[0..4], asBytes(ptr));
         },
         .vector => |v| {
             const arr: [v.len]v.child = ptr.*;
-            @memcpy(out[0 .. 4 * v.len], std.mem.asBytes(&arr));
+            @memcpy(out[0 .. 4 * v.len], asBytes(&arr));
         },
         .array => |a| {
             switch (@typeInfo(a.child)) {
@@ -827,7 +830,7 @@ fn writeWireField(comptime FieldT: type, ptr: *const FieldT, out: []u8) void {
                     }
                 },
                 else => {
-                    @memcpy(out[0..comptime wireFieldSize(FieldT)], std.mem.asBytes(ptr));
+                    @memcpy(out[0..comptime wireFieldSize(FieldT)], asBytes(ptr));
                 },
             }
         },

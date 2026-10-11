@@ -55,6 +55,7 @@ const mulMat = zm.mulMat;
 const translation = zm.translation;
 const scaling = zm.scaling;
 const splat = zm.splat;
+const Vec2 = zm.Vec2;
 const bufPrint = std.fmt.bufPrint;
 
 const Trainer = ppo_track.Trainer(zn_mlp);
@@ -141,31 +142,6 @@ fn pipelineEntries(comptime M: type) [M.kernels.len]z.Compute(M).KernelWgsl {
     return table;
 }
 
-const State = struct {
-    font: z.Font,
-    ui_host: z.UiHost,
-    cam: z.OrbitCamera,
-    sphere: z.Mesh,
-    cube: z.Mesh,
-    cylinder: z.Mesh,
-    transform: [1]Mat,
-
-    doc: codecs.xml.Document,
-    robot: mjcf.Robot,
-    imported: rmj.Imported,
-    /// The reference's pose, posed each frame by forward kinematics, for drawing.
-    ghost: rbt.Data,
-
-    gpa: Allocator,
-    pipe: z.Compute(zn_mlp),
-    task: Task,
-    clip: dance.Clip,
-    trainer: *Trainer,
-    /// Exactly-zero actions for the whole fleet: the servo alone.
-    zero_actions: []f32,
-    progress: Progress,
-};
-
 /// Everything that changes as training goes, every field with a default - and assigned AS A WHOLE
 /// whenever training starts. That is the point: the app framework makes the `State` with
 /// `gpa.create`, which hands back uninitialised memory, so a default written on a `State` field is
@@ -193,6 +169,31 @@ const Progress = struct {
     servo_left: u32 = 96,
     servo_exposure: u64 = 0,
     servo_failures: u32 = 0,
+};
+
+const State = struct {
+    font: z.Font,
+    ui_host: z.UiHost,
+    cam: z.OrbitCamera,
+    sphere: z.Mesh,
+    cube: z.Mesh,
+    cylinder: z.Mesh,
+    transform: [1]Mat,
+
+    doc: codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: rmj.Imported,
+    /// The reference's pose, posed each frame by forward kinematics, for drawing.
+    ghost: rbt.Data,
+
+    gpa: Allocator,
+    pipe: z.Compute(zn_mlp),
+    task: Task,
+    clip: dance.Clip,
+    trainer: *Trainer,
+    /// Exactly-zero actions for the whole fleet: the servo alone.
+    zero_actions: []f32,
+    progress: Progress,
 };
 
 /// Mean time to failure, in seconds, from steps watched and failures among them - or null when
@@ -234,6 +235,22 @@ fn recentWindow(p: *const Progress) Recent {
     };
 }
 
+/// Begin training on a motion from scratch: its baked clip, a fresh trainer, fresh progress.
+/// `replace` says whether a previous motion's clip and trainer must be released first.
+fn startTask(s: *State, task: Task, replace: bool) !void {
+    if (replace) {
+        s.trainer.deinit();
+        s.clip.deinit();
+    }
+    const m: *rbt.Model = &s.imported.model;
+    s.task = task;
+    s.clip = try dance.Clip.fromBytes(s.gpa, task.clipBytes());
+    // The fleet copies this list, so a local array is fine here.
+    const clips = [_]*const dance.Clip{&s.clip};
+    s.trainer = try Trainer.init(s.gpa, &s.pipe, m, s.imported.names, &clips, task.options());
+    s.progress = .{};
+}
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.progress = .{};
     s.gpa = gpa;
@@ -265,22 +282,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     try startTask(s, .getup, false);
 }
 
-/// Begin training on a motion from scratch: its baked clip, a fresh trainer, fresh progress.
-/// `replace` says whether a previous motion's clip and trainer must be released first.
-fn startTask(s: *State, task: Task, replace: bool) !void {
-    if (replace) {
-        s.trainer.deinit();
-        s.clip.deinit();
-    }
-    const m: *rbt.Model = &s.imported.model;
-    s.task = task;
-    s.clip = try dance.Clip.fromBytes(s.gpa, task.clipBytes());
-    // The fleet copies this list, so a local array is fine here.
-    const clips = [_]*const dance.Clip{&s.clip};
-    s.trainer = try Trainer.init(s.gpa, &s.pipe, m, s.imported.names, &clips, task.options());
-    s.progress = .{};
-}
-
 fn deinit(gpa: Allocator, s: *State) void {
     // The trainer first - it holds the networks on the GPU host - and then the host itself, which
     // owns the buffers, bind groups and compute pipelines.
@@ -299,54 +300,25 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl = f.gl;
-    const m: *const rbt.Model = &s.imported.model;
+/// The servo alone - the policy's actions held at exactly zero - on the very fleet that is about
+/// to train, counted the same way as the policy: steps watched against failures among them. Done
+/// before learning starts, so it measures the servo and nothing else.
+fn measureServo(s: *State) void {
     const p: *Progress = &s.progress;
-
-    // A slice at a time: it grows while frames come in under budget and shrinks the moment one
-    // does not, so the page stays responsive on a slow device and uses a fast one.
-    const dt: f32 = f.time.delta_time;
-    if (dt > 0 and dt < 0.018 and p.per_frame < 16) {
-        p.per_frame += 1;
-    } else if (dt > 0.024 and p.per_frame > 1) {
-        p.per_frame -= 1;
-    }
-    if (p.servo_left > 0) {
-        measureServo(s);
-    } else if (p.failed == null) {
-        if (dt > 0 and dt < 1.0) {
-            p.training_seconds += dt;
-        }
-        if (s.trainer.collect(p.per_frame)) {
-            if (s.trainer.learn()) |stats| {
-                recordBatch(s, stats);
-                offerWeights(s);
-            } else |err| {
-                p.failed = @errorName(err);
+    const fleet: *track.Fleet = s.trainer.env.fleet;
+    const take: u32 = @min(p.servo_left, p.per_frame);
+    for (0..take) |_| {
+        for (0..2) |_| {
+            _ = fleet.step(s.zero_actions);
+            p.servo_exposure += envs;
+            for (fleet.failures) |lost| {
+                if (lost) {
+                    p.servo_failures += 1;
+                }
             }
         }
     }
-
-    takeUploads(s);
-    z.clearViewport(f, bg);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(s, f);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 20, 0.5);
-    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
-
-    // The reference, where training character 0 should be; then the character itself.
-    const fleet: *track.Fleet = s.trainer.fleet;
-    const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
-    @memcpy(s.ghost.pos, s.clip.pose(frame));
-    s.ghost.stage = .stale;
-    rbt.kinematics(m, &s.ghost);
-    drawRobot(s, gl, &s.ghost, ref_col);
-    drawRobot(s, gl, &fleet.data[0], sim_col);
-    z.endMode3D(gl);
+    p.servo_left -= take;
 }
 
 /// One finished batch into the history, and the milestones it may have reached.
@@ -371,25 +343,73 @@ fn recordBatch(s: *State, stats: ppo_track.Stats) void {
     }
 }
 
-/// The servo alone - the policy's actions held at exactly zero - on the very fleet that is about
-/// to train, counted the same way as the policy: steps watched against failures among them. Done
-/// before learning starts, so it measures the servo and nothing else.
-fn measureServo(s: *State) void {
-    const p: *Progress = &s.progress;
-    const fleet: *track.Fleet = s.trainer.fleet;
-    const take: u32 = @min(p.servo_left, p.per_frame);
-    for (0..take) |_| {
-        for (0..2) |_| {
-            _ = fleet.step(s.zero_actions);
-            p.servo_exposure += envs;
-            for (fleet.failures) |lost| {
-                if (lost) {
-                    p.servo_failures += 1;
-                }
-            }
+/// Hand the newest weights to the Save overlay, named by motion and by how many batches trained
+/// them - so the newest file on the phone is obvious by its name alone.
+fn offerWeights(s: *State) void {
+    const bytes: []u8 = s.trainer.exportWeights(s.gpa) catch return;
+    defer s.gpa.free(bytes);
+    var name_buffer: [64]u8 = undefined;
+    const batches: u64 = s.trainer.iterations;
+    const name: []const u8 = bufPrint(&name_buffer, "{s}_ppo_b{d}.weights", .{ s.task.label(), batches }) catch return;
+    z.userfile.offerDownload(bytes, name);
+}
+
+fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
+    const written: []const u8 = bufPrint(&s.progress.status, fmt, args) catch s.progress.status[0..0];
+    s.progress.status_len = written.len;
+}
+
+/// Weights the user picked: carried on from if they fit this network AND this motion, refused by
+/// name if not.
+fn takeUploads(s: *State) void {
+    while (z.userfile.pendingCount() > 0) {
+        const size: u32 = z.userfile.nextSize();
+        const bytes: []u8 = s.gpa.alloc(u8, size) catch {
+            z.userfile.discardNext();
+            return;
+        };
+        defer s.gpa.free(bytes);
+        _ = z.userfile.readNext(bytes);
+        if (s.trainer.importWeights(bytes)) |_| {
+            // A fresh record from here: the servo stands, the history and milestones restart.
+            const servo_exposure: u64 = s.progress.servo_exposure;
+            const servo_failures: u32 = s.progress.servo_failures;
+            s.progress = .{};
+            s.progress.servo_left = 0;
+            s.progress.servo_exposure = servo_exposure;
+            s.progress.servo_failures = servo_failures;
+            setStatus(s, "loaded batch {d}", .{s.trainer.iterations});
+            offerWeights(s);
+        } else |err| {
+            setStatus(s, "refused: {s}", .{@errorName(err)});
         }
     }
-    p.servo_left -= take;
+}
+
+/// The failure rate over time, in plain ASCII - a density ramp every font has - one character a
+/// batch: taller is longer between losses, relative to the best window so far.
+fn drawCurve(u: ui.Ui, p: *const Progress) void {
+    const shown: usize = @min(p.history_count, 32);
+    if (shown == 0) {
+        return;
+    }
+    const ramp: []const u8 = ".:-=+*#%@";
+    var values: [32]f32 = undefined;
+    var top: f32 = 0.1;
+    for (0..shown) |i| {
+        // Each character: that batch's own exposure over its failures, capped so one lucky batch
+        // with no failures does not flatten the rest.
+        const index: usize = (p.history_count - shown + i) % history_len;
+        const seconds: f32 = @min(meanTimeToFailure(p.exposure[index], p.failures[index]) orelse 30.0, 30.0);
+        values[i] = seconds;
+        top = @max(top, seconds);
+    }
+    var line: [32]u8 = undefined;
+    for (0..shown) |i| {
+        const step: usize = @trunc(values[i] / top * float(ramp.len - 1));
+        line[i] = ramp[@min(ramp.len - 1, step)];
+    }
+    u.text("{s}", .{line[0..shown]});
 }
 
 /// The numbers that say whether it is learning. Returns whether the pointer belongs to the panel,
@@ -444,14 +464,14 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         }
         u.text("{s}", .{marks[0..at]});
         _ = u.button("save", .{});
-        const save_min: zm.Vec2 = u.getItemRectMin();
-        const save_max: zm.Vec2 = u.getItemRectMax();
-        z.web.userfile.setSaveRect(save_min[0], save_min[1], save_max[0] - save_min[0], save_max[1] - save_min[1]);
+        const save_min: Vec2 = u.getItemRectMin();
+        const save_max: Vec2 = u.getItemRectMax();
+        z.userfile.setSaveRect(save_min[0], save_min[1], save_max[0] - save_min[0], save_max[1] - save_min[1]);
         u.sameLine(.{});
         _ = u.button("load", .{});
-        const load_min: zm.Vec2 = u.getItemRectMin();
-        const load_max: zm.Vec2 = u.getItemRectMax();
-        z.web.userfile.setPickerRect(
+        const load_min: Vec2 = u.getItemRectMin();
+        const load_max: Vec2 = u.getItemRectMax();
+        z.userfile.setPickerRect(
             load_min[0],
             load_min[1],
             load_max[0] - load_min[0],
@@ -472,75 +492,6 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         drawCurve(u, p);
     }
     return captured;
-}
-
-/// The failure rate over time, in plain ASCII - a density ramp every font has - one character a
-/// batch: taller is longer between losses, relative to the best window so far.
-fn drawCurve(u: ui.Ui, p: *const Progress) void {
-    const shown: usize = @min(p.history_count, 32);
-    if (shown == 0) {
-        return;
-    }
-    const ramp: []const u8 = ".:-=+*#%@";
-    var values: [32]f32 = undefined;
-    var top: f32 = 0.1;
-    for (0..shown) |i| {
-        // Each character: that batch's own exposure over its failures, capped so one lucky batch
-        // with no failures does not flatten the rest.
-        const index: usize = (p.history_count - shown + i) % history_len;
-        const seconds: f32 = @min(meanTimeToFailure(p.exposure[index], p.failures[index]) orelse 30.0, 30.0);
-        values[i] = seconds;
-        top = @max(top, seconds);
-    }
-    var line: [32]u8 = undefined;
-    for (0..shown) |i| {
-        const step: usize = @trunc(values[i] / top * float(ramp.len - 1));
-        line[i] = ramp[@min(ramp.len - 1, step)];
-    }
-    u.text("{s}", .{line[0..shown]});
-}
-
-/// Hand the newest weights to the Save overlay, named by motion and by how many batches trained
-/// them - so the newest file on the phone is obvious by its name alone.
-fn offerWeights(s: *State) void {
-    const bytes: []u8 = s.trainer.exportWeights(s.gpa) catch return;
-    defer s.gpa.free(bytes);
-    var name_buffer: [64]u8 = undefined;
-    const batches: u64 = s.trainer.iterations;
-    const name: []const u8 = bufPrint(&name_buffer, "{s}_ppo_b{d}.weights", .{ s.task.label(), batches }) catch return;
-    z.web.userfile.offerDownload(bytes, name);
-}
-
-/// Weights the user picked: carried on from if they fit this network AND this motion, refused by
-/// name if not.
-fn takeUploads(s: *State) void {
-    while (z.web.userfile.pendingCount() > 0) {
-        const size: u32 = z.web.userfile.nextSize();
-        const bytes: []u8 = s.gpa.alloc(u8, size) catch {
-            z.web.userfile.discardNext();
-            return;
-        };
-        defer s.gpa.free(bytes);
-        _ = z.web.userfile.readNext(bytes);
-        if (s.trainer.importWeights(bytes)) |_| {
-            // A fresh record from here: the servo stands, the history and milestones restart.
-            const servo_exposure: u64 = s.progress.servo_exposure;
-            const servo_failures: u32 = s.progress.servo_failures;
-            s.progress = .{};
-            s.progress.servo_left = 0;
-            s.progress.servo_exposure = servo_exposure;
-            s.progress.servo_failures = servo_failures;
-            setStatus(s, "loaded batch {d}", .{s.trainer.iterations});
-            offerWeights(s);
-        } else |err| {
-            setStatus(s, "refused: {s}", .{@errorName(err)});
-        }
-    }
-}
-
-fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
-    const written: []const u8 = bufPrint(&s.progress.status, fmt, args) catch s.progress.status[0..0];
-    s.progress.status_len = written.len;
 }
 
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
@@ -575,6 +526,53 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
             else => {},
         }
     }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl = f.gl;
+    const m: *const rbt.Model = &s.imported.model;
+    const p: *Progress = &s.progress;
+
+    // A slice at a time: it grows while frames come in under budget and shrinks the moment one
+    // does not, so the page stays responsive on a slow device and uses a fast one.
+    const dt: f32 = f.time.delta_time;
+    if (dt > 0 and dt < 0.018 and p.per_frame < 16) {
+        p.per_frame += 1;
+    } else if (dt > 0.024 and p.per_frame > 1) {
+        p.per_frame -= 1;
+    }
+    if (p.servo_left > 0) {
+        measureServo(s);
+    } else if (p.failed == null) {
+        if (dt > 0 and dt < 1.0) {
+            p.training_seconds += dt;
+        }
+        if (s.trainer.collect(p.per_frame)) {
+            const stats: ppo_track.Stats = s.trainer.learn();
+            recordBatch(s, stats);
+            offerWeights(s);
+        }
+    }
+
+    takeUploads(s);
+    z.clearViewport(f, bg);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(s, f);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 20, 0.5);
+    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
+
+    // The reference, where training character 0 should be; then the character itself.
+    const fleet: *track.Fleet = s.trainer.env.fleet;
+    const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
+    @memcpy(s.ghost.pos, s.clip.pose(frame));
+    s.ghost.stage = .stale;
+    rbt.kinematics(m, &s.ghost);
+    drawRobot(s, gl, &s.ghost, ref_col);
+    drawRobot(s, gl, &fleet.data[0], sim_col);
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

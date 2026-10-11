@@ -19,6 +19,8 @@ const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
 const ui = @import("../ui.zig");
 const shapes2d = @import("../shapes2d.zig");
 const text2d = @import("../text2d.zig");
@@ -67,18 +69,18 @@ fn buildContext(gpa: Allocator) ui.UiContext {
 /// Best-effort directory create + file delete using the Io-threaded
 /// file APIs.  Both swallow errors - the tests are robust to host
 /// environments where `tests/snapshots/` isn't writable.
-fn prepareSnapshotPath(io: std.Io, ref_path: []const u8) void {
-    std.Io.Dir.cwd().createDirPath(io, snapshot_dir) catch {}; // lint:off catch-suppression: ensure-dir, ok if exists
-    std.Io.Dir.cwd().deleteFile(io, ref_path) catch {}; // lint:off catch-suppression: remove if present
+fn prepareSnapshotPath(io: Io, ref_path: []const u8) void {
+    Io.Dir.cwd().createDirPath(io, snapshot_dir) catch {}; // lint:off catch-suppression: ensure-dir, ok if exists
+    Io.Dir.cwd().deleteFile(io, ref_path) catch {}; // lint:off catch-suppression: remove if present
 }
 
 test "snapshot: first-run writes baseline and returns clean diff" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const ref_path: []const u8 = snapshot_dir ++ "/snap_baseline_test.png";
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
     prepareSnapshotPath(io, ref_path);
 
     var ctx: ui.UiContext = buildContext(gpa);
@@ -102,12 +104,12 @@ test "snapshot: first-run writes baseline and returns clean diff" {
 }
 
 test "snapshot: identical scene re-run is byte-for-byte equal" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const ref_path: []const u8 = snapshot_dir ++ "/snap_identical_test.png";
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
     prepareSnapshotPath(io, ref_path);
 
     // Pass 1: write the baseline.
@@ -145,12 +147,12 @@ test "snapshot: identical scene re-run is byte-for-byte equal" {
 }
 
 test "snapshot: different scene against same reference yields nonzero diff" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const ref_path: []const u8 = snapshot_dir ++ "/snap_diff_test.png";
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
     prepareSnapshotPath(io, ref_path);
 
     // Pass 1: write Scene A as baseline.

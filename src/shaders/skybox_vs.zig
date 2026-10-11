@@ -7,6 +7,7 @@
 
 const zm = @import("zm");
 const mulMatVec = zm.mulMatVec;
+const Vec = zm.Vec;
 const shader_io = @import("skybox_vs_io.zig");
 const shader_externs = @import("skybox_vs_externs");
 
@@ -26,7 +27,7 @@ pub fn shaderMain(io_in: Io) Out {
 
     // Unproject the corner to a world-space ray from the camera.
     const uu = io_in.u;
-    const far: zm.Vec = mulMatVec(uu.inv_view_proj, .{ cx, cy, 1.0, 1.0 });
+    const far: Vec = mulMatVec(uu.inv_view_proj, .{ cx, cy, 1.0, 1.0 });
     const w: f32 = far[3];
     out.dir = .{
         far[0] / w - uu.camera_pos[0],

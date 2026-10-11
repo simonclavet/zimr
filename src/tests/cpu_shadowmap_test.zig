@@ -207,7 +207,7 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
     const light_vp: Mat = mulMat(light_proj, light_view);
 
     // ---- Pass 1: depth-in-red into the shadow map. ----
-    const SM: usize = 128;
+    const shadow_map_size: usize = 128;
     var depth_outs: [vertex_count]DepthVs.Out = undefined;
     raster_shader.dispatchVertexShader(
         DepthVs,
@@ -216,11 +216,11 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
         vertex_count,
         fillDepthAttrs,
     );
-    const shadow_img: [SM * SM][4]u8 = raster_shader.rasterizeToImage(
+    const shadow_img: [shadow_map_size * shadow_map_size][4]u8 = raster_shader.rasterizeToImage(
         DepthVs,
         DepthFs,
-        SM,
-        SM,
+        shadow_map_size,
+        shadow_map_size,
         &depth_outs,
         &indices,
         .{ .gray = undefined },
@@ -240,14 +240,14 @@ test "cpu two-pass shadow map: occluder casts a visible ground shadow" {
     try expect(min_red < 240);
 
     // Flatten to a byte slice for the CPU sampler.
-    var sm_bytes: [SM * SM * 4]u8 = undefined;
+    var sm_bytes: [shadow_map_size * shadow_map_size * 4]u8 = undefined;
     for (shadow_img, 0..) |px, i| {
         sm_bytes[i * 4 + 0] = px[0];
         sm_bytes[i * 4 + 1] = px[1];
         sm_bytes[i * 4 + 2] = px[2];
         sm_bytes[i * 4 + 3] = px[3];
     }
-    const shadow_ref: ShadowRef = .{ .pixels = &sm_bytes, .w = SM, .h = SM };
+    const shadow_ref: ShadowRef = .{ .pixels = &sm_bytes, .w = shadow_map_size, .h = shadow_map_size };
 
     // ---- Camera view-projection. ----
     const W: usize = 160;

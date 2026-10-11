@@ -138,12 +138,24 @@
 //! Re-export surface follows.  Internal modules (descriptor_encoder,
 //! shader_introspect, ...) are exposed for advanced users who drop a layer.
 
+const std = @import("std");
+const bufPrint = std.fmt.bufPrint;
+const Allocator = std.mem.Allocator;
+const indexOfScalar = std.mem.indexOfScalar;
+
 pub const wgpu = @import("wgpu.zig");
+/// Which platform the engine runs on, as three comptime facts (`is_browser`, `has_gpu`, `has_window`).
+pub const host = @import("host.zig");
 pub const wgpu_app = @import("wgpu_app.zig");
+// lint:off browser-call: the browser's module, offered to apps as z.web for what only a browser can do
+pub const web = @import("web.zig");
+/// The platforms and their contract: `platform.current` is the one this build runs on.
+pub const platform = @import("platform.zig");
+
 pub const dom = web.dom;
 pub const DateTime = web.dom.DateTime;
 pub const localTime = web.dom.localNow;
-pub const epochMillis = web.dom.epochMillis;
+pub const epochMillis = wgpu_app.epochMillis;
 pub const timezoneOffsetMinutes = web.dom.tz_offset_min;
 
 // Software rasterizer (pure-Zig) + its per-pixel fragment-shader dispatcher, so
@@ -322,6 +334,14 @@ pub const Image = @import("types.zig").Image;
 pub const PixelFormat = @import("types.zig").PixelFormat;
 /// Decode PNG bytes into an Image (CPU only - no GPU). Agnostic (codecs).
 pub const loadImageFromMemory = wgpu_app.loadImageFromMemory;
+// Asset codecs (glTF parsing + JPEG/PNG decode), re-exported so wgpu
+// consumers can load models/textures.  Lives in this module (rather than a
+// separate one) because `raster` already pulls `types.zig` into the zimr
+// module, and a file may belong to only one module - sharing it here avoids
+// a one-file-per-module conflict.  Only pure functions get analyzed unless
+// the GL/dom paths are referenced.
+pub const codecs = @import("codecs.zig");
+
 /// A decoded GIF animation (raylib's `LoadImageAnim`): N fully-composited
 /// RGBA8 canvases (one per frame) + each frame's delay in ms. Frame `i` is
 /// `anim.frame(i)`; release with `anim.deinit(gpa)`. Play by uploading the
@@ -330,7 +350,7 @@ pub const GifAnim = codecs.gif.Anim;
 /// Decode animated (or single-frame) GIF bytes into a `GifAnim`. CPU only -
 /// no GPU. The frames are already composited (disposal + transparency
 /// applied), so a player just blits `anim.frame(i)`.
-pub fn loadGifAnim(gpa: std.mem.Allocator, bytes: []const u8) codecs.gif.Error!GifAnim {
+pub fn loadGifAnim(gpa: Allocator, bytes: []const u8) codecs.gif.Error!GifAnim {
     return codecs.gif.decode(gpa, bytes);
 }
 /// Procedural CPU image generation (backend-agnostic; src/image.zig). Each
@@ -358,6 +378,8 @@ pub const unloadImage = image.unloadImage;
 /// Reproducible RNG (`rng.Seeded.init(seed)`), re-exported from the runtime.
 pub const rng = @import("runtime.zig").effects.rng;
 
+pub const sound = @import("sound.zig");
+
 // ---- Audio (Web Audio; backend-agnostic, shared with the GL path) ----
 // Call `z.audio_device.init(f.audio_device)` once (that's what reaches the
 // `extern "audio"` JS bridge), then synthesize with z.composer / z.waves and
@@ -366,6 +388,8 @@ pub const audio_device = sound.audio_device;
 pub const waves = sound.waves;
 pub const sounds = sound.sounds;
 pub const composer = sound.composer;
+/// The engine's one mixer: voices read from sources, mixed each frame, pushed to the platform's output.
+pub const mixer = sound.mixer;
 pub const analyser = sound.analyser;
 pub const AudioState = sound.AudioState;
 pub const Sound = @import("types.zig").Sound;
@@ -467,9 +491,9 @@ pub const physics_common = @import("physics_common.zig");
 comptime {
     physics_common.assertParallelEngines(zimrphysics2d, zimrphysics);
 }
-pub const sound = @import("sound.zig");
-pub const web = @import("web.zig");
 pub const net = @import("net.zig");
+/// WebSocket connections on any platform (`net.ws`).
+pub const ws = net.ws;
 
 // ---- std.log -> on-page console (the proper logging fix) -------------------
 //
@@ -482,21 +506,14 @@ pub const net = @import("net.zig");
 //     const z = @import("zimr");
 //     pub const std_options = z.std_options;
 //
-// Each line is formatted with its scope/level prefix and routed through
-// web.dom.log (which targets js_log on wasm, stderr on host).
+// Each line is formatted with its scope/level prefix and handed to the platform's log
+// (`platform.current.log`: the browser's console, or standard error natively and headless).
 fn zimrLogFn(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.enum_literal),
     comptime fmt: []const u8,
     args: anytype,
 ) void {
-    // lint:off import-at-top: logFn callback; module has no file-scope std
-    const dom_level: web.dom.LogLevel = switch (level) {
-        .err => .err,
-        .warn => .warn,
-        .info => .info,
-        .debug => .debug,
-    };
     const prefix: []const u8 = if (scope == .default) "" else "(" ++ @tagName(scope) ++ ") ";
     // A generous buffer: assert failures and the memwatch per-frame-leak warning
     // both run long, and the diagnostic the reader needs is usually the HEAD of
@@ -508,14 +525,14 @@ fn zimrLogFn(
     var buf: [16384]u8 = @splat(0);
     const marker: []const u8 = " [...truncated]";
     const msg: []const u8 = bufPrint(buf[0 .. buf.len - marker.len], prefix ++ fmt, args) catch trunc: {
-        const cut: usize = std.mem.indexOfScalar(u8, buf[0 .. buf.len - marker.len], 0) orelse (buf.len - marker.len);
+        const cut: usize = indexOfScalar(u8, buf[0 .. buf.len - marker.len], 0) orelse (buf.len - marker.len);
         @memcpy(buf[cut .. cut + marker.len], marker);
         break :trunc buf[0 .. cut + marker.len];
     };
-    web.dom.log(dom_level, msg);
+    platform.current.log(level, msg);
 }
 
-/// Root-module std options that route std.log to the on-page console.
+/// Root-module std options that route std.log to the platform's log (`platform.current.log`).
 /// `pub const std_options = z.std_options;` in your example's main file.
 pub const std_options: std.Options = .{ .logFn = zimrLogFn };
 pub const utils = @import("utils.zig");
@@ -527,6 +544,12 @@ pub const profiler = @import("profiler.zig");
 /// App-callable profiler views (flamegraph, etc.) built on ui.zig. The app
 /// owns its own button/pause and calls these inside its UI. See profiler_ui.zig.
 pub const profiler_ui = @import("profiler_ui.zig");
+
+// Internals for advanced users (typically not needed).
+// `spv2wgsl.zig` is BUILD-TIME ONLY (Phase D1 of the wgpu plan);
+// it's still loaded into the test block below so its tests run,
+// but it's not re-exposed as a runtime API surface.
+pub const gpu = @import("gpu.zig");
 
 // Core lifecycle types
 pub const GpuFrame = gpu.GpuFrame;
@@ -599,11 +622,6 @@ pub const shader = @import("shader_runtime_wgpu.zig");
 pub const render_pass = wgpu.render_pass;
 pub const compute_pass = wgpu.compute_pass;
 
-// Internals for advanced users (typically not needed).
-// `spv2wgsl.zig` is BUILD-TIME ONLY (Phase D1 of the wgpu plan);
-// it's still loaded into the test block below so its tests run,
-// but it's not re-exposed as a runtime API surface.
-pub const gpu = @import("gpu.zig");
 pub const shader_introspect = @import("shader_introspect.zig");
 
 // Custom-pipeline API - complete WebGPU control (raw WGSL or Zig shaders, custom
@@ -640,14 +658,6 @@ pub const FluidDiscs = @import("draw3d.zig").draw_points.FluidDiscs;
 pub const BufRegion = @import("draw3d.zig").draw_points.BufRegion;
 pub const FluidDiscOptions = @import("draw3d.zig").draw_points.FluidOptions;
 pub const StorageBuffer = wgpu.storage_buffer.StorageBuffer;
-
-// Asset codecs (glTF parsing + JPEG/PNG decode), re-exported so wgpu
-// consumers can load models/textures.  Lives in this module (rather than a
-// separate one) because `raster` already pulls `types.zig` into the zimr
-// module, and a file may belong to only one module - sharing it here avoids
-// a one-file-per-module conflict.  Only pure functions get analyzed unless
-// the GL/dom paths are referenced.
-pub const codecs = @import("codecs.zig");
 
 /// Run a PURE kernel off the main thread (a Web Worker), so a long job stops
 /// freezing the frame. `codecs.png.encode` of a 1024x1024 image is ~240 ms in wasm on
@@ -904,8 +914,43 @@ const input_ns = @import("runtime.zig").input;
 pub const hideCursor = input_ns.hideCursor;
 pub const showCursor = input_ns.showCursor;
 pub const isCursorHidden = input_ns.isCursorHidden;
-pub const disableCursor = input_ns.disableCursor;
-pub const enableCursor = input_ns.enableCursor;
+pub const disableCursor = wgpu_app.disableCursor;
+pub const enableCursor = wgpu_app.enableCursor;
+pub const isPointerLocked = input_ns.isPointerLocked;
+pub const setWindowTitle = wgpu_app.setWindowTitle;
+pub const requestFullscreen = wgpu_app.requestFullscreen;
+pub const Monitor = wgpu_app.Monitor;
+pub const monitorCount = wgpu_app.monitorCount;
+pub const monitor = wgpu_app.monitor;
+pub const currentMonitor = wgpu_app.currentMonitor;
+pub const WindowShow = wgpu_app.WindowShow;
+pub const SizeLimits = wgpu_app.SizeLimits;
+pub const showWindow = wgpu_app.showWindow;
+pub const focusWindow = wgpu_app.focusWindow;
+pub const setWindowPosition = wgpu_app.setWindowPosition;
+pub const setWindowSizeLimits = wgpu_app.setWindowSizeLimits;
+pub const keyName = wgpu_app.keyName;
+pub const GamepadButton = @import("types.zig").GamepadButton;
+pub const GamepadAxis = @import("types.zig").GamepadAxis;
+pub const isGamepadAvailable = input_ns.isGamepadAvailable;
+pub const isGamepadButtonDown = input_ns.isGamepadButtonDown;
+pub const isGamepadButtonPressed = input_ns.isGamepadButtonPressed;
+pub const isGamepadButtonReleased = input_ns.isGamepadButtonReleased;
+pub const getGamepadAxisMovement = input_ns.getGamepadAxisMovement;
+pub const setGamepadVibration = input_ns.setGamepadVibration;
+pub const keepAwake = wgpu_app.keepAwake;
+pub const openUrl = wgpu_app.openUrl;
+pub const setClipboardText = wgpu_app.setClipboardText;
+pub const userfile = wgpu_app.userfile;
+pub const requestPaste = wgpu_app.requestPaste;
+pub const getPastedText = input_ns.getPastedText;
+pub const wantTextInput = input_ns.wantTextInput;
+pub const TextInputOptions = input_ns.TextInputOptions;
+pub const TextInputArea = input_ns.TextInputArea;
+pub const loadValue = wgpu_app.loadValue;
+pub const saveValue = wgpu_app.saveValue;
+pub const removeValue = wgpu_app.removeValue;
+pub const isCursorOnScreen = input_ns.isCursorOnScreen;
 pub const setMouseCursor = input_ns.setMouseCursor;
 pub const getTouchPointId = input_ns.getTouchPointId;
 
@@ -952,8 +997,9 @@ pub const isMouseButtonReleased = wgpu_app.isMouseButtonReleased;
 // GlAdapter + raster's SwAdapter): immediate-mode scene code drives Renderer2D's
 // batch through it, so one `fn drawX(gl: anytype)` runs on all three backends.
 pub const WgpuGl = @import("WgpuGl.zig");
-const std = @import("std");
-const bufPrint = std.fmt.bufPrint;
+/// The scene contract (`requireGlScene`: what a renderer-polymorphic `drawScene(gl: anytype)` needs)
+/// and the software rasteriser's adapter, `SwAdapter`.
+pub const renderer_trait = @import("renderer_trait.zig");
 
 test {
     // Pull all module tests into one place.  `zig test

@@ -46,10 +46,6 @@ fn runnerInit(gpa: Allocator, f: *z.Frame, s: *State) anyerror!void {
     try z.initInto(spec, gpa, f, s);
 }
 
-pub fn main() !void {
-    try zimr_app.run(spec.config, State, runnerInit, runnerUpdate);
-}
-
 /// Tear down the current example State by running its `deinit` - the entry point
 /// the smoke/leak harness calls after ticking frames, so the GPU-handle balance
 /// can be re-measured post-teardown (a non-zero delta from a clean baseline is a
@@ -58,6 +54,11 @@ pub fn main() !void {
 pub export fn runnerDeinit() void {
     zimr_app.pushTracePhase("deinit");
     defer zimr_app.popTracePhase();
+    // The sound stops first: the mixer's voices may read samples, or a generator's context, that the example's deinit
+    // frees. Closing the device stops the mixer and clears its ready mark, so that a later `init` - after a reload -
+    // starts it again; stopping the mixer as well covers an app that started it without the device.
+    z.audio_device.close(&zimr_app.audio_device);
+    zimr_app.mixer.stop();
     if (zimr_app.state) |st| {
         const sp: *State = @ptrCast(@alignCast(st));
         spec.deinit(zimr_app.gpa, sp);
@@ -139,7 +140,7 @@ pub export fn runnerReinit() void {
     zimr_app.pushTracePhase("init");
     defer zimr_app.popTracePhase();
     const state_ptr: *State = zimr_app.gpa.create(State) catch return;
-    var f: z.Frame = zimr_app.makeFrame();
+    var f: z.Frame = zimr_app.makeFrame(null);
     z.initInto(spec, zimr_app.gpa, &f, state_ptr) catch {
         zimr_app.gpa.destroy(state_ptr);
         return;
@@ -151,6 +152,14 @@ pub export fn runnerReinit() void {
 /// harness only ENFORCES a flat twice-lifecycle census for `.managed` examples.
 pub export fn runnerMemoryMode() i32 {
     return @backingInt(spec.memory);
+}
+
+fn clampToI32(bytes: usize) i32 {
+    const i32_max: usize = (1 << 31) - 1;
+    if (bytes > i32_max) {
+        return @intCast(i32_max);
+    }
+    return @intCast(bytes);
 }
 
 /// Net live bytes currently handed out through the example's allocator - the
@@ -196,10 +205,19 @@ pub export fn runnerWrongSideFrees() i32 {
     return @intCast(@min(total, i32_max));
 }
 
-fn clampToI32(bytes: usize) i32 {
-    const i32_max: usize = (1 << 31) - 1;
-    if (bytes > i32_max) {
-        return @intCast(i32_max);
+pub fn main() !void {
+    try zimr_app.run(spec.config, State, runnerInit, runnerUpdate);
+    // On the web `run` returns and the browser drives frames through the `update` export. A native program drives
+    // them itself until its window closes - a headless one for its count of frames - then tears down exactly as the
+    // leak harness does.
+    if (comptime z.host.drives_own_frames) {
+        zimr_app.runNative();
+        runnerShutdown();
+        // An unclean run - the validation layer's messages, a script line that failed - exits with status 1, so that a
+        // headless run fails as a test.
+        if (!zimr_app.finishNative()) {
+            // lint:off process-exit: the program's entry point: an unclean run's exit status
+            std.process.exit(1);
+        }
     }
-    return @intCast(bytes);
 }

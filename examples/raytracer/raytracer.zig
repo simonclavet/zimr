@@ -39,6 +39,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const clamp = zm.clamp;
@@ -64,7 +66,7 @@ const Color = zm.Color;
 /// `zimrmath.vector3RandomUnitVector` (the zimrmath compute surface
 /// was deleted in Z4).  Uses the same algorithm: sample a cube,
 /// reject points outside the unit ball, normalize what survives.
-fn randomUnitVec3(rng: std.Random) zm.Vec {
+fn randomUnitVec3(rng: Random) Vec {
     while (true) {
         const v = vec(
             rng.float(f32) * 2 - 1,
@@ -83,6 +85,7 @@ fn randomUnitVec3(rng: std.Random) zm.Vec {
 // ============================================================================
 
 const screen_w: i32 = 800;
+
 const screen_h: i32 = 450;
 
 /// Internal render resolution.  The framebuffer is this many pixels;
@@ -90,7 +93,9 @@ const screen_h: i32 = 450;
 /// quarter-of-1080p - a sweet spot for "image still looks like an
 /// image" at single-thread f32.
 const rt_w: i32 = 480;
+
 const rt_h: i32 = 270;
+
 const rt_px_count: usize = @intCast(rt_w * rt_h);
 
 /// Stride used when moving - every Nth pixel is rendered, the rest
@@ -124,6 +129,7 @@ const Material = union(enum) {
 // ============================================================================
 
 const Ray = zm.Ray;
+
 fn rayAt(self: Ray, t: f32) Vec {
     return (self.position + (self.direction * splat(t)));
 }
@@ -171,10 +177,10 @@ fn deriveBasis(cam: Camera) CamBasis {
     const sy: f32 = @sin(cam.yaw);
 
     const forward: Vec = vec(-cp * sy, sp, -cp * cy);
-    const w: zm.Vec = normalize3((-(forward)));
+    const w: Vec = normalize3((-(forward)));
     const world_up: Vec = vec(0, 1, 0);
-    const u: zm.Vec = normalize3(cross(world_up, w));
-    const v: zm.Vec = cross(w, u);
+    const u: Vec = normalize3(cross(world_up, w));
+    const v: Vec = cross(w, u);
 
     // Viewport size in world units.  `focus_dist = 1.0` (no depth-
     // of-field) keeps the math straightforward.
@@ -183,16 +189,16 @@ fn deriveBasis(cam: Camera) CamBasis {
     const half_h: f32 = @tan(theta / 2.0) * focus_dist;
     const half_w: f32 = half_h * (float(rt_w) / float(rt_h));
 
-    const viewport_u: zm.Vec = (u * splat(2.0 * half_w));
-    const viewport_v: zm.Vec = (v * splat(-2.0 * half_h));
-    const pdu: zm.Vec = (viewport_u * splat(1.0 / float(rt_w)));
-    const pdv: zm.Vec = (viewport_v * splat(1.0 / float(rt_h)));
+    const viewport_u: Vec = (u * splat(2.0 * half_w));
+    const viewport_v: Vec = (v * splat(-2.0 * half_h));
+    const pdu: Vec = (viewport_u * splat(1.0 / float(rt_w)));
+    const pdv: Vec = (viewport_v * splat(1.0 / float(rt_h)));
 
     // Top-left corner of the viewport, then nudge by half a pixel
     // to sit at the center of pixel (0, 0).
-    const upper_left: zm.Vec =
+    const upper_left: Vec =
         cam.lookfrom - (w * splat(focus_dist)) - (viewport_u * splat(0.5)) - (viewport_v * splat(0.5));
-    const px00: zm.Vec = upper_left + (pdu * splat(0.5)) + (pdv * splat(0.5));
+    const px00: Vec = upper_left + (pdu * splat(0.5)) + (pdv * splat(0.5));
 
     return .{
         .origin = cam.lookfrom,
@@ -251,20 +257,9 @@ const State = struct {
     moving: bool = false,
 
     // -- UI + scratch ------------------------
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     gpa: Allocator,
 };
-
-// ============================================================================
-// Main entry point
-// ============================================================================
-
-fn deinit(gpa: Allocator, s: *State) void {
-    s.fb.deinit();
-    s.world.deinit(gpa);
-    gpa.free(s.accum);
-    gpa.free(s.pixels);
-}
 
 // ============================================================================
 // Init
@@ -277,7 +272,7 @@ fn spawnSphere(
     radius: f32,
     mat: Material,
 ) !void {
-    const e: ecs.Entity = try ecs.Entity.reserveImmediateOrErr(world);
+    const e: ecs.Entity = try .reserveImmediateOrErr(world);
     _ = try e.changeArchImmediateOrErr(world, gpa, struct {
         sphere: Sphere,
         material: Material,
@@ -348,12 +343,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // GPU texture world (Phase E pattern - same shape as
     // procgen_noise).  Just holds the one streaming texture.
-    const fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    const fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         @intCast(rt_w),
         @intCast(rt_h),
-        std.mem.sliceAsBytes(pixels),
+        sliceAsBytes(pixels),
         "raytracer_fb",
     );
 
@@ -368,20 +363,331 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .accum = accum,
         .pixels = pixels,
         .fb = fb,
-        .rng = std.Random.DefaultPrng.init(0xCAFE),
+        .rng = Random.DefaultPrng.init(0xCAFE),
         .gpa = gpa,
     };
 }
 
 // ============================================================================
-// Per-frame update
+// Material scatter
 // ============================================================================
 
-fn drawUiPanel(f: *z.Frame, s: *State) bool {
-    _ = f;
-    _ = s;
-    return false; // UI panel omitted in the wgpu CPU port (no z.Ui yet)
+const Scatter = struct {
+    attenuation: Vec,
+    scattered: Ray,
+};
+
+/// Diffuse: scatter in a random direction biased toward the normal.
+/// `normal + randomUnitVector` is the "true Lambertian" distribution
+/// (cosine-weighted) - gives the soft, even-illumination look.
+fn scatterLambertian(
+    rng: Random,
+    m: Lambertian,
+    rec: HitRecord,
+) ?Scatter {
+    var dir: Vec = (rec.normal + randomUnitVec3(rng));
+    // Guard against the degenerate case where the random vector
+    // cancels the normal (would produce a zero-length ray direction).
+    if (lengthSq3(dir) < 1.0e-8) {
+        dir = rec.normal;
+    }
+    return .{
+        .attenuation = m.albedo,
+        .scattered = .{ .position = rec.point, .direction = dir },
+    };
 }
+
+/// Specular reflection plus optional fuzz.  Fuzz=0 is a perfect
+/// mirror; higher fuzz scatters the reflection inside a sphere
+/// around the ideal direction, producing brushed-metal blur.
+fn scatterMetal(
+    rng: Random,
+    m: Metal,
+    ray_in: Ray,
+    rec: HitRecord,
+) ?Scatter {
+    const reflected: Vec = reflect3(normalize3(ray_in.direction), rec.normal);
+    const fuzzy: Vec = (reflected + (randomUnitVec3(rng) * splat(m.fuzz)));
+    // If the fuzz scatter pushes the ray below the surface, drop
+    // the bounce - would otherwise produce darkened pixels at
+    // grazing angles.
+    if (dot3(fuzzy, rec.normal) <= 0) {
+        return null;
+    }
+    return .{
+        .attenuation = m.albedo,
+        .scattered = .{ .position = rec.point, .direction = fuzzy },
+    };
+}
+
+/// Schlick's approximation for the Fresnel reflectance - gives the
+/// "edges of glass reflect more than the middle" effect cheaply.
+fn schlick(cos_theta: f32, ref_idx: f32) f32 {
+    var r0: f32 = (1.0 - ref_idx) / (1.0 + ref_idx);
+    r0 = r0 * r0;
+    return r0 + (1.0 - r0) * pow(1.0 - cos_theta, 5);
+}
+
+/// Glass: refract (Snell's law) unless total internal reflection or
+/// the Schlick approximation says "reflect this one anyway."  No
+/// attenuation - glass passes color through unchanged.
+fn scatterDielectric(
+    rng: Random,
+    m: Dielectric,
+    ray_in: Ray,
+    rec: HitRecord,
+) ?Scatter {
+    const ri: f32 = if (rec.front_face) 1.0 / m.ref_idx else m.ref_idx;
+    const unit_dir: Vec = normalize3(ray_in.direction);
+    const cos_theta: f32 = @min(dot3((-(unit_dir)), rec.normal), 1.0);
+    const sin_theta: f32 = @sqrt(1.0 - cos_theta * cos_theta);
+
+    const cannot_refract: bool = ri * sin_theta > 1.0;
+    const reflect_prob: f32 = schlick(cos_theta, ri);
+    const must_reflect = cannot_refract or reflect_prob > rng.float(f32);
+
+    const dir: Vec = if (must_reflect)
+        reflect3(unit_dir, rec.normal)
+    else
+        refract3(unit_dir, rec.normal, ri);
+
+    return .{
+        .attenuation = vec(1, 1, 1),
+        .scattered = .{ .position = rec.point, .direction = dir },
+    };
+}
+
+fn scatter(
+    rng: Random,
+    ray_in: Ray,
+    rec: HitRecord,
+) ?Scatter {
+    return switch (rec.material) {
+        .lambertian => |m| scatterLambertian(rng, m, rec),
+        .metal => |m| scatterMetal(rng, m, ray_in, rec),
+        .dielectric => |m| scatterDielectric(rng, m, ray_in, rec),
+    };
+}
+
+// ============================================================================
+// Sky + tonemap
+// ============================================================================
+
+fn skyColor(dir: Vec, preset_idx: i32) Vec {
+    const unit: Vec = normalize3(dir);
+    const a: f32 = 0.5 * (unit[1] + 1.0);
+    const preset: SkyPreset = @fromBackingInt(@intCast(preset_idx));
+    const colors: [2]Vec = switch (preset) {
+        .day => .{
+            vec(1.0, 1.0, 1.0), // horizon - bright white
+            vec(0.5, 0.7, 1.0), // zenith - sky blue
+        },
+        .sunset => .{
+            vec(1.0, 0.55, 0.35), // horizon - orange
+            vec(0.25, 0.15, 0.45), // zenith - purple
+        },
+        .night => .{
+            vec(0.05, 0.06, 0.12), // horizon - dim navy
+            vec(0.01, 0.01, 0.03), // zenith - near-black
+        },
+    };
+    return ((colors[0] * splat(1.0 - a)) + (colors[1] * splat(a)));
+}
+
+fn clamp8(v: f32) u8 {
+    return int(u8, clamp(v, 0, 0.999) * 256.0);
+}
+
+/// Linear HDR -> sRGB-ish 8-bit color.  `sqrt` is the cheap stand-in
+/// for gamma 2.0 (the proper sRGB curve is barely different
+/// visually and costlier per pixel).
+fn tonemap(c: Vec) Color {
+    return .{
+        .r = clamp8(@sqrt(@max(0, c[0]))),
+        .g = clamp8(@sqrt(@max(0, c[1]))),
+        .b = clamp8(@sqrt(@max(0, c[2]))),
+        .a = 255,
+    };
+}
+
+// ============================================================================
+// Trace - recursive shading
+// ============================================================================
+
+/// Analytic ray-sphere intersection.  Solves the quadratic
+/// `|O + tD - C|^2 = r^2` for `t`.  Returns the nearest root in
+/// `(t_min, t_max)` or null.
+fn hitSphere(
+    s: Sphere,
+    mat: Material,
+    ray: Ray,
+    t_min: f32,
+    t_max: f32,
+) ?HitRecord {
+    const oc: Vec = (s.center - ray.position);
+    const a: f32 = dot3(ray.direction, ray.direction);
+    const h: f32 = dot3(oc, ray.direction);
+    const c: f32 = dot3(oc, oc) - s.radius * s.radius;
+    const disc: f32 = h * h - a * c;
+    if (disc < 0) {
+        return null;
+    }
+    const sqrt_d: f32 = @sqrt(disc);
+
+    // Try the nearer root first; fall back to the further one if
+    // the nearer is outside the interval.  (This handles cases like
+    // "ray origin is inside the sphere".)
+    var root: f32 = (h - sqrt_d) / a;
+    if (root <= t_min or root >= t_max) {
+        root = (h + sqrt_d) / a;
+        if (root <= t_min or root >= t_max) {
+            return null;
+        }
+    }
+
+    const point: Vec = rayAt(ray, root);
+    const outward_normal: Vec = ((point - s.center) * splat(1.0 / s.radius));
+    const front_face: bool = dot3(ray.direction, outward_normal) < 0;
+    return .{
+        .point = point,
+        .normal = if (front_face) outward_normal else (-(outward_normal)),
+        .t = root,
+        .front_face = front_face,
+        .material = mat,
+    };
+}
+
+/// Iterate every (Sphere, Material) entity, return the nearest hit
+/// in the [t_min, t_max] interval (or null).
+fn hitScene(
+    ray: Ray,
+    world: *const ecs.Registry,
+    t_min: f32,
+    t_max: f32,
+) ?HitRecord {
+    var closest: ?HitRecord = null;
+    var closest_t: f32 = t_max;
+
+    // Cast away const for iteration (ecs requires *World).  No
+    // component mutation happens - we only read.
+    const w_mut: *ecs.Registry = @constCast(world);
+    var iter = w_mut.iterator(struct { s: *const Sphere, m: *const Material });
+    while (iter.next(w_mut)) |view| {
+        if (hitSphere(view.s.*, view.m.*, ray, t_min, closest_t)) |rec| {
+            closest = rec;
+            closest_t = rec.t;
+        }
+    }
+    return closest;
+}
+
+/// Recursive ray color.  Hits -> scatter recursively x albedo.  Miss
+/// -> sky.  Depth -> black (energy budget exhausted).
+fn rayColor(
+    rng: Random,
+    ray: Ray,
+    world: *const ecs.Registry,
+    params: Params,
+    depth: u32,
+) Vec {
+    if (depth == 0) {
+        return vec(0, 0, 0);
+    }
+
+    if (hitScene(ray, world, 0.001, inf(f32))) |rec| {
+        if (scatter(rng, ray, rec)) |scat| {
+            const sub: Vec = rayColor(rng, scat.scattered, world, params, depth - 1);
+            return (scat.attenuation * sub);
+        }
+        return vec(0, 0, 0);
+    }
+
+    return skyColor(ray.direction, params.sky_preset);
+}
+
+// ============================================================================
+// Rendering - two paths, full-res accumulate + low-res-while-moving
+// ============================================================================
+
+/// Build the ray for pixel (x, y), with a tiny anti-alias jitter so
+/// successive samples for the same pixel sit at slightly different
+/// sub-pixel positions - the convergence path.
+fn pixelRay(
+    rng: Random,
+    basis: *const CamBasis,
+    x: i32,
+    y: i32,
+) Ray {
+    const jx: f32 = rng.float(f32) - 0.5;
+    const jy: f32 = rng.float(f32) - 0.5;
+    const fx: f32 = float(x) + jx;
+    const fy: f32 = float(y) + jy;
+    const px_center: Vec = basis.px00 + (basis.pdu * splat(fx)) + (basis.pdv * splat(fy));
+    return .{
+        .position = basis.origin,
+        .direction = (px_center - basis.origin),
+    };
+}
+
+/// Low-resolution single-sample stride render.  Renders every
+/// `move_stride`-th pixel; the other pixels keep their last-frame
+/// color.  Runs while the camera is moving - the framebuffer was
+/// just reset to zero in the caller, so the un-stride pixels read
+/// as zero (black).  To compensate, we fill an entire stridexstride
+/// block from each rendered sample so the image looks coherent
+/// instead of like a polka-dot pattern.
+fn renderStride(s: *State, basis: *const CamBasis) void {
+    const rng: Random = s.rng.random();
+    var y: i32 = 0;
+    while (y < rt_h) : (y += move_stride) {
+        var x: i32 = 0;
+        while (x < rt_w) : (x += move_stride) {
+            const ray: Ray = pixelRay(rng, basis, x, y);
+            // Shallower depth while moving (cap at 3) - the extra
+            // bounces are invisible in motion + halve the per-ray
+            // work.
+            const depth: u32 = @min(3, @as(u32, @intCast(s.params.max_depth)));
+            const color: Vec = rayColor(rng, ray, &s.world, s.params, depth);
+            const display: Color = tonemap(color);
+            // Splat this color across the move_stride x move_stride
+            // pixel block.
+            var dy: i32 = 0;
+            while (dy < move_stride and (y + dy) < rt_h) : (dy += 1) {
+                var dx: i32 = 0;
+                while (dx < move_stride and (x + dx) < rt_w) : (dx += 1) {
+                    const idx: usize = @intCast((y + dy) * rt_w + (x + dx));
+                    s.pixels[idx] = display;
+                }
+            }
+        }
+    }
+}
+
+/// Full-resolution single-sample-per-frame accumulator render.  Adds
+/// one fresh sample to each pixel; caller divides by `sample_count`
+/// at tonemap time.  Runs while the camera is still.
+fn renderOneSample(s: *State, basis: *const CamBasis) void {
+    const rng: Random = s.rng.random();
+    var y: i32 = 0;
+    while (y < rt_h) : (y += 1) {
+        var x: i32 = 0;
+        while (x < rt_w) : (x += 1) {
+            const idx: usize = @intCast(y * rt_w + x);
+            const ray: Ray = pixelRay(rng, basis, x, y);
+            const sample: Vec = rayColor(rng, ray, &s.world, s.params, @intCast(s.params.max_depth));
+            s.accum[idx] = (s.accum[idx] + sample);
+        }
+    }
+    // Tonemap the whole buffer for display.
+    const denom: f32 = 1.0 / float(s.sample_count + 1);
+    for (s.accum, 0..) |c, i| {
+        s.pixels[i] = tonemap((c * splat(denom)));
+    }
+}
+
+// ============================================================================
+// Input -> camera updates
+// ============================================================================
 
 /// Read input.  Returns true if any camera-related state changed
 /// this frame (which triggers the accumulator reset + low-res
@@ -452,306 +758,19 @@ fn handleInput(
     return changed;
 }
 
-/// Build the ray for pixel (x, y), with a tiny anti-alias jitter so
-/// successive samples for the same pixel sit at slightly different
-/// sub-pixel positions - the convergence path.
-fn pixelRay(
-    rng: std.Random,
-    basis: *const CamBasis,
-    x: i32,
-    y: i32,
-) Ray {
-    const jx: f32 = rng.float(f32) - 0.5;
-    const jy: f32 = rng.float(f32) - 0.5;
-    const fx: f32 = float(x) + jx;
-    const fy: f32 = float(y) + jy;
-    const px_center: zm.Vec = basis.px00 + (basis.pdu * splat(fx)) + (basis.pdv * splat(fy));
-    return .{
-        .position = basis.origin,
-        .direction = (px_center - basis.origin),
-    };
+// ============================================================================
+// UI panel
+// ============================================================================
+
+fn drawUiPanel(f: *z.Frame, s: *State) bool {
+    _ = f;
+    _ = s;
+    return false; // UI panel omitted in the wgpu CPU port (no z.Ui yet)
 }
 
-/// Analytic ray-sphere intersection.  Solves the quadratic
-/// `|O + tD - C|^2 = r^2` for `t`.  Returns the nearest root in
-/// `(t_min, t_max)` or null.
-fn hitSphere(
-    s: Sphere,
-    mat: Material,
-    ray: Ray,
-    t_min: f32,
-    t_max: f32,
-) ?HitRecord {
-    const oc: zm.Vec = (s.center - ray.position);
-    const a: f32 = dot3(ray.direction, ray.direction);
-    const h: f32 = dot3(oc, ray.direction);
-    const c: f32 = dot3(oc, oc) - s.radius * s.radius;
-    const disc: f32 = h * h - a * c;
-    if (disc < 0) {
-        return null;
-    }
-    const sqrt_d: f32 = @sqrt(disc);
-
-    // Try the nearer root first; fall back to the further one if
-    // the nearer is outside the interval.  (This handles cases like
-    // "ray origin is inside the sphere".)
-    var root: f32 = (h - sqrt_d) / a;
-    if (root <= t_min or root >= t_max) {
-        root = (h + sqrt_d) / a;
-        if (root <= t_min or root >= t_max) {
-            return null;
-        }
-    }
-
-    const point: zm.Vec = rayAt(ray, root);
-    const outward_normal: zm.Vec = ((point - s.center) * splat(1.0 / s.radius));
-    const front_face: bool = dot3(ray.direction, outward_normal) < 0;
-    return .{
-        .point = point,
-        .normal = if (front_face) outward_normal else (-(outward_normal)),
-        .t = root,
-        .front_face = front_face,
-        .material = mat,
-    };
-}
-
-/// Iterate every (Sphere, Material) entity, return the nearest hit
-/// in the [t_min, t_max] interval (or null).
-fn hitScene(
-    ray: Ray,
-    world: *const ecs.Registry,
-    t_min: f32,
-    t_max: f32,
-) ?HitRecord {
-    var closest: ?HitRecord = null;
-    var closest_t: f32 = t_max;
-
-    // Cast away const for iteration (ecs requires *World).  No
-    // component mutation happens - we only read.
-    const w_mut: *ecs.Registry = @constCast(world);
-    var iter = w_mut.iterator(struct { s: *const Sphere, m: *const Material });
-    while (iter.next(w_mut)) |view| {
-        if (hitSphere(view.s.*, view.m.*, ray, t_min, closest_t)) |rec| {
-            closest = rec;
-            closest_t = rec.t;
-        }
-    }
-    return closest;
-}
-
-const Scatter = struct {
-    attenuation: Vec,
-    scattered: Ray,
-};
-
-/// Diffuse: scatter in a random direction biased toward the normal.
-/// `normal + randomUnitVector` is the "true Lambertian" distribution
-/// (cosine-weighted) - gives the soft, even-illumination look.
-fn scatterLambertian(
-    rng: std.Random,
-    m: Lambertian,
-    rec: HitRecord,
-) ?Scatter {
-    var dir: zm.Vec = (rec.normal + randomUnitVec3(rng));
-    // Guard against the degenerate case where the random vector
-    // cancels the normal (would produce a zero-length ray direction).
-    if (lengthSq3(dir) < 1.0e-8) {
-        dir = rec.normal;
-    }
-    return .{
-        .attenuation = m.albedo,
-        .scattered = .{ .position = rec.point, .direction = dir },
-    };
-}
-
-/// Specular reflection plus optional fuzz.  Fuzz=0 is a perfect
-/// mirror; higher fuzz scatters the reflection inside a sphere
-/// around the ideal direction, producing brushed-metal blur.
-fn scatterMetal(
-    rng: std.Random,
-    m: Metal,
-    ray_in: Ray,
-    rec: HitRecord,
-) ?Scatter {
-    const reflected: zm.Vec = reflect3(normalize3(ray_in.direction), rec.normal);
-    const fuzzy: zm.Vec = (reflected + (randomUnitVec3(rng) * splat(m.fuzz)));
-    // If the fuzz scatter pushes the ray below the surface, drop
-    // the bounce - would otherwise produce darkened pixels at
-    // grazing angles.
-    if (dot3(fuzzy, rec.normal) <= 0) {
-        return null;
-    }
-    return .{
-        .attenuation = m.albedo,
-        .scattered = .{ .position = rec.point, .direction = fuzzy },
-    };
-}
-
-/// Schlick's approximation for the Fresnel reflectance - gives the
-/// "edges of glass reflect more than the middle" effect cheaply.
-fn schlick(cos_theta: f32, ref_idx: f32) f32 {
-    var r0: f32 = (1.0 - ref_idx) / (1.0 + ref_idx);
-    r0 = r0 * r0;
-    return r0 + (1.0 - r0) * pow(1.0 - cos_theta, 5);
-}
-
-/// Glass: refract (Snell's law) unless total internal reflection or
-/// the Schlick approximation says "reflect this one anyway."  No
-/// attenuation - glass passes color through unchanged.
-fn scatterDielectric(
-    rng: std.Random,
-    m: Dielectric,
-    ray_in: Ray,
-    rec: HitRecord,
-) ?Scatter {
-    const ri: f32 = if (rec.front_face) 1.0 / m.ref_idx else m.ref_idx;
-    const unit_dir: zm.Vec = normalize3(ray_in.direction);
-    const cos_theta: f32 = @min(dot3((-(unit_dir)), rec.normal), 1.0);
-    const sin_theta: f32 = @sqrt(1.0 - cos_theta * cos_theta);
-
-    const cannot_refract: bool = ri * sin_theta > 1.0;
-    const reflect_prob: f32 = schlick(cos_theta, ri);
-    const must_reflect = cannot_refract or reflect_prob > rng.float(f32);
-
-    const dir: Vec = if (must_reflect)
-        reflect3(unit_dir, rec.normal)
-    else
-        refract3(unit_dir, rec.normal, ri);
-
-    return .{
-        .attenuation = vec(1, 1, 1),
-        .scattered = .{ .position = rec.point, .direction = dir },
-    };
-}
-
-fn scatter(
-    rng: std.Random,
-    ray_in: Ray,
-    rec: HitRecord,
-) ?Scatter {
-    return switch (rec.material) {
-        .lambertian => |m| scatterLambertian(rng, m, rec),
-        .metal => |m| scatterMetal(rng, m, ray_in, rec),
-        .dielectric => |m| scatterDielectric(rng, m, ray_in, rec),
-    };
-}
-
-fn skyColor(dir: Vec, preset_idx: i32) Vec {
-    const unit: zm.Vec = normalize3(dir);
-    const a: f32 = 0.5 * (unit[1] + 1.0);
-    const preset: SkyPreset = @fromBackingInt(@intCast(preset_idx));
-    const colors: [2]zm.Vec = switch (preset) {
-        .day => .{
-            vec(1.0, 1.0, 1.0), // horizon - bright white
-            vec(0.5, 0.7, 1.0), // zenith - sky blue
-        },
-        .sunset => .{
-            vec(1.0, 0.55, 0.35), // horizon - orange
-            vec(0.25, 0.15, 0.45), // zenith - purple
-        },
-        .night => .{
-            vec(0.05, 0.06, 0.12), // horizon - dim navy
-            vec(0.01, 0.01, 0.03), // zenith - near-black
-        },
-    };
-    return ((colors[0] * splat(1.0 - a)) + (colors[1] * splat(a)));
-}
-
-/// Recursive ray color.  Hits -> scatter recursively x albedo.  Miss
-/// -> sky.  Depth -> black (energy budget exhausted).
-fn rayColor(
-    rng: std.Random,
-    ray: Ray,
-    world: *const ecs.Registry,
-    params: Params,
-    depth: u32,
-) Vec {
-    if (depth == 0) {
-        return vec(0, 0, 0);
-    }
-
-    if (hitScene(ray, world, 0.001, inf(f32))) |rec| {
-        if (scatter(rng, ray, rec)) |scat| {
-            const sub: zm.Vec = rayColor(rng, scat.scattered, world, params, depth - 1);
-            return (scat.attenuation * sub);
-        }
-        return vec(0, 0, 0);
-    }
-
-    return skyColor(ray.direction, params.sky_preset);
-}
-
-fn clamp8(v: f32) u8 {
-    return int(u8, clamp(v, 0, 0.999) * 256.0);
-}
-
-/// Linear HDR -> sRGB-ish 8-bit color.  `sqrt` is the cheap stand-in
-/// for gamma 2.0 (the proper sRGB curve is barely different
-/// visually and costlier per pixel).
-fn tonemap(c: Vec) Color {
-    return .{
-        .r = clamp8(@sqrt(@max(0, c[0]))),
-        .g = clamp8(@sqrt(@max(0, c[1]))),
-        .b = clamp8(@sqrt(@max(0, c[2]))),
-        .a = 255,
-    };
-}
-
-/// Low-resolution single-sample stride render.  Renders every
-/// `move_stride`-th pixel; the other pixels keep their last-frame
-/// color.  Runs while the camera is moving - the framebuffer was
-/// just reset to zero in the caller, so the un-stride pixels read
-/// as zero (black).  To compensate, we fill an entire stridexstride
-/// block from each rendered sample so the image looks coherent
-/// instead of like a polka-dot pattern.
-fn renderStride(s: *State, basis: *const CamBasis) void {
-    const rng: std.Random = s.rng.random();
-    var y: i32 = 0;
-    while (y < rt_h) : (y += move_stride) {
-        var x: i32 = 0;
-        while (x < rt_w) : (x += move_stride) {
-            const ray: Ray = pixelRay(rng, basis, x, y);
-            // Shallower depth while moving (cap at 3) - the extra
-            // bounces are invisible in motion + halve the per-ray
-            // work.
-            const depth: u32 = @min(3, @as(u32, @intCast(s.params.max_depth)));
-            const color: Vec = rayColor(rng, ray, &s.world, s.params, depth);
-            const display: Color = tonemap(color);
-            // Splat this color across the move_stride x move_stride
-            // pixel block.
-            var dy: i32 = 0;
-            while (dy < move_stride and (y + dy) < rt_h) : (dy += 1) {
-                var dx: i32 = 0;
-                while (dx < move_stride and (x + dx) < rt_w) : (dx += 1) {
-                    const idx: usize = @intCast((y + dy) * rt_w + (x + dx));
-                    s.pixels[idx] = display;
-                }
-            }
-        }
-    }
-}
-
-/// Full-resolution single-sample-per-frame accumulator render.  Adds
-/// one fresh sample to each pixel; caller divides by `sample_count`
-/// at tonemap time.  Runs while the camera is still.
-fn renderOneSample(s: *State, basis: *const CamBasis) void {
-    const rng: std.Random = s.rng.random();
-    var y: i32 = 0;
-    while (y < rt_h) : (y += 1) {
-        var x: i32 = 0;
-        while (x < rt_w) : (x += 1) {
-            const idx: usize = @intCast(y * rt_w + x);
-            const ray: Ray = pixelRay(rng, basis, x, y);
-            const sample: Vec = rayColor(rng, ray, &s.world, s.params, @intCast(s.params.max_depth));
-            s.accum[idx] = (s.accum[idx] + sample);
-        }
-    }
-    // Tonemap the whole buffer for display.
-    const denom: f32 = 1.0 / float(s.sample_count + 1);
-    for (s.accum, 0..) |c, i| {
-        s.pixels[i] = tonemap((c * splat(denom)));
-    }
-}
+// ============================================================================
+// Per-frame update
+// ============================================================================
 
 fn update(f: *z.Frame, s: *State) void {
     // Per-frame order of operations:
@@ -787,7 +806,7 @@ fn update(f: *z.Frame, s: *State) void {
     }
 
     // 5. Push pixels to the GPU + draw.
-    s.fb.update(f.gpu.queue, std.mem.sliceAsBytes(s.pixels));
+    s.fb.update(f.gpu.queue, sliceAsBytes(s.pixels));
 
     z.clearViewport(f, .{ .r = 0, .g = 0, .b = 0, .a = 255 });
     s.fb.present(f.gl, 0, 0, float(screen_w), float(screen_h));
@@ -796,28 +815,15 @@ fn update(f: *z.Frame, s: *State) void {
 }
 
 // ============================================================================
-// Input -> camera updates
+// Main entry point
 // ============================================================================
 
-// ============================================================================
-// Rendering - two paths, full-res accumulate + low-res-while-moving
-// ============================================================================
-
-// ============================================================================
-// Trace - recursive shading
-// ============================================================================
-
-// ============================================================================
-// Material scatter
-// ============================================================================
-
-// ============================================================================
-// Sky + tonemap
-// ============================================================================
-
-// ============================================================================
-// UI panel
-// ============================================================================
+fn deinit(gpa: Allocator, s: *State) void {
+    s.fb.deinit();
+    s.world.deinit(gpa);
+    gpa.free(s.accum);
+    gpa.free(s.pixels);
+}
 
 /// User-owned framework integration point.  See `examples/basic.zig`
 /// for the canonical comment block; this declaration is the

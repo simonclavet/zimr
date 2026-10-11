@@ -31,6 +31,8 @@ const dance = z.robot_dance;
 const d3 = z.draw3d;
 
 const Allocator = std.mem.Allocator;
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
 const Color = zm.Color;
 const Camera3D = zm.Camera3D;
 const Vec = zm.Vec;
@@ -123,8 +125,8 @@ const State = struct {
     /// Frames a second while playing - the clip's own rate, or slower to study it.
     rate: f32 = 30.0,
     show_markers: bool = true,
-    left: Foot = .{ .height = 0, .tilt = 0, .at = zm.vec(0, 0, 0) },
-    right: Foot = .{ .height = 0, .tilt = 0, .at = zm.vec(0, 0, 0) },
+    left: Foot = .{ .height = 0, .tilt = 0, .at = vec(0, 0, 0) },
+    right: Foot = .{ .height = 0, .tilt = 0, .at = vec(0, 0, 0) },
     /// The lowest point of the WHOLE body, and whether a foot is the thing reaching it.
     body_low: f32 = 0,
     feet_deepest: bool = false,
@@ -132,6 +134,107 @@ const State = struct {
     edge_frames: usize = 0,
     down_frames: usize = 0,
 };
+
+fn bodyNamed(names: []const []const u8, want: []const u8) ?usize {
+    for (names, 0..) |name, i| {
+        if (eql(u8, name, want)) {
+            return i;
+        }
+    }
+    return null;
+}
+
+/// One foot's height and tilt. A foot here is TWO bodies - the foot and its toe - and the toe is
+/// usually the lower of them, so both go into the height; and the line from one to the other lies
+/// along the sole, which is what makes the tilt measurable without assuming which way any axis
+/// points.
+fn footAt(s: *State, foot_name: []const u8, toe_name: []const u8) Foot {
+    const m: *const rbt.Model = &s.imported.model;
+    const names: []const []const u8 = s.imported.names;
+    const height: f32 = @min(
+        dance.lowestGeomNamed(m, &s.data, names, foot_name),
+        dance.lowestGeomNamed(m, &s.data, names, toe_name),
+    );
+    var tilt: f32 = 0.0;
+    var at: Vec = vec(0, 0, 0);
+    if (bodyNamed(names, foot_name)) |foot| {
+        at = s.data.body_xpos[foot];
+        if (bodyNamed(names, toe_name)) |toe| {
+            const along: Vec = s.data.body_xpos[toe] - at;
+            const span: f32 = length3(along);
+            if (span > 1.0e-6) {
+                tilt = @abs(asinRad(clamp(along[2] / span, -1.0, 1.0))) * deg_per_rad;
+            }
+        }
+    }
+    return .{ .height = height, .tilt = tilt, .at = at };
+}
+
+/// A capture bone whose name contains `want` - captures disagree about punctuation and case, so a
+/// substring is the only match that survives a different file.
+fn captureBone(s: *State, want: []const u8) ?usize {
+    for (0..s.capture.boneCount()) |i| {
+        if (indexOf(u8, s.capture.boneName(i), want) != null) {
+            return i;
+        }
+    }
+    return null;
+}
+
+/// The angle a capture's sole makes with the floor: the capture stands in its own units and its own
+/// up-axis (y), so only the direction matters here, not the scale.
+fn captureSole(s: *State, foot: []const u8, toe: []const u8) f32 {
+    const a: usize = captureBone(s, foot) orelse return 0.0;
+    const b: usize = captureBone(s, toe) orelse return 0.0;
+    const along: Vec = s.capture_pos[b] - s.capture_pos[a];
+    const span: f32 = length3(along);
+    if (span < 1.0e-6) {
+        return 0.0;
+    }
+    return @abs(asinRad(clamp(along[1] / span, -1.0, 1.0))) * deg_per_rad;
+}
+
+/// The capture posed on the same moment: clip frame `at` is capture frame `capture_first + at`. Its
+/// own soles are measured the same way the robot's are - ankle to toe - so the two angles answer the
+/// same question, and the difference between them is what retargeting did.
+fn captureAt(s: *State, at: usize) void {
+    const frames: usize = @intCast(@max(s.capture.animation.keyframeCount, 1));
+    const frame: usize = @min(capture_first + at, frames - 1);
+    d3.bvhForwardKinematics(s.capture, frame, s.capture_pos, s.capture_rot);
+    s.capture_left = captureSole(s, "LeftFoot", "LeftToe");
+    s.capture_right = captureSole(s, "RightFoot", "RightToe");
+}
+
+/// Pose the robot at a frame and work out what its feet are doing there.
+fn poseAt(s: *State, frame: usize) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const at: usize = @min(frame, s.clip.frame_count - 1);
+    @memcpy(s.data.pos, s.clip.pose(at));
+    s.data.stage = .stale;
+    rbt.kinematics(m, &s.data);
+    s.left = footAt(s, "foot_left", "toe_left");
+    s.right = footAt(s, "foot_right", "toe_right");
+    s.body_low = dance.lowestBodyPoint(m, &s.data);
+    s.feet_deepest = @min(s.left.height, s.right.height) - s.body_low < 0.005;
+    captureAt(s, at);
+}
+
+/// The whole clip, once: how many frames have a foot down, and how many of those have it tilted.
+fn countEdges(s: *State) void {
+    s.down_frames = 0;
+    s.edge_frames = 0;
+    for (0..s.clip.frame_count) |frame| {
+        poseAt(s, frame);
+        for ([_]Foot{ s.left, s.right }) |foot| {
+            if (foot.down()) {
+                s.down_frames += 1;
+                if (!foot.flat()) {
+                    s.edge_frames += 1;
+                }
+            }
+        }
+    }
+}
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
@@ -184,161 +287,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadMesh(gpa, s.cube);
     s.ui_host.deinit();
     z.unloadFont(gpa, s.font);
-}
-
-/// Pose the robot at a frame and work out what its feet are doing there.
-fn poseAt(s: *State, frame: usize) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const at: usize = @min(frame, s.clip.frame_count - 1);
-    @memcpy(s.data.pos, s.clip.pose(at));
-    s.data.stage = .stale;
-    rbt.kinematics(m, &s.data);
-    s.left = footAt(s, "foot_left", "toe_left");
-    s.right = footAt(s, "foot_right", "toe_right");
-    s.body_low = dance.lowestBodyPoint(m, &s.data);
-    s.feet_deepest = @min(s.left.height, s.right.height) - s.body_low < 0.005;
-    captureAt(s, at);
-}
-
-/// The capture posed on the same moment: clip frame `at` is capture frame `capture_first + at`. Its
-/// own soles are measured the same way the robot's are - ankle to toe - so the two angles answer the
-/// same question, and the difference between them is what retargeting did.
-fn captureAt(s: *State, at: usize) void {
-    const frames: usize = @intCast(@max(s.capture.animation.keyframeCount, 1));
-    const frame: usize = @min(capture_first + at, frames - 1);
-    d3.bvhForwardKinematics(s.capture, frame, s.capture_pos, s.capture_rot);
-    s.capture_left = captureSole(s, "LeftFoot", "LeftToe");
-    s.capture_right = captureSole(s, "RightFoot", "RightToe");
-}
-
-/// The angle a capture's sole makes with the floor: the capture stands in its own units and its own
-/// up-axis (y), so only the direction matters here, not the scale.
-fn captureSole(s: *State, foot: []const u8, toe: []const u8) f32 {
-    const a: usize = captureBone(s, foot) orelse return 0.0;
-    const b: usize = captureBone(s, toe) orelse return 0.0;
-    const along: Vec = s.capture_pos[b] - s.capture_pos[a];
-    const span: f32 = length3(along);
-    if (span < 1.0e-6) {
-        return 0.0;
-    }
-    return @abs(asinRad(clamp(along[1] / span, -1.0, 1.0))) * deg_per_rad;
-}
-
-/// A capture bone whose name contains `want` - captures disagree about punctuation and case, so a
-/// substring is the only match that survives a different file.
-fn captureBone(s: *State, want: []const u8) ?usize {
-    for (0..s.capture.boneCount()) |i| {
-        if (std.mem.indexOf(u8, s.capture.boneName(i), want) != null) {
-            return i;
-        }
-    }
-    return null;
-}
-
-/// One foot's height and tilt. A foot here is TWO bodies - the foot and its toe - and the toe is
-/// usually the lower of them, so both go into the height; and the line from one to the other lies
-/// along the sole, which is what makes the tilt measurable without assuming which way any axis
-/// points.
-fn footAt(s: *State, foot_name: []const u8, toe_name: []const u8) Foot {
-    const m: *const rbt.Model = &s.imported.model;
-    const names: []const []const u8 = s.imported.names;
-    const height: f32 = @min(
-        dance.lowestGeomNamed(m, &s.data, names, foot_name),
-        dance.lowestGeomNamed(m, &s.data, names, toe_name),
-    );
-    var tilt: f32 = 0.0;
-    var at: Vec = vec(0, 0, 0);
-    if (bodyNamed(names, foot_name)) |foot| {
-        at = s.data.body_xpos[foot];
-        if (bodyNamed(names, toe_name)) |toe| {
-            const along: Vec = s.data.body_xpos[toe] - at;
-            const span: f32 = length3(along);
-            if (span > 1.0e-6) {
-                tilt = @abs(asinRad(clamp(along[2] / span, -1.0, 1.0))) * deg_per_rad;
-            }
-        }
-    }
-    return .{ .height = height, .tilt = tilt, .at = at };
-}
-
-fn bodyNamed(names: []const []const u8, want: []const u8) ?usize {
-    for (names, 0..) |name, i| {
-        if (std.mem.eql(u8, name, want)) {
-            return i;
-        }
-    }
-    return null;
-}
-
-/// The whole clip, once: how many frames have a foot down, and how many of those have it tilted.
-fn countEdges(s: *State) void {
-    s.down_frames = 0;
-    s.edge_frames = 0;
-    for (0..s.clip.frame_count) |frame| {
-        poseAt(s, frame);
-        for ([_]Foot{ s.left, s.right }) |foot| {
-            if (foot.down()) {
-                s.down_frames += 1;
-                if (!foot.flat()) {
-                    s.edge_frames += 1;
-                }
-            }
-        }
-    }
-}
-
-fn update(f: *z.Frame, s: *State) void {
-    const frames: f32 = float(s.clip.frame_count);
-    if (s.playing) {
-        const dt: f32 = if (f.time.delta_time > 0 and f.time.delta_time < 0.2) f.time.delta_time else 0.0;
-        s.frame += dt * s.rate;
-        if (s.frame >= frames) {
-            s.frame = 0;
-        }
-    }
-    poseAt(s, int(usize, clamp(s.frame, 0.0, frames - 1.0)));
-
-    z.clearViewport(f, bg);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(s, f);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
-    const gl = f.gl;
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 20, 0.25);
-    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
-    drawRobot(s, gl, &s.data, ref_col);
-    if (s.show_capture) {
-        drawCapture(s, gl);
-    }
-    if (s.show_markers) {
-        // A disc under each foot that is DOWN: green when the sole is flat enough to carry weight,
-        // orange when the character is standing on an edge.
-        for ([_]Foot{ s.left, s.right }) |foot| {
-            if (!foot.down()) {
-                continue;
-            }
-            const place: Mat = mulMat(zm.zUpToYUp(), translation(foot.at[0], foot.at[1], 0.005));
-            s.transform[0] = mulMat(place, scaling(0.16, 0.16, 0.01));
-            z.drawMeshInstanced(gl, &s.cube, &s.transform, if (foot.flat()) flat_col else tilted_col);
-        }
-    }
-    z.endMode3D(gl);
-}
-
-/// The capture's skeleton, a step to the side: a dot at every joint and a line to its parent. In its
-/// own units (centimetres) and its own up-axis, which the world already uses for drawing.
-fn drawCapture(s: *State, gl: *z.WgpuGl) void {
-    const shift: Vec = vec(s.capture_shift, 0, 0);
-    for (0..s.capture.boneCount()) |i| {
-        const here: Vec = s.capture_pos[i] * splat(s.capture_scale) + shift;
-        z.drawSphereWires(gl, here, .{ .radius = 0.012, .rings = 4, .slices = 6, .color = capture_col });
-        const parent: i32 = s.capture.skeleton.bones[i].parent;
-        if (parent >= 0) {
-            const up: Vec = s.capture_pos[@intCast(parent)] * splat(s.capture_scale) + shift;
-            z.drawLine3D(gl, here, up, capture_col);
-        }
-    }
 }
 
 fn drawPanel(s: *State, f: *z.Frame) bool {
@@ -423,6 +371,60 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
             else => {},
         }
     }
+}
+
+/// The capture's skeleton, a step to the side: a dot at every joint and a line to its parent. In its
+/// own units (centimetres) and its own up-axis, which the world already uses for drawing.
+fn drawCapture(s: *State, gl: *z.WgpuGl) void {
+    const shift: Vec = vec(s.capture_shift, 0, 0);
+    for (0..s.capture.boneCount()) |i| {
+        const here: Vec = s.capture_pos[i] * splat(s.capture_scale) + shift;
+        z.drawSphereWires(gl, here, .{ .radius = 0.012, .rings = 4, .slices = 6, .color = capture_col });
+        const parent: i32 = s.capture.skeleton.bones[i].parent;
+        if (parent >= 0) {
+            const up: Vec = s.capture_pos[@intCast(parent)] * splat(s.capture_scale) + shift;
+            z.drawLine3D(gl, here, up, capture_col);
+        }
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const frames: f32 = float(s.clip.frame_count);
+    if (s.playing) {
+        const dt: f32 = if (f.time.delta_time > 0 and f.time.delta_time < 0.2) f.time.delta_time else 0.0;
+        s.frame += dt * s.rate;
+        if (s.frame >= frames) {
+            s.frame = 0;
+        }
+    }
+    poseAt(s, int(usize, clamp(s.frame, 0.0, frames - 1.0)));
+
+    z.clearViewport(f, bg);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(s, f);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
+    const gl = f.gl;
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 20, 0.25);
+    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
+    drawRobot(s, gl, &s.data, ref_col);
+    if (s.show_capture) {
+        drawCapture(s, gl);
+    }
+    if (s.show_markers) {
+        // A disc under each foot that is DOWN: green when the sole is flat enough to carry weight,
+        // orange when the character is standing on an edge.
+        for ([_]Foot{ s.left, s.right }) |foot| {
+            if (!foot.down()) {
+                continue;
+            }
+            const place: Mat = mulMat(zm.zUpToYUp(), translation(foot.at[0], foot.at[1], 0.005));
+            s.transform[0] = mulMat(place, scaling(0.16, 0.16, 0.01));
+            z.drawMeshInstanced(gl, &s.cube, &s.transform, if (foot.flat()) flat_col else tilted_col);
+        }
+    }
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

@@ -21,10 +21,12 @@ const std = @import("std");
 const zm = @import("zm");
 const float = zm.float;
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const common = @import("example_common");
 const vs_io = @import("instancing_vs_io.zig");
 const fs_io = @import("pipeline_uniforms_fs_io.zig");
+const Vec = zm.Vec;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -66,7 +68,7 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.wgpu.destroyBuffer(s.color_vbo);
 }
 
-fn aspectMat(sx: f32, sy: f32) [4]@Vector(4, f32) {
+fn aspectMat(sx: f32, sy: f32) [4]Vec {
     return .{
         .{ sx, 0, 0, 0 },
         .{ 0, sy, 0, 0 },
@@ -93,7 +95,7 @@ fn makeBuffer(f: *z.Frame, bytes: []const u8, label: []const u8) z.wgpu.BufferHa
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const vbo: z.wgpu.BufferHandle = makeBuffer(f, std.mem.sliceAsBytes(&tri), "inst_tri_vbo");
+    const vbo: z.wgpu.BufferHandle = makeBuffer(f, sliceAsBytes(&tri), "inst_tri_vbo");
 
     // Per-instance colours: a 2D gradient across the grid. Uploaded once.
     var colors: [inst_count]Col = undefined;
@@ -104,7 +106,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             colors[ry * cols + cx] = .{ .r = 0.25 + 0.75 * fx, .g = 0.3 + 0.7 * fy, .b = 0.3 + 0.7 * (1.0 - fx) };
         }
     }
-    const color_vbo: z.wgpu.BufferHandle = makeBuffer(f, std.mem.sliceAsBytes(&colors), "inst_color_vbo");
+    const color_vbo: z.wgpu.BufferHandle = makeBuffer(f, sliceAsBytes(&colors), "inst_color_vbo");
 
     // Per-instance offsets: seeded with the base grid; re-uploaded each frame.
     var offsets: [inst_count]Off = undefined;
@@ -113,7 +115,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             offsets[ry * cols + cx] = cellPos(cx, ry);
         }
     }
-    const offset_vbo: z.wgpu.BufferHandle = makeBuffer(f, std.mem.sliceAsBytes(&offsets), "inst_offset_vbo");
+    const offset_vbo: z.wgpu.BufferHandle = makeBuffer(f, sliceAsBytes(&offsets), "inst_offset_vbo");
 
     // Three buffer layouts: slot 0 per-VERTEX, slots 1 & 2 per-INSTANCE. The
     // schema can't express step rate, so instanced layouts are hand-built and
@@ -174,7 +176,7 @@ fn update(f: *z.Frame, s: *State) void {
             offsets[ry * cols + cx] = .{ .x = base.x, .y = base.y + wave };
         }
     }
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.offset_vbo, 0, std.mem.sliceAsBytes(&offsets));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.offset_vbo, 0, sliceAsBytes(&offsets));
 
     const ps: *z.PassState = f.gl.pass;
     s.shader.bindForDraw(ps);

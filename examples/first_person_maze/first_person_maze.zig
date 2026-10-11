@@ -18,6 +18,10 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
+const ArrayList = std.ArrayList;
 const z = @import("zimr");
 const zm = @import("zm");
 const assertUnreachable = zm.assertUnreachable;
@@ -77,14 +81,14 @@ const GpuMesh = struct {
 
 /// Carve a maze into an RGBA8 image: start all-wall (white), then a
 /// randomized DFS knocks out corridors (black) on a 2-step lattice.
-fn carveMaze(gpa: Allocator, rng: *std.Random.DefaultPrng) !z.Image {
+fn carveMaze(gpa: Allocator, rng: *Random.DefaultPrng) !z.Image {
     const img: z.Image = try z.genImageColor(gpa, grid_w, grid_h, white);
     const px: [*]Color = @ptrCast(@alignCast(img.data.?));
     const w: usize = @intCast(grid_w);
     const black: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
 
-    const rand: std.Random = rng.random();
-    var stack: std.ArrayList([2]usize) = .empty;
+    const rand: Random = rng.random();
+    var stack: ArrayList([2]usize) = .empty;
     defer stack.deinit(gpa);
     px[1 * w + 1] = black;
     try stack.append(gpa, .{ 1, 1 });
@@ -135,7 +139,7 @@ fn fillMesh(
             .normal = .{ mesh.normals[i * 3 + 0], mesh.normals[i * 3 + 1], mesh.normals[i * 3 + 2] },
         };
     }
-    z.wgpu.queueWriteBuffer(queue, vbo, 0, std.mem.sliceAsBytes(scratch[0..vcount]));
+    z.wgpu.queueWriteBuffer(queue, vbo, 0, sliceAsBytes(scratch[0..vcount]));
     return @intCast(vcount);
 }
 
@@ -153,7 +157,7 @@ const State = struct {
     // Resident maze pixels for collision (true = wall cell).
     walls: [@intCast(grid_w * grid_h)]bool = undefined,
 
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     rt: z.RenderTexture,
     ui_host: z.UiHost,
     font: z.Font,
@@ -339,7 +343,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, maze_fs_wgsl, "maze_fs");
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -376,7 +380,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .g0_bg = g0_bg,
         .fs_ubo = fs_ubo,
         .g2_bg = g2_bg,
-        .rng = std.Random.DefaultPrng.init(0x5EED_1A2E),
+        .rng = Random.DefaultPrng.init(0x5EED_1A2E),
         .rt = .{},
         .font = ui_font,
         .ui_host = z.UiHost.init(gpa, ui_font),
@@ -437,6 +441,39 @@ fn handleLook(f: *z.Frame, s: *State, ui_wants_mouse: bool) void {
     }
 }
 
+/// A small top-down map in the corner: a cell per pixel-block, walls
+/// light, corridors dark, the player a red dot at their cell.
+fn drawMinimap(f: *z.Frame, s: *State, vw: f32) void {
+    const cell_px: f32 = @max(@min(vw, 480) / 60.0, 4.0);
+    const pad: f32 = 8;
+    const map_w: f32 = float(grid_w) * cell_px;
+    const ox: f32 = vw - map_w - pad;
+    const oy: f32 = pad;
+
+    var cz: i32 = 0;
+    while (cz < grid_h) : (cz += 1) {
+        var cx: i32 = 0;
+        while (cx < grid_w) : (cx += 1) {
+            const col: Color = if (isWall(s, cx, cz)) wall_dot else floor_dot;
+            const cell_pos: Vec2 = .{ ox + float(cx) * cell_px, oy + float(cz) * cell_px };
+            f.gl.rect(
+                .{ .x = cell_pos[0], .y = cell_pos[1], .width = cell_px - 1, .height = cell_px - 1 },
+                .{ .color = col },
+            );
+        }
+    }
+    // Player dot at their current cell.
+    const pcx: i32 = worldToCellX(s.px_pos);
+    const pcz: i32 = worldToCellZ(s.pz_pos);
+    const dot_pos: Vec2 = .{ ox + (float(pcx) + 0.5) * cell_px, oy + (float(pcz) + 0.5) * cell_px };
+    f.gl.circle(dot_pos, cell_px * 0.5, .{ .color = player_dot, .segments = 14 });
+    // A short facing tick.
+    f.gl.line(.{ ox + (float(pcx) + 0.5) * cell_px, oy + (float(pcz) + 0.5) * cell_px }, .{
+        ox + (float(pcx) + 0.5 + @sin(s.yaw)) * cell_px,
+        oy + (float(pcz) + 0.5 + @cos(s.yaw)) * cell_px,
+    }, .{ .color = player_dot, .thickness = 2.0 });
+}
+
 fn update(f: *z.Frame, s: *State) void {
     ensureTargets(f, s);
     const dt: f32 = @floatCast(f.time.delta_time);
@@ -460,7 +497,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var vs_io: mat_vs.Io = undefined;
     vs_io.u = .{ .mvp = cam_vp, .model = zm.identity(), .normal_matrix = zm.identity() };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, asBytes(&vs_io.u));
 
     var fs_io: mat_fs.Io = undefined;
     fs_io.u = .{
@@ -470,7 +507,7 @@ fn update(f: *z.Frame, s: *State) void {
         .col_wall_x = .{ 0.40, 0.55, 0.80, 1 },
         .col_wall_z = .{ 0.80, 0.50, 0.38, 1 },
     };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, asBytes(&fs_io.u));
 
     // ---- the maze pass ----
     const Backend: type = z.WgpuBackend;
@@ -548,39 +585,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     s.ui_host.render(f);
     z.endDrawing(f.gl);
-}
-
-/// A small top-down map in the corner: a cell per pixel-block, walls
-/// light, corridors dark, the player a red dot at their cell.
-fn drawMinimap(f: *z.Frame, s: *State, vw: f32) void {
-    const cell_px: f32 = @max(@min(vw, 480) / 60.0, 4.0);
-    const pad: f32 = 8;
-    const map_w: f32 = float(grid_w) * cell_px;
-    const ox: f32 = vw - map_w - pad;
-    const oy: f32 = pad;
-
-    var cz: i32 = 0;
-    while (cz < grid_h) : (cz += 1) {
-        var cx: i32 = 0;
-        while (cx < grid_w) : (cx += 1) {
-            const col: Color = if (isWall(s, cx, cz)) wall_dot else floor_dot;
-            const cell_pos: Vec2 = .{ ox + float(cx) * cell_px, oy + float(cz) * cell_px };
-            f.gl.rect(
-                .{ .x = cell_pos[0], .y = cell_pos[1], .width = cell_px - 1, .height = cell_px - 1 },
-                .{ .color = col },
-            );
-        }
-    }
-    // Player dot at their current cell.
-    const pcx: i32 = worldToCellX(s.px_pos);
-    const pcz: i32 = worldToCellZ(s.pz_pos);
-    const dot_pos: Vec2 = .{ ox + (float(pcx) + 0.5) * cell_px, oy + (float(pcz) + 0.5) * cell_px };
-    f.gl.circle(dot_pos, cell_px * 0.5, .{ .color = player_dot, .segments = 14 });
-    // A short facing tick.
-    f.gl.line(.{ ox + (float(pcx) + 0.5) * cell_px, oy + (float(pcz) + 0.5) * cell_px }, .{
-        ox + (float(pcx) + 0.5 + @sin(s.yaw)) * cell_px,
-        oy + (float(pcz) + 0.5 + @cos(s.yaw)) * cell_px,
-    }, .{ .color = player_dot, .thickness = 2.0 });
 }
 
 pub const app: z.AppSpec(State) = .{

@@ -31,6 +31,7 @@
 //! bridge.zig goes there too, or an edit to it leaves every page on the old zimr.js.
 
 const std = @import("std");
+const indexOfScalar = std.mem.indexOfScalar;
 const types = @import("types.zig");
 
 const KeyboardKey = types.KeyboardKey;
@@ -172,7 +173,9 @@ fn domKeyRows() []const DomKey {
     };
 }
 
-const dom_key_count: usize = domKeyRows().len;
+/// How many keys the table names - one per raylib key a browser reports. Public for the native host's scancode
+/// table (`native_input.zig`), which must name the same keys.
+pub const dom_key_count: usize = domKeyRows().len;
 
 /// The longest code in the table. A longer one cannot name a raylib key, so the bridge reads
 /// `KeyboardEvent.code` into a buffer of exactly this many bytes and drops anything longer.
@@ -229,6 +232,21 @@ const packed_engine_keys: [dom_key_count]KeyboardKey = keys: {
     break :keys engine_keys;
 };
 
+/// Byte-for-byte equality. Hand-written rather than `std.mem.eql` because the bridge compiles
+/// without std, and this keeps it that way.
+fn sameBytes(first: []const u8, second: []const u8) bool {
+    const lengths_differ: bool = first.len != second.len;
+    if (lengths_differ) {
+        return false;
+    }
+    for (first, second) |first_byte, second_byte| {
+        if (first_byte != second_byte) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// The raylib key a `KeyboardEvent.code` names, or null for a key raylib has no name for.
 pub fn keyboardKeyFromDomCode(dom_code: []const u8) ?KeyboardKey {
     // Through slices, not the arrays themselves: Zig's C backend passes a const array used BY
@@ -244,21 +262,6 @@ pub fn keyboardKeyFromDomCode(dom_code: []const u8) ?KeyboardKey {
         code_start = code_end;
     }
     return null;
-}
-
-/// Byte-for-byte equality. Hand-written rather than `std.mem.eql` because the bridge compiles
-/// without std, and this keeps it that way.
-fn sameBytes(first: []const u8, second: []const u8) bool {
-    const lengths_differ: bool = first.len != second.len;
-    if (lengths_differ) {
-        return false;
-    }
-    for (first, second) |first_byte, second_byte| {
-        if (first_byte != second_byte) {
-            return false;
-        }
-    }
-    return true;
 }
 
 /// `MouseEvent.button` as the DOM numbers it, under the UI Events spec's names.
@@ -477,7 +480,7 @@ test "dom_input: every raylib key has exactly one DOM code, except Android's fou
                 rows_naming_key += 1;
             }
         }
-        const key_is_android_only: bool = std.mem.indexOfScalar(KeyboardKey, &android_only_keys, key) != null;
+        const key_is_android_only: bool = indexOfScalar(KeyboardKey, &android_only_keys, key) != null;
         const key_needs_no_row: bool = key == .null or key_is_android_only;
         const expected_rows: usize = if (key_needs_no_row) 0 else 1;
         errdefer std.log.warn("dom_input: KeyboardKey.{s} is named by {d} rows", .{ key_name, rows_naming_key });

@@ -3,8 +3,9 @@
 //! Replaces `scripts/measure.sh`. Same output format, same `/tmp/measure.log` append, so the
 //! numbers already quoted across `claude.md` and the plans stay comparable.
 //!
-//! Usage - built through the build, then run directly, because this Zig's `std.Build` has no
-//! `b.args` and a step cannot forward the command to measure:
+//! Usage - built through the build, then run directly: a tool that measures `zig build` cannot run
+//! inside the build it measures. (Its command line stays hand-read, like zbuild's: everything after
+//! the label is someone else's command, which no declared struct could describe.)
 //!
 //!     zig build measure                        once; installs into tools/zig-out/bin
 //!     measure <label> <command...>             .zenv.sh puts tools/zig-out/bin on PATH
@@ -27,9 +28,11 @@
 //! the steps worth measuring run for tens of seconds.
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const fs_space = @import("fs_space.zig");
 const Allocator = std.mem.Allocator;
-const File = std.Io.File;
+const File = Io.File;
 const ArrayList = std.ArrayList;
 const bufPrint = std.fmt.bufPrint;
 
@@ -37,13 +40,13 @@ const log_path = "/tmp/measure.log";
 const child_log_path = "/tmp/b.log";
 
 /// Megabytes in use under `.zig-cache`, or 0 if it is not there yet.
-fn cacheMegabytes(io: std.Io, gpa: Allocator) usize {
+fn cacheMegabytes(io: Io, gpa: Allocator) usize {
     var total: u64 = 0;
-    var dir: std.Io.Dir = std.Io.Dir.cwd().openDir(io, ".zig-cache", .{ .iterate = true }) catch {
+    var dir: Io.Dir = Io.Dir.cwd().openDir(io, ".zig-cache", .{ .iterate = true }) catch {
         return 0;
     };
     defer dir.close(io);
-    var walker: std.Io.Dir.Walker = dir.walk(gpa) catch {
+    var walker: Io.Dir.Walker = dir.walk(gpa) catch {
         return 0;
     };
     defer walker.deinit();
@@ -51,17 +54,17 @@ fn cacheMegabytes(io: std.Io, gpa: Allocator) usize {
         if (entry.kind != .file) {
             continue;
         }
-        const stat: std.Io.Dir.Stat = dir.statFile(io, entry.path, .{}) catch continue;
+        const stat: Io.Dir.Stat = dir.statFile(io, entry.path, .{}) catch continue;
         total += stat.size;
     }
     return @intCast(total / (1024 * 1024));
 }
 
 pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
     const gpa: Allocator = arena.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
     var args_list: ArrayList([]u8) = .empty;
     var arg_it: std.process.Args.Iterator = try .initAllocator(init.minimal.args, gpa);
@@ -82,14 +85,14 @@ pub fn main(init: std.process.Init) !void {
     const cache_before: usize = cacheMegabytes(io, gpa);
     const free_before: ?usize = fs_space.freeMegabytes();
     // `Clock.awake` is the monotonic one - unaffected by an NTP step mid-build.
-    const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const started: Io.Timestamp = Io.Clock.now(.awake, io);
 
     // The child's own output goes to a fixed file, NOT to this process's stdout.
     //
     // * That is a trap worth naming: redirecting the `measure` invocation captures only this
     // summary line, so a `grep 'error:'` on it reports nothing whatever the build did. The log
     // to read is /tmp/b.log, and it is overwritten by the next measured command.
-    const log_file: File = try std.Io.Dir.cwd().createFile(io, child_log_path, .{});
+    const log_file: File = try Io.Dir.cwd().createFile(io, child_log_path, .{});
     defer log_file.close(io);
 
     var child: std.process.Child = try std.process.spawn(io, .{
@@ -114,7 +117,7 @@ pub fn main(init: std.process.Init) !void {
 
     const peak_kb: usize = (child.resource_usage_statistics.getMaxRss() orelse 0) / 1024;
 
-    const total_ns: i96 = std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
+    const total_ns: i96 = Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
     const wall_s: u64 = @intCast(@divTrunc(total_ns, std.time.ns_per_s));
     const cache_after: usize = cacheMegabytes(io, gpa);
     const free_after: ?usize = fs_space.freeMegabytes();
@@ -147,9 +150,9 @@ pub fn main(init: std.process.Init) !void {
     );
     try File.stdout().writeStreamingAll(io, line);
 
-    const existing: []const u8 = std.Io.Dir.cwd().readFileAlloc(io, log_path, gpa, .unlimited) catch "";
+    const existing: []const u8 = Io.Dir.cwd().readFileAlloc(io, log_path, gpa, .unlimited) catch "";
     const merged: []u8 = try std.mem.concat(gpa, u8, &.{ existing, line });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = log_path, .data = merged });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = log_path, .data = merged });
 
     std.process.exit(code);
 }

@@ -20,6 +20,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -215,21 +217,21 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const quad_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(fullscreen_verts[0..]),
+        sliceAsBytes(fullscreen_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "hy_quad",
     );
     const cube_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(cube_verts[0..]),
+        sliceAsBytes(cube_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "hy_cube_vbo",
     );
     const cube_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(cube_indices[0..]),
+        sliceAsBytes(cube_indices[0..]),
         .{ .index = true, .copy_dst = true },
         "hy_cube_ibo",
     );
@@ -260,7 +262,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, shading_vs_wgsl, "deferred_shading_vs");
     const march_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, hybrid_raymarch_fs_wgsl, "hybrid_raymarch_fs");
-    const march_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const march_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -305,7 +307,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const cube_fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, fog_fs_wgsl, "fog_fs");
-    const cube_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const cube_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -470,7 +472,7 @@ fn update(f: *z.Frame, s: *State) void {
         .cam_fwd = .{ fwd3[0], fwd3[1], fwd3[2], @tan(fov_y * 0.5) },
         .params = .{ aspect, t, 0, 0 },
     };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.march_ubo, 0, std.mem.asBytes(&march_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.march_ubo, 0, asBytes(&march_io.u));
 
     for (&s.cubes, cube_colors, 0..) |*obj, color, i| {
         const c: [3]f32 = cubeCenter(i, t);
@@ -481,7 +483,7 @@ fn update(f: *z.Frame, s: *State) void {
         );
         var vs_io: mat_vs.Io = undefined;
         vs_io.u = .{ .mvp = mulMat(cam_vp, model), .model = model, .normal_matrix = spin };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, asBytes(&vs_io.u));
 
         var fs_io: cube_fs.Io = undefined;
         fs_io.u = .{
@@ -491,7 +493,7 @@ fn update(f: *z.Frame, s: *State) void {
             .fog_color = .{ 0, 0, 0, 1 },
             .params = .{ 0, 0, 0, 0 },
         };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, asBytes(&fs_io.u));
     }
 
     // ---- ONE pass, two rendering methods, one depth buffer ----

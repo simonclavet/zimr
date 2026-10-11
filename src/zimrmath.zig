@@ -400,7 +400,19 @@ const builtin = @import("builtin");
 pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();
 
 const std = @import("std");
+const Random = std.Random;
 const build_options = @import("build_options");
+
+/// Two-argument form of `perLane`.
+pub fn perLane2(comptime scalar: anytype, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
+    const T = @TypeOf(a);
+    const lanes = @typeInfo(T).vector.len;
+    var result: T = undefined;
+    inline for (0..lanes) |i| {
+        result[i] = scalar(a[i], b[i]);
+    }
+    return result;
+}
 
 /// Floating-point power: `base ** exponent`.  GLSL-style 2-arg
 /// signature (`pow(x, y)` rather than std.math's `pow(T, x, y)`).
@@ -449,15 +461,303 @@ pub fn pow(base: anytype, exponent: anytype) @TypeOf(base, exponent) {
 // function that isn't here: add it (vendored if small, gated-delegate if
 // big) - do NOT reach for std.math at the call site.
 
+/// The one shape every float-only function here takes: a float of any width (f16, f32, f64, ...), a
+/// `comptime_float`, or a vector of floats - `Vec`, `Vec2`, any `@Vector(N, f32)`. It is the first line of
+/// those functions, so an integer fails right at the call, by name, instead of somewhere inside the
+/// arithmetic. Integers are refused on purpose: convert where the conversion is visible (`float(i)`).
+/// (zimrnum's `requireFloat` is the scalar-only sibling, for its tensors' element types.)
+pub fn requireFloatLike(comptime T: type) void {
+    const float_like: bool = switch (@typeInfo(T)) {
+        .float, .comptime_float => true,
+        .vector => |vector| @typeInfo(vector.child) == .float,
+        else => false,
+    };
+    if (comptime !float_like) {
+        @compileError("zm: expected a float or a vector of floats, got " ++ @typeName(T) ++
+            " - convert at the call site (zm.float)");
+    }
+}
+
 /// Degrees -> radians.
 pub fn radFromDeg(d: anytype) @TypeOf(d) {
+    requireFloatLike(@TypeOf(d));
     return d * (pi / 180.0);
 }
 /// Radians -> degrees.
 pub fn degFromRad(r: anytype) @TypeOf(r) {
+    requireFloatLike(@TypeOf(r));
     return r * (180.0 / pi);
 }
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+
+const expectEqual = std.testing.expectEqual;
+
+/// A comptime float lifted into `T`, whether `T` is a scalar or a vector.
+///
+/// This is the small piece that makes every function above read the same for both shapes. A
+/// bare `1.0` mixed with a vector is a compile error; `@splat` on a scalar is one too.
+fn splatLike(comptime T: type, comptime value: comptime_float) T {
+    if (comptime @typeInfo(T) == .vector) {
+        return @splat(@as(@typeInfo(T).vector.child, value));
+    }
+    return value;
+}
+
+/// True if any lane is zero. One scalar comparison, or a reduction across the lanes.
+fn anyZero(x: anytype) bool {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return @reduce(.Or, x == splatLike(@TypeOf(x), 0));
+    }
+    return x == 0;
+}
+
+/// Smallest power of two >= `value` (asserts no overflow on host).
+/// Integer division rounding toward negative infinity: `divFloor(-7, 2)` is `-4`.
+///
+/// ZIG NAMES FOUR DIVISIONS AND zimrmath SHOULD HAVE ALL FOUR
+///
+/// `a / b` on two signed integers is a compile error whose message is the specification:
+/// *"signed integers must use @divTrunc, @divFloor, @divCeil, or @divExact"*. A caller who
+/// cannot reach `std.math` needs the same four here, or they write the workaround instead -
+/// which is exactly what happened in zimrnum before these existed.
+///
+/// SCALARS AND VECTORS, LIKE EVERYTHING ELSE IN THIS FILE
+///
+/// The first version took `comptime T` and compared `denominator == 0`, which on a `@Vector`
+/// yields a vector of bools and does not compile. **A function here that only works on scalars
+/// is half a function**: the same expression has to run on a lane, on a scalar, and in a shader.
+/// So the divisor check is `@reduce(.Or, ...)` on a vector and a plain comparison otherwise.
+pub fn divFloor(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @divFloor(numerator, denominator);
+}
+
+/// Integer division rounding toward zero: `divTrunc(-7, 2)` is `-3`.
+pub fn divTrunc(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @divTrunc(numerator, denominator);
+}
+
+/// Integer division rounding up: `divCeil(7, 2)` is `4`, and `divCeil(-7, 2)` is `-3`.
+///
+/// The one you want when sizing a buffer - `divCeil(items, per_chunk)` is how many chunks you
+/// need, and rounding down loses the last partial one. This is `@divCeil` with the divisor
+/// checked, so a zero divisor is an error rather than undefined behaviour. It takes signed and
+/// unsigned integers, scalars and vectors alike, and is exact across the whole type: the
+/// hand-written `(a + b - 1) / b` overflows when `a` is near the top of the type.
+pub fn divCeil(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @divCeil(numerator, denominator);
+}
+
+/// The remainder pairing with `divFloor`: its sign follows the DIVISOR, so `mod(-7, 3)` is `2`.
+///
+/// This is the one that wraps an index - never negative for a positive divisor, which `rem` is
+/// not. The pair agrees on positive inputs and disagrees on negative ones, so code tested on
+/// positive data passes either way and then indexes with a negative number.
+pub fn mod(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @mod(numerator, denominator);
+}
+
+/// The remainder pairing with `divTrunc`: its sign follows the DIVIDEND, so `rem(-7, 3)` is `-1`.
+pub fn rem(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    return @rem(numerator, denominator);
+}
+
+const expectError = std.testing.expectError;
+
+/// True if any lane is nonzero. The mirror of `anyZero`, for the inexact check.
+fn anyNonZero(x: anytype) bool {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return @reduce(.Or, x != splatLike(@TypeOf(x), 0));
+    }
+    return x != 0;
+}
+
+/// Integer division that REFUSES to round, because the caller said it would not have to.
+///
+/// `@divExact` is ILLEGAL BEHAVIOUR when the division is inexact - in a release build that is
+/// silent corruption rather than a crash. Checking first turns a wrong assumption into a value.
+pub fn divExact(
+    numerator: anytype,
+    denominator: @TypeOf(numerator),
+) error{ DivisionByZero, Inexact }!@TypeOf(numerator) {
+    if (anyZero(denominator)) {
+        return error.DivisionByZero;
+    }
+    if (anyNonZero(@rem(numerator, denominator))) {
+        return error.Inexact;
+    }
+    return @divExact(numerator, denominator);
+}
+
+/// The largest whole number dividing both, by Euclid.
+///
+/// Zero is handled the way every library does and nobody documents: `gcd(0, n)` is `n`, because
+/// every number divides zero. `gcd(0, 0)` is zero for the same reason and is the one case where
+/// the answer is a convention rather than a fact.
+///
+/// SCALAR ONLY, AND THAT IS A REAL LIMIT RATHER THAN AN OVERSIGHT: Euclid's loop runs a
+/// different number of times per lane, so a vector version would have to run every lane to the
+/// worst case and mask. Worth doing when something wants it, not before.
+pub fn gcd(comptime T: type, first: T, second: T) T {
+    var a: T = if (first < 0) -first else first;
+    var b: T = if (second < 0) -second else second;
+    while (b != 0) {
+        const carry: T = b;
+        b = @rem(a, b);
+        a = carry;
+    }
+    return a;
+}
+
+/// The smallest whole number both divide.
+///
+/// Divides BEFORE multiplying, so `lcm(a, b)` survives inputs whose product would overflow.
+/// Scalar only, for the same reason as `gcd`.
+pub fn lcm(comptime T: type, first: T, second: T) T {
+    if (first == 0 or second == 0) {
+        return 0;
+    }
+    const shared: T = gcd(T, first, second);
+    const a: T = if (first < 0) -first else first;
+    const b: T = if (second < 0) -second else second;
+    return @divExact(a, shared) * b;
+}
+
+const expect = std.testing.expect;
+
+pub fn veclen(comptime T: type) comptime_int {
+    return @typeInfo(T).vector.len;
+}
+
+pub fn abs(v: anytype) @TypeOf(v) {
+    return @abs(v); // load, andps
+}
+
+/// The scalar behind a float type, whether it is already scalar or a vector of them.
+///
+/// The five constant-returning helpers below (`nan`, `inf`, `floatMax`, `floatMin`, `floatEps`)
+/// take a TYPE rather than a value, so `perLane` - which maps over a value - cannot help them.
+/// Before this existed they answered `@compileError` for every vector type, which meant the one
+/// place they are most needed said no: a shader's working type is `@Vector(4, f32)`, and
+/// `zm.floatEps(@Vector(4, f32))` is exactly what a per-lane tolerance wants.
+fn FloatScalar(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .vector => |v| v.child,
+        else => T,
+    };
+}
+
+/// Broadcast a scalar constant to `T`, which may be a vector type.
+fn splatTo(comptime T: type, comptime value: FloatScalar(T)) T {
+    return switch (@typeInfo(T)) {
+        .vector => @splat(value),
+        else => value,
+    };
+}
+
+/// Positive infinity of float type `T`.
+pub fn inf(comptime T: type) T {
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, @bitCast(@as(u32, 0x7F80_0000))),
+        f64 => splatTo(T, @bitCast(@as(u64, 0x7FF0_0000_0000_0000))),
+        else => @compileError("zm.inf: unsupported float type"),
+    };
+}
+
+/// True when `x` is neither inf nor nan. Scalar in, `bool` out; vector in, vector of bools out -
+/// the same shape as `isNan` and `isInf` beside it.
+pub fn isFinite(
+    x: anytype,
+) if (@typeInfo(@TypeOf(x)) == .vector) @Vector(veclen(@TypeOf(x)), bool) else bool {
+    const T = @TypeOf(x);
+    // Finite iff not-NaN (x == x) and not-+/-inf. Bit-identical to std.math.isFinite for f32/f64.
+    // The vector form uses `&` where the scalar uses `and`, because vectors have no `and`; it
+    // is the same predicate written twice rather than two different tests.
+    if (comptime @typeInfo(T) == .vector) {
+        const child = @typeInfo(T).vector.child;
+        return (x == x) & (abs(x) != @as(T, @splat(inf(child))));
+    }
+    return (x == x) and (@abs(x) != inf(T));
+}
+
+/// Smallest positive normal value of float type `T`.
+pub fn floatMin(comptime T: type) T {
+    return switch (FloatScalar(T)) {
+        f32 => splatTo(T, 1.1754943508222875e-38),
+        f64 => splatTo(T, 2.2250738585072014e-308),
+        else => @compileError("zm.floatMin: unsupported float type"),
+    };
+}
+
+/// True when `x` is a normal float - finite, nonzero, and not subnormal.
+///
+/// The four classifiers below name states that `isFinite` alone cannot distinguish, and a caller
+/// who cannot reach `std.math` has no other way to ask. Each answers about ONE value, so they
+/// take a scalar; a lane-wise version would return a vector of bools and belongs beside the
+/// comparisons rather than here.
+pub fn isNormal(x: anytype) bool {
+    const T = @TypeOf(x);
+    return isFinite(x) and x != 0 and @abs(x) >= floatMin(T);
+}
+
+/// True for positive infinity only. `isInf` cannot tell the two apart.
+pub fn isPositiveInf(x: anytype) bool {
+    return x == inf(@TypeOf(x));
+}
+
+/// True for negative infinity only.
+pub fn isNegativeInf(x: anytype) bool {
+    return x == -inf(@TypeOf(x));
+}
+
+/// True for negative zero, which `x == 0` cannot detect because `-0.0 == 0.0`.
+///
+/// The sign of zero survives division: `1 / -0.0` is negative infinity where `1 / 0.0` is
+/// positive. That makes negative zero worth being able to ask about.
+pub fn isNegativeZero(x: anytype) bool {
+    const T = @TypeOf(x);
+    return x == 0 and @as(@Int(.unsigned, @bitSizeOf(T)), @bitCast(x)) != 0;
+}
+
+// Integer / comptime utilities
+// These are comptime or pure-integer, so they're target-independent (the
+// comptime ones produce constants usable in a shader; the runtime ones
+// use only integer ops).  Exposed via zm so the `std-math` rule stays
+// clean across the codebase.
+pub fn maxInt(comptime T: type) comptime_int {
+    const info = @typeInfo(T);
+    const bit_count: u16 = info.int.bits;
+    if (bit_count == 0) {
+        return 0;
+    }
+    return (1 << (bit_count - @intFromBool(info.int.signedness == .signed))) - 1;
+}
+
+pub fn minInt(comptime T: type) comptime_int {
+    const info = @typeInfo(T);
+    const bit_count: u16 = info.int.bits;
+    if (info.int.signedness == .unsigned) {
+        return 0;
+    }
+    if (bit_count == 0) {
+        return 0;
+    }
+    return -(1 << (bit_count - 1));
+}
 
 test "zm: the std.math replacements, against std.math itself" {
     // EVERY ONE CHECKED AGAINST THE FUNCTION IT REPLACES
@@ -483,6 +783,10 @@ test "zm: the std.math replacements, against std.math itself" {
         try expectEqual(a, (try divFloor(a, b)) * b + (try mod(a, b)));
         try expectEqual(a, (try divTrunc(a, b)) * b + (try rem(a, b)));
     }
+
+    // `divCeil` at the edges of the type: an unsigned dividend, and the most negative one.
+    try expectEqual(@as(u32, 3), try divCeil(@as(u32, 9), 4));
+    try expectEqual(@as(i32, std.math.minInt(i32)), try divCeil(@as(i32, std.math.minInt(i32)), 1));
 
     // A ZERO DIVISOR IS AN ERROR, NOT A TRAP - integer division by zero halts the program.
     try expectError(error.DivisionByZero, divFloor(1, 0));
@@ -582,30 +886,7 @@ test "zm.radFromDeg" {
 test "zm.degFromRad" {
     try expectApproxEqAbs(@as(f32, 180.0), degFromRad(@as(f32, pi)), 1.0e-4);
 }
-/// Positive infinity of float type `T`.
-pub fn inf(comptime T: type) T {
-    return switch (FloatScalar(T)) {
-        f32 => splatTo(T, @bitCast(@as(u32, 0x7F80_0000))),
-        f64 => splatTo(T, @bitCast(@as(u64, 0x7FF0_0000_0000_0000))),
-        else => @compileError("zm.inf: unsupported float type"),
-    };
-}
 
-/// True when `x` is neither inf nor nan. Scalar in, `bool` out; vector in, vector of bools out -
-/// the same shape as `isNan` and `isInf` beside it.
-pub fn isFinite(
-    x: anytype,
-) if (@typeInfo(@TypeOf(x)) == .vector) @Vector(veclen(@TypeOf(x)), bool) else bool {
-    const T = @TypeOf(x);
-    // Finite iff not-NaN (x == x) and not-+/-inf. Bit-identical to std.math.isFinite for f32/f64.
-    // The vector form uses `&` where the scalar uses `and`, because vectors have no `and`; it
-    // is the same predicate written twice rather than two different tests.
-    if (comptime @typeInfo(T) == .vector) {
-        const child = @typeInfo(T).vector.child;
-        return (x == x) & (abs(x) != @as(T, @splat(inf(child))));
-    }
-    return (x == x) and (@abs(x) != inf(T));
-}
 /// True when `x` is a positive power of two.
 pub fn isPowerOfTwo(x: anytype) bool {
     // std.math.isPowerOfTwo asserts `x > 0`; this returns false for x <= 0
@@ -652,166 +933,6 @@ pub fn Log2Int(comptime T: type) type {
     return @Int(.unsigned, log2_bits);
 }
 
-/// Smallest power of two >= `value` (asserts no overflow on host).
-/// Integer division rounding toward negative infinity: `divFloor(-7, 2)` is `-4`.
-///
-/// ZIG NAMES FOUR DIVISIONS AND zimrmath SHOULD HAVE ALL FOUR
-///
-/// `a / b` on two signed integers is a compile error whose message is the specification:
-/// *"signed integers must use @divTrunc, @divFloor, @divCeil, or @divExact"*. A caller who
-/// cannot reach `std.math` needs the same four here, or they write the workaround instead -
-/// which is exactly what happened in zimrnum before these existed.
-///
-/// SCALARS AND VECTORS, LIKE EVERYTHING ELSE IN THIS FILE
-///
-/// The first version took `comptime T` and compared `denominator == 0`, which on a `@Vector`
-/// yields a vector of bools and does not compile. **A function here that only works on scalars
-/// is half a function**: the same expression has to run on a lane, on a scalar, and in a shader.
-/// So the divisor check is `@reduce(.Or, ...)` on a vector and a plain comparison otherwise.
-pub fn divFloor(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
-    if (anyZero(denominator)) {
-        return error.DivisionByZero;
-    }
-    return @divFloor(numerator, denominator);
-}
-
-/// Integer division rounding toward zero: `divTrunc(-7, 2)` is `-3`.
-pub fn divTrunc(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
-    if (anyZero(denominator)) {
-        return error.DivisionByZero;
-    }
-    return @divTrunc(numerator, denominator);
-}
-
-/// Integer division rounding up: `divCeil(7, 2)` is `4`.
-///
-/// The one you want when sizing a buffer - `divCeil(items, per_chunk)` is how many chunks you
-/// need, and rounding down loses the last partial one.
-pub fn divCeil(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
-    if (anyZero(denominator)) {
-        return error.DivisionByZero;
-    }
-    // Flooring the negation and negating back, which needs no second builtin and vectorises.
-    return -@divFloor(-numerator, denominator);
-}
-
-/// Integer division that REFUSES to round, because the caller said it would not have to.
-///
-/// `@divExact` is ILLEGAL BEHAVIOUR when the division is inexact - in a release build that is
-/// silent corruption rather than a crash. Checking first turns a wrong assumption into a value.
-pub fn divExact(
-    numerator: anytype,
-    denominator: @TypeOf(numerator),
-) error{ DivisionByZero, Inexact }!@TypeOf(numerator) {
-    if (anyZero(denominator)) {
-        return error.DivisionByZero;
-    }
-    if (anyNonZero(@rem(numerator, denominator))) {
-        return error.Inexact;
-    }
-    return @divExact(numerator, denominator);
-}
-
-/// The remainder pairing with `divFloor`: its sign follows the DIVISOR, so `mod(-7, 3)` is `2`.
-///
-/// This is the one that wraps an index - never negative for a positive divisor, which `rem` is
-/// not. The pair agrees on positive inputs and disagrees on negative ones, so code tested on
-/// positive data passes either way and then indexes with a negative number.
-pub fn mod(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
-    if (anyZero(denominator)) {
-        return error.DivisionByZero;
-    }
-    return @mod(numerator, denominator);
-}
-
-/// The remainder pairing with `divTrunc`: its sign follows the DIVIDEND, so `rem(-7, 3)` is `-1`.
-pub fn rem(numerator: anytype, denominator: @TypeOf(numerator)) error{DivisionByZero}!@TypeOf(numerator) {
-    if (anyZero(denominator)) {
-        return error.DivisionByZero;
-    }
-    return @rem(numerator, denominator);
-}
-
-/// True if any lane is zero. One scalar comparison, or a reduction across the lanes.
-fn anyZero(x: anytype) bool {
-    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
-        return @reduce(.Or, x == splatLike(@TypeOf(x), 0));
-    }
-    return x == 0;
-}
-
-/// True if any lane is nonzero. The mirror of `anyZero`, for the inexact check.
-fn anyNonZero(x: anytype) bool {
-    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
-        return @reduce(.Or, x != splatLike(@TypeOf(x), 0));
-    }
-    return x != 0;
-}
-
-/// The largest whole number dividing both, by Euclid.
-///
-/// Zero is handled the way every library does and nobody documents: `gcd(0, n)` is `n`, because
-/// every number divides zero. `gcd(0, 0)` is zero for the same reason and is the one case where
-/// the answer is a convention rather than a fact.
-///
-/// SCALAR ONLY, AND THAT IS A REAL LIMIT RATHER THAN AN OVERSIGHT: Euclid's loop runs a
-/// different number of times per lane, so a vector version would have to run every lane to the
-/// worst case and mask. Worth doing when something wants it, not before.
-pub fn gcd(comptime T: type, first: T, second: T) T {
-    var a: T = if (first < 0) -first else first;
-    var b: T = if (second < 0) -second else second;
-    while (b != 0) {
-        const carry: T = b;
-        b = @rem(a, b);
-        a = carry;
-    }
-    return a;
-}
-
-/// The smallest whole number both divide.
-///
-/// Divides BEFORE multiplying, so `lcm(a, b)` survives inputs whose product would overflow.
-/// Scalar only, for the same reason as `gcd`.
-pub fn lcm(comptime T: type, first: T, second: T) T {
-    if (first == 0 or second == 0) {
-        return 0;
-    }
-    const shared: T = gcd(T, first, second);
-    const a: T = if (first < 0) -first else first;
-    const b: T = if (second < 0) -second else second;
-    return @divExact(a, shared) * b;
-}
-
-/// True when `x` is a normal float - finite, nonzero, and not subnormal.
-///
-/// The four classifiers below name states that `isFinite` alone cannot distinguish, and a caller
-/// who cannot reach `std.math` has no other way to ask. Each answers about ONE value, so they
-/// take a scalar; a lane-wise version would return a vector of bools and belongs beside the
-/// comparisons rather than here.
-pub fn isNormal(x: anytype) bool {
-    const T = @TypeOf(x);
-    return isFinite(x) and x != 0 and @abs(x) >= floatMin(T);
-}
-
-/// True for positive infinity only. `isInf` cannot tell the two apart.
-pub fn isPositiveInf(x: anytype) bool {
-    return x == inf(@TypeOf(x));
-}
-
-/// True for negative infinity only.
-pub fn isNegativeInf(x: anytype) bool {
-    return x == -inf(@TypeOf(x));
-}
-
-/// True for negative zero, which `x == 0` cannot detect because `-0.0 == 0.0`.
-///
-/// The sign of zero survives division: `1 / -0.0` is negative infinity where `1 / 0.0` is
-/// positive. That makes negative zero worth being able to ask about.
-pub fn isNegativeZero(x: anytype) bool {
-    const T = @TypeOf(x);
-    return x == 0 and @as(@Int(.unsigned, @bitSizeOf(T)), @bitCast(x)) != 0;
-}
-
 pub fn ceilPowerOfTwo(comptime T: type, value: T) error{Overflow}!T {
     // Vendored from std.math.ceilPowerOfTwo: promote to one extra bit so
     // the overflow bit can be tested, then narrow back.  Keeps std's
@@ -830,27 +951,6 @@ pub fn ceilPowerOfTwo(comptime T: type, value: T) error{Overflow}!T {
     }
     return @as(T, @intCast(x));
 }
-/// The scalar behind a float type, whether it is already scalar or a vector of them.
-///
-/// The five constant-returning helpers below (`nan`, `inf`, `floatMax`, `floatMin`, `floatEps`)
-/// take a TYPE rather than a value, so `perLane` - which maps over a value - cannot help them.
-/// Before this existed they answered `@compileError` for every vector type, which meant the one
-/// place they are most needed said no: a shader's working type is `@Vector(4, f32)`, and
-/// `zm.floatEps(@Vector(4, f32))` is exactly what a per-lane tolerance wants.
-fn FloatScalar(comptime T: type) type {
-    return switch (@typeInfo(T)) {
-        .vector => |v| v.child,
-        else => T,
-    };
-}
-
-/// Broadcast a scalar constant to `T`, which may be a vector type.
-fn splatTo(comptime T: type, comptime value: FloatScalar(T)) T {
-    return switch (@typeInfo(T)) {
-        .vector => @splat(value),
-        else => value,
-    };
-}
 
 /// Quiet NaN of float type `T`. `T` may be a vector type, giving a vector of NaNs.
 pub fn nan(comptime T: type) T {
@@ -868,21 +968,32 @@ pub fn floatEps(comptime T: type) T {
         else => @compileError("zm.floatEps: unsupported float type"),
     };
 }
-/// Cube root. `x^(1/3)`, sign-preserving.
+/// Apply a scalar function to every lane of a vector.
 ///
-/// WRAPPED HERE RATHER THAN CALLED FROM std BECAUSE OF THE GPU BRANCH. `pow` is undefined
-/// for a negative base, so the naive `pow(x, 1.0/3.0)` returns NaN for exactly half its
-/// domain; taking the magnitude and restoring the sign is correct on both sides. On the CPU
-/// std's version is more accurate, so use it there.
-pub fn cbrt(x: anytype) @TypeOf(x) {
-    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
-        return perLane(cbrt, x);
+/// THE BRIDGE THAT MAKES "SCALARS AND VECTORS" TRUE RATHER THAN INTENDED
+///
+/// A dozen functions here were declared `anytype` and then called `std.math.something`, which
+/// takes scalars only. They compiled, they were tested on scalars, and they failed to compile the
+/// first time anyone passed a vector - `tanh`, `sigmoid`, `gelu`, `cosh`, `cbrt`, `isFinite`,
+/// `hypot`, `pow`, `step`, `fract`. The signature promised one thing and the body delivered
+/// another.
+///
+/// Rather than rewriting each in vector-safe arithmetic - which would lose the accuracy the
+/// standard library has near the edges of each function's range - a vector argument is split into
+/// lanes, the scalar path runs on each, and the lanes are reassembled. Same answer as the scalar
+/// call, by construction, on every lane.
+///
+/// NOT `inline` itself, though the loop inside is comptime-unrolled. An `inline fn` calling a
+/// scalar function that is also `inline` is inline recursion, which the compiler refuses - the
+/// helper has to be an ordinary function for the pattern to work at all.
+pub fn perLane(comptime scalar: anytype, v: anytype) @TypeOf(v) {
+    const T = @TypeOf(v);
+    const lanes = @typeInfo(T).vector.len;
+    var result: T = undefined;
+    inline for (0..lanes) |i| {
+        result[i] = scalar(v[i]);
     }
-    if (comptime is_gpu) {
-        const magnitude: @TypeOf(x) = @exp(@log(@abs(x)) * (1.0 / 3.0));
-        return if (x < 0) -magnitude else magnitude;
-    }
-    return cbrtExact(@TypeOf(x), x);
+    return result;
 }
 
 /// `cbrt` at full precision, without `std.math`.
@@ -968,6 +1079,24 @@ fn cbrtExact(comptime T: type, x: T) T {
     q = (q - t) / (w + q);
     return t + t * q;
 }
+
+/// Cube root. `x^(1/3)`, sign-preserving.
+///
+/// WRAPPED HERE RATHER THAN CALLED FROM std BECAUSE OF THE GPU BRANCH. `pow` is undefined
+/// for a negative base, so the naive `pow(x, 1.0/3.0)` returns NaN for exactly half its
+/// domain; taking the magnitude and restoring the sign is correct on both sides. On the CPU
+/// std's version is more accurate, so use it there.
+pub fn cbrt(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(cbrt, x);
+    }
+    if (comptime is_gpu) {
+        const magnitude: @TypeOf(x) = @exp(@log(@abs(x)) * (1.0 / 3.0));
+        return if (x < 0) -magnitude else magnitude;
+    }
+    return cbrtExact(@TypeOf(x), x);
+}
+
 /// Hyperbolic cosine. `(e^x + e^-^x)/2`.
 ///
 /// WRAPPED HERE RATHER THAN CALLED FROM std BECAUSE OF THE GPU BRANCH, like `cbrt` above.
@@ -1024,14 +1153,6 @@ pub fn floatMax(comptime T: type) T {
         else => @compileError("zm.floatMax: unsupported float type"),
     };
 }
-/// Smallest positive normal value of float type `T`.
-pub fn floatMin(comptime T: type) T {
-    return switch (FloatScalar(T)) {
-        f32 => splatTo(T, 1.1754943508222875e-38),
-        f64 => splatTo(T, 2.2250738585072014e-308),
-        else => @compileError("zm.floatMin: unsupported float type"),
-    };
-}
 /// Sign bit of `x` (true for negative, including -0.0).
 pub fn signbit(x: anytype) bool {
     const bits = @typeInfo(@TypeOf(x)).float.bits;
@@ -1049,6 +1170,7 @@ pub fn mulAdd(
     v1: anytype,
     v2: anytype,
 ) @TypeOf(v0, v1, v2) {
+    requireFloatLike(@TypeOf(v0));
     const T = @TypeOf(v0, v1, v2);
     // [zimr Z0] Upstream zmath reads `enable_cross_platform_determinism`
     // from a build-injected `zmath_options` module.  zimr vendors this
@@ -1108,6 +1230,21 @@ pub fn int(comptime T: type, x: anytype) T {
     return @trunc(x);
 }
 
+/// int -> f32. Comptime-asserts `x` is an integer (a float/bool/etc is a
+/// COMPILE error, so this can't silently hide a bad conversion the way bare
+/// @floatFromInt can - and the f32 output is PINNED, not context-inferred).
+/// `float(width)` instead of `float(width)`.
+pub fn float(x: anytype) f32 {
+    comptime {
+        const info = @typeInfo(@TypeOf(x));
+        if (info != .int and info != .comptime_int) {
+            @compileError("zm.float expects an integer; got " ++ @typeName(@TypeOf(x)) ++
+                " (use a plain f32 literal/value directly).");
+        }
+    }
+    return @floatFromInt(x);
+}
+
 pub fn modAngle32(in_angle_rad: f32) f32 {
     const angle: f32 = in_angle_rad + pi;
     var temp: f32 = @abs(angle);
@@ -1120,10 +1257,6 @@ pub fn modAngle32(in_angle_rad: f32) f32 {
 }
 
 const has_avx512f = if (cpu_arch == .x86_64) std.Target.x86.featureSetHas(builtin.cpu.features, .avx512f) else false;
-
-pub fn veclen(comptime T: type) comptime_int {
-    return @typeInfo(T).vector.len;
-}
 
 pub fn andInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
     const T = @TypeOf(v0, v1);
@@ -1147,10 +1280,6 @@ pub fn orInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
 
 fn splatNoFraction(comptime T: type) T {
     return @splat(@as(f32, 8_388_608.0));
-}
-
-pub fn abs(v: anytype) @TypeOf(v) {
-    return @abs(v); // load, andps
 }
 
 pub fn blend(
@@ -1229,6 +1358,7 @@ pub fn round(v: anytype) @TypeOf(v) {
 }
 
 pub fn modAngle32xN(v: anytype) @TypeOf(v) {
+    requireFloatLike(@TypeOf(v));
     const T = @TypeOf(v);
     return v - @as(T, @splat(tau)) * round(v * @as(T, @splat(1.0 / tau))); // 2 x vmulps, 2 x load, vroundps, vaddps
 }
@@ -1356,19 +1486,23 @@ pub fn tanRad(x: anytype) @TypeOf(x) {
 }
 /// Base-2 logarithm.  `@log2` lowers to a GLSL.std.450 op on SPIR-V.
 pub fn log2(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @log2(x);
 }
 /// Base-10 logarithm.  `@log10` lowers to a GLSL.std.450 op on SPIR-V.
 pub fn log10(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @log10(x);
 }
 /// Base-2 exponential.  `@exp2` lowers to a GLSL.std.450 op on SPIR-V.
 pub fn exp2(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @exp2(x);
 }
 /// Base-10 exponential (10^x).  There is no `@exp10` builtin; the
 /// `@exp(x * ln10)` identity lowers cleanly on host and SPIR-V alike.
 pub fn exp10(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @exp(x * ln10);
 }
 
@@ -1380,6 +1514,7 @@ pub fn exp10(x: anytype) @TypeOf(x) {
 
 /// Base-e exponential.
 pub fn exp(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @exp(x);
 }
 /// THE ELEMENTWISE SET, COMPLETED TO MATCH zimrnum
@@ -1395,6 +1530,7 @@ pub fn exp(x: anytype) @TypeOf(x) {
 /// scalar form, `perLane` bridges it to vectors rather than trading accuracy for reach.
 /// `1 / sqrt(x)`, elementwise. NaN below zero, infinity at zero.
 pub fn rsqrt(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return splatLike(@TypeOf(x), 1.0) / @sqrt(x);
 }
 
@@ -1413,46 +1549,41 @@ pub fn sign(x: anytype) @TypeOf(x) {
     return x; // preserves NaN and both zeros
 }
 
-/// `e^x - 1`, accurate near zero.
+/// `e^x - 1`, accurate near zero, on every backend.
 ///
-/// FIVE LINES INSTEAD OF std's TWO HUNDRED AND SIXTY, AND WITHIN TWO ULP OF IT
+/// For small `x`, `e^x` is just above 1, and `e^x - 1` subtracts away the digits that were the answer: at `x = 1e-6`
+/// in f32, `e^x` rounds to a neighbour of 1 and the difference keeps only a digit or two. So below `|x| = 0.5` the
+/// function sums the series `x + x^2/2! + x^3/3! + ...` instead, which involves no subtraction of near-equal values
+/// at all, in nested form:
 ///
-/// The naive `@exp(x) - 1` is what this used to be, and it is wrong in a way the function exists
-/// to prevent: for small `x`, `e^x` is just above 1 and subtracting 1 throws away the digits that
-/// were the answer. Measured against std at f64:
+///     x * (1 + x/2 * (1 + x/3 * (1 + x/4 * (...))))
 ///
-///     x = 1e-5    identity 9.7e-12    here 1.7e-16
-///     x = 1e-8    identity 1.1e-8     here 1.7e-16
-///     x = 1e-12   identity 8.9e-5     here EXACT
+/// evaluated from the innermost term outwards. Eight terms reach f32's precision at the boundary (the first term
+/// left out, `x^9 / 9!`, is 1.1e-8 relative there) and fourteen reach f64's (4.7e-17). From 0.5 on, `e^x - 1` loses
+/// little: `e^x` is at least 1.65 or at most 0.61 away from 1, and the difference keeps nearly all its digits.
 ///
-/// **Kahan's observation is that the error is recoverable.** `u = e^x` is computed to within a
-/// rounding step, and `log(u)` is the value of `x` that WOULD have produced exactly that `u`. So
-/// `(u - 1) * x / log(u)` rescales the badly-cancelled `u - 1` by the ratio of the true argument
-/// to the effective one, and the cancellation divides out. Both `u - 1` and `log(u)` lose the
-/// same digits, and their quotient does not.
-///
-/// std's `expm1` is 251 lines of argument reduction and a minimax polynomial per width, and it is
-/// worth ~2 ULP more than this. Measured over 300 000 points across thirty decades: **f64 3.4e-16,
-/// f32 2.0e-7** - one to two ULP at each width. That trade is the right one for a library that
-/// also has to run in a shader.
-///
-/// The two guards are the endpoints, not special cases: `u == 1` means `x` was too small to move
-/// the exponential at all, so `x` IS the answer; `u - 1 == -1` means `e^x` underflowed, and the
-/// limit is -1.
+/// The series also keeps the function independent of how accurate a GPU's `log` is. Kahan's formula,
+/// `(u - 1) * x / log(u)` with `u = e^x`, cancels the error well on a CPU, but needs `log(u)` accurate relative to
+/// its tiny value for `u` near 1 - and the Vulkan and WGSL precision rules bound `log` on [0.5, 2] only by an absolute
+/// error of 2^-21, about 5e-7, a few percent of the answer at `x = 1e-6`. The test below measures the accuracy at both
+/// widths against `std.math.expm1`.
 pub fn expm1(x: anytype) @TypeOf(x) {
     const T = @TypeOf(x);
     if (comptime @typeInfo(T) == .vector) {
         return perLane(expm1, x);
     }
-    const one_: T = splatLike(T, 1.0);
-    const u: T = @exp(x);
-    if (u == one_) {
-        return x;
+    const series_limit: T = 0.5;
+    if (@abs(x) < series_limit) {
+        // The highest power summed: the series is cut where its next term falls below the type's precision.
+        const highest_power: comptime_int = if (T == f32) 8 else 14;
+        var nested: T = 1.0;
+        comptime var power: comptime_int = highest_power;
+        inline while (power >= 2) : (power -= 1) {
+            nested = 1.0 + x * nested / @as(T, power);
+        }
+        return x * nested;
     }
-    if (u - one_ == -one_) {
-        return -one_;
-    }
-    return (u - one_) * x / @log(u);
+    return @exp(x) - 1.0;
 }
 
 /// `log(1 + x)`, accurate near zero by the same trick as `expm1` - measured f64 4.1e-16,
@@ -1577,6 +1708,7 @@ pub fn atanh(x: anytype) @TypeOf(x) {
 
 /// `max(0, x)`, elementwise - the rectifier.
 pub fn relu(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @max(x, splatLike(@TypeOf(x), 0.0));
 }
 
@@ -1595,15 +1727,37 @@ pub fn copysign(x: anytype, y: @TypeOf(x)) @TypeOf(x) {
     return if (y < 0) -@abs(x) else @abs(x);
 }
 
-/// A comptime float lifted into `T`, whether `T` is a scalar or a vector.
+/// Sine of `x` turns, advanced by `quadrant_shift` quarter turns.
 ///
-/// This is the small piece that makes every function above read the same for both shapes. A
-/// bare `1.0` mixed with a vector is a compile error; `@splat` on a scalar is one too.
-fn splatLike(comptime T: type, comptime value: comptime_float) T {
-    if (comptime @typeInfo(T) == .vector) {
-        return @splat(@as(@typeInfo(T).vector.child, value));
-    }
-    return value;
+/// EVERY STEP OF THE REDUCTION IS EXACT, WHICH IS WHY THE QUARTER TURNS COME OUT EXACT
+///
+/// Reducing to the whole turn (`x - floor(x)`) drops the integer part without touching a mantissa
+/// bit. Multiplying by four is a power of two, so it is exact. Splitting off the quadrant is
+/// exact for the same reason the first step was. **Nothing has rounded yet**, and the residual
+/// angle is in [0, a quarter turn), where one multiply by tau/4 gives the only rounding in the
+/// whole function.
+///
+/// Doing it this way rather than one multiply by tau is what makes `sinTurns(0.5)` return
+/// **exactly zero** instead of 1.2e-16: a half turn is quadrant 2 with a residual of exactly
+/// zero, and `sin(0)` is exactly zero. Through radians it is `sin(pi)`, and pi is not
+/// representable.
+fn quarterTurn(comptime T: type, x_turns: T, comptime quadrant_shift: u2) T {
+    const whole: T = x_turns - @floor(x_turns);
+    const scaled: T = whole * 4; // exact: a power of two
+    const quadrant: T = @floor(scaled);
+    const residual: T = scaled - quadrant; // exact, and in [0, 1)
+    const angle: T = residual * splatLike(T, 1.5707963267948966); // one quarter turn, in radians
+    // `quadrant` is in [0, 4) and whole by construction, so the low two bits are the quadrant.
+    //  already yields a whole number in [0, 4); the rule wants the rounding named rather
+    // than a bare cast wrapped round it.
+    const index: u2 = @floor(@mod(quadrant, 4));
+    const which: u2 = index +% quadrant_shift;
+    return switch (which) {
+        0 => sinRad(angle),
+        1 => cosRad(angle),
+        2 => -sinRad(angle),
+        3 => -cosRad(angle),
+    };
 }
 
 /// Sine of an angle measured in TURNS, where one turn is a full circle.
@@ -1644,6 +1798,11 @@ pub fn cosTurns(x_turns: anytype) @TypeOf(x_turns) {
     // Cosine is sine a quarter turn ahead, and shifting the QUADRANT rather than the angle keeps
     // the shift exact.
     return quarterTurn(T, x_turns, 1);
+}
+
+/// One turn, in radians.
+fn sin_turn_scale(comptime T: type) T {
+    return splatLike(T, 6.283185307179586);
 }
 
 /// Tangent of an angle in turns.
@@ -1689,68 +1848,68 @@ pub fn sincosTurns(x_turns: anytype) SinCos(@TypeOf(x_turns)) {
     return .{ .sin = quarterTurn(T, x_turns, 0), .cos = quarterTurn(T, x_turns, 1) };
 }
 
-/// Sine of `x` turns, advanced by `quadrant_shift` quarter turns.
-///
-/// EVERY STEP OF THE REDUCTION IS EXACT, WHICH IS WHY THE QUARTER TURNS COME OUT EXACT
-///
-/// Reducing to the whole turn (`x - floor(x)`) drops the integer part without touching a mantissa
-/// bit. Multiplying by four is a power of two, so it is exact. Splitting off the quadrant is
-/// exact for the same reason the first step was. **Nothing has rounded yet**, and the residual
-/// angle is in [0, a quarter turn), where one multiply by tau/4 gives the only rounding in the
-/// whole function.
-///
-/// Doing it this way rather than one multiply by tau is what makes `sinTurns(0.5)` return
-/// **exactly zero** instead of 1.2e-16: a half turn is quadrant 2 with a residual of exactly
-/// zero, and `sin(0)` is exactly zero. Through radians it is `sin(pi)`, and pi is not
-/// representable.
-fn quarterTurn(comptime T: type, x_turns: T, comptime quadrant_shift: u2) T {
-    const whole: T = x_turns - @floor(x_turns);
-    const scaled: T = whole * 4; // exact: a power of two
-    const quadrant: T = @floor(scaled);
-    const residual: T = scaled - quadrant; // exact, and in [0, 1)
-    const angle: T = residual * splatLike(T, 1.5707963267948966); // one quarter turn, in radians
-    // `quadrant` is in [0, 4) and whole by construction, so the low two bits are the quadrant.
-    //  already yields a whole number in [0, 4); the rule wants the rounding named rather
-    // than a bare cast wrapped round it.
-    const index: u2 = @floor(@mod(quadrant, 4));
-    const which: u2 = index +% quadrant_shift;
-    return switch (which) {
-        0 => sinRad(angle),
-        1 => cosRad(angle),
-        2 => -sinRad(angle),
-        3 => -cosRad(angle),
-    };
-}
-
-/// One turn, in radians.
-fn sin_turn_scale(comptime T: type) T {
-    return splatLike(T, 6.283185307179586);
-}
-
 /// Turns from radians. One turn is `tau` radians.
 pub fn turnsFromRad(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return x * splatLike(@TypeOf(x), 0.15915494309189535);
 }
 
 /// Radians from turns.
 pub fn radFromTurns(x_turns: anytype) @TypeOf(x_turns) {
+    requireFloatLike(@TypeOf(x_turns));
     return x_turns * splatLike(@TypeOf(x_turns), 6.283185307179586);
 }
 
 /// Turns from degrees. A turn is 360 degrees, so this is exact for every multiple of 45.
 pub fn turnsFromDeg(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return x * splatLike(@TypeOf(x), 1.0 / 360.0);
 }
 
 /// Degrees from turns.
 pub fn degFromTurns(x_turns: anytype) @TypeOf(x_turns) {
+    requireFloatLike(@TypeOf(x_turns));
     return x_turns * splatLike(@TypeOf(x_turns), 360.0);
 }
 
 /// Natural logarithm.
 pub fn ln(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     return @log(x);
 }
+const math = std.math;
+
+pub fn isInf(
+    v: anytype,
+) if (@typeInfo(@TypeOf(v)) == .vector) @Vector(veclen(@TypeOf(v)), bool) else bool {
+    const T = @TypeOf(v);
+    // A scalar branch, like `isFinite` beside it. Fourth helper here to need one, after
+    // `trunc`, `round` and `isNan` - the pattern was "written for vectors, called with a scalar
+    // years later", and the audit found the rest of them at once instead of one at a time.
+    if (comptime @typeInfo(T) != .vector) {
+        return abs(v) == inf(T);
+    }
+    return abs(v) == @as(T, @splat(math.inf(f32)));
+}
+
+pub fn isNan(
+    v: anytype,
+) if (@typeInfo(@TypeOf(v)) == .vector) @Vector(veclen(@TypeOf(v)), bool) else bool {
+    // A scalar branch, like `isFinite` beside it already had. `veclen` reads `.vector` off the
+    // type info, so calling this with an `f64` failed inside zm rather than at the call site -
+    // the same vector-only gap `trunc` and `round` had.
+    return v != v;
+}
+
+/// One Newton step on `sqrt(x^2 + y^2)`, recovering what the square root rounded away.
+fn hypotFused(comptime T: type, x: T, y: T) T {
+    const r: T = @sqrt(@mulAdd(T, x, x, y * y));
+    const rr: T = r * r;
+    const xx: T = x * x;
+    const z: T = @mulAdd(T, -y, y, rr - xx) + @mulAdd(T, r, r, -rr) - @mulAdd(T, x, x, -xx);
+    return r - z / (2 * r);
+}
+
 /// `hypot` at full precision, without `std.math`.
 ///
 /// OWNED, NOT DELEGATED - AND HALF THE SIZE, BECAUSE IT IS f32 AND f64 ONLY
@@ -1806,15 +1965,6 @@ fn hypotExact(comptime T: type, x: T, y: T) T {
     return hypotFused(T, major, minor);
 }
 
-/// One Newton step on `sqrt(x^2 + y^2)`, recovering what the square root rounded away.
-fn hypotFused(comptime T: type, x: T, y: T) T {
-    const r: T = @sqrt(@mulAdd(T, x, x, y * y));
-    const rr: T = r * r;
-    const xx: T = x * x;
-    const z: T = @mulAdd(T, -y, y, rr - xx) + @mulAdd(T, r, r, -rr) - @mulAdd(T, x, x, -xx);
-    return r - z / (2 * r);
-}
-
 /// Euclidean length of (x, y) - `sqrt(x*x + y*y)`.
 pub fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
     if (comptime @typeInfo(@TypeOf(x)) == .vector) {
@@ -1826,10 +1976,7 @@ pub fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
     return @sqrt(x * x + y * y);
 }
 
-// ===== ZNUM-UPSTREAM(ml-activations): activation functions missing from zm =====
-// Merged from znum's vendored delta ledger (`shaders/vendor/zimr/PROVENANCE.md`), where the
-// block is recorded as `offered`. Kept under its original markers so a re-sync can `grep
-// ZNUM-UPSTREAM` and see it is already upstream.
+// ===== Activation functions for neural-network kernels =====
 //
 // WHY THESE LIVE HERE. A neural-net kernel needs `tanh`, `sigmoid` and `gelu`, and `@tanh` is
 // NOT a Zig builtin (unlike `@exp`/`@sqrt`/`@sin`), so it cannot lower to a WGSL builtin the way
@@ -1838,17 +1985,15 @@ pub fn hypot(x: anytype, y: anytype) @TypeOf(x, y) {
 // host gets precise `std.math`, GPU gets a portable form built on `@exp` - and zimr's own
 // shaders gain them too.
 //
-// GENERIC over the float type, exactly like `pow`/`atan2`/`hypot`. znum records that writing
-// these f32-only "blocked dtype-generic layers", because a kernel generic over an injected
-// element type `T` cannot compose with an activation stuck at f32. The float literals coerce to
+// GENERIC over the float type, exactly like `pow`/`atan2`/`hypot`: a kernel generic over its
+// element type `T` cannot compose with an activation fixed at f32. The float literals coerce to
 // `@TypeOf(x)` on their own.
 //
 // NOT added to the linter's `reserved-math-names` list, deliberately: reserving them would
 // forbid `nn.tanh` / `nn.sigmoid` / `nn.gelu` as layer wrappers, which is exactly what a neural
 // network library wants to spell. `tan` is reserved; `tanh` is a different word.
 
-/// Hyperbolic tangent. The GPU form uses `tanh(x) = (e^{2x} - 1) / (e^{2x} + 1)`, built on the
-/// GPU-portable `exp`. Generic over the float type of `x`.
+/// Hyperbolic tangent, as `expm1(2x) / (expm1(2x) + 2)` on every backend. Generic over the float type of `x`.
 /// ONE EXPRESSION FOR BOTH BACKENDS, AND IT IS MORE ACCURATE THAN THE ONE IT REPLACES
 ///
 /// This used to be `std.math.tanh` on the host and `(e^2x - 1)/(e^2x + 1)` in a shader. That
@@ -1911,9 +2056,104 @@ pub fn sigmoid(x: anytype) @TypeOf(x) {
 /// and `log1p` then takes the small argument directly rather than forming `1 + tiny` and losing
 /// it to rounding. Finite and accurate across the whole range, both tails included.
 pub fn softplus(x: anytype) @TypeOf(x) {
+    requireFloatLike(@TypeOf(x));
     const T = @TypeOf(x);
     const shifted: T = @exp(-@abs(x));
     return @max(x, 0) + log1p(shifted);
+}
+
+/// Where `mish` is `x` to the last bit of its type. Its ratio t = n / (n + 2) is 1 - 2 / (n + 2), with n = e^x (e^x +
+/// 2) growing like e^2x, and it rounds to exactly 1 once 2 / n falls under a quarter of the type's epsilon - once x
+/// passes (1/2) log(8 / eps): 19.1 for f64, 9.0 for f32.
+fn mishSaturation(comptime T: type) T {
+    return comptime 0.5 * @log(8 / floatEps(T));
+}
+
+/// `mish(x) = x * tanh(softplus(x))` - the activation of TD-MPC2 and BMPC - computed with ONE exponential.
+///
+/// ---- THE IDENTITY ----
+///
+/// With e = exp(x), softplus(x) = log(1 + e), and for any u > 0, tanh(log u) = (u^2 - 1) / (u^2 + 1). At u = 1 + e:
+///
+///     tanh(softplus(x)) = ((1 + e)^2 - 1) / ((1 + e)^2 + 1) = n / (n + 2),    n = e (e + 2)
+///
+/// so mish(x) = x n / (n + 2): one exponential, a product and a division, where the composition takes an exponential,
+/// a logarithm and a hyperbolic tangent. It is the same function, not an approximation, and it is accurate in both
+/// tails: for very negative x, n is tiny and the ratio is formed directly, with nothing cancelling.
+///
+///     x          -20        -1         0     1         20
+///     mish(x)    -4.1e-8    -0.3034    0     0.8651    20
+///
+/// ---- SATURATION ----
+///
+/// For large x the ratio rounds to exactly 1 once x passes `mishSaturation` (19.1 in f64, 9.0 in f32); above it mish(x)
+/// is x itself, and x is returned - before n, which grows like e^2x, can overflow.
+pub fn mish(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(mish, x);
+    }
+    requireFloatLike(@TypeOf(x));
+    const T = @TypeOf(x);
+    if (x > mishSaturation(T)) {
+        return x;
+    }
+    const e: T = @exp(x);
+    const n: T = e * (e + 2);
+    return x * (n / (n + 2));
+}
+
+/// The slope of `mish`, still with one exponential:
+///
+///     d/dx [x tanh(softplus(x))] = t + x (1 - t^2) sigmoid(x)
+///
+/// where t = tanh(softplus(x)) = n / (n + 2) as in `mish`, 1 - t^2 is the slope of tanh there, and sigmoid(x) =
+/// e / (1 + e) is the slope of softplus. At x = 0, n = 3 and the slope is exactly 3/5.
+///
+/// 1 - t^2 is formed as (1 - t)(1 + t), with 1 - t = 2 / (n + 2) computed directly: near saturation t is within an
+/// epsilon of 1, and subtracting t^2 from 1 would keep only the rounding. Above `mishSaturation` the slope is 1.
+pub fn mishSlope(x: anytype) @TypeOf(x) {
+    if (comptime @typeInfo(@TypeOf(x)) == .vector) {
+        return perLane(mishSlope, x);
+    }
+    requireFloatLike(@TypeOf(x));
+    const T = @TypeOf(x);
+    if (x > mishSaturation(T)) {
+        return 1;
+    }
+    const e: T = @exp(x);
+    const n: T = e * (e + 2);
+    const tanh_softplus: T = n / (n + 2);
+    const one_minus_tanh: T = 2 / (n + 2);
+    const tanh_slope: T = one_minus_tanh * (1 + tanh_softplus);
+    const softplus_slope: T = e / (1 + e);
+    return tanh_softplus + x * tanh_slope * softplus_slope;
+}
+
+test "zm mish: the same function as x tanh(softplus(x)), with known values and both tails" {
+    // Against the composition, over a grid that crosses zero and both saturations.
+    var x: f64 = -30;
+    while (x <= 30) : (x += 0.37) {
+        const composed: f64 = x * std.math.tanh(softplus(x));
+        try expectApproxEqAbs(composed, mish(x), 4e-16 * @max(1, @abs(composed)));
+    }
+    try expectEqual(@as(f64, 0), mish(@as(f64, 0)));
+    try expectApproxEqAbs(@as(f64, -0.30340146137410895), mish(@as(f64, -1)), 1e-16);
+    try expectApproxEqAbs(@as(f64, 0.8650983882673103), mish(@as(f64, 1)), 1e-16);
+    // Saturated: x itself, slope 1. Far below: finite, and as small as the function is.
+    try expectEqual(@as(f64, 1000), mish(@as(f64, 1000)));
+    try expectEqual(@as(f64, 1), mishSlope(@as(f64, 1000)));
+    try expect(@abs(mish(@as(f64, -1000))) < 1e-300);
+    try expectEqual(@as(f32, 30), mish(@as(f32, 30)));
+}
+
+test "zm mishSlope: 3/5 at zero, and the central difference everywhere" {
+    try expectApproxEqAbs(@as(f64, 0.6), mishSlope(@as(f64, 0)), 1e-16);
+    const h: f64 = 1e-6;
+    var x: f64 = -25;
+    while (x <= 25) : (x += 0.53) {
+        const difference: f64 = (mish(x + h) - mish(x - h)) / (2 * h);
+        try expectApproxEqAbs(difference, mishSlope(x), 1e-8);
+    }
 }
 
 pub fn gelu(x: anytype) @TypeOf(x) {
@@ -1935,6 +2175,21 @@ pub fn gelu(x: anytype) @TypeOf(x) {
     // It is also one call instead of three operations, which is the part worth having: the
     // cancellation-free form is the SHORTER one.
     return x * sigmoid(2.0 * inner);
+}
+
+/// int -> f64. Comptime-asserts `x` is an integer (a float/bool/etc is a
+/// COMPILE error, so this can't silently hide a bad conversion the way bare
+/// @floatFromInt can - and the f64 output is PINNED, not context-inferred).
+/// `float64(width)` instead of `float64(width)`.
+pub fn float64(x: anytype) f64 {
+    comptime {
+        const info = @typeInfo(@TypeOf(x));
+        if (info != .int and info != .comptime_int) {
+            @compileError("zm.float64 expects an integer; got " ++ @typeName(@TypeOf(x)) ++
+                " (use a plain f64 literal/value directly).");
+        }
+    }
+    return @floatFromInt(x);
 }
 
 test "zm: every elementwise function stays within a few ULP, INCLUDING near zero" {
@@ -2096,6 +2351,30 @@ test "zm: every elementwise function stays within a few ULP, INCLUDING near zero
     }
 }
 
+/// Approximate-equal predicate.  Polymorphic over scalar (`f32`,
+/// `comptime_float`, ...) and vector (`Vec`, `Vec2`, `F32x8`,
+/// `F32x16`).  For vectors, returns true only if every lane is
+/// within `eps`.  Returns `bool` so it composes in `or`/`and`
+/// (use `expectVecApproxEqAbs` for assertion-style throws).
+pub fn approxEqAbs(
+    v0: anytype,
+    v1: anytype,
+    eps: f32,
+) bool {
+    const T = @TypeOf(v0, v1);
+    return switch (@typeInfo(T)) {
+        .vector => blk: {
+            inline for (0..veclen(T)) |i| {
+                if (!((v0[i] == v1[i]) or (@abs(v0[i] - v1[i]) <= eps))) {
+                    break :blk false;
+                }
+            }
+            break :blk true;
+        },
+        else => (v0 == v1) or (@abs(v0 - v1) <= eps),
+    };
+}
+
 test "zm turns: the quarter turns are exact, and the reduction never rounds" {
     // WHAT MAKES TURNS WORTH A SEPARATE FUNCTION, ASSERTED
     //
@@ -2194,7 +2473,6 @@ test "zm.tanh / sigmoid / gelu: known points, both float widths" {
     const by_hand: f64 = 0.5 * x * (1.0 + tanh(0.7978845608 * (x + 0.044715 * x * x * x)));
     try expectApproxEqAbs(by_hand, gelu(x), 1.0e-15);
 }
-// ===== END ZNUM-UPSTREAM(ml-activations) =====
 
 /// Smallest power of ten >= `x` (for `x > 0`) - handy for "nice" axis
 /// upper bounds. `ceilPowerOf10(250) == 1000`, `ceilPowerOf10(1) == 1`.
@@ -2211,30 +2489,6 @@ test "zm.log10 / exp10 / ceilPowerOf10" {
     try expectApproxEqAbs(@as(f64, 1.0), ceilPowerOf10(1.0), 1.0e-9);
 }
 
-// Integer / comptime utilities
-// These are comptime or pure-integer, so they're target-independent (the
-// comptime ones produce constants usable in a shader; the runtime ones
-// use only integer ops).  Exposed via zm so the `std-math` rule stays
-// clean across the codebase.
-pub fn maxInt(comptime T: type) comptime_int {
-    const info = @typeInfo(T);
-    const bit_count: u16 = info.int.bits;
-    if (bit_count == 0) {
-        return 0;
-    }
-    return (1 << (bit_count - @intFromBool(info.int.signedness == .signed))) - 1;
-}
-pub fn minInt(comptime T: type) comptime_int {
-    const info = @typeInfo(T);
-    const bit_count: u16 = info.int.bits;
-    if (info.int.signedness == .unsigned) {
-        return 0;
-    }
-    if (bit_count == 0) {
-        return 0;
-    }
-    return -(1 << (bit_count - 1));
-}
 /// floor(log2(x)) for x > 0.
 pub fn log2_int(comptime T: type, x: T) Log2Int(T) {
     // floor(log2(x)) for x > 0 (matches std.math.log2_int, which likewise
@@ -2390,12 +2644,10 @@ pub const axis_x: Vec = .{ 1, 0, 0, 0 };
 pub const axis_y: Vec = .{ 0, 1, 0, 0 }; // alias for vec_up; symmetric with axis_x/axis_z
 pub const axis_z: Vec = .{ 0, 0, 1, 0 };
 
-const expectEqual = std.testing.expectEqual;
-const math = std.math;
-
 /// True when compiling to wasm. zm uses this to pick a SCALAR path where the
 /// SIMD one (@select / vector compares) does not pass wasm validation; native
 /// + GPU (spirv) keep the faster SIMD path. Both paths return the same value.
+// lint:off arch-check: the colour conversions take a scalar path on wasm
 pub const is_wasm: bool = builtin.target.cpu.arch.isWasm();
 
 /// True when assertion bodies actually run. Off in ship builds (ReleaseSmall/
@@ -2496,9 +2748,6 @@ pub fn panicf(
         unreachable;
     }
 }
-
-const expect = std.testing.expect;
-const expectError = std.testing.expectError;
 
 //
 // 1. Initialization functions
@@ -2795,6 +3044,7 @@ pub fn isNearEqual(
     v1: anytype,
     epsilon: anytype,
 ) @Vector(veclen(@TypeOf(v0)), bool) {
+    requireFloatLike(@TypeOf(v0));
     const T = @TypeOf(v0, v1, epsilon);
     const delta: T = v0 - v1;
     const temp = maxFast(delta, @as(T, @splat(0.0)) - delta);
@@ -2842,14 +3092,6 @@ test "zm.isNearEqual" {
     ), 0) == false);
 }
 
-pub fn isNan(
-    v: anytype,
-) if (@typeInfo(@TypeOf(v)) == .vector) @Vector(veclen(@TypeOf(v)), bool) else bool {
-    // A scalar branch, like `isFinite` beside it already had. `veclen` reads `.vector` off the
-    // type info, so calling this with an `f64` failed inside zm rather than at the call site -
-    // the same vector-only gap `trunc` and `round` had.
-    return v != v;
-}
 test "zm.isNan" {
     {
         const v0: Vec = f32x4(math.inf(f32), math.nan(f32), math.nan(f32), 7.0);
@@ -2863,18 +3105,6 @@ test "zm.isNan" {
     }
 }
 
-pub fn isInf(
-    v: anytype,
-) if (@typeInfo(@TypeOf(v)) == .vector) @Vector(veclen(@TypeOf(v)), bool) else bool {
-    const T = @TypeOf(v);
-    // A scalar branch, like `isFinite` beside it. Fourth helper here to need one, after
-    // `trunc`, `round` and `isNan` - the pattern was "written for vectors, called with a scalar
-    // years later", and the audit found the rest of them at once instead of one at a time.
-    if (comptime @typeInfo(T) != .vector) {
-        return abs(v) == inf(T);
-    }
-    return abs(v) == @as(T, @splat(math.inf(f32)));
-}
 test "zm.isInf" {
     {
         const v0: Vec = f32x4(math.inf(f32), math.nan(f32), math.snan(f32), 7.0);
@@ -2892,6 +3122,7 @@ pub fn isInBounds(
     v: anytype,
     bounds: anytype,
 ) @Vector(veclen(@TypeOf(v)), bool) {
+    requireFloatLike(@TypeOf(v));
     const T = @TypeOf(v, bounds);
     const Tu = @Vector(veclen(T), u1);
     const Tr = @Vector(veclen(T), bool);
@@ -3175,21 +3406,6 @@ pub fn expectVecApproxEqAbs(
     inline for (0..veclen(T)) |i| {
         try expectApproxEqAbs(expected[i], actual[i], eps);
     }
-}
-
-/// int -> f32. Comptime-asserts `x` is an integer (a float/bool/etc is a
-/// COMPILE error, so this can't silently hide a bad conversion the way bare
-/// @floatFromInt can - and the f32 output is PINNED, not context-inferred).
-/// `float(width)` instead of `float(width)`.
-pub fn float(x: anytype) f32 {
-    comptime {
-        const info = @typeInfo(@TypeOf(x));
-        if (info != .int and info != .comptime_int) {
-            @compileError("zm.float expects an integer; got " ++ @typeName(@TypeOf(x)) ++
-                " (use a plain f32 literal/value directly).");
-        }
-    }
-    return @floatFromInt(x);
 }
 
 test "zm.round" {
@@ -3810,6 +4026,59 @@ test "zm constants: a vector type gets a vector, and it is the same number in ev
     }
 }
 
+/// `max(0, min(1, x))`.  Matches `shadermath.clamp01`.
+/// Clamp to [0, 1]. Scalars and vectors. HLSL calls this `saturate`; zimr calls
+/// it `clamp01`, and `zm.saturate` exists only to say so (it is a @compileError).
+pub fn clamp01(v: anytype) @TypeOf(v) {
+    const T = @TypeOf(v);
+    // clamp01 IS `clamp(v, 0, 1)` - a specialization of the canonical clamp, not a
+    // re-implementation of it. That buys three things at once:
+    //
+    // * BRANCH-FREE. `clamp` is `min(hi, max(lo, v))`, and zm's min/max are
+    // `@min`/`@max` (+ a NaN select for vectors) - no control flow. The old
+    // SCALAR path was `if (v < 0) 0 else if (v > 1) 1 else v`, and those `if`s
+    // are REAL BRANCHES in SPIR-V: any `textureSample` downstream of a scalar
+    // clamp01 ended up nested inside them in the transpiled WGSL, which Dawn
+    // rejects - "'textureSample' must only be called from uniform control
+    // flow" (decal_fs + effect_ascii_fs, device, zimr786). A branching helper
+    // in the math vocabulary is a hazard to every sample downstream of it.
+    // * SCALAR AND VECTOR AGREE. Both comparisons are FALSE for NaN, so the old
+    // scalar path returned NaN while the vector path returned 0 - a silent
+    // disagreement. The vector test has always pinned `clamp01(NaN) == 0`;
+    // now the scalar path is that same code, so it cannot drift again.
+    // * ONE definition of clamping. The `[clamp-pattern]` lint forbids raw
+    // `@min(@max(..))` for exactly this reason; clamp01 must not be an exception.
+    //
+    // Vector behaviour is bit-identical to the previous implementation (it was
+    // already `max(v, 0)` then `min(result, 1)` - which is what `clamp` does).
+    const lo: T = switch (@typeInfo(T)) {
+        .vector => @splat(0.0),
+        else => 0.0,
+    };
+    const hi: T = switch (@typeInfo(T)) {
+        .vector => @splat(1.0),
+        else => 1.0,
+    };
+    return clamp(v, lo, hi);
+}
+
+/// GLSL/WGSL `step(edge, x)` - `0` below the edge, `1` at or above it.
+///
+/// This is the CANONICAL name. It used to be called `stepEdge`, which nobody
+/// searches for - and the cost of that was exactly what you would predict: a
+/// shader author looked for `step`, did not find it, and hand-rolled a duplicate.
+pub fn step(edge: anytype, v: @TypeOf(edge)) @TypeOf(edge) {
+    if (comptime @typeInfo(@TypeOf(edge)) == .vector) {
+        return perLane2(step, edge, v);
+    }
+    // BRANCH-FREE, same reason as `clamp01`: a branch here puts every
+    // `textureSample` downstream of it inside non-uniform control flow once
+    // transpiled to WGSL. The bool->float conversion lowers to OpSelect, not
+    // to a branch. Semantics unchanged: 0 below the edge, 1 at or above it.
+    // (NaN compares false, so `step(edge, NaN) == 0`, as before.)
+    return @floatFromInt(@intFromBool(v >= edge));
+}
+
 test "zm.clamp01 (vector + scalar; HLSL calls it saturate)" {
     {
         const v0: Vec = f32x4(-1.0, 0.2, 1.1, -0.3);
@@ -3853,6 +4122,7 @@ test "zm.clamp01 (vector + scalar; HLSL calls it saturate)" {
 }
 
 pub fn saturateFast(v: anytype) @TypeOf(v) {
+    requireFloatLike(@TypeOf(v));
     const T = @TypeOf(v);
     var result = maxFast(v, @as(T, @splat(0.0)));
     result = minFast(result, @as(T, @splat(1.0)));
@@ -3910,45 +4180,6 @@ fn sqrtInt(comptime T: type, value: T) T {
         one >>= 2;
     }
     return res;
-}
-
-/// Apply a scalar function to every lane of a vector.
-///
-/// THE BRIDGE THAT MAKES "SCALARS AND VECTORS" TRUE RATHER THAN INTENDED
-///
-/// A dozen functions here were declared `anytype` and then called `std.math.something`, which
-/// takes scalars only. They compiled, they were tested on scalars, and they failed to compile the
-/// first time anyone passed a vector - `tanh`, `sigmoid`, `gelu`, `cosh`, `cbrt`, `isFinite`,
-/// `hypot`, `pow`, `step`, `fract`. The signature promised one thing and the body delivered
-/// another.
-///
-/// Rather than rewriting each in vector-safe arithmetic - which would lose the accuracy the
-/// standard library has near the edges of each function's range - a vector argument is split into
-/// lanes, the scalar path runs on each, and the lanes are reassembled. Same answer as the scalar
-/// call, by construction, on every lane.
-///
-/// NOT `inline` itself, though the loop inside is comptime-unrolled. An `inline fn` calling a
-/// scalar function that is also `inline` is inline recursion, which the compiler refuses - the
-/// helper has to be an ordinary function for the pattern to work at all.
-pub fn perLane(comptime scalar: anytype, v: anytype) @TypeOf(v) {
-    const T = @TypeOf(v);
-    const lanes = @typeInfo(T).vector.len;
-    var result: T = undefined;
-    inline for (0..lanes) |i| {
-        result[i] = scalar(v[i]);
-    }
-    return result;
-}
-
-/// Two-argument form of `perLane`.
-pub fn perLane2(comptime scalar: anytype, a: anytype, b: @TypeOf(a)) @TypeOf(a) {
-    const T = @TypeOf(a);
-    const lanes = @typeInfo(T).vector.len;
-    var result: T = undefined;
-    inline for (0..lanes) |i| {
-        result[i] = scalar(a[i], b[i]);
-    }
-    return result;
 }
 
 pub fn sqrt(v: anytype) @TypeOf(v) {
@@ -4015,6 +4246,7 @@ pub fn lerpOverTime(
     rate: anytype,
     dt: anytype,
 ) @TypeOf(v0, v1) {
+    requireFloatLike(@TypeOf(v0));
     // `@exp2` is Zig's generic-T builtin (works for f32/f64/Vec) and
     // lowers to SPIR-V's GLSL.std.450.Exp2 op on shader targets.
     // Replaces a plain `std.math.exp2` call (which is f32/f64 only
@@ -4029,6 +4261,7 @@ pub fn lerpVOverTime(
     rate: anytype,
     dt: anytype,
 ) @TypeOf(v0, v1, rate, dt) {
+    requireFloatLike(@TypeOf(v0));
     const t: @TypeOf(rate, dt) = @exp2(-rate * dt);
     return lerpV(v1, v0, t);
 }
@@ -4810,6 +5043,7 @@ pub fn length4Splat(v: Vec) Vec {
     return sqrt(dot4Splat(v, v));
 }
 pub fn length2(v: anytype) f32 {
+    requireFloatLike(@TypeOf(v));
     return @sqrt(dot2(v, v));
 }
 pub fn length3(v: Vec) f32 {
@@ -5190,6 +5424,16 @@ test "zm.matrix.transpose" {
     try expectVecApproxEqAbs(mt[3], f32x4(4.0, 8.0, 12.0, 16.0), 0.0001);
 }
 
+pub fn rotationX(angle_rad: f32) Mat {
+    const sc: [2]f32 = sincosRad(angle_rad);
+    return .{
+        f32x4(1.0, 0.0, 0.0, 0.0),
+        f32x4(0.0, sc[1], sc[0], 0.0),
+        f32x4(0.0, -sc[0], sc[1], 0.0),
+        f32x4(0.0, 0.0, 0.0, 1.0),
+    };
+}
+
 /// The rotation taking a Z-up frame into zimr's Y-up one: `(x, y, z) -> (x, z, -y)`.
 ///
 /// WHY THIS CONVERSION EXISTS AT ALL, AND WHY IT IS NOT DONE AT LOAD TIME
@@ -5213,19 +5457,17 @@ pub fn zUpToYUp() Mat {
     return rotationX(-0.5 * pi);
 }
 
+// Converts q back to euler angles, assuming a YXZ rotation order.
+// See: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler
+/// 3D *direction* - lane 3 is 0, so the translation row of an
+/// affine matrix has no effect.
+pub fn vec(x: f32, y: f32, z: f32) Vec {
+    return .{ x, y, z, 0.0 };
+}
+
 /// `zUpToYUp` applied to a single point, for callers that need a position rather than a matrix.
 pub fn zUpToYUpPoint(v: Vec) Vec {
     return vec(v[0], v[2], -v[1]);
-}
-
-pub fn rotationX(angle_rad: f32) Mat {
-    const sc: [2]f32 = sincosRad(angle_rad);
-    return .{
-        f32x4(1.0, 0.0, 0.0, 0.0),
-        f32x4(0.0, sc[1], sc[0], 0.0),
-        f32x4(0.0, -sc[0], sc[1], 0.0),
-        f32x4(0.0, 0.0, 0.0, 1.0),
-    };
 }
 
 pub fn rotationY(angle_rad: f32) Mat {
@@ -6106,6 +6348,13 @@ pub fn quat2Vel(q: Quat) Vec {
     return axis * splat(angle);
 }
 
+/// Quaternion constructor - same storage as `vec4` but reads as
+/// "this is a quaternion" at the callsite.  Convention is
+/// `(x, y, z, w)` per zmath/raylib.
+pub fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
+    return .{ x, y, z, w };
+}
+
 /// The rotation carrying `b` to `a`, as a rotation vector in **b's frame**.
 ///
 /// MuJoCo's `mju_subQuat`, and its contract is worth stating exactly: `b * quat(res) = a`.
@@ -6281,14 +6530,6 @@ test "zm.quaternion.slerp" {
     const to: Vec = f32x4(0.5, 0.5, -0.5, 0.5);
     const result: Quat = slerp(from, to, 0.5);
     try expectVecApproxEqAbs(result, f32x4(0.28867513, 0.28867513, -0.28867513, 0.86602540), 0.0001);
-}
-
-// Converts q back to euler angles, assuming a YXZ rotation order.
-// See: http://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToEuler
-/// 3D *direction* - lane 3 is 0, so the translation row of an
-/// affine matrix has no effect.
-pub fn vec(x: f32, y: f32, z: f32) Vec {
-    return .{ x, y, z, 0.0 };
 }
 
 pub fn quatToRollPitchYaw(q: Quat) [3]f32 {
@@ -6651,6 +6892,7 @@ pub fn hsvToRgb3(h: f32, s: f32, v: f32) [3]f32 {
 /// float -> integer T via @floor (toward -inf). The "to pixel" pattern:
 /// `floori(i32, x * scale)` instead of `@floor(x * scale)`.
 pub fn floori(comptime T: type, x: anytype) T {
+    requireFloatLike(@TypeOf(x));
     return @floor(x);
 }
 
@@ -7838,29 +8080,6 @@ pub fn ifft(
 
     fftUnswizzle(re_temp, re);
 }
-/// Approximate-equal predicate.  Polymorphic over scalar (`f32`,
-/// `comptime_float`, ...) and vector (`Vec`, `Vec2`, `F32x8`,
-/// `F32x16`).  For vectors, returns true only if every lane is
-/// within `eps`.  Returns `bool` so it composes in `or`/`and`
-/// (use `expectVecApproxEqAbs` for assertion-style throws).
-pub fn approxEqAbs(
-    v0: anytype,
-    v1: anytype,
-    eps: f32,
-) bool {
-    const T = @TypeOf(v0, v1);
-    return switch (@typeInfo(T)) {
-        .vector => blk: {
-            inline for (0..veclen(T)) |i| {
-                if (!((v0[i] == v1[i]) or (@abs(v0[i] - v1[i]) <= eps))) {
-                    break :blk false;
-                }
-            }
-            break :blk true;
-        },
-        else => (v0 == v1) or (@abs(v0 - v1) <= eps),
-    };
-}
 
 test "zm.ifft" {
     var unity_table: [512]Vec = undefined;
@@ -8211,12 +8430,6 @@ pub fn vec4(a: f32, b: f32, c: f32, d: f32) Vec {
 /// GLSL `vec3` uniform.
 pub fn vec3(x_: f32, y_: f32, z_: f32) Vec3 {
     return .{ x_, y_, z_ };
-}
-/// Quaternion constructor - same storage as `vec4` but reads as
-/// "this is a quaternion" at the callsite.  Convention is
-/// `(x, y, z, w)` per zmath/raylib.
-pub fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
-    return .{ x, y, z, w };
 }
 
 /// A 2D vector - `@Vector(2, f32)`, 8 bytes.  For UI / 2D math.
@@ -8723,7 +8936,7 @@ test "zm.equals2" {
 /// (lanes 0,1; lanes 2,3 zero).  Takes a `*std.Random` - `math.zig`
 /// stays free of global state (plan decision: RNG ops take an
 /// explicit random source).  Rejection-samples the unit square.
-pub fn randomInUnitDisk2(rand: *std.Random) Vec {
+pub fn randomInUnitDisk2(rand: *Random) Vec {
     while (true) {
         const v: Vec = f32x4(rand.float(f32) * 2.0 - 1.0, rand.float(f32) * 2.0 - 1.0, 0.0, 0.0);
         if (v[0] * v[0] + v[1] * v[1] <= 1.0) {
@@ -8732,8 +8945,8 @@ pub fn randomInUnitDisk2(rand: *std.Random) Vec {
     }
 }
 test "zm.randomInUnitDisk2" {
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x2d_15_ee_d2);
-    var r: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0x2d_15_ee_d2);
+    var r: Random = prng.random();
     for (0..256) |_| {
         const v: Vec = randomInUnitDisk2(&r);
         try expect(v[0] * v[0] + v[1] * v[1] <= 1.0);
@@ -9764,42 +9977,6 @@ test "zm.euler XYZ and ZXY genuinely differ" {
 // for hot SIMD loops on the CPU.  Use the generic forms for general
 // code + anything intended to be shareable with shadermath.
 
-/// `max(0, min(1, x))`.  Matches `shadermath.clamp01`.
-/// Clamp to [0, 1]. Scalars and vectors. HLSL calls this `saturate`; zimr calls
-/// it `clamp01`, and `zm.saturate` exists only to say so (it is a @compileError).
-pub fn clamp01(v: anytype) @TypeOf(v) {
-    const T = @TypeOf(v);
-    // clamp01 IS `clamp(v, 0, 1)` - a specialization of the canonical clamp, not a
-    // re-implementation of it. That buys three things at once:
-    //
-    // * BRANCH-FREE. `clamp` is `min(hi, max(lo, v))`, and zm's min/max are
-    // `@min`/`@max` (+ a NaN select for vectors) - no control flow. The old
-    // SCALAR path was `if (v < 0) 0 else if (v > 1) 1 else v`, and those `if`s
-    // are REAL BRANCHES in SPIR-V: any `textureSample` downstream of a scalar
-    // clamp01 ended up nested inside them in the transpiled WGSL, which Dawn
-    // rejects - "'textureSample' must only be called from uniform control
-    // flow" (decal_fs + effect_ascii_fs, device, zimr786). A branching helper
-    // in the math vocabulary is a hazard to every sample downstream of it.
-    // * SCALAR AND VECTOR AGREE. Both comparisons are FALSE for NaN, so the old
-    // scalar path returned NaN while the vector path returned 0 - a silent
-    // disagreement. The vector test has always pinned `clamp01(NaN) == 0`;
-    // now the scalar path is that same code, so it cannot drift again.
-    // * ONE definition of clamping. The `[clamp-pattern]` lint forbids raw
-    // `@min(@max(..))` for exactly this reason; clamp01 must not be an exception.
-    //
-    // Vector behaviour is bit-identical to the previous implementation (it was
-    // already `max(v, 0)` then `min(result, 1)` - which is what `clamp` does).
-    const lo: T = switch (@typeInfo(T)) {
-        .vector => @splat(0.0),
-        else => 0.0,
-    };
-    const hi: T = switch (@typeInfo(T)) {
-        .vector => @splat(1.0),
-        else => 1.0,
-    };
-    return clamp(v, lo, hi);
-}
-
 /// `x - floor(x)`.  Range `[0, 1)` for positive inputs.  Matches
 /// `shadermath.fract`.
 pub fn fract(v: anytype) @TypeOf(v) {
@@ -9807,23 +9984,6 @@ pub fn fract(v: anytype) @TypeOf(v) {
         return perLane(fract, v);
     }
     return v - @floor(v);
-}
-
-/// GLSL/WGSL `step(edge, x)` - `0` below the edge, `1` at or above it.
-///
-/// This is the CANONICAL name. It used to be called `stepEdge`, which nobody
-/// searches for - and the cost of that was exactly what you would predict: a
-/// shader author looked for `step`, did not find it, and hand-rolled a duplicate.
-pub fn step(edge: anytype, v: @TypeOf(edge)) @TypeOf(edge) {
-    if (comptime @typeInfo(@TypeOf(edge)) == .vector) {
-        return perLane2(step, edge, v);
-    }
-    // BRANCH-FREE, same reason as `clamp01`: a branch here puts every
-    // `textureSample` downstream of it inside non-uniform control flow once
-    // transpiled to WGSL. The bool->float conversion lowers to OpSelect, not
-    // to a branch. Semantics unchanged: 0 below the edge, 1 at or above it.
-    // (NaN compares false, so `step(edge, NaN) == 0`, as before.)
-    return @floatFromInt(@intFromBool(v >= edge));
 }
 
 /// The old spelling. USE `zm.step`.
@@ -9913,6 +10073,7 @@ pub fn dot(a: anytype, b: @TypeOf(a)) f32 {
 
 /// Vector length: `sqrt(dot(v, v))`.
 pub fn length(v: anytype) f32 {
+    requireFloatLike(@TypeOf(v));
     return @sqrt(dot(v, v));
 }
 
@@ -9923,6 +10084,7 @@ pub fn distance(a: anytype, b: @TypeOf(a)) f32 {
 
 /// Normalize to unit length.  Returns the input type.
 pub fn normalize(v: anytype) @TypeOf(v) {
+    requireFloatLike(@TypeOf(v));
     const inv: f32 = 1.0 / length(v);
     const inv_v: @TypeOf(v) = @splat(inv);
     return v * inv_v;
@@ -10481,28 +10643,15 @@ test "zm.finiteOr3: NaN lanes replaced" {
 // is a bare `float(x)`; the float->int path needs the target T (i32/u16/usize all
 // occur) so it's `i(T, x)`.
 
-/// int -> f64. Comptime-asserts `x` is an integer (a float/bool/etc is a
-/// COMPILE error, so this can't silently hide a bad conversion the way bare
-/// @floatFromInt can - and the f64 output is PINNED, not context-inferred).
-/// `float64(width)` instead of `float64(width)`.
-pub fn float64(x: anytype) f64 {
-    comptime {
-        const info = @typeInfo(@TypeOf(x));
-        if (info != .int and info != .comptime_int) {
-            @compileError("zm.float64 expects an integer; got " ++ @typeName(@TypeOf(x)) ++
-                " (use a plain f64 literal/value directly).");
-        }
-    }
-    return @floatFromInt(x);
-}
-
 /// float -> integer T via @round (nearest). `roundi(i32, x)`.
 pub fn roundi(comptime T: type, x: anytype) T {
+    requireFloatLike(@TypeOf(x));
     return @round(x);
 }
 
 /// float -> integer T via @ceil (toward +inf). `ceili(i32, x)`.
 pub fn ceili(comptime T: type, x: anytype) T {
+    requireFloatLike(@TypeOf(x));
     return @ceil(x);
 }
 
@@ -10680,7 +10829,7 @@ test "zm.Range" {
 // Determinism note: Box2D's whole value proposition is bit-reproducible results
 // across platforms, which it achieves with hand-rolled `atan2`/`cos`/`sin`
 // polynomial approximations rather than libm. To reproduce Box2D trajectories we
-// port those approximations verbatim (`atan2Det`, `computeCosSin2`) instead of
+// port those approximations verbatim (`atan2Det`, `Rot2.fromAngle`) instead of
 // reaching for `std.math`. Every `Rot2` is built through them.
 //
 // Parity tags ("// box2d: <symbol> <file>:<line>") mark the upstream source each
@@ -10797,43 +10946,6 @@ pub fn atan2Det(y: f32, x: f32) f32 {
     return result;
 }
 
-/// Deterministic cosine+sine of `radians`, returned as a normalized `Rot2`.
-/// Uses Bhaskara-style rational approximations (Box2D's `b2ComputeCosSin`) then
-/// normalizes, so the result is always a unit rotation. Ported verbatim.
-/// box2d: b2ComputeCosSin + b2MakeRot  math_functions.c:138, math_functions.h:419
-pub fn computeCosSin2(radians: f32) Rot2 {
-    const angle: f32 = unwindAngle(radians); // fold into [-pi, pi]
-    const pi_sq: f32 = pi * pi;
-
-    // Cosine: piecewise rational approximation, shifted by pi near the wings.
-    var cosine: f32 = undefined;
-    if (angle < -0.5 * pi) {
-        const y: f32 = angle + pi;
-        const y_sq: f32 = y * y;
-        cosine = -(pi_sq - 4.0 * y_sq) / (pi_sq + y_sq);
-    } else if (angle > 0.5 * pi) {
-        const y: f32 = angle - pi;
-        const y_sq: f32 = y * y;
-        cosine = -(pi_sq - 4.0 * y_sq) / (pi_sq + y_sq);
-    } else {
-        const y_sq: f32 = angle * angle;
-        cosine = (pi_sq - 4.0 * y_sq) / (pi_sq + y_sq);
-    }
-
-    // Sine: Bhaskara approximation, sign-folded about zero.
-    var sine: f32 = undefined;
-    if (angle < 0.0) {
-        const y: f32 = angle + pi;
-        sine = -16.0 * y * (pi - y) / (5.0 * pi_sq - 4.0 * y * (pi - y));
-    } else {
-        sine = 16.0 * angle * (pi - angle) / (5.0 * pi_sq - 4.0 * angle * (pi - angle));
-    }
-
-    const magnitude: f32 = @sqrt(sine * sine + cosine * cosine);
-    const inv_magnitude: f32 = if (magnitude > 0.0) 1.0 / magnitude else 0.0;
-    return .{ .cosine = cosine * inv_magnitude, .sine = sine * inv_magnitude };
-}
-
 /// Fold any angle into the canonical range [-pi, pi].
 /// box2d: b2UnwindAngle  math_functions.h (uses remainderf, round-half-to-even).
 /// We use round-to-nearest (`@round`, half-away-from-zero); the two differ only
@@ -10858,10 +10970,44 @@ pub const Rot2 = struct {
     /// The zero rotation (identity).
     pub const identity: Rot2 = .{ .cosine = 1.0, .sine = 0.0 };
 
-    /// Build a rotation from an angle in radians (deterministic trig).
-    /// box2d: b2MakeRot  math_functions.h:419
+    /// Build a rotation from an angle in radians - deterministic trig, the same bits on every platform.
+    ///
+    /// Bhaskara-style rational approximations of cosine and sine (Box2D's `b2ComputeCosSin`), then a
+    /// normalisation, so the result is always a unit rotation. Ported verbatim.
+    /// box2d: b2ComputeCosSin + b2MakeRot  math_functions.c:138, math_functions.h:419
     pub fn fromAngle(radians: f32) Rot2 {
-        return computeCosSin2(radians);
+        const folded_radians: f32 = unwindAngle(radians); // fold into [-pi, pi]
+        const pi_sq: f32 = pi * pi;
+
+        // Cosine: piecewise rational approximation, shifted by pi near the wings.
+        var cosine: f32 = undefined;
+        if (folded_radians < -0.5 * pi) {
+            const y: f32 = folded_radians + pi;
+            const y_sq: f32 = y * y;
+            cosine = -(pi_sq - 4.0 * y_sq) / (pi_sq + y_sq);
+        } else if (folded_radians > 0.5 * pi) {
+            const y: f32 = folded_radians - pi;
+            const y_sq: f32 = y * y;
+            cosine = -(pi_sq - 4.0 * y_sq) / (pi_sq + y_sq);
+        } else {
+            const y_sq: f32 = folded_radians * folded_radians;
+            cosine = (pi_sq - 4.0 * y_sq) / (pi_sq + y_sq);
+        }
+
+        // Sine: Bhaskara approximation, sign-folded about zero.
+        var sine: f32 = undefined;
+        if (folded_radians < 0.0) {
+            const y: f32 = folded_radians + pi;
+            sine = -16.0 * y * (pi - y) / (5.0 * pi_sq - 4.0 * y * (pi - y));
+        } else {
+            // (One expression, split only for width: Box2D's exact evaluation order is the point of the port.)
+            sine = 16.0 * folded_radians * (pi - folded_radians) /
+                (5.0 * pi_sq - 4.0 * folded_radians * (pi - folded_radians));
+        }
+
+        const magnitude: f32 = @sqrt(sine * sine + cosine * cosine);
+        const inv_magnitude: f32 = if (magnitude > 0.0) 1.0 / magnitude else 0.0;
+        return .{ .cosine = cosine * inv_magnitude, .sine = sine * inv_magnitude };
     }
 
     /// Build a rotation from a vector already known to be unit length.
@@ -11199,4 +11345,29 @@ test "Camera3D: projMatrix honours the projection field, and ortho fovy_deg is a
     // And `fovy_deg` is a WORLD HEIGHT for ortho, not an angle: with fovy_deg = 10 the view
     // spans +/-5, so the x scale is 2/10 = 0.2. Reading it as degrees would give ~11.4.
     try expectApproxEqAbs(@as(f32, 0.2), mo[0][0], 1.0e-6);
+}
+
+test "zm.expm1: within a few units of precision of std's, at both widths, over thirty decades of each sign" {
+    // Measured at sample points spaced evenly in log10|x| from 1e-20 to 1e10 (clamped to where e^x stays finite),
+    // both signs. The bounds are relative errors: f32 within about 3 units of its precision (2^-23 = 1.2e-7), f64
+    // within about 4 of its (2^-52 = 2.2e-16).
+    const Width = struct { T: type, bound: f64 };
+    inline for ([_]Width{ .{ .T = f32, .bound = 4.0e-7 }, .{ .T = f64, .bound = 1.0e-15 } }) |width| {
+        const T: type = width.T;
+        const largest_exponent: f64 = if (T == f32) 1.9 else 2.8;
+        var worst: f64 = 0;
+        const sample_count: u32 = 30_000;
+        for (0..sample_count) |sample| {
+            const position: f64 = float64(sample) / float64(sample_count - 1);
+            const exponent: f64 = -20.0 + (largest_exponent + 20.0) * position;
+            for ([_]f64{ 1.0, -1.0 }) |direction| {
+                const x: T = @floatCast(direction * std.math.pow(f64, 10.0, exponent));
+                const expected: f64 = std.math.expm1(@as(f64, x));
+                const got: f64 = expm1(x);
+                const relative: f64 = @abs(got - expected) / @abs(expected);
+                worst = @max(worst, relative);
+            }
+        }
+        try expect(worst < width.bound);
+    }
 }

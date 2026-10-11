@@ -13,6 +13,8 @@ const std = @import("std");
 const z = @import("zimr");
 const zm = @import("zm");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const float = zm.float;
 
 const quad_vs = z.deferred_shaders.shading_vs;
@@ -94,15 +96,15 @@ fn countDiff(a: []const [4]u8, b: []const [4]u8) u32 {
 
 pub fn main() !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     const pattern: [src_w * src_h][4]u8 = buildPattern();
     // NOTE: every externs module declares its OWN structurally-identical
     // TextureRef type, so each effect gets an anonymous literal (they
     // coerce); a shared typed const would not cross-assign.
-    const src_bytes: []const u8 = std.mem.sliceAsBytes(pattern[0..]);
+    const src_bytes: []const u8 = sliceAsBytes(pattern[0..]);
 
     // ---- grade: strong contrast + saturation, must differ from source ----
     var grade_io: fx.grade_fs.Io = undefined;
@@ -217,9 +219,9 @@ pub fn main() !void {
             }
         }
     }
-    const png: []u8 = try z.codecs.png.encode(gpa, std.mem.sliceAsBytes(sheet), sheet_w, src_h);
+    const png: []u8 = try z.codecs.png.encode(gpa, sliceAsBytes(sheet), sheet_w, src_h);
     defer gpa.free(png);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "effects_verify.png", .data = png });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "effects_verify.png", .data = png });
     std.debug.print("  wrote effects_verify.png\n", .{});
 
     if (grade_diff == 0 or wave_diff == 0 or ink_px == 0 or pal_bad > 50 or

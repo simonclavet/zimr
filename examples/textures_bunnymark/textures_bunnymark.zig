@@ -3,10 +3,12 @@
 //! A stress test: thousands of drawTexture calls per frame.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
 const Vec2 = zm.Vec2;
+const Color = zm.Color;
 
 const bunny_png = @embedFile("raybunny.png");
 const max_bunnies: usize = 50000;
@@ -17,14 +19,14 @@ const Bunny = struct {
     y: f32,
     sx: f32,
     sy: f32,
-    color: zm.Color,
+    color: Color,
 };
 
 const State = struct {
     tex: z.WgpuTexture,
     bunnies: []Bunny,
     count: usize = 0,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
 };
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -46,10 +48,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .tex = try uploadPng(gpa, f.gl, bunny_png),
         .bunnies = try gpa.alloc(Bunny, max_bunnies),
-        .rng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15),
+        .rng = Random.DefaultPrng.init(0x9e3779b97f4a7c15),
     };
     // Seed a few hundred so the scene is alive before the first click.
-    const rnd: std.Random = s.rng.random();
+    const rnd: Random = s.rng.random();
     while (s.count < 500) : (s.count += 1) {
         s.bunnies[s.count] = .{
             .x = 400,
@@ -67,7 +69,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    const rnd: std.Random = s.rng.random();
+    const rnd: Random = s.rng.random();
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
     const bw: f32 = float(s.tex.width);

@@ -8,9 +8,11 @@
 
 const std = @import("std");
 const zm = @import("zm");
+const Mat = zm.Mat;
 const sinTurns = zm.sinTurns;
 const cosTurns = zm.cosTurns;
 const types = @import("types.zig");
+const requireGl = types.requireGl;
 
 const Color = zm.Color;
 const Vec2 = zm.Vec2;
@@ -92,6 +94,7 @@ pub const ShapeOpts = struct {
 // ===========================================================================
 
 pub fn rectFilled(gl: anytype, r: Rectangle, color: Color) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -109,6 +112,7 @@ pub fn rectFilled(gl: anytype, r: Rectangle, color: Color) void {
 }
 
 pub fn rectOutline(gl: anytype, r: Rectangle, color: Color, thickness: f32) void {
+    requireGl(gl);
     const t: f32 = thickness;
     rectFilled(gl, .{ .x = r.x, .y = r.y, .width = r.width, .height = t }, color); // top
     rectFilled(gl, .{ .x = r.x, .y = r.y + r.height - t, .width = r.width, .height = t }, color); // bottom
@@ -123,6 +127,7 @@ pub fn circleFilled(
     color: Color,
     segments: u32,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -153,6 +158,7 @@ pub fn circleOutline(
     thickness: f32,
     segments: u32,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -190,6 +196,7 @@ pub fn lineEmit(
     color: Color,
     thickness: f32,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -226,6 +233,7 @@ pub fn triangleFilled(
     c: Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -272,6 +280,52 @@ const EmitProbe = struct {
             self.vy[self.n] = y;
             self.n += 1;
         }
+    }
+
+    // EmitProbe records what draw2d's emit helpers produce: vertex positions, the texture id, the
+    // colour. The rest of the gl contract (types.requireGl) is outside what these tests check, so it is
+    // DECLARED and refuses to compile - a test that reaches one of these needs a probe that records it.
+    pub fn texCoord2f(_: *EmitProbe, _: f32, _: f32) void {
+        @compileError("EmitProbe records positions only - texture coordinates are not probed");
+    }
+    pub fn normal3f(_: *EmitProbe, _: f32, _: f32, _: f32) void {
+        @compileError("EmitProbe records positions only - normals are not probed");
+    }
+    pub fn enable(_: *EmitProbe, _: anytype) void {
+        @compileError("EmitProbe records geometry only - render state is not probed");
+    }
+    pub fn disable(_: *EmitProbe, _: anytype) void {
+        @compileError("EmitProbe records geometry only - render state is not probed");
+    }
+    pub fn pushMatrix(_: *EmitProbe) void {
+        @compileError("EmitProbe records untransformed geometry - it has no matrix stack");
+    }
+    pub fn popMatrix(_: *EmitProbe) void {
+        @compileError("EmitProbe records untransformed geometry - it has no matrix stack");
+    }
+    pub fn translate(_: *EmitProbe, _: f32, _: f32, _: f32) void {
+        @compileError("EmitProbe records untransformed geometry - it has no matrix stack");
+    }
+    pub fn rotate(
+        _: *EmitProbe,
+        _: f32,
+        _: f32,
+        _: f32,
+        _: f32,
+    ) void {
+        @compileError("EmitProbe records untransformed geometry - it has no matrix stack");
+    }
+    pub fn scissor(
+        _: *EmitProbe,
+        _: i32,
+        _: i32,
+        _: i32,
+        _: i32,
+    ) void {
+        @compileError("EmitProbe records geometry only - clipping is not probed");
+    }
+    pub fn getMatrixTransform(_: *EmitProbe) Mat {
+        @compileError("EmitProbe records untransformed geometry - it has no matrix stack");
     }
 };
 
@@ -331,6 +385,7 @@ pub fn rectRotatedFilled(
     rotation_turns: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -369,6 +424,7 @@ pub fn rectRoundedFilled(
     segments: u32,
     color: Color,
 ) void {
+    requireGl(gl);
     const half: f32 = @min(w, h) * 0.5;
     var r: f32 = roundness * half;
     if (r < 0) {
@@ -402,6 +458,7 @@ pub fn triangleGradient(
     cb: Color,
     cd: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(ca.r, ca.g, ca.b, ca.a);
@@ -423,6 +480,7 @@ pub fn circleSectorFilled(
     segments: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -440,6 +498,7 @@ pub fn polyFilled(
     rotation_turns: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -459,6 +518,7 @@ pub fn ringFilled(
     segments: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(color.r, color.g, color.b, color.a);
@@ -494,6 +554,7 @@ pub fn lineDashedEmit(
     gap: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const dx: f32 = b[0] - a[0];
     const dy: f32 = b[1] - a[1];
     const len: f32 = @sqrt(dx * dx + dy * dy);
@@ -524,6 +585,7 @@ pub fn rectGradientVerticalEmit(
     top: Color,
     bottom: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(0);
     gl.begin(.triangles);
     c4(gl, top);
@@ -550,6 +612,7 @@ pub fn rectGradientCornersEmit(
     br: Color,
     tr: Color,
 ) void {
+    requireGl(gl);
     const x1: f32 = rec.x + rec.width;
     const y1: f32 = rec.y + rec.height;
     gl.setTexture(0);
@@ -571,6 +634,7 @@ pub fn rectGradientCornersEmit(
 
 /// A triangle fan from `points[0]` through the rest.
 pub fn triangleFanEmit(gl: anytype, points: []const Vec2, color: Color) void {
+    requireGl(gl);
     if (points.len < 3) {
         return;
     }
@@ -593,6 +657,7 @@ pub fn splineLinearEmit(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 2) {
         return;
     }
@@ -616,6 +681,7 @@ pub fn splineBasisEmit(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -657,6 +723,7 @@ pub fn splineCatmullRomEmit(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -691,6 +758,7 @@ pub fn splineBezierCubicEmit(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -754,6 +822,7 @@ pub fn rectRoundedLinesEmit(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const half: f32 = @min(w, h) * 0.5;
     var r: f32 = roundness * half;
     if (r < 0) {

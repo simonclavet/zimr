@@ -11,6 +11,7 @@
 //! doesn't sample textures", no longer holds now that vertex texture fetch works.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec = zm.Vec;
@@ -104,14 +105,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "vdisp_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(verts));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(verts));
 
     const ibo: z.wgpu.BufferHandle = z.wgpu.createBuffer(f.gpu.device, .{
         .size = idx.len * @sizeOf(u16),
         .usage = .{ .index = true, .copy_dst = true },
         .label = "vdisp_ibo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, ibo, 0, std.mem.sliceAsBytes(idx));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, ibo, 0, sliceAsBytes(idx));
 
     // Perlin heightfield. MIRROR_REPEAT addressing (not clamp) so the vertex
     // shader can sample at uv*freq > 1 - and once scrolling pushes the lookup
@@ -124,7 +125,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const iw: u32 = @intCast(img.width);
     const ih: u32 = @intCast(img.height);
     const pixels: []const u8 = @as([*]const u8, @ptrCast(img.data.?))[0 .. iw * ih * 4];
-    const tex: z.WgpuTexture = z.WgpuTexture.createFromPixels(f.gpu.device, f.gpu.queue, .{
+    const tex: z.WgpuTexture = .createFromPixels(f.gpu.device, f.gpu.queue, .{
         .width = iw,
         .height = ih,
         .pixels = pixels,

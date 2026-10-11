@@ -22,10 +22,16 @@
 //! do - WGSL's `/* */` - fails this build instead of rendering a broken pane.
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
+const cli = @import("cli");
 const docfmt = @import("docfmt.zig");
 const Allocator = std.mem.Allocator;
-const Writer = std.Io.Writer;
-const File = std.Io.File;
+const Writer = Io.Writer;
+const File = Io.File;
 const startsWith = std.mem.startsWith;
 const expect = std.testing.expect;
 
@@ -105,33 +111,50 @@ fn highlight(gpa: Allocator, text: []const u8) ![]const u8 {
     return html.written();
 }
 
+/// The command line (std's cli, `src/command_line.zig`).
+const SourceArgs = struct {
+    name: []const u8,
+    output: []const u8,
+    files: []const [:0]const u8 = &.{},
+};
+
+const source_cli: cli.Config(SourceArgs) = .{
+    .prog = "example_source",
+    .description = "Bundles an example's source files into the JSON its page's code pane shows.",
+    .args = .{
+        .name = .{ .description = "the example" },
+        .output = .{ .description = "the .json to write" },
+        .files = .{ .description = "<display-path> <file> pairs, at least one" },
+    },
+};
+
 pub fn main(init: std.process.Init) !u8 {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
     const gpa: Allocator = arena.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
     var stderr_buf: [512]u8 = undefined;
     var stderr_writer: File.Writer = File.stderr().writer(io, &stderr_buf);
     const stderr: *Writer = &stderr_writer.interface;
 
-    const argv: []const [:0]const u8 = try init.minimal.args.toSlice(gpa);
-    const has_file_pairs: bool = argv.len >= 5 and (argv.len - 3) % 2 == 0;
+    const args: SourceArgs = cli.args(&init, SourceArgs, source_cli);
+    const has_file_pairs: bool = args.files.len >= 2 and args.files.len % 2 == 0;
     if (!has_file_pairs) {
-        try stderr.writeAll("usage: example_source <name> <out.json> <display-path> <file> ...\n");
+        try stderr.writeAll("example_source: files come in <display-path> <file> pairs (--help)\n");
         try stderr.flush();
         return 2;
     }
-    const name: []const u8 = argv[1];
-    const out_path: []const u8 = argv[2];
-    const pairs: []const [:0]const u8 = argv[3..];
+    const name: []const u8 = args.name;
+    const out_path: []const u8 = args.output;
+    const pairs: []const [:0]const u8 = args.files;
 
     const files: []SourceFile = try gpa.alloc(SourceFile, pairs.len / 2);
     var file_count: usize = 0;
     for (0..files.len) |i| {
         const display_path: []const u8 = pairs[2 * i];
         const disk_path: []const u8 = pairs[2 * i + 1];
-        const raw: []u8 = std.Io.Dir.cwd().readFileAlloc(io, disk_path, gpa, .limited(max_source_bytes)) catch |err| {
+        const raw: []u8 = Io.Dir.cwd().readFileAlloc(io, disk_path, gpa, .limited(max_source_bytes)) catch |err| {
             try stderr.print("example_source: {s}: cannot read {s}: {s}\n", .{ name, display_path, @errorName(err) });
             try stderr.flush();
             return 1;
@@ -157,12 +180,12 @@ pub fn main(init: std.process.Init) !u8 {
     const example: ExampleSource = .{ .name = name, .files = files[0..file_count] };
     var json: Writer.Allocating = .init(gpa);
     try std.json.Stringify.value(example, .{}, &json.writer);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = json.written() });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = json.written() });
     return 0;
 }
 
 test "highlighted Zig closes every span on the line that opened it" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const gpa: Allocator = arena.allocator();
     // Each Zig construct that could plausibly span lines: a doc comment, a
@@ -182,7 +205,7 @@ test "highlighted Zig closes every span on the line that opened it" {
     const html: []const u8 = try highlight(gpa, source);
     try expect(spansCloseOnEveryLine(html));
     try expect(std.mem.count(u8, html, "\n") == std.mem.count(u8, source, "\n"));
-    try expect(std.mem.indexOf(u8, html, "&lt;angle brackets&gt;") != null);
+    try expect(indexOf(u8, html, "&lt;angle brackets&gt;") != null);
 }
 
 test "a span left open across a newline is caught" {
@@ -192,10 +215,10 @@ test "a span left open across a newline is caught" {
 }
 
 test "CRLF becomes LF, and lines are counted the way an editor numbers them" {
-    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const text: []const u8 = try lfOnly(arena.allocator(), "a\r\nb\r\n");
-    try expect(std.mem.eql(u8, text, "a\nb\n"));
+    try expect(eql(u8, text, "a\nb\n"));
     try expect(lineCount(text) == 2);
     try expect(lineCount("a\nb") == 2);
     try expect(lineCount("") == 0);

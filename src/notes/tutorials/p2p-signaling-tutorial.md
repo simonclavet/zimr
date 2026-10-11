@@ -7,7 +7,9 @@ protocols involved (WebSocket + a sliver of WebRTC), the new async I/O API, the
 concurrency design, and the one nasty bug that ate an afternoon. It ends with a
 detailed plan for the next three layers.
 
-The code lives in `tools/signal_server.zig`. Everything here matches that file.
+The server lives in `tools/signal_server.zig`. The WebSocket protocol it speaks - the opening handshake and the
+frames - lives in `src/net_core.zig`, in its `websocket` section, shared with the deployable server
+(`tools/render_server.zig`) and the engine's native client. Everything here matches those files.
 
 ---
 
@@ -210,7 +212,8 @@ Sec-WebSocket-Accept = base64( sha1( key ++ "258EAFA5-E914-47DA-95CA-C5AB0DC85B1
 ```
 
 Reply with `101 Switching Protocols` and that accept header, and the handshake is
-done. Both sides stop speaking HTTP and start exchanging frames. In our code:
+done. Both sides stop speaking HTTP and start exchanging frames. In our code (`net_core.websocket`, where a
+client checks the server's answer with the same function):
 
 ```zig
 fn computeAccept(key: []const u8, out: []u8) []const u8 {
@@ -358,14 +361,22 @@ and all.
 
 ### 5.3 Reading and writing frames
 
-`readFrame` (§4.2) decodes the header, honors the 126/127 length escapes, copies
-the header/mask bytes out immediately (because `take()` views are transient),
-copies the payload into the caller's buffer, and unmasks in place. It guards the
+`readFrame` (§4.2) decodes the header, honors the 126/127 length escapes (read in
+64 bits, whatever the target's word size), copies the header and mask bytes out
+immediately (because `take()` views are transient), reads the payload straight into
+the caller's buffer - so a frame may be longer than the reader's own buffer, which a
+`take()` of the whole payload would require - and unmasks it in place. It guards the
 output buffer — an over-large frame is refused with `error.MessageTooLarge`
 rather than smashing memory.
 
-`writeFrame` is the mirror, minus masking. It builds the 2/4/10-byte header,
-writes it, writes the payload, and **flushes**. `sendText` wraps it so callers
+`writeFrame` is the mirror. It builds the 2/4/10-byte header - then the 4-byte
+masking key when a client writes, for a client masks every frame and a server none -
+writes it, writes the payload (masked through a small buffer, the caller's bytes left
+as they were), and **flushes**. The server passes no mask. The server's writer has a
+buffer, so header and payload leave the machine in one write: written apart, the payload
+would wait for the browser to acknowledge the header, as TCP holds back a small write
+while an earlier one is unacknowledged (Nagle's algorithm) and the other end delays its
+acknowledgements - tens of milliseconds on every message. `sendText` wraps it so callers
 don't have to handle "what if that peer just vanished" — a failed write simply
 marks the peer dead:
 
@@ -519,7 +530,7 @@ name with `pkill -x`.)
 Run it (PORT optional, defaults to 7777):
 
 ```sh
-PORT=7777 zig run tools/signal_server.zig
+zig build signal-server -- --port 7777
 ```
 
 There's no browser in the dev sandbox, so we test with a tiny raw-WebSocket

@@ -12,6 +12,7 @@
 // (sets up the allocator), then `transpile` is callable indefinitely.
 
 const std = @import("std");
+const ArenaAllocator = std.heap.ArenaAllocator;
 const spv2wgsl = @import("spv2wgsl.zig");
 
 // Static buffer for the SPIR-V input (1 MB max - comfortable margin
@@ -21,13 +22,13 @@ var spv_buf: [1024 * 1024]u8 align(@alignOf(u32)) = undefined;
 
 // Arena owns the WGSL output between calls.  Reset on each transpile.
 // lint:off module-var: wasm-export output arena, persists across JS calls
-var arena_storage: std.heap.ArenaAllocator = undefined;
+var arena_storage: ArenaAllocator = undefined;
 // lint:off module-var: wasm-export one-time-init guard
 var initialized: bool = false;
 
 pub fn main() void {
     // wasi-reactor init.  Allocator backing for the arena.
-    arena_storage = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    arena_storage = ArenaAllocator.init(std.heap.page_allocator);
     initialized = true;
 }
 

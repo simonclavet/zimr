@@ -105,6 +105,13 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const swap = std.mem.swap;
+const sortSlice = std.mem.sort;
+const indexOf = std.mem.indexOf;
+const startsWith = std.mem.startsWith;
 
 const zm = @import("zm");
 const float = zm.float;
@@ -403,6 +410,37 @@ pub const Inertia = struct {
     }
 };
 
+/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
+/// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
+/// orientation to recover - identity keeps the simulation running instead of emitting NaN.
+fn normalizeQuat(q: Quat) Quat {
+    const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    return if (n > 1.0e-9) q / splat(n) else quat_identity;
+}
+
+/// A rigid placement in some frame. Named rather than anonymous because a pose is a real
+/// concept here - bodies, joints and sites all have one, and `compose` is how they relate.
+pub const Pose = struct {
+    pos: Vec = vec_zero,
+    rot: Quat = quat_identity,
+
+    pub const identity: Pose = .{};
+
+    /// Place `local` inside `self`. Rotation composes; translation is this pose's origin
+    /// plus the child's offset rotated into this frame.
+    ///
+    /// The order is the whole content of the function: `qmul(a, b)` applies `b` FIRST,
+    /// so `parent.compose(local)` reads "start at the parent, then go local", which is
+    /// the direction a tree walk travels. Swapping the operands compiles and puts every
+    /// body in the wrong place in a way that still looks like a robot.
+    pub fn compose(self: Pose, local: Pose) Pose {
+        return .{
+            .pos = self.pos + rotate(self.rot, local.pos),
+            .rot = qmul(self.rot, local.rot),
+        };
+    }
+};
+
 // =============================================================================
 // The model spec - what the user writes
 //
@@ -464,6 +502,15 @@ pub const Softness = struct {
     damp_ratio: f32 = 1.0,
 };
 
+/// `x^p` for positive `x`. Named because `std.math.pow` is not reachable under the
+/// no-std-math rule and the exp/log form is the intended one for a positive base.
+fn powf(x: f32, p: f32) f32 {
+    if (x <= 0.0) {
+        return 0.0;
+    }
+    return @exp(p * @log(x));
+}
+
 /// How MUCH of the constraint is enforced, as a function of how badly it is violated.
 ///
 /// Impedance `d in (0,1)` interpolates between "constraint absent" and "constraint rigid".
@@ -516,15 +563,6 @@ pub const Impedance = struct {
     }
 };
 
-/// `x^p` for positive `x`. Named because `std.math.pow` is not reachable under the
-/// no-std-math rule and the exp/log form is the intended one for a positive base.
-fn powf(x: f32, p: f32) f32 {
-    if (x <= 0.0) {
-        return 0.0;
-    }
-    return @exp(p * @log(x));
-}
-
 /// One joint. `axis` is ignored for `free` and `ball` (they have no single axis), and
 /// `pos` is the anchor point in the owning body's frame.
 pub const JointSpec = struct {
@@ -554,100 +592,9 @@ pub const JointSpec = struct {
     ref: f32 = 0,
 };
 
-/// A collision/inertia shape attached to a body. Only the primitives that can be written
-/// as a comptime literal live here; hulls and meshes need allocation and arrive through a
-/// runtime model path later.
-/// The lowest point of all the model's collision shapes at the current kinematics (run `forward` first) - how
-/// far a pose reaches below the floor (z = 0) when negative. Shapes on the world body (the floor itself) are
-/// skipped. Plain geometry: the lowest of a sphere's, a capsule's or cylinder's (along local Y), a box's
-/// corners, a hull's points.
-pub fn lowestPoint(m: *const Model, d: *const Data) f32 {
-    // Higher than any robot will ever stand: the first shape replaces it.
-    var lowest: f32 = no_shape_height;
-    for (0..m.ngeom) |g| {
-        if (m.geom_body[g] == 0) {
-            continue;
-        }
-        lowest = @min(lowest, geomLowestPoint(m, d, g));
-    }
-    return lowest;
-}
-
 /// What a body with no collision shape reports as its lowest point: higher than any robot will ever stand, so it
 /// never reads as touching the floor, and any real shape replaces it in a minimum.
 pub const no_shape_height: f32 = 1.0e30;
-
-/// Each body's own lowest point, the same geometry as `lowestPoint` (run `forward` first): `out[b]` is the lowest
-/// point of body `b`'s collision shapes, `no_shape_height` for a body with none (the world body always - it is the
-/// floor). What lets a tracker ask WHICH body touches the floor, not just whether something does.
-pub fn bodyLowestPoints(m: *const Model, d: *const Data, out: []f32) void {
-    assertf(out.len == m.nbody, @src(), "{d} heights for {d} bodies", .{ out.len, m.nbody });
-    @memset(out, no_shape_height);
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        if (body == 0) {
-            continue;
-        }
-        out[body] = @min(out[body], geomLowestPoint(m, d, g));
-    }
-}
-
-/// The lowest point (world z) of one collision shape at the current kinematics. Plain geometry: the lowest of a
-/// sphere's, a capsule's or cylinder's (along local Y), a box's corners, a hull's points.
-fn geomLowestPoint(m: *const Model, d: *const Data, g: usize) f32 {
-    const body: u32 = m.geom_body[g];
-    const rot: Quat = qmul(d.body_xrot[body], m.geom_rot[g]);
-    const center: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[g]);
-    switch (m.geom_shape[g]) {
-        .sphere => |shape| return center[2] - shape.radius,
-        .capsule => |shape| {
-            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
-            return center[2] - @abs(axis[2]) - shape.radius;
-        },
-        .cylinder => |shape| {
-            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
-            return center[2] - @abs(axis[2]) - shape.radius;
-        },
-        .box => |shape| {
-            var lowest: f32 = no_shape_height;
-            for (0..8) |corner| {
-                const h: Vec = shape.half_extent;
-                const x: f32 = if (corner & 1 == 0) -h[0] else h[0];
-                const y: f32 = if (corner & 2 == 0) -h[1] else h[1];
-                const z: f32 = if (corner & 4 == 0) -h[2] else h[2];
-                lowest = @min(lowest, center[2] + rotate(rot, vec(x, y, z))[2]);
-            }
-            return lowest;
-        },
-        .hull => |shape| {
-            var lowest: f32 = no_shape_height;
-            for (shape.points) |point| {
-                lowest = @min(lowest, center[2] + rotate(rot, point)[2]);
-            }
-            return lowest;
-        },
-    }
-}
-
-/// Lift a free-rooted robot so its lowest point sits `clearance` above the floor - a pose copied from a
-/// capture puts feet INTO the floor (Geno's soles rest 4.5 mm below it, a walk's heel deeper), and the contact
-/// solver resolves that overlap in one step with an impulse that throws the robot up and spins it. Never
-/// lowers: a clip may start in the air. Returns the lift; the data is forwarded again when it moved.
-pub fn restOnFloor(m: *const Model, d: *Data, clearance: f32) f32 {
-    const root: usize = for (m.jnt_type, 0..) |kind, j| {
-        if (kind == .free) {
-            break j;
-        }
-    } else return 0.0;
-    const lift: f32 = clearance - lowestPoint(m, d);
-    if (!(lift > 0.0)) {
-        return 0.0;
-    }
-    d.pos[m.jnt_qpos_adr[root] + 2] += lift;
-    d.stage = .stale;
-    forward(m, d);
-    return lift;
-}
 
 pub const GeomShape = union(enum) {
     sphere: struct { radius: f32 },
@@ -889,6 +836,38 @@ pub const ActuatorSpec = struct {
     }
 };
 
+/// How far through the pipeline a `Data` has been advanced.
+///
+/// MuJoCo's docs single this out as the thing that surprises people: the pipeline is
+/// imperative, so after writing `qpos` every derived quantity is silently stale until you
+/// call the right stage, and nothing tells you. In C the only alternatives are to check
+/// nothing or to pay for a check forever.
+///
+/// Zig gets a third option. `Data` carries a watermark, every stage sets it, and every
+/// reader asserts on it - through `assertf`, which compiles out of a ship build entirely.
+/// So a development build says
+///
+///     robot: crb needs the position stage, but this Data is only at .stale
+///     (did you forget kinematics?)
+///
+/// and a ship build pays nothing. The information was always available; C just had nowhere
+/// cheap to put it.
+pub const Stage = enum(u8) {
+    /// Position or velocity has been written; everything derived is stale.
+    stale = 0,
+    /// `kinematics` and `comPos` have run: body poses, `cdof`, `cinert` are current.
+    position,
+    /// `comVel` has run: body velocities are current.
+    velocity,
+    /// Forces and accelerations are current.
+    force,
+
+    /// Stages are ordered, so "have we at least reached X" is a comparison.
+    pub fn atLeast(self: Stage, want: Stage) bool {
+        return @backingInt(self) >= @backingInt(want);
+    }
+};
+
 /// What a sensor measures. The target it names depends on the kind - a joint, a tendon,
 /// an actuator or a site - and `Spec()` checks that the name resolves to the right thing.
 ///
@@ -972,6 +951,157 @@ pub const Integrator = enum {
     implicitfast,
 };
 
+/// How the solver is run. Defaults are chosen so that a joint limit converges in a handful
+/// of iterations; a stiff contact set will want more.
+pub const Algorithm = enum {
+    /// Projected Gauss-Seidel: sweep rows, project each onto its allowed set.
+    pgs,
+    /// Newton on the convex objective, with a line search. See `solveNewton`.
+    newton,
+};
+
+pub const SolverOptions = struct {
+    /// Ceiling on sweeps. PGS converges linearly, so this bounds the work rather than the
+    /// accuracy - `tolerance` is what decides when to stop.
+    /// Which algorithm drives the constraint rows to their targets.
+    ///
+    /// -- ** THE TRADE, MEASURED ON A SIX-BOX STACK (96 rows) --
+    ///
+    /// PGS sweeps rows one at a time; Newton minimises the whole convex objective at once.
+    /// Sweeping is cheap per iteration and converges LINEARLY, which is fine until the rows are
+    /// strongly coupled - and a stack couples every row to every other through the boxes
+    /// between them.
+    ///
+    ///     PGS residual:   1 iter 26.7 * 5 iters 13.4 * 20 iters 4.83 * 100 iters 0.269
+    ///
+    /// Still falling at a hundred iterations, and the stack collapses. Newton's whole point is
+    /// that it does not have to propagate information one contact per sweep.
+    ///
+    /// * PGS REMAINS THE DEFAULT, and it is not a grudging one: at FIVE iterations it beats
+    /// MuJoCo's own PGS by 4.5x and matches MuJoCo's Newton, because the exact `A_hat` diagonal and
+    /// the stall check do real work. Most scenes never reach the regime where this matters, and
+    /// PGS is markedly cheaper per iteration.
+    ///
+    /// -- ** AND ON A REAL ROBOT PGS STOPS SHORT OF `tolerance`, EVERY STEP --
+    ///
+    /// Worth knowing before `constraintConverged` surprises you. A Go1 holding its home pose
+    /// on four feet - sixteen rows, `zig build robot-bench` case 4 - measured over 20 000
+    /// steps at two controller stiffnesses:
+    ///
+    ///     pgs     kp 100   residual 6.8e-6   converged FALSE
+    ///     pgs     kp 300   residual 3.0e-6   converged FALSE
+    ///     newton  kp 100   residual 1.8e-7   converged true
+    ///     newton  kp 300   residual 1.2e-7   converged true
+    ///
+    /// PGS is stopping on `min_progress`, not on `tolerance` - the linear-convergence floor
+    /// the table under `tolerance` documents, reached here at a few times the target. **The
+    /// simulation is fine**: 3e-6 of constraint residual is far below anything the robot can
+    /// feel, both solvers agree on the resting trunk height to four decimals, and the stance
+    /// is stable indefinitely. What is NOT fine is reading `constraintConverged` as a health
+    /// check and concluding something is broken. It reports what it says - did the residual
+    /// reach `tolerance` - and under PGS on a coupled scene the honest answer is no.
+    ///
+    /// If you need `converged` to mean something, use `.newton`; if you need a number, use
+    /// `constraintResidual` and pick a threshold your mechanism actually cares about.
+    algorithm: Algorithm = .pgs,
+    max_iterations: u32 = 60,
+    /// How fast a constraint may push itself out of a violation, in metres per second.
+    ///
+    /// Bounds the POSITION-correction half of the reference acceleration. A soft constraint's
+    /// `-K*I*violation` grows without limit as overlap deepens, and overlap can deepen
+    /// arbitrarily when a fast body is first seen already buried - so this caps how much
+    /// separation one step may demand. 2 m/s recovers a centimetre in five milliseconds,
+    /// which is far quicker than anything looks wrong, while a 0.25 m overlap unwinds over a
+    /// handful of steps instead of exploding.
+    ///
+    /// At the sub-millimetre depths a settled contact reaches, this is orders of magnitude
+    /// from binding.
+    /// Accelerate Gauss-Seidel with Nesterov momentum, as MuJoCo's PGS does.
+    ///
+    /// -- ** IMPLEMENTED, CORRECT, AND OFF BY DEFAULT - because it MEASURED SLOWER --
+    ///
+    /// Plain PGS converges linearly; Nesterov extrapolation reaches the accelerated rate. On a
+    /// standing Go1 it does exactly what the theory says:
+    ///
+    ///     momentum off:  14 solver iterations,  17,847 ns/step
+    ///     momentum on:    3 solver iterations,  19,280 ns/step
+    ///
+    /// **A 4.7x reduction in iterations, and 8% SLOWER.** Each iteration costs roughly twice
+    /// as much, because extrapolating the forces invalidates `d.acc` and it must be rebuilt -
+    /// `rebuildAccelerationFromForces` is O(rows x nv), the same order as the sweep it is
+    /// accelerating. At sixteen rows the fixed cost dominates the saved sweeps.
+    ///
+    /// It is kept rather than deleted because the trade REVERSES with problem size: the rebuild
+    /// is once per iteration while the sweeps saved grow with row count, so a scene with
+    /// hundreds of contact rows should favour it. The switch is how that gets tested when such
+    /// a scene exists, instead of re-deriving the whole thing.
+    ///
+    /// **The lesson is about MuJoCo rather than about momentum.** MuJoCo runs f64 with elliptic
+    /// friction cones and a Newton solver whose inner loop is far more expensive than a
+    /// Gauss-Seidel sweep - the same acceleration pays for itself there and does not here.
+    /// **Copying a technique from a reference implementation copies its cost model too**, and
+    /// that has to be measured rather than inherited.
+    momentum: bool = false,
+    /// Stop when one sweep improves the residual by less than this FRACTION of it.
+    ///
+    /// PGS has a floor - set by f32 and by its own linear convergence - and `tolerance` can
+    /// sit below it. When it does, the solver reaches its best answer and then spends every
+    /// remaining iteration failing to improve on it. Measured on a standing Go1, solved cold
+    /// from a settled stance:
+    ///
+    ///     iterations:   1      2      5     10     20     60     200    1000
+    ///     residual:  19.70  10.14   6.74   3.93   1.35  0.0199  4.0e-6  4.0e-6
+    ///
+    /// It converges by ~200 sweeps and then **plateaus at 4.013e-6 against a target of
+    /// 3.55e-6** - thirteen percent away and unreachable - so it ran to the 60-iteration cap
+    /// on every step of a robot standing still. The readout said `60 it`, which reads as
+    /// failure to converge and was failure to NOTICE convergence.
+    ///
+    /// Relative, so it is scale-free. 1% is far below the per-sweep progress of a problem
+    /// that is genuinely still descending - the Go1 above was still halving its residual per
+    /// sweep at iteration 20 - so this cannot fire early on real work.
+    min_progress: f32 = 0.01,
+    /// How close to the tolerance target a residual must be before `min_progress` may stop
+    /// the solve, as a multiple of that target.
+    ///
+    /// * THIS IS WHAT KEEPS THE STALL CHECK FROM ABANDONING HARD PROBLEMS. Slow progress near
+    /// the floor means the answer is finished; slow progress mid-impact means the problem is
+    /// hard. Without this bound the two are indistinguishable, and the check took a KUKA
+    /// sweeping a crate tower from 14 m/s of ejection to 32 by walking away from half-solved
+    /// contacts.
+    ///
+    /// The measured plateau sat 1.13x above its target, so 100x is generous for the case this
+    /// exists to catch, while a mid-impact residual runs thousands of times larger and stays
+    /// well outside it.
+    stall_window: f32 = 100.0,
+    max_recovery_velocity: f32 = 2.0,
+    // * AUDIT NOTE: this currently fires ZERO times in 280,000 row-solves of the worst scene
+    // available - a KUKA sweeping a five-crate tower at four times its normal rate. It is
+    // kept anyway, and a sibling bound was removed, and the difference is worth stating.
+    //
+    // A `max_force_scale` was added beside this in the same session, capping each row's force
+    // at an arbitrary multiple. Both were plasters over a 1.4 GN blow-up whose real causes
+    // turned out to be a stale `body_subtree_mass` and a contact the solver could never
+    // satisfy. With those fixed, neither fires.
+    //
+    // Bounded penetration recovery is STANDARD (Bullet's error reduction, PhysX's
+    // `maxDepenetrationVelocity`) and describes real behaviour: nothing should be flung apart
+    // faster than it could plausibly separate. An arbitrary force ceiling describes nothing,
+    // and a bound that never fires but would silently rewrite the physics if it did is worse
+    // than no bound. So one stayed and one went.
+    /// Stop once the complementarity residual falls below this FRACTION of the problem's
+    /// own scale (the largest reference acceleration among the active rows).
+    ///
+    /// Relative, not absolute, and the reason is f32. The residual has units of
+    /// acceleration, and reference accelerations for a stiff limit run to several hundred.
+    /// A single-precision float carries about seven significant digits, so the smallest
+    /// residual representable near a magnitude of 500 is around 5e-5 - an absolute
+    /// tolerance below that is unreachable, and the solver would spin to `max_iterations`
+    /// on a problem it had already solved exactly. Scaling by the problem removes the
+    /// dependence on how stiff the model happens to be.
+    tolerance: f32 = 1.0e-6,
+};
+
 /// Simulation-wide settings, mirroring `mjModel.opt`.
 pub const Options = struct {
     /// Defaults to zimr's Y-up convention. **An MJCF-imported model is Z-up and sets
@@ -1016,6 +1146,83 @@ pub const TransmissionKind = enum { joint, tendon };
 /// A pyramidal contact costs four rows: two tangent directions, two opposing edges each.
 pub const rows_per_contact: u32 = 4;
 
+/// One joint's coordinate as a polynomial in another's.
+pub const JointCouplingSpec = struct {
+    /// The joint whose value is determined by the other.
+    driven: []const u8,
+    /// The joint it follows. Null pins `driven` to a constant offset from its rest value,
+    /// which is how a joint is locked without removing it from the model.
+    driver: ?[]const u8 = null,
+    /// `c0 ... c4`. `.{ 0, 1 }` makes the two joints equal; `.{ 0, -1 }` mirrors them.
+    poly: [5]f32 = .{ 0, 1, 0, 0, 0 },
+};
+
+/// A point on two bodies that must coincide - MuJoCo's `<equality type="connect">`.
+///
+/// -- ** WHY A TREE NEEDS THIS AT ALL --
+///
+/// Reduced coordinates buy exact joints and no drift, and they pay for it in TOPOLOGY: a tree
+/// has no loops, so a mechanism whose links form a ring cannot be spelled at all. That rules
+/// out a whole class of real machine - Cassie and Digit's parallel shin linkages, four-bar
+/// suspensions, most delta arms, and nearly every rigid gripper whose fingers are geared to
+/// each other.
+///
+/// The standard answer, and MuJoCo's, is to build the SPANNING TREE and close the remaining
+/// loops with constraints the solver enforces. The joints stay exact; the loop closure is
+/// approximate in the same way contact is, and to the same tolerance.
+///
+/// * THREE ROWS, NOT ONE. A point constraint is three scalar equations - one per world axis -
+/// and they go to the solver as three rows sharing a body pair. Writing it as a single row
+/// along the current error direction would look right while the error is small and drift
+/// sideways, because a direction computed from an error cannot constrain the two axes the
+/// error happens not to point along.
+pub const EqualitySpec = struct {
+    /// The two bodies, by name.
+    body_a: []const u8,
+    body_b: []const u8,
+    /// The coincident point, in each body's own frame.
+    anchor_a: Vec = vec_zero,
+    /// Hold the two bodies at a fixed relative POSE rather than at a shared point. The
+    /// orientation to hold is derived from the rest pose, in the same way `anchor_b` is.
+    weld: bool = false,
+    /// See `Equality.weld`. Only read when `weld` is set.
+    torque_scale: f32 = 1.0,
+    /// Couple two joints instead of two points. When set, the anchors are ignored.
+    ///
+    /// -- * WHAT THIS IS FOR --
+    ///
+    /// A parallel gripper's two fingers driven by one motor; a geared pair; a linkage whose
+    /// ratio is known rather than derived from geometry. `driven - rest = c0 + c1*x + ... `
+    /// where `x = driver - rest`, which is MuJoCo's `polycoef` exactly - a coupling written
+    /// for one engine reads the same in the other.
+    ///
+    /// A LINEAR coupling is `.{ offset, ratio }` and covers essentially every gripper. The
+    /// higher terms exist because MuJoCo has them and a model may use them, not because they
+    /// are usually wanted.
+    couple: ?JointCouplingSpec = null,
+    /// Where the point sits in `body_b`'s frame - or **null to derive it**, which is almost
+    /// always what you want.
+    ///
+    /// -- ** A LOOP CLOSURE THAT STARTS VIOLATED SNAPS --
+    ///
+    /// Both anchors describe the same physical point, so stating both is stating the same
+    /// fact twice in two different frames - and getting the second one wrong by a centimetre
+    /// gives a mechanism that lurches on frame one and then behaves, which reads as a solver
+    /// problem and is a typo.
+    ///
+    /// Null means "whatever makes this exact at the rest pose": the builder places `anchor_a`
+    /// in the world using `qpos0`, then expresses that point in `body_b`'s frame. **MuJoCo
+    /// does the same derivation** - its `<connect anchor="...">` takes one point and the
+    /// compiler fills in the other - but only in the file format. Having it in the API means
+    /// a model built in code gets it too.
+    anchor_b: ?Vec = null,
+    /// How stiffly the loop is held. The default is stiffer than contact: a loop closure is a
+    /// statement about the mechanism rather than about a surface, and a visibly stretchy
+    /// linkage is worse than a slightly harsh one.
+    softness: Softness = .{ .time_const_s = 0.005 },
+    impedance: Impedance = .{},
+};
+
 /// The whole model description.
 pub const ModelSpec = struct {
     bodies: []const BodySpec,
@@ -1038,538 +1245,6 @@ const hemisphere_transverse: f32 = 2.0 / 5.0 - 9.0 / 64.0;
 const default_armature_fraction: f32 = 0.01;
 
 // =============================================================================
-// Spec() - the comptime layer
-//
-// Validates the spec, generates name enums, and computes the counts. Everything that can
-// be wrong with a model becomes a compile error here rather than a runtime check. What it
-// deliberately does NOT do is build the index tables: those are ordinary runtime data
-// produced by `build()`, so a model loaded from a file at runtime can take the same path.
-// =============================================================================
-
-/// A comptime evaluation budget that scales with the model, rather than a magic number
-/// that works until someone builds a slightly larger robot. The quadratic term is real:
-/// `assertUniqueNames` compares every name against every later one.
-fn quotaFor(comptime spec: ModelSpec) u32 {
-    var names: u32 = 0;
-    var parts: u32 = 0;
-    for (spec.bodies) |b| {
-        names += 1 + @as(u32, @intCast(b.joints.len + b.sites.len));
-        parts += @as(u32, @intCast(b.joints.len + b.sites.len + b.geoms.len));
-    }
-    const bodies: u32 = @intCast(spec.bodies.len);
-    // name-uniqueness is quadratic; everything else is linear in the parts.
-    return 4000 + 8 * (names * names + bodies * bodies) + 64 * (parts + bodies);
-}
-
-/// Turn a list of comptime names into an exhaustive enum whose tag values are the index
-/// into that list. `@backingInt(E.foo)` is therefore the array index, for free.
-fn NamesEnum(comptime names: []const []const u8) type {
-    if (names.len == 0) {
-        // An enum with no fields is legal but useless; callers guard on the count instead.
-        return u32;
-    }
-    var values: [names.len]u32 = undefined;
-    for (&values, 0..) |*v, i| {
-        v.* = @intCast(i);
-    }
-    const frozen = values;
-    return @Enum(u32, .exhaustive, names, &frozen);
-}
-
-/// Compile-error unless every string in `names` is distinct. `what` names the category so
-/// the message says which list to look at.
-fn assertUniqueNames(comptime names: []const []const u8, comptime what: []const u8) void {
-    for (names, 0..) |a, i| {
-        if (a.len == 0) {
-            @compileError("robot: a " ++ what ++ " has an empty name");
-        }
-        for (names[i + 1 ..]) |b| {
-            if (std.mem.eql(u8, a, b)) {
-                @compileError("robot: duplicate " ++ what ++ " name '" ++ a ++ "'");
-            }
-        }
-    }
-}
-
-/// Validate a spec and derive everything about it that is knowable without allocating.
-///
-///     const Arm = robot.Spec(.{ .bodies = &.{ ... } });
-///     var model: robot.Model = try Arm.build(gpa);
-///     var data: robot.Data = try robot.Data.init(gpa, &model);
-///     data.setPos(Arm.Joint.elbow, 0.4);        // compile-checked
-///
-pub fn Spec(comptime spec: ModelSpec) type {
-    // Zig caps comptime loop iterations to catch runaway evaluation, and the default of
-    // 1000 is reached by a perfectly ordinary humanoid: the validation pass alone is
-    // bodies x joints x geoms, and the name collection is quadratic in the name count.
-    // Measured - an 18-body model failed to COMPILE before this line existed.
-    //
-    // The quota scales with the spec so a bigger model does not hit the same wall, with a
-    // generous constant because the cost of over-estimating is nothing (it is a ceiling,
-    // not an allocation) and the cost of under-estimating is a confusing compile error in
-    // someone else's model.
-    @setEvalBranchQuota(quotaFor(spec));
-
-    // ---- validation -------------------------------------------------------
-    comptime {
-        if (spec.bodies.len == 0) {
-            @compileError("robot: a model needs at least one body");
-        }
-        if (spec.options.timestep <= 0.0) {
-            @compileError("robot: timestep must be positive");
-        }
-
-        var body_names: [spec.bodies.len][]const u8 = undefined;
-        for (spec.bodies, 0..) |b, i| {
-            body_names[i] = b.name;
-        }
-        assertUniqueNames(&body_names, "body");
-
-        for (spec.bodies, 0..) |b, bi| {
-            // A parent must exist AND be declared earlier - the tree passes rely on it.
-            if (b.parent) |parent| {
-                var found: bool = false;
-                for (spec.bodies[0..bi]) |earlier| {
-                    if (std.mem.eql(u8, earlier.name, parent)) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    @compileError("robot: body '" ++ b.name ++ "' names parent '" ++ parent ++
-                        "', which is not a body declared before it (bodies must be parent-first)");
-                }
-            }
-
-            for (b.joints) |j| {
-                // A free joint IS the six degrees of freedom of a floating base. Putting
-                // one deeper in the tree, or beside another joint, is always a modelling
-                // mistake rather than an exotic mechanism.
-                if (j.kind == .free) {
-                    if (b.parent != null) {
-                        @compileError("robot: free joint '" ++ j.name ++ "' on body '" ++ b.name ++
-                            "' — a free joint only belongs on a direct child of the world");
-                    }
-                    if (b.joints.len != 1) {
-                        @compileError("robot: body '" ++ b.name ++
-                            "' has a free joint alongside other joints; a free joint is already all six DOFs");
-                    }
-                }
-                if (j.kind == .slide or j.kind == .hinge) {
-                    const len_sq: f32 = j.axis[0] * j.axis[0] + j.axis[1] * j.axis[1] + j.axis[2] * j.axis[2];
-                    if (len_sq < 1.0e-12) {
-                        @compileError("robot: joint '" ++ j.name ++ "' has a zero-length axis");
-                    }
-                }
-                if (j.range) |r| {
-                    if (r[0] > r[1]) {
-                        @compileError("robot: joint '" ++ j.name ++ "' has range lo > hi");
-                    }
-                    // A ball or free joint's limit is a CONE on a rotation, not an interval
-                    // on a scalar. MuJoCo supports it by converting the quaternion to
-                    // axis-angle; we do not, and silently ignoring a limit the model asked
-                    // for is worse than refusing it.
-                    if (j.kind != .hinge and j.kind != .slide) {
-                        @compileError("robot: joint '" ++ j.name ++
-                            "' is a ball or free joint with a range — limits are only " ++
-                            "supported on hinge and slide joints");
-                    }
-                    if (j.limit_margin < 0.0) {
-                        @compileError("robot: joint '" ++ j.name ++ "' has a negative limit margin");
-                    }
-                    // MuJoCo overloads the SIGN of solref to mean "these are K and B
-                    // directly". `Softness` names its fields, so a negative time constant
-                    // is simply nonsense rather than a second meaning.
-                    if (j.limit_softness.time_const_s <= 0.0 or j.limit_softness.damp_ratio <= 0.0) {
-                        @compileError("robot: joint '" ++ j.name ++
-                            "' has a non-positive limit time constant or damping ratio");
-                    }
-                    const imp = j.limit_impedance;
-                    if (imp.min <= 0.0 or imp.max >= 1.0 or imp.min > imp.max) {
-                        @compileError("robot: joint '" ++ j.name ++
-                            "' needs 0 < impedance.min <= impedance.max < 1");
-                    }
-                    if (imp.width < 0.0 or imp.power < 1.0 or
-                        imp.midpoint <= 0.0 or imp.midpoint >= 1.0)
-                    {
-                        @compileError("robot: joint '" ++ j.name ++
-                            "' has an impedance ramp that is not a valid sigmoid " ++
-                            "(need width >= 0, power >= 1, 0 < midpoint < 1)");
-                    }
-                }
-                if (j.armature) |a| {
-                    if (a < 0.0) {
-                        @compileError("robot: joint '" ++ j.name ++ "' has negative armature");
-                    }
-                }
-            }
-
-            for (b.geoms) |g| {
-                const bad: bool = switch (g.shape) {
-                    .sphere => |s| s.radius <= 0.0,
-                    .box => |s| s.half_extent[0] <= 0.0 or s.half_extent[1] <= 0.0 or s.half_extent[2] <= 0.0,
-                    // A hull needs enough points to BE a volume: three define a plane, and
-                    // a degenerate cloud makes a hull builder produce something arbitrary
-                    // rather than fail. Cheaper to reject here, by name, at compile time.
-                    .hull => |s| s.points.len < 4,
-                    .capsule => |s| s.radius <= 0.0 or s.half_height < 0.0,
-                    .cylinder => |s| s.radius <= 0.0 or s.half_height <= 0.0,
-                };
-                if (bad) {
-                    @compileError("robot: body '" ++ b.name ++ "' has a geom with a non-positive size");
-                }
-                if (g.mass) |m| {
-                    // * ZERO IS LEGAL AND MEANINGFUL: a COLLISION-ONLY geom.
-                    //
-                    // An imported robot states its mass properties in `<inertial>` and its
-                    // collision geometry separately, so its geoms must contribute no mass -
-                    // otherwise a link is counted twice and comes out several times too
-                    // heavy. `mass = 0` says exactly that, and the body's own `inertial`
-                    // supplies the physics.
-                    //
-                    // Negative remains an error: it is not a shape that weighs nothing, it
-                    // is a shape that weighs less than nothing.
-                    if (m < 0.0) {
-                        @compileError("robot: body '" ++ b.name ++ "' has a geom with negative mass");
-                    }
-                    if (m == 0.0 and b.inertial == null) {
-                        @compileError("robot: body '" ++ b.name ++
-                            "' has a massless geom but no <inertial> to supply its mass — " ++
-                            "the body would have none at all");
-                    }
-                } else if (g.density <= 0.0) {
-                    @compileError("robot: body '" ++ b.name ++ "' has a geom with non-positive density");
-                }
-            }
-
-            // A body that moves must have inertia, or the mass matrix is singular and the
-            // factorization divides by zero. Catch it here with the body's name rather
-            // than as a NaN three phases downstream.
-            if (b.inertial) |inertial| {
-                // * A zero mass is legal on a body with NO degrees of freedom, and real
-                // models rely on it: a KUKA iiwa's `lbr_iiwa_link_0` is the bolted-down
-                // base and declares `mass="0.0"`. Nothing accelerates it, so nothing
-                // divides by it.
-                //
-                // With joints it is fatal - the mass matrix is singular and `factorM`
-                // divides by zero - which is the same rule as the geom check below, and
-                // for the same reason.
-                if (b.joints.len > 0 and inertial.mass <= 0.0) {
-                    @compileError("robot: body '" ++ b.name ++
-                        "' has joints but a non-positive stated mass — the mass matrix " ++
-                        "would be singular");
-                }
-                if (inertial.mass < 0.0) {
-                    @compileError("robot: body '" ++ b.name ++ "' has a negative stated mass");
-                }
-                // The diagonal must be positive and satisfy the triangle inequality, or the
-                // tensor is not the inertia of any real object and `factorM` will fail
-                // somewhere far from here with a much less helpful message.
-                const ixx: f32 = inertial.full_inertia[0];
-                const iyy: f32 = inertial.full_inertia[1];
-                const izz: f32 = inertial.full_inertia[2];
-                // A massless jointless body may legitimately state a zero tensor; only a
-                // body that can actually move needs positive moments.
-                if (b.joints.len > 0 and (ixx <= 0.0 or iyy <= 0.0 or izz <= 0.0)) {
-                    @compileError("robot: body '" ++ b.name ++
-                        "' has joints and a non-positive principal moment in its stated inertia");
-                }
-                if (ixx < 0.0 or iyy < 0.0 or izz < 0.0) {
-                    @compileError("robot: body '" ++ b.name ++ "' has a negative principal moment");
-                }
-                if (ixx + iyy < izz or ixx + izz < iyy or iyy + izz < ixx) {
-                    @compileError("robot: body '" ++ b.name ++
-                        "' has a stated inertia violating the triangle inequality — no rigid " ++
-                        "body has those moments");
-                }
-            } else if (b.joints.len > 0 and b.geoms.len == 0) {
-                @compileError("robot: body '" ++ b.name ++
-                    "' has joints but no geoms, so it has no mass — the mass matrix would be singular");
-            }
-        }
-
-        var sensor_names_check: [spec.sensors.len][]const u8 = undefined;
-        for (spec.sensors, 0..) |sensor, i| {
-            sensor_names_check[i] = sensor.name;
-            // Each kind reads a particular kind of thing, and naming the wrong one is a
-            // modelling mistake worth catching at compile time rather than as a wrong
-            // number at runtime.
-            const found: bool = switch (sensor.kind) {
-                .joint_pos, .joint_vel => blk: {
-                    for (spec.bodies) |b| {
-                        for (b.joints) |j| {
-                            if (std.mem.eql(u8, j.name, sensor.target)) {
-                                if (j.kind != .hinge and j.kind != .slide) {
-                                    @compileError("robot: sensor '" ++ sensor.name ++
-                                        "' reads joint '" ++ sensor.target ++
-                                        "', which is not scalar");
-                                }
-                                break :blk true;
-                            }
-                        }
-                    }
-                    break :blk false;
-                },
-                .tendon_pos, .tendon_vel => blk: {
-                    for (spec.tendons) |t| {
-                        if (std.mem.eql(u8, t.name, sensor.target)) {
-                            break :blk true;
-                        }
-                    }
-                    break :blk false;
-                },
-                .actuator_force => blk: {
-                    for (spec.actuators) |act| {
-                        if (std.mem.eql(u8, act.name, sensor.target)) {
-                            break :blk true;
-                        }
-                    }
-                    break :blk false;
-                },
-                .site_pos, .site_quat, .site_lin_vel, .site_ang_vel, .velocimeter, .gyro, .accelerometer => blk: {
-                    for (spec.bodies) |b| {
-                        for (b.sites) |site| {
-                            if (std.mem.eql(u8, site.name, sensor.target)) {
-                                break :blk true;
-                            }
-                        }
-                    }
-                    break :blk false;
-                },
-            };
-            if (!found) {
-                @compileError("robot: sensor '" ++ sensor.name ++ "' names '" ++ sensor.target ++
-                    "', which is not a thing of the kind it reads");
-            }
-        }
-        assertUniqueNames(&sensor_names_check, "sensor");
-
-        var tendon_names_check: [spec.tendons.len][]const u8 = undefined;
-        for (spec.tendons, 0..) |t, i| {
-            tendon_names_check[i] = t.name;
-            if (t.joints.len == 0) {
-                @compileError("robot: tendon '" ++ t.name ++ "' couples no joints");
-            }
-            for (t.joints) |tj| {
-                var found: bool = false;
-                for (spec.bodies) |b| {
-                    for (b.joints) |j| {
-                        if (std.mem.eql(u8, j.name, tj.name)) {
-                            // A tendon's length is a sum of scalar coordinates, so every
-                            // joint it names must have one.
-                            if (j.kind != .hinge and j.kind != .slide) {
-                                @compileError("robot: tendon '" ++ t.name ++ "' includes joint '" ++
-                                    tj.name ++ "', which is not a hinge or slide");
-                            }
-                            found = true;
-                        }
-                    }
-                }
-                if (!found) {
-                    @compileError("robot: tendon '" ++ t.name ++ "' names joint '" ++
-                        tj.name ++ "', which does not exist");
-                }
-            }
-        }
-        assertUniqueNames(&tendon_names_check, "tendon");
-
-        for (spec.actuators) |act| {
-            switch (act.on) {
-                .joint => |t| {
-                    var found: bool = false;
-                    for (spec.bodies) |b| {
-                        for (b.joints) |j| {
-                            if (std.mem.eql(u8, j.name, t.name)) {
-                                // A joint transmission is a SCALAR coordinate, so it needs
-                                // a scalar joint. A ball or free joint has no single angle
-                                // to servo toward.
-                                if (j.kind != .hinge and j.kind != .slide) {
-                                    @compileError("robot: actuator '" ++ act.name ++ "' drives joint '" ++
-                                        t.name ++ "', which is not a hinge or slide — a joint " ++
-                                        "transmission needs a scalar coordinate");
-                                }
-                                found = true;
-                            }
-                        }
-                    }
-                    if (!found) {
-                        @compileError("robot: actuator '" ++ act.name ++ "' names joint '" ++
-                            t.name ++ "', which does not exist");
-                    }
-                    if (t.gear == 0.0) {
-                        @compileError("robot: actuator '" ++ act.name ++ "' has zero gear, so it can do nothing");
-                    }
-                },
-                .tendon => |t| {
-                    var found: bool = false;
-                    for (spec.tendons) |tendon| {
-                        if (std.mem.eql(u8, tendon.name, t.name)) {
-                            found = true;
-                        }
-                    }
-                    if (!found) {
-                        @compileError("robot: actuator '" ++ act.name ++ "' names tendon '" ++
-                            t.name ++ "', which does not exist");
-                    }
-                    if (t.gear == 0.0) {
-                        @compileError("robot: actuator '" ++ act.name ++ "' has zero gear, so it can do nothing");
-                    }
-                },
-            }
-            if (act.ctrl_range) |r| {
-                if (r[0] > r[1]) {
-                    @compileError("robot: actuator '" ++ act.name ++ "' has ctrl_range lo > hi");
-                }
-            }
-            switch (act.activation) {
-                .filter, .filter_exact => |f| {
-                    if (f.time_const_s <= 0.0) {
-                        @compileError("robot: actuator '" ++ act.name ++
-                            "' has a non-positive filter time constant");
-                    }
-                },
-                .none, .integrator => {},
-            }
-        }
-    }
-
-    // ---- derived names and counts ----------------------------------------
-    const Counts = struct { nq: u32, nv: u32, njnt: u32, nsite: u32, ngeom: u32, na: u32 };
-    const counts: Counts = comptime blk: {
-        var nq: u32 = 0;
-        var nv: u32 = 0;
-        var njnt: u32 = 0;
-        var nsite: u32 = 0;
-        var ngeom: u32 = 0;
-        var na: u32 = 0;
-        for (spec.actuators) |act| {
-            if (act.activation != .none) {
-                na += 1;
-            }
-        }
-        for (spec.bodies) |b| {
-            for (b.joints) |j| {
-                nq += j.kind.posCount();
-                nv += j.kind.dofCount();
-                njnt += 1;
-            }
-            nsite += @intCast(b.sites.len);
-            ngeom += @intCast(b.geoms.len);
-        }
-        break :blk Counts{ .nq = nq, .nv = nv, .njnt = njnt, .nsite = nsite, .ngeom = ngeom, .na = na };
-    };
-
-    const joint_names: [counts.njnt][]const u8 = comptime blk: {
-        var names: [counts.njnt][]const u8 = undefined;
-        var n: usize = 0;
-        for (spec.bodies) |b| {
-            for (b.joints) |j| {
-                names[n] = j.name;
-                n += 1;
-            }
-        }
-        const frozen = names;
-        break :blk frozen;
-    };
-    comptime assertUniqueNames(&joint_names, "joint");
-
-    const site_names: [counts.nsite][]const u8 = comptime blk: {
-        var names: [counts.nsite][]const u8 = undefined;
-        var n: usize = 0;
-        for (spec.bodies) |b| {
-            for (b.sites) |s| {
-                names[n] = s.name;
-                n += 1;
-            }
-        }
-        const frozen = names;
-        break :blk frozen;
-    };
-    comptime assertUniqueNames(&site_names, "site");
-
-    const sensor_names: [spec.sensors.len][]const u8 = comptime blk: {
-        var names: [spec.sensors.len][]const u8 = undefined;
-        for (spec.sensors, 0..) |sensor, i| {
-            names[i] = sensor.name;
-        }
-        const frozen = names;
-        break :blk frozen;
-    };
-
-    const tendon_names: [spec.tendons.len][]const u8 = comptime blk: {
-        var names: [spec.tendons.len][]const u8 = undefined;
-        for (spec.tendons, 0..) |t, i| {
-            names[i] = t.name;
-        }
-        const frozen = names;
-        break :blk frozen;
-    };
-
-    const actuator_names: [spec.actuators.len][]const u8 = comptime blk: {
-        var names: [spec.actuators.len][]const u8 = undefined;
-        for (spec.actuators, 0..) |act, i| {
-            names[i] = act.name;
-        }
-        const frozen = names;
-        break :blk frozen;
-    };
-    comptime assertUniqueNames(&actuator_names, "actuator");
-
-    const body_names: [spec.bodies.len][]const u8 = comptime blk: {
-        var names: [spec.bodies.len][]const u8 = undefined;
-        for (spec.bodies, 0..) |b, i| {
-            names[i] = b.name;
-        }
-        const frozen = names;
-        break :blk frozen;
-    };
-
-    return struct {
-        /// The spec this was built from, kept so `build` needs no arguments beyond an
-        /// allocator and so tooling can introspect a model type.
-        pub const model_spec: ModelSpec = spec;
-
-        /// Body 0 is the WORLD, so a spec body's index is its position in the list plus
-        /// one. These enums number the spec bodies from zero; add `world_body` when
-        /// indexing `Model`'s arrays.
-        pub const Body = NamesEnum(&body_names);
-        pub const Joint = NamesEnum(&joint_names);
-        pub const Site = NamesEnum(&site_names);
-        pub const Actuator = NamesEnum(&actuator_names);
-        pub const Tendon = NamesEnum(&tendon_names);
-        pub const Sensor = NamesEnum(&sensor_names);
-
-        pub const nbody: u32 = @as(u32, spec.bodies.len) + 1; // +1 for the world
-        pub const njnt: u32 = counts.njnt;
-        pub const nsite: u32 = counts.nsite;
-        pub const ngeom: u32 = counts.ngeom;
-        pub const nq: u32 = counts.nq;
-        pub const nv: u32 = counts.nv;
-        /// Number of actuators, and therefore of controls.
-        pub const nu: u32 = @intCast(spec.actuators.len);
-        /// Number of ACTIVATION states - only actuators with internal dynamics have one.
-        pub const na: u32 = counts.na;
-        /// Number of tendons.
-        pub const ntendon: u32 = @intCast(spec.tendons.len);
-        /// Number of sensors, and the total width of their readings.
-        pub const nsensor: u32 = @intCast(spec.sensors.len);
-        pub const neq: u32 = @intCast(spec.equalities.len);
-        pub const nsensordata: u32 = blk: {
-            var total: u32 = 0;
-            for (spec.sensors) |sensor| {
-                total += sensor.kind.dim();
-            }
-            break :blk total;
-        };
-
-        /// Build the runtime model. The spec is consumed here and not referenced again.
-        pub fn build(gpa: Allocator) !Model {
-            return buildFromSpec(gpa, spec);
-        }
-    };
-}
-
-// =============================================================================
 // Model - constant once built
 //
 // Parallel arrays, indexed by body / joint / dof, exactly like `mjModel`. Flat arrays
@@ -1582,6 +1257,64 @@ pub fn Spec(comptime spec: ModelSpec) type {
 
 /// The index of the world body. Its parent is itself.
 pub const world_body: u32 = 0;
+
+/// One end of a loop closure: a point on a body, in that body's own frame.
+pub const Anchor = struct {
+    body: u32,
+    point: Vec,
+};
+
+/// A scalar joint coordinate, resolved to where it lives.
+pub const Coordinate = struct {
+    qpos: u32,
+    dof: u32,
+    /// The joint's rest value, which the polynomial is measured from - the same `qpos0`
+    /// convention MuJoCo uses, so a coupling written for one reads the same in the other.
+    rest: f32,
+};
+
+/// A resolved loop closure, as the model stores it.
+pub const Equality = struct {
+    /// What is being held equal. The two variants share nothing but their softness, which is
+    /// why this is a field rather than the whole type being a union - every caller that only
+    /// cares how STIFFLY a closure is held can read `softness` without unwrapping anything.
+    holds: union(enum) {
+        /// Two points on two bodies that must coincide.
+        connect: struct { a: Anchor, b: Anchor },
+        /// Two bodies held at a fixed relative POSE - position and orientation both.
+        ///
+        /// -- * WHY THIS IS NOT JUST A JOINTLESS BODY --
+        ///
+        /// A body with no joint is welded to its PARENT, which the tree already expresses for
+        /// free. This welds two bodies that are not related that way - a hand gripping a
+        /// crate, two halves of a mechanism bolted together at runtime, a robot clamped to a
+        /// bench it did not grow from. The tie can also be removed again, which a topology
+        /// cannot.
+        weld: struct {
+            a: Anchor,
+            b: Anchor,
+            /// The relative orientation to hold: `rot_b * relative = rot_a`.
+            relative: Quat,
+            /// How much the orientation rows count for relative to the position ones.
+            /// MuJoCo's `torquescale`, and for the same reason: the two halves are in
+            /// different units - metres against radians - so one number has to say how they
+            /// trade, and 1 means "a radian matters as much as a metre".
+            torque_scale: f32,
+        },
+        /// One joint's coordinate as a polynomial in another's - MuJoCo's
+        /// `<equality type="joint">`. See `JointCouplingSpec`.
+        joint: struct {
+            /// The joint whose value is DETERMINED. Its qpos and dof addresses, resolved.
+            driven: Coordinate,
+            /// The joint it follows. Null couples `driven` to a constant.
+            driver: ?Coordinate,
+            /// `driven - ref = c0 + c1*x + c2*x^2 + c3*x^3 + c4*x^4`, where `x = driver - ref`.
+            poly: [5]f32,
+        },
+    },
+    softness: Softness,
+    impedance: Impedance,
+};
 
 /// NAMING NOTE. Counts stay as `nq`, `nv`, `nu`, `na` rather than becoming
 /// `position_count` and friends. Those four are the universal notation of the field -
@@ -1597,7 +1330,7 @@ pub const Model = struct {
     /// struct's ADDRESS. Storing it by value and returning the model would strand every
     /// allocation in a copy nobody frees. (zimr has been bitten by this shape before -
     /// see the wgpu_bringup use-after-scope note in claude.md.)
-    arena: *std.heap.ArenaAllocator,
+    arena: *ArenaAllocator,
     opt: Options,
 
     nbody: u32,
@@ -1749,6 +1482,92 @@ pub const Model = struct {
     }
 };
 
+/// Errors a runtime-built model can produce. The comptime path turns these into
+/// `@compileError` instead; a loader has to handle them, since its input arrives at startup
+/// rather than in source.
+pub const BuildError = error{
+    /// A joint coupling named a ball or free joint. Those have no scalar coordinate to
+    /// couple - a quaternion is not a number - so this is a modelling error rather than
+    /// something to approximate.
+    UnsupportedJointForCoupling,
+    /// A name referenced by a joint, tendon, actuator or sensor that no such thing has.
+    UnknownName,
+    OutOfMemory,
+};
+
+/// Joints are numbered in declaration order across all bodies, which is the same order
+/// `build` assigns them.
+fn jointIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
+    var n: u32 = 0;
+    for (spec.bodies) |b| {
+        for (b.joints) |j| {
+            if (eql(u8, j.name, name)) {
+                return n;
+            }
+            n += 1;
+        }
+    }
+    return BuildError.UnknownName;
+}
+
+/// Resolve a joint name to where its scalar coordinate lives.
+///
+/// * HINGE AND SLIDE ONLY. A ball or free joint has no scalar to couple - its coordinate is a
+/// quaternion or a whole pose - so a coupling naming one is a modelling error rather than
+/// something to approximate.
+fn coordinateOf(spec: ModelSpec, m: Model, name: []const u8) BuildError!Coordinate {
+    const j: u32 = try jointIndexByName(spec, name);
+    switch (m.jnt_type[j]) {
+        .hinge, .slide => {},
+        .free, .ball => return BuildError.UnsupportedJointForCoupling,
+    }
+    return .{
+        .qpos = m.jnt_qpos_adr[j],
+        .dof = m.jnt_dof_adr[j],
+        .rest = m.qpos0[m.jnt_qpos_adr[j]],
+    };
+}
+
+/// A body's rest transform, composed from the root down.
+fn restPose(m: *const Model, body: u32) Pose {
+    if (body == world_body) {
+        return .{ .pos = vec_zero, .rot = quat_identity };
+    }
+    const parent: Pose = restPose(m, m.body_parent[body]);
+    return .{
+        .pos = parent.pos + rotate(parent.rot, m.body_pos[body]),
+        .rot = qmul(parent.rot, m.body_rot[body]),
+    };
+}
+
+fn restToWorld(m: *const Model, body: u32, point: Vec) Vec {
+    const pose: Pose = restPose(m, body);
+    return pose.pos + rotate(pose.rot, point);
+}
+
+/// Express a point given in one body's frame in another body's frame, at the REST pose.
+///
+/// Walks each body's parent chain to the world using the model's own `body_pos`/`body_rot` -
+/// which is `qpos0`, since a joint at its zero coordinate contributes nothing. That is exactly
+/// the configuration a spec describes, so a closure derived here is satisfied the moment the
+/// model is built.
+fn restFrameAnchor(m: *const Model, from_body: u32, point: Vec, to_body: u32) Vec {
+    const in_world: Vec = restToWorld(m, from_body, point);
+    // The inverse of `to_body`'s rest transform: undo the translation, then the rotation.
+    const pose: Pose = restPose(m, to_body);
+    return rotate(conjugate(pose.rot), in_world - pose.pos);
+}
+
+/// Accept a generated enum or a plain index. The same rule as `jointIndex`, used by every
+/// by-name accessor: a comptime model gets compile-checked names, a runtime-loaded one
+/// falls back to integers, and neither pays anything.
+fn siteIndex(site: anytype) u32 {
+    return switch (@typeInfo(@TypeOf(site))) {
+        .@"enum" => @backingInt(site),
+        else => @intCast(site),
+    };
+}
+
 /// Sentinel for "this DOF has no parent" - the top of a kinematic chain.
 pub const no_dof: u32 = maxInt(u32);
 
@@ -1797,8 +1616,241 @@ pub fn refreshSubtreeMass(m: *Model) void {
     }
 }
 
-pub fn buildRuntime(gpa: Allocator, spec: ModelSpec) !Model {
-    return buildFromSpec(gpa, spec);
+/// Body 0 is the world, so a spec body at index `i` is model body `i + 1`.
+fn bodyIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
+    for (spec.bodies, 0..) |b, i| {
+        if (eql(u8, b.name, name)) {
+            return @intCast(i + 1);
+        }
+    }
+    return BuildError.UnknownName;
+}
+
+/// A body's aggregated mass properties, in the body frame.
+const BodyMass = struct {
+    mass: f32,
+    /// Centre of mass, in the body frame.
+    com: Vec,
+    /// Inertia ABOUT THE CENTRE OF MASS, in the body frame. Full symmetric tensor, so a
+    /// rotated geom needs no special case and no eigendecomposition.
+    inertia: Inertia,
+};
+
+/// Sum a body's geoms into one mass, centre of mass and inertia tensor.
+///
+/// Three steps per geom, each one an operation that already exists:
+///   1. `shapeMoments` gives the principal moments about the geom's own centre, in the
+///      geom's own frame - diagonal, because a primitive's axes ARE its principal axes.
+///   2. `rotated` re-expresses that in the BODY frame, which is where a rotated geom stops
+///      being a special case.
+///   3. `translate` moves it from the geom's centre out to the body origin.
+/// Then they simply add, because section 2's ten-parameter packing makes summation valid once
+/// everything shares a frame and a reference point.
+///
+/// Finally the total is shifted from the body origin to the body's centre of mass, since
+/// that is the form `comPos` wants and the form a parallel-axis shift starts from.
+///
+/// MUJOCO DIVERGENCE, deliberate: `mjModel` stores three principal moments plus a
+/// quaternion, which requires diagonalizing this tensor with a symmetric-3x3
+/// eigendecomposition. We keep the six-float symmetric form and skip that entirely - one
+/// fewer numerical routine, no degenerate-eigenvalue edge cases, and one float less to
+/// store. See `Inertia.rotated`.
+/// Convert a stated `<inertial>` into the engine's form.
+///
+/// A near-transcription rather than a computation, which is the payoff for `Inertia`
+/// storing the full symmetric tensor. MuJoCo's `fullinertia` orders its six numbers as
+/// `(xx, yy, zz, xy, xz, yz)`, and `Inertia` splits them into `diag` and `off` - where
+/// `off` is `(xy, xz, yz)` in that same order, so the two halves copy straight across.
+///
+/// `h` is the FIRST MOMENT, `mass * com`, and is zero here because a stated inertia is
+/// given about the centre of mass by definition. `body_ipos` carries the offset separately,
+/// exactly as it does for the geom-derived path.
+fn inertialToBodyMass(inertial: InertialSpec) BodyMass {
+    return .{
+        .mass = inertial.mass,
+        .com = inertial.pos,
+        .inertia = .{
+            .diag = vec(inertial.full_inertia[0], inertial.full_inertia[1], inertial.full_inertia[2]),
+            .off = vec(inertial.full_inertia[3], inertial.full_inertia[4], inertial.full_inertia[5]),
+            .h = vec_zero,
+            .mass = inertial.mass,
+        },
+    };
+}
+
+fn shapeVolume(shape: GeomShape) f32 {
+    return switch (shape) {
+        .sphere => |s| (4.0 / 3.0) * pi * s.radius * s.radius * s.radius,
+        .box => |s| 8.0 * s.half_extent[0] * s.half_extent[1] * s.half_extent[2],
+        // A capsule is a cylinder plus a sphere's worth of caps.
+        .capsule => |s| pi * s.radius * s.radius * (2.0 * s.half_height) +
+            (4.0 / 3.0) * pi * s.radius * s.radius * s.radius,
+        .cylinder => |s| pi * s.radius * s.radius * (2.0 * s.half_height),
+        // Bounding-box volume, deliberately. The true hull volume needs the hull, which
+        // lives in the physics engine; and any model with a hull geom is an imported one,
+        // which states `<inertial>` explicitly and never reaches this path.
+        .hull => |s| 8.0 * s.bounds_half_extent[0] * s.bounds_half_extent[1] *
+            s.bounds_half_extent[2],
+    };
+}
+
+/// Principal moments about the shape's own centre, for a uniform solid. Capsules and
+/// cylinders run along local Y, matching zimr's convention (NOT MuJoCo's Z).
+fn shapeMoments(shape: GeomShape, mass: f32) Vec {
+    switch (shape) {
+        // A hull is treated as its bounding box: an OVERESTIMATE of the true moments, which
+        // is the safe direction - it never makes a link easier to spin than it really is.
+        // As with the volume above, a model carrying hulls states its inertias anyway.
+        .hull => |s| {
+            const x: f32 = 2.0 * s.bounds_half_extent[0];
+            const y: f32 = 2.0 * s.bounds_half_extent[1];
+            const z: f32 = 2.0 * s.bounds_half_extent[2];
+            const k: f32 = mass / 12.0;
+            return vec(k * (y * y + z * z), k * (x * x + z * z), k * (x * x + y * y));
+        },
+        .sphere => |s| {
+            const i: f32 = 0.4 * mass * s.radius * s.radius;
+            return vec(i, i, i);
+        },
+        .box => |s| {
+            const x: f32 = 2.0 * s.half_extent[0];
+            const y: f32 = 2.0 * s.half_extent[1];
+            const z: f32 = 2.0 * s.half_extent[2];
+            const k: f32 = mass / 12.0;
+            return vec(k * (y * y + z * z), k * (x * x + z * z), k * (x * x + y * y));
+        },
+        .cylinder => |s| {
+            const r2: f32 = s.radius * s.radius;
+            const h: f32 = 2.0 * s.half_height;
+            const side: f32 = mass * (3.0 * r2 + h * h) / 12.0;
+            return vec(side, 0.5 * mass * r2, side); // spin axis is Y
+        },
+        .capsule => |s| {
+            // A capsule is a cylinder plus two hemispherical caps, so split the mass
+            // between them by volume and add the moments.
+            //
+            // The caps need care, and getting it wrong here is invisible: the AXIAL moment
+            // comes out right either way, and only the side moment is off by ~0.15%.
+            //
+            //   * A hemisphere's transverse moment about the CENTRE OF ITS FLAT FACE is
+            //     (2/5)m*r^2, the same as a full sphere, by symmetry.
+            //   * Its centroid is NOT there - it sits 3r/8 out along the axis.
+            //   * Parallel axis moves an inertia between a point and the CENTROID, so
+            //     before shifting out to the capsule's centre we must first come back to
+            //     the centroid:
+            //         I_centroid = (2/5)m*r^2 - m*(3r/8)^2 = (2/5 - 9/64)*m*r^2
+            //     and only then push out to (half_height + 3r/8).
+            //
+            // Using (2/5)m*r^2 directly as the centroid moment double-counts m*(3r/8)^2.
+            // Verified against MuJoCo to 3e-10; see the test below.
+            const r: f32 = s.radius;
+            const r2: f32 = r * r;
+            const h: f32 = 2.0 * s.half_height;
+            const v_cyl: f32 = pi * r2 * h;
+            const v_cap: f32 = (4.0 / 3.0) * pi * r2 * r;
+            const total: f32 = v_cyl + v_cap;
+            const m_cyl: f32 = if (total > 0.0) mass * v_cyl / total else 0.0;
+            const m_cap: f32 = mass - m_cyl;
+
+            // About the axis, both parts are already centred: no shift needed.
+            const axial: f32 = 0.5 * m_cyl * r2 + 0.4 * m_cap * r2;
+
+            const side_cyl: f32 = m_cyl * (3.0 * r2 + h * h) / 12.0;
+            const cap_centroid: f32 = s.half_height + 0.375 * r;
+            const side_cap: f32 = m_cap *
+                (hemisphere_transverse * r2 + cap_centroid * cap_centroid);
+            return vec(side_cyl + side_cap, axial, side_cyl + side_cap); // spin axis is Y
+        },
+    }
+}
+
+fn geomsToBodyMass(geoms: []const GeomSpec) BodyMass {
+    var total: Inertia = .zero;
+    for (geoms) |g| {
+        const gm: f32 = g.mass orelse (shapeVolume(g.shape) * g.density);
+        const principal: Inertia = .{
+            .diag = shapeMoments(g.shape, gm),
+            .mass = gm,
+        };
+        total = total.add(principal.rotated(g.rot).translate(g.pos));
+    }
+    if (total.mass <= min_mass) {
+        return .{ .mass = 0, .com = vec_zero, .inertia = .zero };
+    }
+    // `h` is `mass * com`, so the centre of mass falls out of the sum for free.
+    const com: Vec = total.h / splat(total.mass);
+    // Shift from the body origin back to the centre of mass: the inverse of step 3.
+    return .{ .mass = total.mass, .com = com, .inertia = total.translate(-com) };
+}
+
+/// The last DOF belonging to `body`, walking up until a body with DOFs is found. That is
+/// the DOF a child's first DOF chains onto - welded bodies are transparent here, which is
+/// exactly what makes a weld free.
+fn lastDofOf(m: *const Model, body: u32) u32 {
+    var b: u32 = body;
+    while (true) {
+        if (m.body_dof_num[b] > 0) {
+            return m.body_dof_adr[b] + m.body_dof_num[b] - 1;
+        }
+        if (b == world_body) {
+            return no_dof;
+        }
+        b = m.body_parent[b];
+    }
+}
+
+/// A single scalar standing in for "how much inertia this DOF sees", used only to scale
+/// the default armature. Rotational DOFs get the mean principal moment; sliding ones get
+/// the mass, since that is what resists a translation.
+fn representativeInertia(props: BodyMass, kind: JointType) f32 {
+    return switch (kind) {
+        .slide => props.mass,
+        // The mean of the diagonal is the trace over three - basis-independent, so it does
+        // not matter which frame the tensor happens to be expressed in.
+        .free, .ball, .hinge => (props.inertia.diag[0] + props.inertia.diag[1] +
+            props.inertia.diag[2]) / 3.0,
+    };
+}
+
+fn tendonIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
+    for (spec.tendons, 0..) |t, i| {
+        if (eql(u8, t.name, name)) {
+            return @intCast(i);
+        }
+    }
+    return BuildError.UnknownName;
+}
+
+/// Index of the named actuator, or an error.
+///
+/// * WHY THESE ARE RUNTIME SCANS. They used to be comptime, which was fine when every model
+/// was a source literal. A loaded robot's names are not known until startup, so the lookup
+/// has to work either way - and a linear scan over a few dozen names costs nothing at build
+/// time, once, where a hash map would cost more than it saves. `Spec()` still catches a bad
+/// name at COMPILE time via its own validation pass; this is the fallback for models the
+/// program was handed.
+fn actuatorIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
+    for (spec.actuators, 0..) |act, i| {
+        if (eql(u8, act.name, name)) {
+            return @intCast(i);
+        }
+    }
+    return BuildError.UnknownName;
+}
+
+/// Sites are numbered in declaration order across all bodies, matching how `build` assigns
+/// them.
+fn siteIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
+    var n: u32 = 0;
+    for (spec.bodies) |b| {
+        for (b.sites) |site| {
+            if (eql(u8, site.name, name)) {
+                return n;
+            }
+            n += 1;
+        }
+    }
+    return BuildError.UnknownName;
 }
 
 /// Build a `Model` from a spec.
@@ -1816,9 +1868,9 @@ pub fn buildRuntime(gpa: Allocator, spec: ModelSpec) !Model {
 /// model, and generated name enums. What the runtime path keeps: the ability to load a
 /// robot the program was handed rather than written against. See section 4i-quater.
 fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
-    const arena: *std.heap.ArenaAllocator = try gpa.create(std.heap.ArenaAllocator);
+    const arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
     errdefer gpa.destroy(arena);
-    arena.* = .init(gpa);
+    arena.* = ArenaAllocator.init(gpa);
     errdefer arena.deinit();
     const a: Allocator = arena.allocator();
 
@@ -2263,269 +2315,540 @@ fn buildFromSpec(gpa: Allocator, spec: ModelSpec) !Model {
     return m;
 }
 
-/// A body's aggregated mass properties, in the body frame.
-const BodyMass = struct {
-    mass: f32,
-    /// Centre of mass, in the body frame.
-    com: Vec,
-    /// Inertia ABOUT THE CENTRE OF MASS, in the body frame. Full symmetric tensor, so a
-    /// rotated geom needs no special case and no eigendecomposition.
-    inertia: Inertia,
-};
-
-/// Sum a body's geoms into one mass, centre of mass and inertia tensor.
-///
-/// Three steps per geom, each one an operation that already exists:
-///   1. `shapeMoments` gives the principal moments about the geom's own centre, in the
-///      geom's own frame - diagonal, because a primitive's axes ARE its principal axes.
-///   2. `rotated` re-expresses that in the BODY frame, which is where a rotated geom stops
-///      being a special case.
-///   3. `translate` moves it from the geom's centre out to the body origin.
-/// Then they simply add, because section 2's ten-parameter packing makes summation valid once
-/// everything shares a frame and a reference point.
-///
-/// Finally the total is shifted from the body origin to the body's centre of mass, since
-/// that is the form `comPos` wants and the form a parallel-axis shift starts from.
-///
-/// MUJOCO DIVERGENCE, deliberate: `mjModel` stores three principal moments plus a
-/// quaternion, which requires diagonalizing this tensor with a symmetric-3x3
-/// eigendecomposition. We keep the six-float symmetric form and skip that entirely - one
-/// fewer numerical routine, no degenerate-eigenvalue edge cases, and one float less to
-/// store. See `Inertia.rotated`.
-/// Convert a stated `<inertial>` into the engine's form.
-///
-/// A near-transcription rather than a computation, which is the payoff for `Inertia`
-/// storing the full symmetric tensor. MuJoCo's `fullinertia` orders its six numbers as
-/// `(xx, yy, zz, xy, xz, yz)`, and `Inertia` splits them into `diag` and `off` - where
-/// `off` is `(xy, xz, yz)` in that same order, so the two halves copy straight across.
-///
-/// `h` is the FIRST MOMENT, `mass * com`, and is zero here because a stated inertia is
-/// given about the centre of mass by definition. `body_ipos` carries the offset separately,
-/// exactly as it does for the geom-derived path.
-fn inertialToBodyMass(inertial: InertialSpec) BodyMass {
-    return .{
-        .mass = inertial.mass,
-        .com = inertial.pos,
-        .inertia = .{
-            .diag = vec(inertial.full_inertia[0], inertial.full_inertia[1], inertial.full_inertia[2]),
-            .off = vec(inertial.full_inertia[3], inertial.full_inertia[4], inertial.full_inertia[5]),
-            .h = vec_zero,
-            .mass = inertial.mass,
-        },
-    };
+pub fn buildRuntime(gpa: Allocator, spec: ModelSpec) !Model {
+    return buildFromSpec(gpa, spec);
 }
 
-fn geomsToBodyMass(geoms: []const GeomSpec) BodyMass {
-    var total: Inertia = .zero;
-    for (geoms) |g| {
-        const gm: f32 = g.mass orelse (shapeVolume(g.shape) * g.density);
-        const principal: Inertia = .{
-            .diag = shapeMoments(g.shape, gm),
-            .mass = gm,
+// =============================================================================
+// Spec() - the comptime layer
+//
+// Validates the spec, generates name enums, and computes the counts. Everything that can
+// be wrong with a model becomes a compile error here rather than a runtime check. What it
+// deliberately does NOT do is build the index tables: those are ordinary runtime data
+// produced by `build()`, so a model loaded from a file at runtime can take the same path.
+// =============================================================================
+
+/// A comptime evaluation budget that scales with the model, rather than a magic number
+/// that works until someone builds a slightly larger robot. The quadratic term is real:
+/// `assertUniqueNames` compares every name against every later one.
+fn quotaFor(comptime spec: ModelSpec) u32 {
+    var names: u32 = 0;
+    var parts: u32 = 0;
+    for (spec.bodies) |b| {
+        names += 1 + @as(u32, @intCast(b.joints.len + b.sites.len));
+        parts += @as(u32, @intCast(b.joints.len + b.sites.len + b.geoms.len));
+    }
+    const bodies: u32 = @intCast(spec.bodies.len);
+    // name-uniqueness is quadratic; everything else is linear in the parts.
+    return 4000 + 8 * (names * names + bodies * bodies) + 64 * (parts + bodies);
+}
+
+/// Turn a list of comptime names into an exhaustive enum whose tag values are the index
+/// into that list. `@backingInt(E.foo)` is therefore the array index, for free.
+fn NamesEnum(comptime names: []const []const u8) type {
+    if (names.len == 0) {
+        // An enum with no fields is legal but useless; callers guard on the count instead.
+        return u32;
+    }
+    var values: [names.len]u32 = undefined;
+    for (&values, 0..) |*v, i| {
+        v.* = @intCast(i);
+    }
+    const frozen = values;
+    return @Enum(u32, .exhaustive, names, &frozen);
+}
+
+/// Compile-error unless every string in `names` is distinct. `what` names the category so
+/// the message says which list to look at.
+fn assertUniqueNames(comptime names: []const []const u8, comptime what: []const u8) void {
+    for (names, 0..) |a, i| {
+        if (a.len == 0) {
+            @compileError("robot: a " ++ what ++ " has an empty name");
+        }
+        for (names[i + 1 ..]) |b| {
+            if (eql(u8, a, b)) {
+                @compileError("robot: duplicate " ++ what ++ " name '" ++ a ++ "'");
+            }
+        }
+    }
+}
+
+/// Validate a spec and derive everything about it that is knowable without allocating.
+///
+///     const Arm = robot.Spec(.{ .bodies = &.{ ... } });
+///     var model: robot.Model = try Arm.build(gpa);
+///     var data: robot.Data = try robot.Data.init(gpa, &model);
+///     data.setPos(Arm.Joint.elbow, 0.4);        // compile-checked
+///
+pub fn Spec(comptime spec: ModelSpec) type {
+    // Zig caps comptime loop iterations to catch runaway evaluation, and the default of
+    // 1000 is reached by a perfectly ordinary humanoid: the validation pass alone is
+    // bodies x joints x geoms, and the name collection is quadratic in the name count.
+    // Measured - an 18-body model failed to COMPILE before this line existed.
+    //
+    // The quota scales with the spec so a bigger model does not hit the same wall, with a
+    // generous constant because the cost of over-estimating is nothing (it is a ceiling,
+    // not an allocation) and the cost of under-estimating is a confusing compile error in
+    // someone else's model.
+    @setEvalBranchQuota(quotaFor(spec));
+
+    // ---- validation -------------------------------------------------------
+    comptime {
+        if (spec.bodies.len == 0) {
+            @compileError("robot: a model needs at least one body");
+        }
+        if (spec.options.timestep <= 0.0) {
+            @compileError("robot: timestep must be positive");
+        }
+
+        var body_names: [spec.bodies.len][]const u8 = undefined;
+        for (spec.bodies, 0..) |b, i| {
+            body_names[i] = b.name;
+        }
+        assertUniqueNames(&body_names, "body");
+
+        for (spec.bodies, 0..) |b, bi| {
+            // A parent must exist AND be declared earlier - the tree passes rely on it.
+            if (b.parent) |parent| {
+                var found: bool = false;
+                for (spec.bodies[0..bi]) |earlier| {
+                    if (eql(u8, earlier.name, parent)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    @compileError("robot: body '" ++ b.name ++ "' names parent '" ++ parent ++
+                        "', which is not a body declared before it (bodies must be parent-first)");
+                }
+            }
+
+            for (b.joints) |j| {
+                // A free joint IS the six degrees of freedom of a floating base. Putting
+                // one deeper in the tree, or beside another joint, is always a modelling
+                // mistake rather than an exotic mechanism.
+                if (j.kind == .free) {
+                    if (b.parent != null) {
+                        @compileError("robot: free joint '" ++ j.name ++ "' on body '" ++ b.name ++
+                            "' — a free joint only belongs on a direct child of the world");
+                    }
+                    if (b.joints.len != 1) {
+                        @compileError("robot: body '" ++ b.name ++
+                            "' has a free joint alongside other joints; a free joint is already all six DOFs");
+                    }
+                }
+                if (j.kind == .slide or j.kind == .hinge) {
+                    const len_sq: f32 = j.axis[0] * j.axis[0] + j.axis[1] * j.axis[1] + j.axis[2] * j.axis[2];
+                    if (len_sq < 1.0e-12) {
+                        @compileError("robot: joint '" ++ j.name ++ "' has a zero-length axis");
+                    }
+                }
+                if (j.range) |r| {
+                    if (r[0] > r[1]) {
+                        @compileError("robot: joint '" ++ j.name ++ "' has range lo > hi");
+                    }
+                    // A ball or free joint's limit is a CONE on a rotation, not an interval
+                    // on a scalar. MuJoCo supports it by converting the quaternion to
+                    // axis-angle; we do not, and silently ignoring a limit the model asked
+                    // for is worse than refusing it.
+                    if (j.kind != .hinge and j.kind != .slide) {
+                        @compileError("robot: joint '" ++ j.name ++
+                            "' is a ball or free joint with a range — limits are only " ++
+                            "supported on hinge and slide joints");
+                    }
+                    if (j.limit_margin < 0.0) {
+                        @compileError("robot: joint '" ++ j.name ++ "' has a negative limit margin");
+                    }
+                    // MuJoCo overloads the SIGN of solref to mean "these are K and B
+                    // directly". `Softness` names its fields, so a negative time constant
+                    // is simply nonsense rather than a second meaning.
+                    if (j.limit_softness.time_const_s <= 0.0 or j.limit_softness.damp_ratio <= 0.0) {
+                        @compileError("robot: joint '" ++ j.name ++
+                            "' has a non-positive limit time constant or damping ratio");
+                    }
+                    const imp = j.limit_impedance;
+                    if (imp.min <= 0.0 or imp.max >= 1.0 or imp.min > imp.max) {
+                        @compileError("robot: joint '" ++ j.name ++
+                            "' needs 0 < impedance.min <= impedance.max < 1");
+                    }
+                    if (imp.width < 0.0 or imp.power < 1.0 or
+                        imp.midpoint <= 0.0 or imp.midpoint >= 1.0)
+                    {
+                        @compileError("robot: joint '" ++ j.name ++
+                            "' has an impedance ramp that is not a valid sigmoid " ++
+                            "(need width >= 0, power >= 1, 0 < midpoint < 1)");
+                    }
+                }
+                if (j.armature) |a| {
+                    if (a < 0.0) {
+                        @compileError("robot: joint '" ++ j.name ++ "' has negative armature");
+                    }
+                }
+            }
+
+            for (b.geoms) |g| {
+                const bad: bool = switch (g.shape) {
+                    .sphere => |s| s.radius <= 0.0,
+                    .box => |s| s.half_extent[0] <= 0.0 or s.half_extent[1] <= 0.0 or s.half_extent[2] <= 0.0,
+                    // A hull needs enough points to BE a volume: three define a plane, and
+                    // a degenerate cloud makes a hull builder produce something arbitrary
+                    // rather than fail. Cheaper to reject here, by name, at compile time.
+                    .hull => |s| s.points.len < 4,
+                    .capsule => |s| s.radius <= 0.0 or s.half_height < 0.0,
+                    .cylinder => |s| s.radius <= 0.0 or s.half_height <= 0.0,
+                };
+                if (bad) {
+                    @compileError("robot: body '" ++ b.name ++ "' has a geom with a non-positive size");
+                }
+                if (g.mass) |m| {
+                    // * ZERO IS LEGAL AND MEANINGFUL: a COLLISION-ONLY geom.
+                    //
+                    // An imported robot states its mass properties in `<inertial>` and its
+                    // collision geometry separately, so its geoms must contribute no mass -
+                    // otherwise a link is counted twice and comes out several times too
+                    // heavy. `mass = 0` says exactly that, and the body's own `inertial`
+                    // supplies the physics.
+                    //
+                    // Negative remains an error: it is not a shape that weighs nothing, it
+                    // is a shape that weighs less than nothing.
+                    if (m < 0.0) {
+                        @compileError("robot: body '" ++ b.name ++ "' has a geom with negative mass");
+                    }
+                    if (m == 0.0 and b.inertial == null) {
+                        @compileError("robot: body '" ++ b.name ++
+                            "' has a massless geom but no <inertial> to supply its mass — " ++
+                            "the body would have none at all");
+                    }
+                } else if (g.density <= 0.0) {
+                    @compileError("robot: body '" ++ b.name ++ "' has a geom with non-positive density");
+                }
+            }
+
+            // A body that moves must have inertia, or the mass matrix is singular and the
+            // factorization divides by zero. Catch it here with the body's name rather
+            // than as a NaN three phases downstream.
+            if (b.inertial) |inertial| {
+                // * A zero mass is legal on a body with NO degrees of freedom, and real
+                // models rely on it: a KUKA iiwa's `lbr_iiwa_link_0` is the bolted-down
+                // base and declares `mass="0.0"`. Nothing accelerates it, so nothing
+                // divides by it.
+                //
+                // With joints it is fatal - the mass matrix is singular and `factorM`
+                // divides by zero - which is the same rule as the geom check below, and
+                // for the same reason.
+                if (b.joints.len > 0 and inertial.mass <= 0.0) {
+                    @compileError("robot: body '" ++ b.name ++
+                        "' has joints but a non-positive stated mass — the mass matrix " ++
+                        "would be singular");
+                }
+                if (inertial.mass < 0.0) {
+                    @compileError("robot: body '" ++ b.name ++ "' has a negative stated mass");
+                }
+                // The diagonal must be positive and satisfy the triangle inequality, or the
+                // tensor is not the inertia of any real object and `factorM` will fail
+                // somewhere far from here with a much less helpful message.
+                const ixx: f32 = inertial.full_inertia[0];
+                const iyy: f32 = inertial.full_inertia[1];
+                const izz: f32 = inertial.full_inertia[2];
+                // A massless jointless body may legitimately state a zero tensor; only a
+                // body that can actually move needs positive moments.
+                if (b.joints.len > 0 and (ixx <= 0.0 or iyy <= 0.0 or izz <= 0.0)) {
+                    @compileError("robot: body '" ++ b.name ++
+                        "' has joints and a non-positive principal moment in its stated inertia");
+                }
+                if (ixx < 0.0 or iyy < 0.0 or izz < 0.0) {
+                    @compileError("robot: body '" ++ b.name ++ "' has a negative principal moment");
+                }
+                if (ixx + iyy < izz or ixx + izz < iyy or iyy + izz < ixx) {
+                    @compileError("robot: body '" ++ b.name ++
+                        "' has a stated inertia violating the triangle inequality — no rigid " ++
+                        "body has those moments");
+                }
+            } else if (b.joints.len > 0 and b.geoms.len == 0) {
+                @compileError("robot: body '" ++ b.name ++
+                    "' has joints but no geoms, so it has no mass — the mass matrix would be singular");
+            }
+        }
+
+        var sensor_names_check: [spec.sensors.len][]const u8 = undefined;
+        for (spec.sensors, 0..) |sensor, i| {
+            sensor_names_check[i] = sensor.name;
+            // Each kind reads a particular kind of thing, and naming the wrong one is a
+            // modelling mistake worth catching at compile time rather than as a wrong
+            // number at runtime.
+            const found: bool = switch (sensor.kind) {
+                .joint_pos, .joint_vel => blk: {
+                    for (spec.bodies) |b| {
+                        for (b.joints) |j| {
+                            if (eql(u8, j.name, sensor.target)) {
+                                if (j.kind != .hinge and j.kind != .slide) {
+                                    @compileError("robot: sensor '" ++ sensor.name ++
+                                        "' reads joint '" ++ sensor.target ++
+                                        "', which is not scalar");
+                                }
+                                break :blk true;
+                            }
+                        }
+                    }
+                    break :blk false;
+                },
+                .tendon_pos, .tendon_vel => blk: {
+                    for (spec.tendons) |t| {
+                        if (eql(u8, t.name, sensor.target)) {
+                            break :blk true;
+                        }
+                    }
+                    break :blk false;
+                },
+                .actuator_force => blk: {
+                    for (spec.actuators) |act| {
+                        if (eql(u8, act.name, sensor.target)) {
+                            break :blk true;
+                        }
+                    }
+                    break :blk false;
+                },
+                .site_pos, .site_quat, .site_lin_vel, .site_ang_vel, .velocimeter, .gyro, .accelerometer => blk: {
+                    for (spec.bodies) |b| {
+                        for (b.sites) |site| {
+                            if (eql(u8, site.name, sensor.target)) {
+                                break :blk true;
+                            }
+                        }
+                    }
+                    break :blk false;
+                },
+            };
+            if (!found) {
+                @compileError("robot: sensor '" ++ sensor.name ++ "' names '" ++ sensor.target ++
+                    "', which is not a thing of the kind it reads");
+            }
+        }
+        assertUniqueNames(&sensor_names_check, "sensor");
+
+        var tendon_names_check: [spec.tendons.len][]const u8 = undefined;
+        for (spec.tendons, 0..) |t, i| {
+            tendon_names_check[i] = t.name;
+            if (t.joints.len == 0) {
+                @compileError("robot: tendon '" ++ t.name ++ "' couples no joints");
+            }
+            for (t.joints) |tj| {
+                var found: bool = false;
+                for (spec.bodies) |b| {
+                    for (b.joints) |j| {
+                        if (eql(u8, j.name, tj.name)) {
+                            // A tendon's length is a sum of scalar coordinates, so every
+                            // joint it names must have one.
+                            if (j.kind != .hinge and j.kind != .slide) {
+                                @compileError("robot: tendon '" ++ t.name ++ "' includes joint '" ++
+                                    tj.name ++ "', which is not a hinge or slide");
+                            }
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) {
+                    @compileError("robot: tendon '" ++ t.name ++ "' names joint '" ++
+                        tj.name ++ "', which does not exist");
+                }
+            }
+        }
+        assertUniqueNames(&tendon_names_check, "tendon");
+
+        for (spec.actuators) |act| {
+            switch (act.on) {
+                .joint => |t| {
+                    var found: bool = false;
+                    for (spec.bodies) |b| {
+                        for (b.joints) |j| {
+                            if (eql(u8, j.name, t.name)) {
+                                // A joint transmission is a SCALAR coordinate, so it needs
+                                // a scalar joint. A ball or free joint has no single angle
+                                // to servo toward.
+                                if (j.kind != .hinge and j.kind != .slide) {
+                                    @compileError("robot: actuator '" ++ act.name ++ "' drives joint '" ++
+                                        t.name ++ "', which is not a hinge or slide — a joint " ++
+                                        "transmission needs a scalar coordinate");
+                                }
+                                found = true;
+                            }
+                        }
+                    }
+                    if (!found) {
+                        @compileError("robot: actuator '" ++ act.name ++ "' names joint '" ++
+                            t.name ++ "', which does not exist");
+                    }
+                    if (t.gear == 0.0) {
+                        @compileError("robot: actuator '" ++ act.name ++ "' has zero gear, so it can do nothing");
+                    }
+                },
+                .tendon => |t| {
+                    var found: bool = false;
+                    for (spec.tendons) |tendon| {
+                        if (eql(u8, tendon.name, t.name)) {
+                            found = true;
+                        }
+                    }
+                    if (!found) {
+                        @compileError("robot: actuator '" ++ act.name ++ "' names tendon '" ++
+                            t.name ++ "', which does not exist");
+                    }
+                    if (t.gear == 0.0) {
+                        @compileError("robot: actuator '" ++ act.name ++ "' has zero gear, so it can do nothing");
+                    }
+                },
+            }
+            if (act.ctrl_range) |r| {
+                if (r[0] > r[1]) {
+                    @compileError("robot: actuator '" ++ act.name ++ "' has ctrl_range lo > hi");
+                }
+            }
+            switch (act.activation) {
+                .filter, .filter_exact => |f| {
+                    if (f.time_const_s <= 0.0) {
+                        @compileError("robot: actuator '" ++ act.name ++
+                            "' has a non-positive filter time constant");
+                    }
+                },
+                .none, .integrator => {},
+            }
+        }
+    }
+
+    // ---- derived names and counts ----------------------------------------
+    const Counts = struct { nq: u32, nv: u32, njnt: u32, nsite: u32, ngeom: u32, na: u32 };
+    const counts: Counts = comptime blk: {
+        var nq: u32 = 0;
+        var nv: u32 = 0;
+        var njnt: u32 = 0;
+        var nsite: u32 = 0;
+        var ngeom: u32 = 0;
+        var na: u32 = 0;
+        for (spec.actuators) |act| {
+            if (act.activation != .none) {
+                na += 1;
+            }
+        }
+        for (spec.bodies) |b| {
+            for (b.joints) |j| {
+                nq += j.kind.posCount();
+                nv += j.kind.dofCount();
+                njnt += 1;
+            }
+            nsite += @intCast(b.sites.len);
+            ngeom += @intCast(b.geoms.len);
+        }
+        break :blk Counts{ .nq = nq, .nv = nv, .njnt = njnt, .nsite = nsite, .ngeom = ngeom, .na = na };
+    };
+
+    const joint_names: [counts.njnt][]const u8 = comptime blk: {
+        var names: [counts.njnt][]const u8 = undefined;
+        var n: usize = 0;
+        for (spec.bodies) |b| {
+            for (b.joints) |j| {
+                names[n] = j.name;
+                n += 1;
+            }
+        }
+        const frozen = names;
+        break :blk frozen;
+    };
+    comptime assertUniqueNames(&joint_names, "joint");
+
+    const site_names: [counts.nsite][]const u8 = comptime blk: {
+        var names: [counts.nsite][]const u8 = undefined;
+        var n: usize = 0;
+        for (spec.bodies) |b| {
+            for (b.sites) |s| {
+                names[n] = s.name;
+                n += 1;
+            }
+        }
+        const frozen = names;
+        break :blk frozen;
+    };
+    comptime assertUniqueNames(&site_names, "site");
+
+    const sensor_names: [spec.sensors.len][]const u8 = comptime blk: {
+        var names: [spec.sensors.len][]const u8 = undefined;
+        for (spec.sensors, 0..) |sensor, i| {
+            names[i] = sensor.name;
+        }
+        const frozen = names;
+        break :blk frozen;
+    };
+
+    const tendon_names: [spec.tendons.len][]const u8 = comptime blk: {
+        var names: [spec.tendons.len][]const u8 = undefined;
+        for (spec.tendons, 0..) |t, i| {
+            names[i] = t.name;
+        }
+        const frozen = names;
+        break :blk frozen;
+    };
+
+    const actuator_names: [spec.actuators.len][]const u8 = comptime blk: {
+        var names: [spec.actuators.len][]const u8 = undefined;
+        for (spec.actuators, 0..) |act, i| {
+            names[i] = act.name;
+        }
+        const frozen = names;
+        break :blk frozen;
+    };
+    comptime assertUniqueNames(&actuator_names, "actuator");
+
+    const body_names: [spec.bodies.len][]const u8 = comptime blk: {
+        var names: [spec.bodies.len][]const u8 = undefined;
+        for (spec.bodies, 0..) |b, i| {
+            names[i] = b.name;
+        }
+        const frozen = names;
+        break :blk frozen;
+    };
+
+    return struct {
+        /// The spec this was built from, kept so `build` needs no arguments beyond an
+        /// allocator and so tooling can introspect a model type.
+        pub const model_spec: ModelSpec = spec;
+
+        /// Body 0 is the WORLD, so a spec body's index is its position in the list plus
+        /// one. These enums number the spec bodies from zero; add `world_body` when
+        /// indexing `Model`'s arrays.
+        pub const Body = NamesEnum(&body_names);
+        pub const Joint = NamesEnum(&joint_names);
+        pub const Site = NamesEnum(&site_names);
+        pub const Actuator = NamesEnum(&actuator_names);
+        pub const Tendon = NamesEnum(&tendon_names);
+        pub const Sensor = NamesEnum(&sensor_names);
+
+        pub const nbody: u32 = @as(u32, spec.bodies.len) + 1; // +1 for the world
+        pub const njnt: u32 = counts.njnt;
+        pub const nsite: u32 = counts.nsite;
+        pub const ngeom: u32 = counts.ngeom;
+        pub const nq: u32 = counts.nq;
+        pub const nv: u32 = counts.nv;
+        /// Number of actuators, and therefore of controls.
+        pub const nu: u32 = @intCast(spec.actuators.len);
+        /// Number of ACTIVATION states - only actuators with internal dynamics have one.
+        pub const na: u32 = counts.na;
+        /// Number of tendons.
+        pub const ntendon: u32 = @intCast(spec.tendons.len);
+        /// Number of sensors, and the total width of their readings.
+        pub const nsensor: u32 = @intCast(spec.sensors.len);
+        pub const neq: u32 = @intCast(spec.equalities.len);
+        pub const nsensordata: u32 = blk: {
+            var total: u32 = 0;
+            for (spec.sensors) |sensor| {
+                total += sensor.kind.dim();
+            }
+            break :blk total;
         };
-        total = total.add(principal.rotated(g.rot).translate(g.pos));
-    }
-    if (total.mass <= min_mass) {
-        return .{ .mass = 0, .com = vec_zero, .inertia = .zero };
-    }
-    // `h` is `mass * com`, so the centre of mass falls out of the sum for free.
-    const com: Vec = total.h / splat(total.mass);
-    // Shift from the body origin back to the centre of mass: the inverse of step 3.
-    return .{ .mass = total.mass, .com = com, .inertia = total.translate(-com) };
-}
 
-fn shapeVolume(shape: GeomShape) f32 {
-    return switch (shape) {
-        .sphere => |s| (4.0 / 3.0) * pi * s.radius * s.radius * s.radius,
-        .box => |s| 8.0 * s.half_extent[0] * s.half_extent[1] * s.half_extent[2],
-        // A capsule is a cylinder plus a sphere's worth of caps.
-        .capsule => |s| pi * s.radius * s.radius * (2.0 * s.half_height) +
-            (4.0 / 3.0) * pi * s.radius * s.radius * s.radius,
-        .cylinder => |s| pi * s.radius * s.radius * (2.0 * s.half_height),
-        // Bounding-box volume, deliberately. The true hull volume needs the hull, which
-        // lives in the physics engine; and any model with a hull geom is an imported one,
-        // which states `<inertial>` explicitly and never reaches this path.
-        .hull => |s| 8.0 * s.bounds_half_extent[0] * s.bounds_half_extent[1] *
-            s.bounds_half_extent[2],
+        /// Build the runtime model. The spec is consumed here and not referenced again.
+        pub fn build(gpa: Allocator) !Model {
+            return buildFromSpec(gpa, spec);
+        }
     };
-}
-
-/// Principal moments about the shape's own centre, for a uniform solid. Capsules and
-/// cylinders run along local Y, matching zimr's convention (NOT MuJoCo's Z).
-fn shapeMoments(shape: GeomShape, mass: f32) Vec {
-    switch (shape) {
-        // A hull is treated as its bounding box: an OVERESTIMATE of the true moments, which
-        // is the safe direction - it never makes a link easier to spin than it really is.
-        // As with the volume above, a model carrying hulls states its inertias anyway.
-        .hull => |s| {
-            const x: f32 = 2.0 * s.bounds_half_extent[0];
-            const y: f32 = 2.0 * s.bounds_half_extent[1];
-            const z: f32 = 2.0 * s.bounds_half_extent[2];
-            const k: f32 = mass / 12.0;
-            return vec(k * (y * y + z * z), k * (x * x + z * z), k * (x * x + y * y));
-        },
-        .sphere => |s| {
-            const i: f32 = 0.4 * mass * s.radius * s.radius;
-            return vec(i, i, i);
-        },
-        .box => |s| {
-            const x: f32 = 2.0 * s.half_extent[0];
-            const y: f32 = 2.0 * s.half_extent[1];
-            const z: f32 = 2.0 * s.half_extent[2];
-            const k: f32 = mass / 12.0;
-            return vec(k * (y * y + z * z), k * (x * x + z * z), k * (x * x + y * y));
-        },
-        .cylinder => |s| {
-            const r2: f32 = s.radius * s.radius;
-            const h: f32 = 2.0 * s.half_height;
-            const side: f32 = mass * (3.0 * r2 + h * h) / 12.0;
-            return vec(side, 0.5 * mass * r2, side); // spin axis is Y
-        },
-        .capsule => |s| {
-            // A capsule is a cylinder plus two hemispherical caps, so split the mass
-            // between them by volume and add the moments.
-            //
-            // The caps need care, and getting it wrong here is invisible: the AXIAL moment
-            // comes out right either way, and only the side moment is off by ~0.15%.
-            //
-            //   * A hemisphere's transverse moment about the CENTRE OF ITS FLAT FACE is
-            //     (2/5)m*r^2, the same as a full sphere, by symmetry.
-            //   * Its centroid is NOT there - it sits 3r/8 out along the axis.
-            //   * Parallel axis moves an inertia between a point and the CENTROID, so
-            //     before shifting out to the capsule's centre we must first come back to
-            //     the centroid:
-            //         I_centroid = (2/5)m*r^2 - m*(3r/8)^2 = (2/5 - 9/64)*m*r^2
-            //     and only then push out to (half_height + 3r/8).
-            //
-            // Using (2/5)m*r^2 directly as the centroid moment double-counts m*(3r/8)^2.
-            // Verified against MuJoCo to 3e-10; see the test below.
-            const r: f32 = s.radius;
-            const r2: f32 = r * r;
-            const h: f32 = 2.0 * s.half_height;
-            const v_cyl: f32 = pi * r2 * h;
-            const v_cap: f32 = (4.0 / 3.0) * pi * r2 * r;
-            const total: f32 = v_cyl + v_cap;
-            const m_cyl: f32 = if (total > 0.0) mass * v_cyl / total else 0.0;
-            const m_cap: f32 = mass - m_cyl;
-
-            // About the axis, both parts are already centred: no shift needed.
-            const axial: f32 = 0.5 * m_cyl * r2 + 0.4 * m_cap * r2;
-
-            const side_cyl: f32 = m_cyl * (3.0 * r2 + h * h) / 12.0;
-            const cap_centroid: f32 = s.half_height + 0.375 * r;
-            const side_cap: f32 = m_cap *
-                (hemisphere_transverse * r2 + cap_centroid * cap_centroid);
-            return vec(side_cyl + side_cap, axial, side_cyl + side_cap); // spin axis is Y
-        },
-    }
-}
-
-/// A single scalar standing in for "how much inertia this DOF sees", used only to scale
-/// the default armature. Rotational DOFs get the mean principal moment; sliding ones get
-/// the mass, since that is what resists a translation.
-fn representativeInertia(props: BodyMass, kind: JointType) f32 {
-    return switch (kind) {
-        .slide => props.mass,
-        // The mean of the diagonal is the trace over three - basis-independent, so it does
-        // not matter which frame the tensor happens to be expressed in.
-        .free, .ball, .hinge => (props.inertia.diag[0] + props.inertia.diag[1] +
-            props.inertia.diag[2]) / 3.0,
-    };
-}
-
-/// Errors a runtime-built model can produce. The comptime path turns these into
-/// `@compileError` instead; a loader has to handle them, since its input arrives at startup
-/// rather than in source.
-pub const BuildError = error{
-    /// A joint coupling named a ball or free joint. Those have no scalar coordinate to
-    /// couple - a quaternion is not a number - so this is a modelling error rather than
-    /// something to approximate.
-    UnsupportedJointForCoupling,
-    /// A name referenced by a joint, tendon, actuator or sensor that no such thing has.
-    UnknownName,
-    OutOfMemory,
-};
-
-/// Index of the named actuator, or an error.
-///
-/// * WHY THESE ARE RUNTIME SCANS. They used to be comptime, which was fine when every model
-/// was a source literal. A loaded robot's names are not known until startup, so the lookup
-/// has to work either way - and a linear scan over a few dozen names costs nothing at build
-/// time, once, where a hash map would cost more than it saves. `Spec()` still catches a bad
-/// name at COMPILE time via its own validation pass; this is the fallback for models the
-/// program was handed.
-fn actuatorIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
-    for (spec.actuators, 0..) |act, i| {
-        if (std.mem.eql(u8, act.name, name)) {
-            return @intCast(i);
-        }
-    }
-    return BuildError.UnknownName;
-}
-
-/// Sites are numbered in declaration order across all bodies, matching how `build` assigns
-/// them.
-fn siteIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
-    var n: u32 = 0;
-    for (spec.bodies) |b| {
-        for (b.sites) |site| {
-            if (std.mem.eql(u8, site.name, name)) {
-                return n;
-            }
-            n += 1;
-        }
-    }
-    return BuildError.UnknownName;
-}
-
-fn tendonIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
-    for (spec.tendons, 0..) |t, i| {
-        if (std.mem.eql(u8, t.name, name)) {
-            return @intCast(i);
-        }
-    }
-    return BuildError.UnknownName;
-}
-
-/// Joints are numbered in declaration order across all bodies, which is the same order
-/// `build` assigns them.
-fn jointIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
-    var n: u32 = 0;
-    for (spec.bodies) |b| {
-        for (b.joints) |j| {
-            if (std.mem.eql(u8, j.name, name)) {
-                return n;
-            }
-            n += 1;
-        }
-    }
-    return BuildError.UnknownName;
-}
-
-/// Body 0 is the world, so a spec body at index `i` is model body `i + 1`.
-fn bodyIndexByName(spec: ModelSpec, name: []const u8) BuildError!u32 {
-    for (spec.bodies, 0..) |b, i| {
-        if (std.mem.eql(u8, b.name, name)) {
-            return @intCast(i + 1);
-        }
-    }
-    return BuildError.UnknownName;
-}
-
-/// The last DOF belonging to `body`, walking up until a body with DOFs is found. That is
-/// the DOF a child's first DOF chains onto - welded bodies are transparent here, which is
-/// exactly what makes a weld free.
-fn lastDofOf(m: *const Model, body: u32) u32 {
-    var b: u32 = body;
-    while (true) {
-        if (m.body_dof_num[b] > 0) {
-            return m.body_dof_adr[b] + m.body_dof_num[b] - 1;
-        }
-        if (b == world_body) {
-            return no_dof;
-        }
-        b = m.body_parent[b];
-    }
 }
 
 // =============================================================================
@@ -2537,41 +2860,104 @@ fn lastDofOf(m: *const Model, body: u32) u32 {
 // what is stale and why is part of using this correctly.
 // =============================================================================
 
-/// How far through the pipeline a `Data` has been advanced.
-///
-/// MuJoCo's docs single this out as the thing that surprises people: the pipeline is
-/// imperative, so after writing `qpos` every derived quantity is silently stale until you
-/// call the right stage, and nothing tells you. In C the only alternatives are to check
-/// nothing or to pay for a check forever.
-///
-/// Zig gets a third option. `Data` carries a watermark, every stage sets it, and every
-/// reader asserts on it - through `assertf`, which compiles out of a ship build entirely.
-/// So a development build says
-///
-///     robot: crb needs the position stage, but this Data is only at .stale
-///     (did you forget kinematics?)
-///
-/// and a ship build pays nothing. The information was always available; C just had nowhere
-/// cheap to put it.
-pub const Stage = enum(u8) {
-    /// Position or velocity has been written; everything derived is stale.
-    stale = 0,
-    /// `kinematics` and `comPos` have run: body poses, `cdof`, `cinert` are current.
-    position,
-    /// `comVel` has run: body velocities are current.
-    velocity,
-    /// Forces and accelerations are current.
-    force,
+/// What produced a constraint row. Only limits exist today; contacts and equalities join
+/// this enum rather than getting their own parallel arrays, because the solver must treat
+/// them uniformly and an enum makes that structural.
+pub const ConstraintKind = enum {
+    /// A joint pushed past one end of its range.
+    limit,
+    /// One edge of a contact's friction pyramid. See `addContact`.
+    contact,
+    /// One axis of an equality constraint holding two points together. See `EqualitySpec`.
+    connect,
 
-    /// Stages are ordered, so "have we at least reached X" is a comparison.
-    pub fn atLeast(self: Stage, want: Stage) bool {
-        return @backingInt(self) >= @backingInt(want);
+    /// Whether this row may only PUSH, never pull.
+    ///
+    /// -- * THE ONE QUESTION EVERY SOLVER ASKS ABOUT A ROW --
+    ///
+    /// A surface can separate and a joint limit can be left; a loop closure cannot, because the
+    /// two points are welded together. PGS clamps a unilateral row's force at zero and leaves a
+    /// bilateral one free; Newton includes a unilateral row in the objective only while it is
+    /// violated, which is what makes that objective piecewise quadratic.
+    ///
+    /// * ASKING THE ENUM BEATS COMPARING AGAINST IT. This was written inline as
+    /// `kind != .connect` in four places, which is correct today and silently wrong the moment
+    /// a second bilateral kind is added - a `weld`'s orientation rows, say. Here the compiler
+    /// will point at this switch instead.
+    pub fn isUnilateral(self: ConstraintKind) bool {
+        return switch (self) {
+            .limit, .contact => true,
+            .connect => false,
+        };
     }
 };
 
+/// A contact, as the collision detector reports it. Deliberately a plain value type with
+/// no reference to the shapes that produced it: the row builder needs the geometry of the
+/// touching, not the identity of the touchers, and keeping it that way is what lets
+/// zimrphysics be the collision source without robot.zig knowing anything about it.
+pub const Contact = struct {
+    /// Where the contact acts, in world coordinates.
+    position: Vec,
+    /// Unit normal, pointing from `body_a` toward `body_b` - so a positive normal force
+    /// pushes `body_b` along it and `body_a` against it.
+    normal: Vec,
+    /// Two unit vectors completing a right-handed frame with `normal`. The friction
+    /// directions. Supplied rather than derived so the caller can keep them stable frame
+    /// to frame, which matters for warm starting later.
+    tangent: [2]Vec,
+    /// Separation. NEGATIVE when the shapes overlap, which is the interesting case.
+    distance: f32,
+    /// Coulomb friction coefficient, one per tangent direction.
+    friction: [2]f32,
+    /// The two bodies, as indices into THIS robot's tree. `world_body` for static
+    /// geometry and for anything outside the tree.
+    body_a: u32,
+    body_b: u32,
+    /// -- * WHY THERE IS NO `external_mass` HERE (section 4k) --
+    ///
+    /// There was, briefly. When a contact's other side lived in a different engine, this
+    /// struct carried its inverse mass, inverse inertia, centre of mass, velocity and
+    /// acceleration, and `A_hat` added an effective-mass term for it. All of that existed to
+    /// describe a body the solver could not see.
+    ///
+    /// In one tree it can see it. `addContactRows` builds the RELATIVE Jacobian
+    /// `jac_b - jac_a`, so `J M^-1 J^T` already contains BOTH inertias, `J*v` is already the
+    /// relative velocity and `J*a` the relative acceleration. Every one of those fields was
+    /// a hand-rolled reconstruction of something the Jacobian does exactly.
+    ///
+    /// **`world_body` on either side still means immovable**, which is correct for static
+    /// geometry and is the deliberate approximation for a zimrphysics body a scene chose not
+    /// to put in the tree.
+    /// A stable identity for this contact POINT, from whatever detected it.
+    ///
+    /// Two jobs, both needing it to survive from one step to the next: it is the tie
+    /// breaker that makes row order deterministic when two contacts share a body pair, and
+    /// it is what will let a future warm start match a row to the force it carried last
+    /// step. A detector that cannot supply one should leave it zero and accept that ties
+    /// fall back to insertion order.
+    id: u64 = 0,
+    /// Distance at which the contact begins to act. Positive values engage it early,
+    /// which lets a soft contact decelerate rather than catch.
+    margin: f32 = 0,
+    softness: Softness = .{},
+    impedance: Impedance = .{},
+};
+
+/// Accept either a generated enum or a plain index, so a comptime-specified model and a
+/// runtime-loaded one share the same API. The enum's tag value IS the index, by
+/// construction in `NamesEnum`.
+fn jointIndex(joint: anytype) u32 {
+    const T = @TypeOf(joint);
+    return switch (@typeInfo(T)) {
+        .@"enum" => @backingInt(joint),
+        else => @intCast(joint),
+    };
+}
+
 pub const Data = struct {
     /// Heap-allocated for the same reason as `Model.arena` - see the note there.
-    arena: *std.heap.ArenaAllocator,
+    arena: *ArenaAllocator,
 
     /// How far the pipeline has been advanced. Writing state knocks it back to `.stale`;
     /// each stage raises it; readers assert on it. Never read it to DECIDE anything - it
@@ -2816,9 +3202,9 @@ pub const Data = struct {
     actuator_force: []f32,
 
     pub fn init(gpa: Allocator, m: *const Model) !Data {
-        const arena: *std.heap.ArenaAllocator = try gpa.create(std.heap.ArenaAllocator);
+        const arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         const a: Allocator = arena.allocator();
 
@@ -3139,46 +3525,12 @@ pub const Data = struct {
     }
 };
 
-/// Accept either a generated enum or a plain index, so a comptime-specified model and a
-/// runtime-loaded one share the same API. The enum's tag value IS the index, by
-/// construction in `NamesEnum`.
-fn jointIndex(joint: anytype) u32 {
-    const T = @TypeOf(joint);
-    return switch (@typeInfo(T)) {
-        .@"enum" => @backingInt(joint),
-        else => @intCast(joint),
-    };
-}
-
 // =============================================================================
 // Kinematics - phase 1
 //
 // One forward pass over the tree, parent before child, turning generalized positions into
 // world poses. This is the first stage of the pipeline and everything else depends on it.
 // =============================================================================
-
-/// A rigid placement in some frame. Named rather than anonymous because a pose is a real
-/// concept here - bodies, joints and sites all have one, and `compose` is how they relate.
-pub const Pose = struct {
-    pos: Vec = vec_zero,
-    rot: Quat = quat_identity,
-
-    pub const identity: Pose = .{};
-
-    /// Place `local` inside `self`. Rotation composes; translation is this pose's origin
-    /// plus the child's offset rotated into this frame.
-    ///
-    /// The order is the whole content of the function: `qmul(a, b)` applies `b` FIRST,
-    /// so `parent.compose(local)` reads "start at the parent, then go local", which is
-    /// the direction a tree walk travels. Swapping the operands compiles and puts every
-    /// body in the wrong place in a way that still looks like a robot.
-    pub fn compose(self: Pose, local: Pose) Pose {
-        return .{
-            .pos = self.pos + rotate(self.rot, local.pos),
-            .rot = qmul(self.rot, local.rot),
-        };
-    }
-};
 
 /// Forward kinematics: world pose of every body, joint anchor, joint axis and site.
 ///
@@ -3278,6 +3630,29 @@ pub fn kinematics(m: *const Model, d: *Data) void {
     d.stage = .position;
 }
 
+/// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
+/// `offset` from the axis. Rotating about a line that does not pass through the origin
+/// moves the origin too, and `axis x offset` is exactly how much.
+fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
+    return .{ .ang = axis, .lin = cross(axis, offset) };
+}
+
+/// Basis vector `k`. A named function rather than three literals because it appears in two
+/// places above and a transposed index there is invisible.
+fn worldAxis(comptime k: usize) Vec {
+    return switch (k) {
+        0 => vec(1, 0, 0),
+        1 => vec(0, 1, 0),
+        2 => vec(0, 0, 1),
+        else => @compileError("robot: axis index must be 0, 1 or 2"),
+    };
+}
+
+/// Column `k` of a body's world rotation - its local X, Y or Z axis in world space.
+fn bodyAxis(rot: Quat, comptime k: usize) Vec {
+    return rotate(rot, worldAxis(k));
+}
+
 /// Build the shared frame each kinematic tree's dynamics are expressed in, and put every
 /// body's inertia and every DOF's motion axis into it.
 ///
@@ -3375,27 +3750,41 @@ pub fn comPos(m: *const Model, d: *Data) void {
     }
 }
 
-/// The spatial motion a unit rotation about `axis` produces, when the frame's origin sits
-/// `offset` from the axis. Rotating about a line that does not pass through the origin
-/// moves the origin too, and `axis x offset` is exactly how much.
-fn dofAboutAxis(axis: Vec, offset: Vec) Motion {
-    return .{ .ang = axis, .lin = cross(axis, offset) };
-}
-
-/// Column `k` of a body's world rotation - its local X, Y or Z axis in world space.
-fn bodyAxis(rot: Quat, comptime k: usize) Vec {
-    return rotate(rot, worldAxis(k));
-}
-
-/// Basis vector `k`. A named function rather than three literals because it appears in two
-/// places above and a transposed index there is invisible.
-fn worldAxis(comptime k: usize) Vec {
-    return switch (k) {
-        0 => vec(1, 0, 0),
-        1 => vec(0, 1, 0),
-        2 => vec(0, 0, 1),
-        else => @compileError("robot: axis index must be 0, 1 or 2"),
-    };
+/// Tendon lengths and rates, from the constant coefficient matrix.
+///
+/// For a FIXED tendon this is two dot products per tendon and nothing else:
+///
+///     length   = sum coefficient_i * q_i
+///     velocity = sum coefficient_i * v_i
+///
+/// which follows immediately from the definition, since the coefficients do not depend on
+/// configuration. That is the whole reason a fixed tendon is a good way to couple joints:
+/// it is a DEFINITION, evaluated, rather than a constraint that has to be enforced. An
+/// equality constraint between the same joints would cost a solver row and would hold only
+/// approximately; this holds exactly and costs a dot product.
+///
+/// A spatial tendon would compute both quantities geometrically here and everything after
+/// would be unchanged - that separation is the point of section 7's transmission/force split.
+pub fn tendonLengths(m: *const Model, d: *Data) void {
+    for (0..m.ntendon) |ti| {
+        const coefficients: []const f32 = m.tendon_jacobian[ti * m.nv ..][0..m.nv];
+        var total_length: f32 = 0;
+        var velocity: f32 = 0;
+        for (coefficients, 0..) |coefficient, dof| {
+            if (coefficient == 0.0) {
+                continue;
+            }
+            // A tendon's coefficients index DOFs, but its LENGTH reads position
+            // coordinates - and those are different index spaces in general (nq != nv).
+            // The hop through the owning joint is what translates between them, and it is
+            // exact here because `Spec()` only lets a tendon touch scalar joints, whose
+            // single DOF and single position coordinate correspond one to one.
+            total_length += coefficient * d.pos[m.jnt_qpos_adr[m.dof_jnt[dof]]];
+            velocity += coefficient * d.vel[dof];
+        }
+        d.tendon_length[ti] = total_length;
+        d.tendon_velocity[ti] = velocity;
+    }
 }
 
 // =============================================================================
@@ -3543,10 +3932,6 @@ fn dofWidth(kind: JointType) u32 {
     };
 }
 
-pub fn factorM(m: *const Model, d: *Data) void {
-    factorMDamped(m, d, 0);
-}
-
 /// Factor `M + damping_dt * diag(B)`.
 ///
 /// * THE DAMPING GOES ON THE FACTORISATION, NOT ON `mass_matrix`. That array is read by the
@@ -3635,6 +4020,10 @@ pub fn factorMDamped(m: *const Model, d: *Data, damping_dt: f32) void {
     d.stage = .position;
 }
 
+pub fn factorM(m: *const Model, d: *Data) void {
+    factorMDamped(m, d, 0);
+}
+
 /// Solve `M*x = y` in place, using the factorization from `factorM`.
 ///
 /// Three passes, one per factor of `L^T*D*L`, in the order that undoes them:
@@ -3717,6 +4106,26 @@ pub fn conditionEstimate(m: *const Model, d: *const Data) f32 {
 // only ever wants their sum.
 // =============================================================================
 
+/// The three rotational DOFs of a ball joint (or a free joint's rotation half).
+///
+/// * ALL THREE differentiate against the SAME velocity - the one before ANY of them has
+/// contributed. That is not an optimisation, it is the definition: the three axes are
+/// simultaneous components of one rotation, not a sequence of three joints. Updating the
+/// velocity between them makes the second and third axes see motion that is really their
+/// own siblings', which produces a plausible, wrong gyroscopic force.
+///
+/// A scalar joint cannot show this bug, because there is nothing to be out of order with -
+/// which is exactly why it survives a test suite built on hinge models.
+fn rotationTriple(d: *Data, dof: u32, vel: *Motion) void {
+    const snapshot: Motion = vel.*;
+    inline for (0..3) |k| {
+        d.cdof_dot[dof + k] = crossMotion(snapshot, d.cdof[dof + k]);
+    }
+    inline for (0..3) |k| {
+        vel.* = vel.add(d.cdof[dof + k].scale(d.vel[dof + k]));
+    }
+}
+
 /// Body velocities and the rate of change of each DOF's motion axis, in the shared frame.
 ///
 /// A child's velocity is its parent's plus whatever its own joints contribute - one
@@ -3769,26 +4178,6 @@ pub fn comVel(m: *const Model, d: *Data) void {
     }
 
     d.stage = .velocity;
-}
-
-/// The three rotational DOFs of a ball joint (or a free joint's rotation half).
-///
-/// * ALL THREE differentiate against the SAME velocity - the one before ANY of them has
-/// contributed. That is not an optimisation, it is the definition: the three axes are
-/// simultaneous components of one rotation, not a sequence of three joints. Updating the
-/// velocity between them makes the second and third axes see motion that is really their
-/// own siblings', which produces a plausible, wrong gyroscopic force.
-///
-/// A scalar joint cannot show this bug, because there is nothing to be out of order with -
-/// which is exactly why it survives a test suite built on hinge models.
-fn rotationTriple(d: *Data, dof: u32, vel: *Motion) void {
-    const snapshot: Motion = vel.*;
-    inline for (0..3) |k| {
-        d.cdof_dot[dof + k] = crossMotion(snapshot, d.cdof[dof + k]);
-    }
-    inline for (0..3) |k| {
-        vel.* = vel.add(d.cdof[dof + k].scale(d.vel[dof + k]));
-    }
 }
 
 /// Recursive Newton-Euler: the inverse dynamics of the tree.
@@ -4009,43 +4398,6 @@ pub fn passive(m: *const Model, d: *Data) void {
 // This is where a mechanism becomes a robot. Everything so far responds to forces; nothing
 // so far DECIDES what force to apply.
 // =============================================================================
-
-/// Tendon lengths and rates, from the constant coefficient matrix.
-///
-/// For a FIXED tendon this is two dot products per tendon and nothing else:
-///
-///     length   = sum coefficient_i * q_i
-///     velocity = sum coefficient_i * v_i
-///
-/// which follows immediately from the definition, since the coefficients do not depend on
-/// configuration. That is the whole reason a fixed tendon is a good way to couple joints:
-/// it is a DEFINITION, evaluated, rather than a constraint that has to be enforced. An
-/// equality constraint between the same joints would cost a solver row and would hold only
-/// approximately; this holds exactly and costs a dot product.
-///
-/// A spatial tendon would compute both quantities geometrically here and everything after
-/// would be unchanged - that separation is the point of section 7's transmission/force split.
-pub fn tendonLengths(m: *const Model, d: *Data) void {
-    for (0..m.ntendon) |ti| {
-        const coefficients: []const f32 = m.tendon_jacobian[ti * m.nv ..][0..m.nv];
-        var total_length: f32 = 0;
-        var velocity: f32 = 0;
-        for (coefficients, 0..) |coefficient, dof| {
-            if (coefficient == 0.0) {
-                continue;
-            }
-            // A tendon's coefficients index DOFs, but its LENGTH reads position
-            // coordinates - and those are different index spaces in general (nq != nv).
-            // The hop through the owning joint is what translates between them, and it is
-            // exact here because `Spec()` only lets a tendon touch scalar joints, whose
-            // single DOF and single position coordinate correspond one to one.
-            total_length += coefficient * d.pos[m.jnt_qpos_adr[m.dof_jnt[dof]]];
-            velocity += coefficient * d.vel[dof];
-        }
-        d.tendon_length[ti] = total_length;
-        d.tendon_velocity[ti] = velocity;
-    }
-}
 
 /// Read each actuator's transmission coordinate and its rate.
 ///
@@ -4272,16 +4624,6 @@ pub fn applyForceAtPoint(
     }
 }
 
-/// Accept a generated enum or a plain index. The same rule as `jointIndex`, used by every
-/// by-name accessor: a comptime model gets compile-checked names, a runtime-loaded one
-/// falls back to integers, and neither pays anything.
-fn siteIndex(site: anytype) u32 {
-    return switch (@typeInfo(@TypeOf(site))) {
-        .@"enum" => @backingInt(site),
-        else => @intCast(site),
-    };
-}
-
 // =============================================================================
 // Constraints - phase 6a: the ROWS, with no solver
 //
@@ -4306,551 +4648,29 @@ fn siteIndex(site: anytype) u32 {
 // differentiable. The last of those is not a bonus; it is the property section 4d needs.
 // =============================================================================
 
-/// What produced a constraint row. Only limits exist today; contacts and equalities join
-/// this enum rather than getting their own parallel arrays, because the solver must treat
-/// them uniformly and an enum makes that structural.
-pub const ConstraintKind = enum {
-    /// A joint pushed past one end of its range.
-    limit,
-    /// One edge of a contact's friction pyramid. See `addContact`.
-    contact,
-    /// One axis of an equality constraint holding two points together. See `EqualitySpec`.
-    connect,
-
-    /// Whether this row may only PUSH, never pull.
-    ///
-    /// -- * THE ONE QUESTION EVERY SOLVER ASKS ABOUT A ROW --
-    ///
-    /// A surface can separate and a joint limit can be left; a loop closure cannot, because the
-    /// two points are welded together. PGS clamps a unilateral row's force at zero and leaves a
-    /// bilateral one free; Newton includes a unilateral row in the objective only while it is
-    /// violated, which is what makes that objective piecewise quadratic.
-    ///
-    /// * ASKING THE ENUM BEATS COMPARING AGAINST IT. This was written inline as
-    /// `kind != .connect` in four places, which is correct today and silently wrong the moment
-    /// a second bilateral kind is added - a `weld`'s orientation rows, say. Here the compiler
-    /// will point at this switch instead.
-    pub fn isUnilateral(self: ConstraintKind) bool {
-        return switch (self) {
-            .limit, .contact => true,
-            .connect => false,
-        };
-    }
-};
-
-/// One end of a loop closure: a point on a body, in that body's own frame.
-pub const Anchor = struct {
-    body: u32,
-    point: Vec,
-};
-
-/// Resolve a joint name to where its scalar coordinate lives.
+/// Pack a row's identity into one integer.
 ///
-/// * HINGE AND SLIDE ONLY. A ball or free joint has no scalar to couple - its coordinate is a
-/// quaternion or a whole pose - so a coupling naming one is a modelling error rather than
-/// something to approximate.
-fn coordinateOf(spec: ModelSpec, m: Model, name: []const u8) BuildError!Coordinate {
-    const j: u32 = try jointIndexByName(spec, name);
-    switch (m.jnt_type[j]) {
-        .hinge, .slide => {},
-        .free, .ball => return BuildError.UnsupportedJointForCoupling,
-    }
-    return .{
-        .qpos = m.jnt_qpos_adr[j],
-        .dof = m.jnt_dof_adr[j],
-        .rest = m.qpos0[m.jnt_qpos_adr[j]],
-    };
-}
-
-/// Express a point given in one body's frame in another body's frame, at the REST pose.
+/// Three fields, no hashing: the kind, the thing it came from (a joint index or a contact
+/// id), and a discriminator for rows that share a source (which end of a limit, which edge
+/// of a friction pyramid). Exact rather than hashed, because a collision would silently
+/// warm-start a row from an unrelated force - a wrong answer that converges, which is the
+/// worst kind.
+/// The bits `constraintKey` reserves for a source id, derived once so nothing re-spells it.
 ///
-/// Walks each body's parent chain to the world using the model's own `body_pos`/`body_rot` -
-/// which is `qpos0`, since a joint at its zero coordinate contributes nothing. That is exactly
-/// the configuration a spec describes, so a closure derived here is satisfied the moment the
-/// model is built.
-fn restFrameAnchor(m: *const Model, from_body: u32, point: Vec, to_body: u32) Vec {
-    const in_world: Vec = restToWorld(m, from_body, point);
-    // The inverse of `to_body`'s rest transform: undo the translation, then the rotation.
-    const pose: Pose = restPose(m, to_body);
-    return rotate(conjugate(pose.rot), in_world - pose.pos);
-}
-
-/// A body's rest transform, composed from the root down.
-fn restPose(m: *const Model, body: u32) Pose {
-    if (body == world_body) {
-        return .{ .pos = vec_zero, .rot = quat_identity };
-    }
-    const parent: Pose = restPose(m, m.body_parent[body]);
-    return .{
-        .pos = parent.pos + rotate(parent.rot, m.body_pos[body]),
-        .rot = qmul(parent.rot, m.body_rot[body]),
-    };
-}
-
-fn restToWorld(m: *const Model, body: u32, point: Vec) Vec {
-    const pose: Pose = restPose(m, body);
-    return pose.pos + rotate(pose.rot, point);
-}
-
-/// A resolved loop closure, as the model stores it.
-pub const Equality = struct {
-    /// What is being held equal. The two variants share nothing but their softness, which is
-    /// why this is a field rather than the whole type being a union - every caller that only
-    /// cares how STIFFLY a closure is held can read `softness` without unwrapping anything.
-    holds: union(enum) {
-        /// Two points on two bodies that must coincide.
-        connect: struct { a: Anchor, b: Anchor },
-        /// Two bodies held at a fixed relative POSE - position and orientation both.
-        ///
-        /// -- * WHY THIS IS NOT JUST A JOINTLESS BODY --
-        ///
-        /// A body with no joint is welded to its PARENT, which the tree already expresses for
-        /// free. This welds two bodies that are not related that way - a hand gripping a
-        /// crate, two halves of a mechanism bolted together at runtime, a robot clamped to a
-        /// bench it did not grow from. The tie can also be removed again, which a topology
-        /// cannot.
-        weld: struct {
-            a: Anchor,
-            b: Anchor,
-            /// The relative orientation to hold: `rot_b * relative = rot_a`.
-            relative: Quat,
-            /// How much the orientation rows count for relative to the position ones.
-            /// MuJoCo's `torquescale`, and for the same reason: the two halves are in
-            /// different units - metres against radians - so one number has to say how they
-            /// trade, and 1 means "a radian matters as much as a metre".
-            torque_scale: f32,
-        },
-        /// One joint's coordinate as a polynomial in another's - MuJoCo's
-        /// `<equality type="joint">`. See `JointCouplingSpec`.
-        joint: struct {
-            /// The joint whose value is DETERMINED. Its qpos and dof addresses, resolved.
-            driven: Coordinate,
-            /// The joint it follows. Null couples `driven` to a constant.
-            driver: ?Coordinate,
-            /// `driven - ref = c0 + c1*x + c2*x^2 + c3*x^3 + c4*x^4`, where `x = driver - ref`.
-            poly: [5]f32,
-        },
-    },
-    softness: Softness,
-    impedance: Impedance,
-};
-
-/// A scalar joint coordinate, resolved to where it lives.
-pub const Coordinate = struct {
-    qpos: u32,
-    dof: u32,
-    /// The joint's rest value, which the polynomial is measured from - the same `qpos0`
-    /// convention MuJoCo uses, so a coupling written for one reads the same in the other.
-    rest: f32,
-};
-
-/// A point on two bodies that must coincide - MuJoCo's `<equality type="connect">`.
+/// *** AN ID IS NOT A SIZE, AND TYPING IT `usize` IS THE BUG THIS REPLACES. `usize` means "big
+/// enough to index this machine's memory" - 64 bits natively, **32 on wasm**. A contact id is a
+/// semantic value whose width has nothing to do with the address space, and passing one through
+/// a `usize` parameter silently narrowed it on one target and not the other.
 ///
-/// -- ** WHY A TREE NEEDS THIS AT ALL --
-///
-/// Reduced coordinates buy exact joints and no drift, and they pay for it in TOPOLOGY: a tree
-/// has no loops, so a mechanism whose links form a ring cannot be spelled at all. That rules
-/// out a whole class of real machine - Cassie and Digit's parallel shin linkages, four-bar
-/// suspensions, most delta arms, and nearly every rigid gripper whose fingers are geared to
-/// each other.
-///
-/// The standard answer, and MuJoCo's, is to build the SPANNING TREE and close the remaining
-/// loops with constraints the solver enforces. The joints stay exact; the loop closure is
-/// approximate in the same way contact is, and to the same tolerance.
-///
-/// * THREE ROWS, NOT ONE. A point constraint is three scalar equations - one per world axis -
-/// and they go to the solver as three rows sharing a body pair. Writing it as a single row
-/// along the current error direction would look right while the error is small and drift
-/// sideways, because a direction computed from an error cannot constrain the two axes the
-/// error happens not to point along.
-pub const EqualitySpec = struct {
-    /// The two bodies, by name.
-    body_a: []const u8,
-    body_b: []const u8,
-    /// The coincident point, in each body's own frame.
-    anchor_a: Vec = vec_zero,
-    /// Hold the two bodies at a fixed relative POSE rather than at a shared point. The
-    /// orientation to hold is derived from the rest pose, in the same way `anchor_b` is.
-    weld: bool = false,
-    /// See `Equality.weld`. Only read when `weld` is set.
-    torque_scale: f32 = 1.0,
-    /// Couple two joints instead of two points. When set, the anchors are ignored.
-    ///
-    /// -- * WHAT THIS IS FOR --
-    ///
-    /// A parallel gripper's two fingers driven by one motor; a geared pair; a linkage whose
-    /// ratio is known rather than derived from geometry. `driven - rest = c0 + c1*x + ... `
-    /// where `x = driver - rest`, which is MuJoCo's `polycoef` exactly - a coupling written
-    /// for one engine reads the same in the other.
-    ///
-    /// A LINEAR coupling is `.{ offset, ratio }` and covers essentially every gripper. The
-    /// higher terms exist because MuJoCo has them and a model may use them, not because they
-    /// are usually wanted.
-    couple: ?JointCouplingSpec = null,
-    /// Where the point sits in `body_b`'s frame - or **null to derive it**, which is almost
-    /// always what you want.
-    ///
-    /// -- ** A LOOP CLOSURE THAT STARTS VIOLATED SNAPS --
-    ///
-    /// Both anchors describe the same physical point, so stating both is stating the same
-    /// fact twice in two different frames - and getting the second one wrong by a centimetre
-    /// gives a mechanism that lurches on frame one and then behaves, which reads as a solver
-    /// problem and is a typo.
-    ///
-    /// Null means "whatever makes this exact at the rest pose": the builder places `anchor_a`
-    /// in the world using `qpos0`, then expresses that point in `body_b`'s frame. **MuJoCo
-    /// does the same derivation** - its `<connect anchor="...">` takes one point and the
-    /// compiler fills in the other - but only in the file format. Having it in the API means
-    /// a model built in code gets it too.
-    anchor_b: ?Vec = null,
-    /// How stiffly the loop is held. The default is stiffer than contact: a loop closure is a
-    /// statement about the mechanism rather than about a surface, and a visibly stretchy
-    /// linkage is worse than a slightly harsh one.
-    softness: Softness = .{ .time_const_s = 0.005 },
-    impedance: Impedance = .{},
-};
+/// The symptom was an `@intCast` trap in a wasm build, invisible natively, reached only when a
+/// robot touched ITSELF - because the bridge packs the other body's index at bit 40 and that
+/// field is zero for every contact against the world. Days of bisection for a type name.
+const source_mask: u64 = (1 << 48) - 1;
 
-/// One joint's coordinate as a polynomial in another's.
-pub const JointCouplingSpec = struct {
-    /// The joint whose value is determined by the other.
-    driven: []const u8,
-    /// The joint it follows. Null pins `driven` to a constant offset from its rest value,
-    /// which is how a joint is locked without removing it from the model.
-    driver: ?[]const u8 = null,
-    /// `c0 ... c4`. `.{ 0, 1 }` makes the two joints equal; `.{ 0, -1 }` mirrors them.
-    poly: [5]f32 = .{ 0, 1, 0, 0, 0 },
-};
-
-/// A contact, as the collision detector reports it. Deliberately a plain value type with
-/// no reference to the shapes that produced it: the row builder needs the geometry of the
-/// touching, not the identity of the touchers, and keeping it that way is what lets
-/// zimrphysics be the collision source without robot.zig knowing anything about it.
-pub const Contact = struct {
-    /// Where the contact acts, in world coordinates.
-    position: Vec,
-    /// Unit normal, pointing from `body_a` toward `body_b` - so a positive normal force
-    /// pushes `body_b` along it and `body_a` against it.
-    normal: Vec,
-    /// Two unit vectors completing a right-handed frame with `normal`. The friction
-    /// directions. Supplied rather than derived so the caller can keep them stable frame
-    /// to frame, which matters for warm starting later.
-    tangent: [2]Vec,
-    /// Separation. NEGATIVE when the shapes overlap, which is the interesting case.
-    distance: f32,
-    /// Coulomb friction coefficient, one per tangent direction.
-    friction: [2]f32,
-    /// The two bodies, as indices into THIS robot's tree. `world_body` for static
-    /// geometry and for anything outside the tree.
-    body_a: u32,
-    body_b: u32,
-    /// -- * WHY THERE IS NO `external_mass` HERE (section 4k) --
-    ///
-    /// There was, briefly. When a contact's other side lived in a different engine, this
-    /// struct carried its inverse mass, inverse inertia, centre of mass, velocity and
-    /// acceleration, and `A_hat` added an effective-mass term for it. All of that existed to
-    /// describe a body the solver could not see.
-    ///
-    /// In one tree it can see it. `addContactRows` builds the RELATIVE Jacobian
-    /// `jac_b - jac_a`, so `J M^-1 J^T` already contains BOTH inertias, `J*v` is already the
-    /// relative velocity and `J*a` the relative acceleration. Every one of those fields was
-    /// a hand-rolled reconstruction of something the Jacobian does exactly.
-    ///
-    /// **`world_body` on either side still means immovable**, which is correct for static
-    /// geometry and is the deliberate approximation for a zimrphysics body a scene chose not
-    /// to put in the tree.
-    /// A stable identity for this contact POINT, from whatever detected it.
-    ///
-    /// Two jobs, both needing it to survive from one step to the next: it is the tie
-    /// breaker that makes row order deterministic when two contacts share a body pair, and
-    /// it is what will let a future warm start match a row to the force it carried last
-    /// step. A detector that cannot supply one should leave it zero and accept that ties
-    /// fall back to insertion order.
-    id: u64 = 0,
-    /// Distance at which the contact begins to act. Positive values engage it early,
-    /// which lets a soft contact decelerate rather than catch.
-    margin: f32 = 0,
-    softness: Softness = .{},
-    impedance: Impedance = .{},
-};
-
-/// Assemble the active constraint rows for the current state.
-///
-/// A limit end is ACTIVE when the joint is within `margin` of it. The distance is measured
-/// per END, not to the nearest one:
-///
-///     lower:  q - lo          upper:  hi - q
-///
-/// and either being below `margin` produces a row. Negative means already violated.
-///
-/// * BOTH ENDS CAN BE ACTIVE AT ONCE, and the code must allow it. It looks impossible -
-/// a joint cannot be past its lower and upper stops simultaneously - but `margin` is what
-/// makes it reachable: if the range is narrower than `2*margin`, the joint is within margin
-/// of both ends everywhere in its travel, and MuJoCo emits two rows. A tempting shortcut
-/// (`residual = min(q - lo, hi - q)`, one row) is correct for every model with the default
-/// zero margin and silently wrong for a narrow range with a generous one. The two rows then
-/// oppose each other and the solver balances them, which is the right behaviour: the joint
-/// is being softly squeezed from both sides.
-///
-/// The Jacobian row is `+1` for a lower end and `-1` for an upper one, so a positive
-/// constraint force always pushes the joint back INTO its range whichever end it hit. That
-/// convention is what lets the solver clamp every row to `f >= 0` uniformly instead of
-/// tracking which direction each row wants to push.
-pub fn makeConstraints(m: *const Model, d: *Data) void {
-    const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.constraints");
-    defer zone.end();
-    d.requireStage(.position, "makeConstraints");
-    d.constraint_count = 0;
-
-    // -- ** EQUALITIES FIRST, BECAUSE THEY ARE THE ONLY ROWS THAT ARE NOT OPTIONAL --
-    //
-    // A contact appears when two things touch and a limit when a joint runs out of travel;
-    // both are conditions of the moment. A loop closure is part of the MECHANISM - emitted
-    // every step, unconditionally - and a linkage that loses its closure because a busy contact
-    // step filled the buffer is not a linkage.
-    //
-    // Capacity reserves exact room for them, so this should never be the difference. It is
-    // ordered this way anyway: the reservation is a promise made in one function and kept in
-    // another, and putting the unconditional rows first means a mistake in either shows up as
-    // a dropped CONTACT - visible, recoverable - rather than as a limb quietly falling off.
-    for (0..m.neq) |eq| {
-        addEqualityRows(m, d, @intCast(eq));
-    }
-
-    for (0..m.njnt) |ji| {
-        const range: [2]f32 = m.jnt_range[ji] orelse continue;
-        // `Spec()` rejects a range on a ball or free joint, so a scalar coordinate is
-        // guaranteed here rather than assumed.
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const vadr: u32 = m.jnt_dof_adr[ji];
-        const q: f32 = d.pos[qadr];
-        const margin: f32 = m.jnt_limit_margin[ji];
-
-        // Lower end first, then upper - the order MuJoCo emits them in, which matters
-        // because the fixtures compare row by row.
-        const ends = [_]struct { distance: f32, jacobian: f32 }{
-            .{ .distance = q - range[0], .jacobian = 1.0 },
-            .{ .distance = range[1] - q, .jacobian = -1.0 },
-        };
-        for (ends) |end| {
-            if (end.distance >= margin) {
-                continue;
-            }
-            const row: u32 = d.constraint_count;
-            assertf(
-                row < m.constraint_capacity,
-                @src(),
-                "constraint rows overflowed: {d} active, capacity {d}",
-                .{ row + 1, m.constraint_capacity },
-            );
-
-            // One nonzero entry: this joint's own DOF.
-            const base: usize = row * m.nv;
-            @memset(d.constraint_jacobian[base .. base + m.nv], 0);
-            d.constraint_jacobian[base + vadr] = end.jacobian;
-
-            d.constraint_kind[row] = .limit;
-            d.constraint_source[row] = @intCast(ji);
-            // Both ends of one joint share a source, so the END must be in the key too, or a
-            // joint swinging from one stop to the other inherits the opposite end's force.
-            d.constraint_key[row] = constraintKey(.limit, ji, if (end.jacobian > 0) 0 else 1);
-            d.constraint_violation[row] = end.distance - margin;
-            d.constraint_softness[row] = m.jnt_limit_softness[ji];
-            d.constraint_impedance[row] = m.jnt_limit_impedance[ji];
-            d.constraint_count = row + 1;
-        }
-    }
-
-    // ---- contacts ----
-    // * SORTED FIRST, and this is not tidiness. A constraint solver is order-sensitive:
-    // Gauss-Seidel sweeps rows in sequence, so a different row order gives a different
-    // (equally valid) answer. Collision detectors do not promise a stable order -
-    // zimrphysics's broad phase certainly does not, and MuJoCo sorts its own contacts for
-    // exactly this reason - so without a sort here the same scene replayed from the same
-    // state can diverge. Sorting inside the engine means a caller cannot forget to.
-    std.mem.sort(Contact, d.contacts[0..d.contact_count], {}, contactBefore);
-    for (d.contacts[0..d.contact_count], 0..) |contact, index| {
-        addContactRows(m, d, contact, @intCast(index));
-    }
-}
-
-/// Total order on contacts: body pair first, then the detector's stable id. Ties fall back
-/// to insertion order because `std.mem.sort` is not stable - which is why `Contact.id`
-/// exists and why a detector that supplies one gets a stronger guarantee than one that
-/// does not.
-fn contactBefore(_: void, a: Contact, b: Contact) bool {
-    if (a.body_a != b.body_a) {
-        return a.body_a < b.body_a;
-    }
-    if (a.body_b != b.body_b) {
-        return a.body_b < b.body_b;
-    }
-    return a.id < b.id;
-}
-
-/// Turn one contact into constraint rows, using a PYRAMIDAL friction cone.
-///
-/// -- WHAT COULOMB FRICTION ACTUALLY DEMANDS --
-/// The physical condition is that the tangential force stays inside a cone around the
-/// normal: `||f_tangential|| <= mu * f_normal`. That is a second-order cone constraint, and
-/// projecting onto it is a different and harder operation than clamping a scalar.
-///
-/// -- THE PYRAMID TRICK --
-/// Approximate the cone by a pyramid whose EDGES are the directions `n +/- mu_k*t_k`, and give
-/// each edge its own non-negative force. Then:
-///
-///   * the total force is a non-negative combination of edge directions, so it lies inside
-///     the pyramid automatically;
-///   * the normal components add up, so `f_normal` is the sum of the edge forces;
-///   * the tangential components cancel in pairs unless the edges are loaded unevenly, and
-///     the imbalance is bounded by `mu` times the normal force - which IS the friction law.
-///
-/// * The consequence is the good part: **friction needs no special projection**. Each edge
-/// row is just `f >= 0`, exactly like a joint limit, so the solver written in 6c handles
-/// friction without a single line of change. The cost is that a pyramid is not a cone -
-/// friction is slightly stronger along the pyramid's edges (by up to sqrt2 for two tangents)
-/// than along its faces - which is the standard, well-understood approximation and the one
-/// MuJoCo uses by default.
-///
-/// All rows of one contact share the SAME residual, the penetration depth. That looks odd
-/// for the friction rows, whose own violation is tangential slip rather than penetration,
-/// and it is deliberate: a friction row should engage exactly when the contact does, and
-/// tying it to the same residual is what couples them.
-fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u32) void {
-    if (contact.distance >= contact.margin) {
-        return; // not touching, and not close enough to matter
-    }
-
-    // The contact-frame Jacobian: how the CONTACT POINT's relative velocity depends on
-    // joint motion. Relative, so it is the difference of the two bodies' point Jacobians -
-    // and because a static body's Jacobian is identically zero, contact against the world
-    // falls out of the same expression with no special case.
-    const jac_a: []Vec = d.pair_jac_a;
-    const jac_b: []Vec = d.pair_jac_b;
-    jacPoint(m, d, contact.body_a, contact.position, jac_a, null);
-    jacPoint(m, d, contact.body_b, contact.position, jac_b, null);
-
-    // Project the relative Jacobian onto the contact frame, giving one row per direction.
-    const directions = [_]Vec{ contact.normal, contact.tangent[0], contact.tangent[1] };
-    var projected: [3][]f32 = .{
-        d.contact_projected[0 * m.nv ..][0..m.nv],
-        d.contact_projected[1 * m.nv ..][0..m.nv],
-        d.contact_projected[2 * m.nv ..][0..m.nv],
-    };
-    for (directions, 0..) |direction, k| {
-        for (0..m.nv) |i| {
-            projected[k][i] = dot3(direction, jac_b[i] - jac_a[i]);
-        }
-    }
-
-    // Two rows per tangent: the pyramid's opposing edges.
-    // The violation the constraint drives to zero.
-    //
-    // `margin` shifts the equilibrium: a contact with a positive margin settles that far
-    // apart, which lets a constraint engage before the surfaces meet. Contacts from
-    // `robot_physics` use zero - see the note there for why, and for what was measured
-    // before arriving at it.
-    const violation: f32 = contact.distance - contact.margin;
-    for (0..2) |tangent_index| {
-        const mu: f32 = contact.friction[tangent_index];
-        for ([_]f32{ 1.0, -1.0 }) |sign| {
-            const row: u32 = d.constraint_count;
-            assertf(
-                row < m.constraint_capacity,
-                @src(),
-                "constraint rows overflowed: {d} active, capacity {d}",
-                .{ row + 1, m.constraint_capacity },
-            );
-            const base: usize = row * m.nv;
-            for (0..m.nv) |i| {
-                d.constraint_jacobian[base + i] = projected[0][i] + sign * mu * projected[tangent_index + 1][i];
-            }
-            // * The row's WORLD-SPACE direction, kept because section 4h-ter needs it.
-            //
-            // Each pyramid edge is `normal + sign*mu*tangent`, a different direction per
-            // row - so the external body's resistance differs per row too, and computing it
-            // from the contact NORMAL would be right for one row in four. Storing the
-            // direction here, where it is already being formed, costs a vector and saves
-            // reconstructing it (and the chance of reconstructing it differently).
-            d.constraint_direction[row] = contact.normal +
-                splat(sign * mu) * contact.tangent[tangent_index];
-            d.constraint_kind[row] = .contact;
-            // For a contact row this is the index into `Data.contacts`; for a limit row it
-            // is the joint index. Two meanings in one array, discriminated by
-            // `constraint_kind` - read one without checking the other and you will get a
-            // plausible wrong answer.
-            d.constraint_source[row] = contact_index;
-            // `contact.id` is the detector's stable per-point identity - the reason
-            // `Contact` carries one. The pyramid edge index completes it.
-            // `contact.id` is a u64 from the detector, so it is narrowed here rather than in
-            // `constraintKey` - the packing there reserves 48 bits for the source, which is
-            // ample for any id a broad phase produces and keeps the key one integer.
-            d.constraint_key[row] = constraintKey(
-                .contact,
-                // The mask lives with the packing, in `source_mask`.
-                contact.id,
-                tangent_index * 2 + @as(usize, if (sign > 0) 0 else 1),
-            );
-            d.constraint_violation[row] = violation;
-            d.constraint_softness[row] = contact.softness;
-            d.constraint_impedance[row] = contact.impedance;
-            d.constraint_count = row + 1;
-        }
-    }
-}
-
-/// Rows for one equality constraint - three, one per world axis.
-///
-/// -- ** A CONNECT ROW IS A CONTACT ROW WITHOUT THE INEQUALITY --
-///
-/// The machinery is nearly identical: take both bodies' point Jacobians at the shared point,
-/// subtract them for the relative Jacobian, project onto a direction, and give the solver the
-/// violation along it. What differs is the SIGN CONDITION. A contact may only push
-/// (`f >= 0`) - the surfaces are free to separate. A loop closure may push OR pull, because the
-/// two points are welded together and neither is allowed to leave.
-///
-/// * THREE AXES, NOT ONE ALONG THE ERROR. Projecting onto the error direction would look right
-/// while the error is small and drift sideways: a direction derived from the error cannot
-/// constrain the two axes the error does not happen to point along. World X, Y and Z always
-/// span the space, whatever the error is doing.
-/// How far apart a loop closure's two anchors currently are, in metres.
-///
-/// -- * THE ONE NUMBER ANYONE DEBUGGING A LINKAGE WANTS --
-///
-/// A loop closure is SOFT, like contact - it holds to a tolerance rather than exactly, and the
-/// tolerance depends on the mechanism's stiffness, the timestep and how hard the loop is being
-/// worked. So "is my linkage holding?" is a real question with a real answer, and it should not
-/// require knowing that the answer lives in three rows of `constraint_violation` indexed by
-/// something that is only an equality index if `constraint_kind` says so.
-///
-/// MuJoCo makes you find the rows in `efc_pos` yourself. This is the same information, asked
-/// the way it is actually wanted.
-pub fn equalityError(m: *const Model, d: *const Data, eq: u32) f32 {
-    d.requireStage(.position, "equalityError");
-    const closure: Equality = m.equalities[eq];
-    return switch (closure.holds) {
-        .connect => |points| length3(worldAnchor(d, points.b) - worldAnchor(d, points.a)),
-        // * A WELD'S ERROR IS REPORTED AS THE POSITION PART ONLY. It has two halves in
-        // different units - metres and radians - and no single number honestly combines them.
-        // Position is the one a caller can act on ("has the grip slipped?"), so that is what
-        // this answers, and the orientation rows are visible in `constraint_violation` for
-        // anyone who needs them.
-        .weld => |w| length3(worldAnchor(d, w.b) - worldAnchor(d, w.a)),
-        // For a coupling the error is already scalar, and its sign carries which way the
-        // driven joint has drifted - which the caller usually wants, so it is not made
-        // absolute here.
-        .joint => |couple| blk: {
-            var wanted: f32 = couple.poly[0];
-            if (couple.driver) |driver| {
-                const x: f32 = d.pos[driver.qpos] - driver.rest;
-                var power: f32 = x;
-                inline for (1..5) |k| {
-                    wanted += couple.poly[k] * power;
-                    power *= x;
-                }
-            }
-            break :blk (d.pos[couple.driven.qpos] - couple.driven.rest) - wanted;
-        },
-    };
+fn constraintKey(kind: ConstraintKind, source: u64, discriminator: usize) u64 {
+    return (@as(u64, @backingInt(kind)) << 56) |
+        ((source & source_mask) << 8) |
+        @as(u64, @intCast(discriminator));
 }
 
 /// Where an anchor currently sits in the world.
@@ -5013,6 +4833,296 @@ fn addEqualityRows(m: *const Model, d: *Data, eq: u32) void {
     }
 }
 
+/// Total order on contacts: body pair first, then the detector's stable id. Ties fall back
+/// to insertion order because `std.mem.sort` is not stable - which is why `Contact.id`
+/// exists and why a detector that supplies one gets a stronger guarantee than one that
+/// does not.
+fn contactBefore(_: void, a: Contact, b: Contact) bool {
+    if (a.body_a != b.body_a) {
+        return a.body_a < b.body_a;
+    }
+    if (a.body_b != b.body_b) {
+        return a.body_b < b.body_b;
+    }
+    return a.id < b.id;
+}
+
+/// Turn one contact into constraint rows, using a PYRAMIDAL friction cone.
+///
+/// -- WHAT COULOMB FRICTION ACTUALLY DEMANDS --
+/// The physical condition is that the tangential force stays inside a cone around the
+/// normal: `||f_tangential|| <= mu * f_normal`. That is a second-order cone constraint, and
+/// projecting onto it is a different and harder operation than clamping a scalar.
+///
+/// -- THE PYRAMID TRICK --
+/// Approximate the cone by a pyramid whose EDGES are the directions `n +/- mu_k*t_k`, and give
+/// each edge its own non-negative force. Then:
+///
+///   * the total force is a non-negative combination of edge directions, so it lies inside
+///     the pyramid automatically;
+///   * the normal components add up, so `f_normal` is the sum of the edge forces;
+///   * the tangential components cancel in pairs unless the edges are loaded unevenly, and
+///     the imbalance is bounded by `mu` times the normal force - which IS the friction law.
+///
+/// * The consequence is the good part: **friction needs no special projection**. Each edge
+/// row is just `f >= 0`, exactly like a joint limit, so the solver written in 6c handles
+/// friction without a single line of change. The cost is that a pyramid is not a cone -
+/// friction is slightly stronger along the pyramid's edges (by up to sqrt2 for two tangents)
+/// than along its faces - which is the standard, well-understood approximation and the one
+/// MuJoCo uses by default.
+///
+/// All rows of one contact share the SAME residual, the penetration depth. That looks odd
+/// for the friction rows, whose own violation is tangential slip rather than penetration,
+/// and it is deliberate: a friction row should engage exactly when the contact does, and
+/// tying it to the same residual is what couples them.
+fn addContactRows(m: *const Model, d: *Data, contact: Contact, contact_index: u32) void {
+    if (contact.distance >= contact.margin) {
+        return; // not touching, and not close enough to matter
+    }
+
+    // The contact-frame Jacobian: how the CONTACT POINT's relative velocity depends on
+    // joint motion. Relative, so it is the difference of the two bodies' point Jacobians -
+    // and because a static body's Jacobian is identically zero, contact against the world
+    // falls out of the same expression with no special case.
+    const jac_a: []Vec = d.pair_jac_a;
+    const jac_b: []Vec = d.pair_jac_b;
+    jacPoint(m, d, contact.body_a, contact.position, jac_a, null);
+    jacPoint(m, d, contact.body_b, contact.position, jac_b, null);
+
+    // Project the relative Jacobian onto the contact frame, giving one row per direction.
+    const directions = [_]Vec{ contact.normal, contact.tangent[0], contact.tangent[1] };
+    var projected: [3][]f32 = .{
+        d.contact_projected[0 * m.nv ..][0..m.nv],
+        d.contact_projected[1 * m.nv ..][0..m.nv],
+        d.contact_projected[2 * m.nv ..][0..m.nv],
+    };
+    for (directions, 0..) |direction, k| {
+        for (0..m.nv) |i| {
+            projected[k][i] = dot3(direction, jac_b[i] - jac_a[i]);
+        }
+    }
+
+    // Two rows per tangent: the pyramid's opposing edges.
+    // The violation the constraint drives to zero.
+    //
+    // `margin` shifts the equilibrium: a contact with a positive margin settles that far
+    // apart, which lets a constraint engage before the surfaces meet. Contacts from
+    // `robot_physics` use zero - see the note there for why, and for what was measured
+    // before arriving at it.
+    const violation: f32 = contact.distance - contact.margin;
+    for (0..2) |tangent_index| {
+        const mu: f32 = contact.friction[tangent_index];
+        for ([_]f32{ 1.0, -1.0 }) |sign| {
+            const row: u32 = d.constraint_count;
+            assertf(
+                row < m.constraint_capacity,
+                @src(),
+                "constraint rows overflowed: {d} active, capacity {d}",
+                .{ row + 1, m.constraint_capacity },
+            );
+            const base: usize = row * m.nv;
+            for (0..m.nv) |i| {
+                d.constraint_jacobian[base + i] = projected[0][i] + sign * mu * projected[tangent_index + 1][i];
+            }
+            // * The row's WORLD-SPACE direction, kept because section 4h-ter needs it.
+            //
+            // Each pyramid edge is `normal + sign*mu*tangent`, a different direction per
+            // row - so the external body's resistance differs per row too, and computing it
+            // from the contact NORMAL would be right for one row in four. Storing the
+            // direction here, where it is already being formed, costs a vector and saves
+            // reconstructing it (and the chance of reconstructing it differently).
+            d.constraint_direction[row] = contact.normal +
+                splat(sign * mu) * contact.tangent[tangent_index];
+            d.constraint_kind[row] = .contact;
+            // For a contact row this is the index into `Data.contacts`; for a limit row it
+            // is the joint index. Two meanings in one array, discriminated by
+            // `constraint_kind` - read one without checking the other and you will get a
+            // plausible wrong answer.
+            d.constraint_source[row] = contact_index;
+            // `contact.id` is the detector's stable per-point identity - the reason
+            // `Contact` carries one. The pyramid edge index completes it.
+            // `contact.id` is a u64 from the detector, so it is narrowed here rather than in
+            // `constraintKey` - the packing there reserves 48 bits for the source, which is
+            // ample for any id a broad phase produces and keeps the key one integer.
+            d.constraint_key[row] = constraintKey(
+                .contact,
+                // The mask lives with the packing, in `source_mask`.
+                contact.id,
+                tangent_index * 2 + @as(usize, if (sign > 0) 0 else 1),
+            );
+            d.constraint_violation[row] = violation;
+            d.constraint_softness[row] = contact.softness;
+            d.constraint_impedance[row] = contact.impedance;
+            d.constraint_count = row + 1;
+        }
+    }
+}
+
+/// Assemble the active constraint rows for the current state.
+///
+/// A limit end is ACTIVE when the joint is within `margin` of it. The distance is measured
+/// per END, not to the nearest one:
+///
+///     lower:  q - lo          upper:  hi - q
+///
+/// and either being below `margin` produces a row. Negative means already violated.
+///
+/// * BOTH ENDS CAN BE ACTIVE AT ONCE, and the code must allow it. It looks impossible -
+/// a joint cannot be past its lower and upper stops simultaneously - but `margin` is what
+/// makes it reachable: if the range is narrower than `2*margin`, the joint is within margin
+/// of both ends everywhere in its travel, and MuJoCo emits two rows. A tempting shortcut
+/// (`residual = min(q - lo, hi - q)`, one row) is correct for every model with the default
+/// zero margin and silently wrong for a narrow range with a generous one. The two rows then
+/// oppose each other and the solver balances them, which is the right behaviour: the joint
+/// is being softly squeezed from both sides.
+///
+/// The Jacobian row is `+1` for a lower end and `-1` for an upper one, so a positive
+/// constraint force always pushes the joint back INTO its range whichever end it hit. That
+/// convention is what lets the solver clamp every row to `f >= 0` uniformly instead of
+/// tracking which direction each row wants to push.
+pub fn makeConstraints(m: *const Model, d: *Data) void {
+    const zone: profiler.Zone = profiler.zoneNamed(@src(), "robot.constraints");
+    defer zone.end();
+    d.requireStage(.position, "makeConstraints");
+    d.constraint_count = 0;
+
+    // -- ** EQUALITIES FIRST, BECAUSE THEY ARE THE ONLY ROWS THAT ARE NOT OPTIONAL --
+    //
+    // A contact appears when two things touch and a limit when a joint runs out of travel;
+    // both are conditions of the moment. A loop closure is part of the MECHANISM - emitted
+    // every step, unconditionally - and a linkage that loses its closure because a busy contact
+    // step filled the buffer is not a linkage.
+    //
+    // Capacity reserves exact room for them, so this should never be the difference. It is
+    // ordered this way anyway: the reservation is a promise made in one function and kept in
+    // another, and putting the unconditional rows first means a mistake in either shows up as
+    // a dropped CONTACT - visible, recoverable - rather than as a limb quietly falling off.
+    for (0..m.neq) |eq| {
+        addEqualityRows(m, d, @intCast(eq));
+    }
+
+    for (0..m.njnt) |ji| {
+        const range: [2]f32 = m.jnt_range[ji] orelse continue;
+        // `Spec()` rejects a range on a ball or free joint, so a scalar coordinate is
+        // guaranteed here rather than assumed.
+        const qadr: u32 = m.jnt_qpos_adr[ji];
+        const vadr: u32 = m.jnt_dof_adr[ji];
+        const q: f32 = d.pos[qadr];
+        const margin: f32 = m.jnt_limit_margin[ji];
+
+        // Lower end first, then upper - the order MuJoCo emits them in, which matters
+        // because the fixtures compare row by row.
+        const ends = [_]struct { distance: f32, jacobian: f32 }{
+            .{ .distance = q - range[0], .jacobian = 1.0 },
+            .{ .distance = range[1] - q, .jacobian = -1.0 },
+        };
+        for (ends) |end| {
+            if (end.distance >= margin) {
+                continue;
+            }
+            const row: u32 = d.constraint_count;
+            assertf(
+                row < m.constraint_capacity,
+                @src(),
+                "constraint rows overflowed: {d} active, capacity {d}",
+                .{ row + 1, m.constraint_capacity },
+            );
+
+            // One nonzero entry: this joint's own DOF.
+            const base: usize = row * m.nv;
+            @memset(d.constraint_jacobian[base .. base + m.nv], 0);
+            d.constraint_jacobian[base + vadr] = end.jacobian;
+
+            d.constraint_kind[row] = .limit;
+            d.constraint_source[row] = @intCast(ji);
+            // Both ends of one joint share a source, so the END must be in the key too, or a
+            // joint swinging from one stop to the other inherits the opposite end's force.
+            d.constraint_key[row] = constraintKey(.limit, ji, if (end.jacobian > 0) 0 else 1);
+            d.constraint_violation[row] = end.distance - margin;
+            d.constraint_softness[row] = m.jnt_limit_softness[ji];
+            d.constraint_impedance[row] = m.jnt_limit_impedance[ji];
+            d.constraint_count = row + 1;
+        }
+    }
+
+    // ---- contacts ----
+    // * SORTED FIRST, and this is not tidiness. A constraint solver is order-sensitive:
+    // Gauss-Seidel sweeps rows in sequence, so a different row order gives a different
+    // (equally valid) answer. Collision detectors do not promise a stable order -
+    // zimrphysics's broad phase certainly does not, and MuJoCo sorts its own contacts for
+    // exactly this reason - so without a sort here the same scene replayed from the same
+    // state can diverge. Sorting inside the engine means a caller cannot forget to.
+    sortSlice(Contact, d.contacts[0..d.contact_count], {}, contactBefore);
+    for (d.contacts[0..d.contact_count], 0..) |contact, index| {
+        addContactRows(m, d, contact, @intCast(index));
+    }
+}
+
+/// Rows for one equality constraint - three, one per world axis.
+///
+/// -- ** A CONNECT ROW IS A CONTACT ROW WITHOUT THE INEQUALITY --
+///
+/// The machinery is nearly identical: take both bodies' point Jacobians at the shared point,
+/// subtract them for the relative Jacobian, project onto a direction, and give the solver the
+/// violation along it. What differs is the SIGN CONDITION. A contact may only push
+/// (`f >= 0`) - the surfaces are free to separate. A loop closure may push OR pull, because the
+/// two points are welded together and neither is allowed to leave.
+///
+/// * THREE AXES, NOT ONE ALONG THE ERROR. Projecting onto the error direction would look right
+/// while the error is small and drift sideways: a direction derived from the error cannot
+/// constrain the two axes the error does not happen to point along. World X, Y and Z always
+/// span the space, whatever the error is doing.
+/// How far apart a loop closure's two anchors currently are, in metres.
+///
+/// -- * THE ONE NUMBER ANYONE DEBUGGING A LINKAGE WANTS --
+///
+/// A loop closure is SOFT, like contact - it holds to a tolerance rather than exactly, and the
+/// tolerance depends on the mechanism's stiffness, the timestep and how hard the loop is being
+/// worked. So "is my linkage holding?" is a real question with a real answer, and it should not
+/// require knowing that the answer lives in three rows of `constraint_violation` indexed by
+/// something that is only an equality index if `constraint_kind` says so.
+///
+/// MuJoCo makes you find the rows in `efc_pos` yourself. This is the same information, asked
+/// the way it is actually wanted.
+pub fn equalityError(m: *const Model, d: *const Data, eq: u32) f32 {
+    d.requireStage(.position, "equalityError");
+    const closure: Equality = m.equalities[eq];
+    return switch (closure.holds) {
+        .connect => |points| length3(worldAnchor(d, points.b) - worldAnchor(d, points.a)),
+        // * A WELD'S ERROR IS REPORTED AS THE POSITION PART ONLY. It has two halves in
+        // different units - metres and radians - and no single number honestly combines them.
+        // Position is the one a caller can act on ("has the grip slipped?"), so that is what
+        // this answers, and the orientation rows are visible in `constraint_violation` for
+        // anyone who needs them.
+        .weld => |w| length3(worldAnchor(d, w.b) - worldAnchor(d, w.a)),
+        // For a coupling the error is already scalar, and its sign carries which way the
+        // driven joint has drifted - which the caller usually wants, so it is not made
+        // absolute here.
+        .joint => |couple| blk: {
+            var wanted: f32 = couple.poly[0];
+            if (couple.driver) |driver| {
+                const x: f32 = d.pos[driver.qpos] - driver.rest;
+                var power: f32 = x;
+                inline for (1..5) |k| {
+                    wanted += couple.poly[k] * power;
+                    power *= x;
+                }
+            }
+            break :blk (d.pos[couple.driven.qpos] - couple.driven.rest) - wanted;
+        },
+    };
+}
+
+/// Impedance is clamped away from 0 and 1: at 0 the constraint does not exist and `R`
+/// diverges, at 1 it is perfectly rigid and `R` vanishes, and both ends are numerically
+/// hostile. MuJoCo clamps identically.
+const min_impedance: f32 = 0.0001;
+
+const max_impedance: f32 = 0.9999;
+
+/// Floors, so a degenerate row cannot produce an infinite or negative regularizer.
+const min_regularizer: f32 = 1.0e-10;
+
 /// Fill in `A_hat`, `R`, `J*v` and `aref` for the rows `makeConstraints` produced.
 ///
 /// * THE EXACT DIAGONAL. `A_hat_ii = (J M^-1 J^T)_ii` is the inertia the constraint actually
@@ -5168,13 +5278,6 @@ pub fn projectConstraints(m: *const Model, d: *Data) void {
     }
 }
 
-/// Impedance is clamped away from 0 and 1: at 0 the constraint does not exist and `R`
-/// diverges, at 1 it is perfectly rigid and `R` vanishes, and both ends are numerically
-/// hostile. MuJoCo clamps identically.
-const min_impedance: f32 = 0.0001;
-const max_impedance: f32 = 0.9999;
-/// Floors, so a degenerate row cannot produce an infinite or negative regularizer.
-const min_regularizer: f32 = 1.0e-10;
 const min_constraint_diag: f32 = 1.0e-10;
 
 // =============================================================================
@@ -5231,180 +5334,76 @@ const min_constraint_diag: f32 = 1.0e-10;
 // --------------------------------------------------------------------------
 // =============================================================================
 
-/// How the solver is run. Defaults are chosen so that a joint limit converges in a handful
-/// of iterations; a stiff contact set will want more.
-pub const Algorithm = enum {
-    /// Projected Gauss-Seidel: sweep rows, project each onto its allowed set.
-    pgs,
-    /// Newton on the convex objective, with a line search. See `solveNewton`.
-    newton,
-};
+/// In-place Cholesky, `A = L*L^T`, lower triangle. False if `A` is not positive definite.
+fn choleskyFactor(a: []f32, n: usize) bool {
+    for (0..n) |i| {
+        for (0..i + 1) |j| {
+            var sum: f32 = a[i * n + j];
+            for (0..j) |k| {
+                sum -= a[i * n + k] * a[j * n + k];
+            }
+            if (i == j) {
+                if (sum <= 0) {
+                    return false;
+                }
+                a[i * n + j] = @sqrt(sum);
+            } else {
+                a[i * n + j] = sum / a[j * n + j];
+            }
+        }
+    }
+    return true;
+}
 
-pub const SolverOptions = struct {
-    /// Ceiling on sweeps. PGS converges linearly, so this bounds the work rather than the
-    /// accuracy - `tolerance` is what decides when to stop.
-    /// Which algorithm drives the constraint rows to their targets.
-    ///
-    /// -- ** THE TRADE, MEASURED ON A SIX-BOX STACK (96 rows) --
-    ///
-    /// PGS sweeps rows one at a time; Newton minimises the whole convex objective at once.
-    /// Sweeping is cheap per iteration and converges LINEARLY, which is fine until the rows are
-    /// strongly coupled - and a stack couples every row to every other through the boxes
-    /// between them.
-    ///
-    ///     PGS residual:   1 iter 26.7 * 5 iters 13.4 * 20 iters 4.83 * 100 iters 0.269
-    ///
-    /// Still falling at a hundred iterations, and the stack collapses. Newton's whole point is
-    /// that it does not have to propagate information one contact per sweep.
-    ///
-    /// * PGS REMAINS THE DEFAULT, and it is not a grudging one: at FIVE iterations it beats
-    /// MuJoCo's own PGS by 4.5x and matches MuJoCo's Newton, because the exact `A_hat` diagonal and
-    /// the stall check do real work. Most scenes never reach the regime where this matters, and
-    /// PGS is markedly cheaper per iteration.
-    ///
-    /// -- ** AND ON A REAL ROBOT PGS STOPS SHORT OF `tolerance`, EVERY STEP --
-    ///
-    /// Worth knowing before `constraintConverged` surprises you. A Go1 holding its home pose
-    /// on four feet - sixteen rows, `zig build robot-bench` case 4 - measured over 20 000
-    /// steps at two controller stiffnesses:
-    ///
-    ///     pgs     kp 100   residual 6.8e-6   converged FALSE
-    ///     pgs     kp 300   residual 3.0e-6   converged FALSE
-    ///     newton  kp 100   residual 1.8e-7   converged true
-    ///     newton  kp 300   residual 1.2e-7   converged true
-    ///
-    /// PGS is stopping on `min_progress`, not on `tolerance` - the linear-convergence floor
-    /// the table under `tolerance` documents, reached here at a few times the target. **The
-    /// simulation is fine**: 3e-6 of constraint residual is far below anything the robot can
-    /// feel, both solvers agree on the resting trunk height to four decimals, and the stance
-    /// is stable indefinitely. What is NOT fine is reading `constraintConverged` as a health
-    /// check and concluding something is broken. It reports what it says - did the residual
-    /// reach `tolerance` - and under PGS on a coupled scene the honest answer is no.
-    ///
-    /// If you need `converged` to mean something, use `.newton`; if you need a number, use
-    /// `constraintResidual` and pick a threshold your mechanism actually cares about.
-    algorithm: Algorithm = .pgs,
-    max_iterations: u32 = 60,
-    /// How fast a constraint may push itself out of a violation, in metres per second.
-    ///
-    /// Bounds the POSITION-correction half of the reference acceleration. A soft constraint's
-    /// `-K*I*violation` grows without limit as overlap deepens, and overlap can deepen
-    /// arbitrarily when a fast body is first seen already buried - so this caps how much
-    /// separation one step may demand. 2 m/s recovers a centimetre in five milliseconds,
-    /// which is far quicker than anything looks wrong, while a 0.25 m overlap unwinds over a
-    /// handful of steps instead of exploding.
-    ///
-    /// At the sub-millimetre depths a settled contact reaches, this is orders of magnitude
-    /// from binding.
-    /// Accelerate Gauss-Seidel with Nesterov momentum, as MuJoCo's PGS does.
-    ///
-    /// -- ** IMPLEMENTED, CORRECT, AND OFF BY DEFAULT - because it MEASURED SLOWER --
-    ///
-    /// Plain PGS converges linearly; Nesterov extrapolation reaches the accelerated rate. On a
-    /// standing Go1 it does exactly what the theory says:
-    ///
-    ///     momentum off:  14 solver iterations,  17,847 ns/step
-    ///     momentum on:    3 solver iterations,  19,280 ns/step
-    ///
-    /// **A 4.7x reduction in iterations, and 8% SLOWER.** Each iteration costs roughly twice
-    /// as much, because extrapolating the forces invalidates `d.acc` and it must be rebuilt -
-    /// `rebuildAccelerationFromForces` is O(rows x nv), the same order as the sweep it is
-    /// accelerating. At sixteen rows the fixed cost dominates the saved sweeps.
-    ///
-    /// It is kept rather than deleted because the trade REVERSES with problem size: the rebuild
-    /// is once per iteration while the sweeps saved grow with row count, so a scene with
-    /// hundreds of contact rows should favour it. The switch is how that gets tested when such
-    /// a scene exists, instead of re-deriving the whole thing.
-    ///
-    /// **The lesson is about MuJoCo rather than about momentum.** MuJoCo runs f64 with elliptic
-    /// friction cones and a Newton solver whose inner loop is far more expensive than a
-    /// Gauss-Seidel sweep - the same acceleration pays for itself there and does not here.
-    /// **Copying a technique from a reference implementation copies its cost model too**, and
-    /// that has to be measured rather than inherited.
-    momentum: bool = false,
-    /// Stop when one sweep improves the residual by less than this FRACTION of it.
-    ///
-    /// PGS has a floor - set by f32 and by its own linear convergence - and `tolerance` can
-    /// sit below it. When it does, the solver reaches its best answer and then spends every
-    /// remaining iteration failing to improve on it. Measured on a standing Go1, solved cold
-    /// from a settled stance:
-    ///
-    ///     iterations:   1      2      5     10     20     60     200    1000
-    ///     residual:  19.70  10.14   6.74   3.93   1.35  0.0199  4.0e-6  4.0e-6
-    ///
-    /// It converges by ~200 sweeps and then **plateaus at 4.013e-6 against a target of
-    /// 3.55e-6** - thirteen percent away and unreachable - so it ran to the 60-iteration cap
-    /// on every step of a robot standing still. The readout said `60 it`, which reads as
-    /// failure to converge and was failure to NOTICE convergence.
-    ///
-    /// Relative, so it is scale-free. 1% is far below the per-sweep progress of a problem
-    /// that is genuinely still descending - the Go1 above was still halving its residual per
-    /// sweep at iteration 20 - so this cannot fire early on real work.
-    min_progress: f32 = 0.01,
-    /// How close to the tolerance target a residual must be before `min_progress` may stop
-    /// the solve, as a multiple of that target.
-    ///
-    /// * THIS IS WHAT KEEPS THE STALL CHECK FROM ABANDONING HARD PROBLEMS. Slow progress near
-    /// the floor means the answer is finished; slow progress mid-impact means the problem is
-    /// hard. Without this bound the two are indistinguishable, and the check took a KUKA
-    /// sweeping a crate tower from 14 m/s of ejection to 32 by walking away from half-solved
-    /// contacts.
-    ///
-    /// The measured plateau sat 1.13x above its target, so 100x is generous for the case this
-    /// exists to catch, while a mid-impact residual runs thousands of times larger and stays
-    /// well outside it.
-    stall_window: f32 = 100.0,
-    max_recovery_velocity: f32 = 2.0,
-    // * AUDIT NOTE: this currently fires ZERO times in 280,000 row-solves of the worst scene
-    // available - a KUKA sweeping a five-crate tower at four times its normal rate. It is
-    // kept anyway, and a sibling bound was removed, and the difference is worth stating.
-    //
-    // A `max_force_scale` was added beside this in the same session, capping each row's force
-    // at an arbitrary multiple. Both were plasters over a 1.4 GN blow-up whose real causes
-    // turned out to be a stale `body_subtree_mass` and a contact the solver could never
-    // satisfy. With those fixed, neither fires.
-    //
-    // Bounded penetration recovery is STANDARD (Bullet's error reduction, PhysX's
-    // `maxDepenetrationVelocity`) and describes real behaviour: nothing should be flung apart
-    // faster than it could plausibly separate. An arbitrary force ceiling describes nothing,
-    // and a bound that never fires but would silently rewrite the physics if it did is worse
-    // than no bound. So one stayed and one went.
-    /// Stop once the complementarity residual falls below this FRACTION of the problem's
-    /// own scale (the largest reference acceleration among the active rows).
-    ///
-    /// Relative, not absolute, and the reason is f32. The residual has units of
-    /// acceleration, and reference accelerations for a stiff limit run to several hundred.
-    /// A single-precision float carries about seven significant digits, so the smallest
-    /// residual representable near a magnitude of 500 is around 5e-5 - an absolute
-    /// tolerance below that is unreachable, and the solver would spin to `max_iterations`
-    /// on a problem it had already solved exactly. Scaling by the problem removes the
-    /// dependence on how stiff the model happens to be.
-    tolerance: f32 = 1.0e-6,
-};
+/// Solve `L*L^T*x = b` in place, given `choleskyFactor`'s output.
+fn choleskySolve(a: []const f32, n: usize, b: []f32) void {
+    for (0..n) |i| {
+        var sum: f32 = b[i];
+        for (0..i) |k| {
+            sum -= a[i * n + k] * b[k];
+        }
+        b[i] = sum / a[i * n + i];
+    }
+    var i: usize = n;
+    while (i > 0) {
+        i -= 1;
+        var sum: f32 = b[i];
+        for (i + 1..n) |k| {
+            sum -= a[k * n + i] * b[k];
+        }
+        b[i] = sum / a[i * n + i];
+    }
+}
 
-/// Pack a row's identity into one integer.
-///
-/// Three fields, no hashing: the kind, the thing it came from (a joint index or a contact
-/// id), and a discriminator for rows that share a source (which end of a limit, which edge
-/// of a friction pyramid). Exact rather than hashed, because a collision would silently
-/// warm-start a row from an unrelated force - a wrong answer that converges, which is the
-/// worst kind.
-/// The bits `constraintKey` reserves for a source id, derived once so nothing re-spells it.
-///
-/// *** AN ID IS NOT A SIZE, AND TYPING IT `usize` IS THE BUG THIS REPLACES. `usize` means "big
-/// enough to index this machine's memory" - 64 bits natively, **32 on wasm**. A contact id is a
-/// semantic value whose width has nothing to do with the address space, and passing one through
-/// a `usize` parameter silently narrowed it on one target and not the other.
-///
-/// The symptom was an `@intCast` trap in a wasm build, invisible natively, reached only when a
-/// robot touched ITSELF - because the bridge packs the other body's index at bit 40 and that
-/// field is zero for every contact against the world. Days of bisection for a type name.
-const source_mask: u64 = (1 << 48) - 1;
-
-fn constraintKey(kind: ConstraintKind, source: u64, discriminator: usize) u64 {
-    return (@as(u64, @backingInt(kind)) << 56) |
-        ((source & source_mask) << 8) |
-        @as(u64, @intCast(discriminator));
+/// The objective at `acc + alpha*step`, for the line search.
+fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
+    const nv: usize = m.nv;
+    for (0..nv) |i| {
+        d.newton_trial[i] = acc[i] + alpha * d.newton_step[i];
+        d.newton_scratch[i] = d.newton_trial[i] - d.free_acc[i];
+    }
+    // 1/2*(a - a_free)^T M (a - a_free)
+    mulM(m, d, d.newton_scratch, d.newton_mv);
+    var cost: f32 = 0;
+    for (0..nv) |i| {
+        cost += 0.5 * d.newton_scratch[i] * d.newton_mv[i];
+    }
+    // plus the penalty on every row that is violated AT THE TRIAL POINT - re-deciding the
+    // active set here is what makes this a valid cost for a piecewise-quadratic objective.
+    for (0..d.constraint_count) |row| {
+        const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
+        var value: f32 = 0;
+        for (0..nv) |i| {
+            value += jac[i] * d.newton_trial[i];
+        }
+        const residual: f32 = value - d.constraint_target_acc[row];
+        const unilateral: bool = d.constraint_kind[row].isUnilateral();
+        if (unilateral and residual >= 0) {
+            continue;
+        }
+        cost += 0.5 * residual * residual / d.constraint_regularizer[row];
+    }
+    return cost;
 }
 
 /// Newton's method on the constraint objective, with a line search.
@@ -5616,76 +5615,104 @@ fn solveNewton(m: *const Model, d: *Data) void {
     }
 }
 
-/// The objective at `acc + alpha*step`, for the line search.
-fn newtonCost(m: *const Model, d: *Data, acc: []const f32, alpha: f32) f32 {
-    const nv: usize = m.nv;
-    for (0..nv) |i| {
-        d.newton_trial[i] = acc[i] + alpha * d.newton_step[i];
-        d.newton_scratch[i] = d.newton_trial[i] - d.free_acc[i];
-    }
-    // 1/2*(a - a_free)^T M (a - a_free)
-    mulM(m, d, d.newton_scratch, d.newton_mv);
-    var cost: f32 = 0;
-    for (0..nv) |i| {
-        cost += 0.5 * d.newton_scratch[i] * d.newton_mv[i];
-    }
-    // plus the penalty on every row that is violated AT THE TRIAL POINT - re-deciding the
-    // active set here is what makes this a valid cost for a piecewise-quadratic objective.
+/// Has the solver actually solved it? The check `solveConstraints` uses internally, exposed
+/// because a caller - or a test - asking "did that converge?" should not have to reconstruct
+/// the scaling rule, and two copies of a convergence criterion is one copy too many.
+/// Rebuild `d.acc` so it agrees with `d.constraint_force` after the forces were changed
+/// outside the sweep.
+///
+/// -- ** THE SOLVER'S ONE INVARIANT: `acc` AND `constraint_force` MUST AGREE --
+///
+/// Every sweep reads `d.acc` to work out how much force a row still needs, then adds the
+/// difference. That only works if `acc` already reflects the forces currently held. Warm
+/// starting learned this the hard way - seeding forces without seeding `acc` made them double
+/// every step, and a joint on its limit reached 7619 N.
+///
+/// Nesterov extrapolation changes the forces the same way, so it needs the same repair. It is
+/// written once here rather than twice because the two callers cannot be allowed to disagree
+/// about what "agree" means.
+fn rebuildAccelerationFromForces(m: *const Model, d: *Data) void {
+    @memcpy(d.acc, d.free_acc);
     for (0..d.constraint_count) |row| {
-        const jac: []const f32 = d.constraint_jacobian[row * nv ..][0..nv];
-        var value: f32 = 0;
-        for (0..nv) |i| {
-            value += jac[i] * d.newton_trial[i];
-        }
-        const residual: f32 = value - d.constraint_target_acc[row];
-        const unilateral: bool = d.constraint_kind[row].isUnilateral();
-        if (unilateral and residual >= 0) {
+        const force: f32 = d.constraint_force[row];
+        if (force == 0) {
             continue;
         }
-        cost += 0.5 * residual * residual / d.constraint_regularizer[row];
+        const inv_inertia_jacobian: []const f32 =
+            d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
+        for (d.acc, inv_inertia_jacobian) |*a, mj| {
+            a.* += force * mj;
+        }
     }
-    return cost;
 }
 
-/// In-place Cholesky, `A = L*L^T`, lower triangle. False if `A` is not positive definite.
-fn choleskyFactor(a: []f32, n: usize) bool {
-    for (0..n) |i| {
-        for (0..i + 1) |j| {
-            var sum: f32 = a[i * n + j];
-            for (0..j) |k| {
-                sum -= a[i * n + k] * a[j * n + k];
-            }
-            if (i == j) {
-                if (sum <= 0) {
-                    return false;
-                }
-                a[i * n + j] = @sqrt(sum);
-            } else {
-                a[i * n + j] = sum / a[j * n + j];
-            }
+/// How far the current forces are from actually solving (5), as a single number.
+///
+/// ABSOLUTE, in units of acceleration. The caller decides what "small" means - the solver
+/// compares it against a fraction of the problem's own scale (see `SolverOptions.tolerance`),
+/// but a gradient computation will want the raw quantity.
+///
+/// -- WHAT "SOLVED" MEANS WITH AN INEQUALITY --
+/// Define the per-row shortfall
+///
+///     s_i = J_i*a + R_i f_i - aref_i
+///
+/// which is the residual of (5) rearranged: `s = (A + R) f - (aref - a_free)`. Without the
+/// inequality, solved would mean `s = 0`. With `f >= 0` it means the
+/// Karush-Kuhn-Tucker conditions
+///
+///     f_i >= 0,     s_i >= 0,     f_i * s_i = 0
+///
+/// read as: a row either carries force and is exactly satisfied (`s_i = 0`), or carries no
+/// force and is over-satisfied (`s_i > 0`, the constraint would have to PULL to do better,
+/// which it may not). The two cases are captured in one expression by the natural
+/// complementarity function, which is zero exactly when the conditions hold:
+///
+///     * residual = || min(f_i, s_i) ||
+///
+/// -- WHY THIS FUNCTION EXISTS AT ALL --
+/// It is a convergence check, and an honest one: a solver that has stopped is not the same
+/// as a solver that has converged, and iteration count alone cannot tell them apart.
+///
+/// But it is also the groundwork for section 4d. Differentiating through an iterative solver by
+/// unrolling its iterations onto an autodiff tape is slow, memory-hungry and numerically
+/// poor. The right technique is IMPLICIT differentiation: differentiate the optimality
+/// conditions at the converged point and solve one linear system, at a cost independent of
+/// how many iterations it took. Those optimality conditions are precisely the `s_i` above.
+/// Writing them down now - as a diagnostic that earns its place immediately - means the
+/// gradient path later is an addition rather than a rewrite.
+pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
+    var sum_squares: f32 = 0;
+    for (0..d.constraint_count) |row| {
+        // Rows the mechanism cannot move along carry no force and are trivially satisfied;
+        // including them would report a residual for a constraint that cannot be violated.
+        if (d.constraint_inertia[row] <= min_constraint_diag) {
+            continue;
         }
+        const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
+        var current_acc: f32 = 0;
+        for (jacobian, d.acc) |j, a| {
+            current_acc += j * a;
+        }
+        const shortfall: f32 = current_acc +
+            d.constraint_regularizer[row] * d.constraint_force[row] -
+            d.constraint_target_acc[row];
+        const violation: f32 = @min(d.constraint_force[row], shortfall);
+        sum_squares += violation * violation;
     }
-    return true;
+    return @sqrt(sum_squares);
 }
 
-/// Solve `L*L^T*x = b` in place, given `choleskyFactor`'s output.
-fn choleskySolve(a: []const f32, n: usize, b: []f32) void {
-    for (0..n) |i| {
-        var sum: f32 = b[i];
-        for (0..i) |k| {
-            sum -= a[i * n + k] * b[k];
-        }
-        b[i] = sum / a[i * n + i];
+/// The magnitude of the constraint problem, used to make convergence scale-independent.
+///
+/// Floored at 1 so a barely-engaged constraint set still has a sane absolute threshold
+/// rather than being asked for exact zero.
+pub fn constraintScale(d: *const Data) f32 {
+    var scale: f32 = 1.0;
+    for (0..d.constraint_count) |row| {
+        scale = @max(scale, @abs(d.constraint_target_acc[row]));
     }
-    var i: usize = n;
-    while (i > 0) {
-        i -= 1;
-        var sum: f32 = b[i];
-        for (i + 1..n) |k| {
-            sum -= a[k * n + i] * b[k];
-        }
-        b[i] = sum / a[i * n + i];
-    }
+    return scale;
 }
 
 pub fn solveConstraints(m: *const Model, d: *Data) void {
@@ -6013,108 +6040,8 @@ pub fn solveConstraints(m: *const Model, d: *Data) void {
     }
 }
 
-/// The magnitude of the constraint problem, used to make convergence scale-independent.
-///
-/// Floored at 1 so a barely-engaged constraint set still has a sane absolute threshold
-/// rather than being asked for exact zero.
-pub fn constraintScale(d: *const Data) f32 {
-    var scale: f32 = 1.0;
-    for (0..d.constraint_count) |row| {
-        scale = @max(scale, @abs(d.constraint_target_acc[row]));
-    }
-    return scale;
-}
-
-/// Has the solver actually solved it? The check `solveConstraints` uses internally, exposed
-/// because a caller - or a test - asking "did that converge?" should not have to reconstruct
-/// the scaling rule, and two copies of a convergence criterion is one copy too many.
-/// Rebuild `d.acc` so it agrees with `d.constraint_force` after the forces were changed
-/// outside the sweep.
-///
-/// -- ** THE SOLVER'S ONE INVARIANT: `acc` AND `constraint_force` MUST AGREE --
-///
-/// Every sweep reads `d.acc` to work out how much force a row still needs, then adds the
-/// difference. That only works if `acc` already reflects the forces currently held. Warm
-/// starting learned this the hard way - seeding forces without seeding `acc` made them double
-/// every step, and a joint on its limit reached 7619 N.
-///
-/// Nesterov extrapolation changes the forces the same way, so it needs the same repair. It is
-/// written once here rather than twice because the two callers cannot be allowed to disagree
-/// about what "agree" means.
-fn rebuildAccelerationFromForces(m: *const Model, d: *Data) void {
-    @memcpy(d.acc, d.free_acc);
-    for (0..d.constraint_count) |row| {
-        const force: f32 = d.constraint_force[row];
-        if (force == 0) {
-            continue;
-        }
-        const inv_inertia_jacobian: []const f32 =
-            d.constraint_inv_inertia_jacobian[row * m.nv ..][0..m.nv];
-        for (d.acc, inv_inertia_jacobian) |*a, mj| {
-            a.* += force * mj;
-        }
-    }
-}
-
 pub fn constraintConverged(m: *const Model, d: *const Data) bool {
     return constraintResidual(m, d) <= m.opt.solver.tolerance * constraintScale(d);
-}
-
-/// How far the current forces are from actually solving (5), as a single number.
-///
-/// ABSOLUTE, in units of acceleration. The caller decides what "small" means - the solver
-/// compares it against a fraction of the problem's own scale (see `SolverOptions.tolerance`),
-/// but a gradient computation will want the raw quantity.
-///
-/// -- WHAT "SOLVED" MEANS WITH AN INEQUALITY --
-/// Define the per-row shortfall
-///
-///     s_i = J_i*a + R_i f_i - aref_i
-///
-/// which is the residual of (5) rearranged: `s = (A + R) f - (aref - a_free)`. Without the
-/// inequality, solved would mean `s = 0`. With `f >= 0` it means the
-/// Karush-Kuhn-Tucker conditions
-///
-///     f_i >= 0,     s_i >= 0,     f_i * s_i = 0
-///
-/// read as: a row either carries force and is exactly satisfied (`s_i = 0`), or carries no
-/// force and is over-satisfied (`s_i > 0`, the constraint would have to PULL to do better,
-/// which it may not). The two cases are captured in one expression by the natural
-/// complementarity function, which is zero exactly when the conditions hold:
-///
-///     * residual = || min(f_i, s_i) ||
-///
-/// -- WHY THIS FUNCTION EXISTS AT ALL --
-/// It is a convergence check, and an honest one: a solver that has stopped is not the same
-/// as a solver that has converged, and iteration count alone cannot tell them apart.
-///
-/// But it is also the groundwork for section 4d. Differentiating through an iterative solver by
-/// unrolling its iterations onto an autodiff tape is slow, memory-hungry and numerically
-/// poor. The right technique is IMPLICIT differentiation: differentiate the optimality
-/// conditions at the converged point and solve one linear system, at a cost independent of
-/// how many iterations it took. Those optimality conditions are precisely the `s_i` above.
-/// Writing them down now - as a diagnostic that earns its place immediately - means the
-/// gradient path later is an addition rather than a rewrite.
-pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
-    var sum_squares: f32 = 0;
-    for (0..d.constraint_count) |row| {
-        // Rows the mechanism cannot move along carry no force and are trivially satisfied;
-        // including them would report a residual for a constraint that cannot be violated.
-        if (d.constraint_inertia[row] <= min_constraint_diag) {
-            continue;
-        }
-        const jacobian: []const f32 = d.constraint_jacobian[row * m.nv ..][0..m.nv];
-        var current_acc: f32 = 0;
-        for (jacobian, d.acc) |j, a| {
-            current_acc += j * a;
-        }
-        const shortfall: f32 = current_acc +
-            d.constraint_regularizer[row] * d.constraint_force[row] -
-            d.constraint_target_acc[row];
-        const violation: f32 = @min(d.constraint_force[row], shortfall);
-        sum_squares += violation * violation;
-    }
-    return @sqrt(sum_squares);
 }
 
 // =============================================================================
@@ -6136,6 +6063,56 @@ pub fn constraintResidual(m: *const Model, d: *const Data) f32 {
 // policy reads sensors and writes controls. `sensor_data` being one flat array is chosen
 // with that in mind - it is the vector a policy consumes.
 // =============================================================================
+
+fn writeVec(out: []f32, v: Vec) void {
+    inline for (0..3) |k| {
+        out[k] = v[k];
+    }
+}
+
+/// A site's spatial velocity, in WORLD axes about the site's own point.
+///
+/// `cvel` is about the tree's shared frame origin, so the linear part has to be carried out
+/// to the site: a spatial motion `(omega, v)` about `O` moves a point `p` at `v + omega x (p - O)`.
+/// The same identity as `jacPoint`, which is not a coincidence - one is this evaluated at a
+/// velocity, the other its derivative with respect to each DOF.
+fn siteVelocity(m: *const Model, d: *const Data, site: u32) Motion {
+    const body: u32 = m.site_body[site];
+    const origin: Vec = d.subtree_com[m.body_root[body]];
+    const spatial: Motion = d.cvel[body];
+    return .{
+        .ang = spatial.ang,
+        .lin = spatial.lin + cross(spatial.ang, d.site_xpos[site] - origin),
+    };
+}
+
+/// Proper linear acceleration at a site, in the site's own frame - what an accelerometer
+/// reads.
+///
+/// * THE TERM THAT IS EASY TO MISS. Carrying a spatial acceleration out to a point is not
+/// the same operation as carrying a velocity out. A point fixed on a rotating body is
+/// accelerating even at constant spatial acceleration, because the frame it sits in is
+/// turning, and the correction is
+///
+///     a_point = a_spatial.lin + alpha x r  +  omega x v_point
+///
+/// The last term is the Coriolis correction from the rotating frame, and MuJoCo's
+/// `mj_objectAcceleration` adds it explicitly for the same reason. Omit it and a spinning
+/// sensor reads plausibly and wrongly - the error is exactly zero whenever the body is not
+/// rotating, which is every simple test one would think to write.
+fn siteProperAcceleration(m: *const Model, d: *const Data, site: u32) Vec {
+    const body: u32 = m.site_body[site];
+    const origin: Vec = d.subtree_com[m.body_root[body]];
+    const offset: Vec = d.site_xpos[site] - origin;
+
+    const spatial_acc: Motion = d.body_acc[body];
+    const spatial_vel: Motion = d.cvel[body];
+    const point_vel: Vec = spatial_vel.lin + cross(spatial_vel.ang, offset);
+    const point_acc: Vec = spatial_acc.lin + cross(spatial_acc.ang, offset) +
+        cross(spatial_vel.ang, point_vel);
+
+    return rotate(conjugate(d.site_xrot[site]), point_acc);
+}
 
 /// Evaluate the sensors belonging to one stage. Called three times per `forward`.
 pub fn sensors(m: *const Model, d: *Data, stage: Stage) void {
@@ -6178,28 +6155,6 @@ pub fn sensors(m: *const Model, d: *Data, stage: Stage) void {
     }
 }
 
-fn writeVec(out: []f32, v: Vec) void {
-    inline for (0..3) |k| {
-        out[k] = v[k];
-    }
-}
-
-/// A site's spatial velocity, in WORLD axes about the site's own point.
-///
-/// `cvel` is about the tree's shared frame origin, so the linear part has to be carried out
-/// to the site: a spatial motion `(omega, v)` about `O` moves a point `p` at `v + omega x (p - O)`.
-/// The same identity as `jacPoint`, which is not a coincidence - one is this evaluated at a
-/// velocity, the other its derivative with respect to each DOF.
-fn siteVelocity(m: *const Model, d: *const Data, site: u32) Motion {
-    const body: u32 = m.site_body[site];
-    const origin: Vec = d.subtree_com[m.body_root[body]];
-    const spatial: Motion = d.cvel[body];
-    return .{
-        .ang = spatial.ang,
-        .lin = spatial.lin + cross(spatial.ang, d.site_xpos[site] - origin),
-    };
-}
-
 /// Propagate the SOLVED acceleration down the tree, giving each body's spatial acceleration.
 ///
 /// Structurally the forward pass of `rne`, with two differences that matter. It uses the
@@ -6227,32 +6182,142 @@ pub fn bodyAccelerations(m: *const Model, d: *Data) void {
     }
 }
 
-/// Proper linear acceleration at a site, in the site's own frame - what an accelerometer
-/// reads.
-///
-/// * THE TERM THAT IS EASY TO MISS. Carrying a spatial acceleration out to a point is not
-/// the same operation as carrying a velocity out. A point fixed on a rotating body is
-/// accelerating even at constant spatial acceleration, because the frame it sits in is
-/// turning, and the correction is
-///
-///     a_point = a_spatial.lin + alpha x r  +  omega x v_point
-///
-/// The last term is the Coriolis correction from the rotating frame, and MuJoCo's
-/// `mj_objectAcceleration` adds it explicitly for the same reason. Omit it and a spinning
-/// sensor reads plausibly and wrongly - the error is exactly zero whenever the body is not
-/// rotating, which is every simple test one would think to write.
-fn siteProperAcceleration(m: *const Model, d: *const Data, site: u32) Vec {
-    const body: u32 = m.site_body[site];
-    const origin: Vec = d.subtree_com[m.body_root[body]];
-    const offset: Vec = d.site_xpos[site] - origin;
+// =============================================================================
+// Position coordinates
+//
+// `pos` and `vel` have different lengths and different geometry. Orientations live on the
+// unit sphere in 4D; velocities live in its 3D tangent space. So you cannot subtract two
+// positions to get a velocity, and you cannot add a velocity to a position. These three
+// functions are the only legal bridges, and everything else must go through them.
+// =============================================================================
 
-    const spatial_acc: Motion = d.body_acc[body];
-    const spatial_vel: Motion = d.cvel[body];
-    const point_vel: Vec = spatial_vel.lin + cross(spatial_vel.ang, offset);
-    const point_acc: Vec = spatial_acc.lin + cross(spatial_acc.ang, offset) +
-        cross(spatial_vel.ang, point_vel);
+/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
+/// rotation the velocity describes over the interval, then compose.
+fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
+    const speed: f32 = length3(w);
+    if (speed < 1.0e-12) {
+        return q;
+    }
+    const axis: Vec = w / splat(speed);
+    const delta: Quat = zm.quatFromNormAxisAngle(axis, speed * dt);
+    // The velocity is in the joint's own frame, so the increment applies on the right.
+    return normalizeQuat(qmul(q, delta));
+}
 
-    return rotate(conjugate(d.site_xrot[site]), point_acc);
+/// Advance `pos` by `vel` over `dt`, respecting the geometry of each joint type.
+pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void {
+    assertf(pos.len == m.nq, @src(), "pos has {d} entries, model wants {d}", .{ pos.len, m.nq });
+    assertf(vel.len == m.nv, @src(), "vel has {d} entries, model wants {d}", .{ vel.len, m.nv });
+
+    for (0..m.njnt) |ji| {
+        const qadr: u32 = m.jnt_qpos_adr[ji];
+        const vadr: u32 = m.jnt_dof_adr[ji];
+        switch (m.jnt_type[ji]) {
+            .slide, .hinge => {
+                pos[qadr] += dt * vel[vadr];
+            },
+            .free => {
+                // Translation is ordinary integration; rotation is not.
+                inline for (0..3) |k| {
+                    pos[qadr + k] += dt * vel[vadr + k];
+                }
+                const w: Vec = vec(vel[vadr + 3], vel[vadr + 4], vel[vadr + 5]);
+                const q: Quat = .{ pos[qadr + 3], pos[qadr + 4], pos[qadr + 5], pos[qadr + 6] };
+                const rotated: Quat = rotateQuatByAngularVel(q, w, dt);
+                inline for (0..4) |k| {
+                    pos[qadr + 3 + k] = rotated[k];
+                }
+            },
+            .ball => {
+                const w: Vec = vec(vel[vadr], vel[vadr + 1], vel[vadr + 2]);
+                const q: Quat = .{ pos[qadr], pos[qadr + 1], pos[qadr + 2], pos[qadr + 3] };
+                const rotated: Quat = rotateQuatByAngularVel(q, w, dt);
+                inline for (0..4) |k| {
+                    pos[qadr + k] = rotated[k];
+                }
+            },
+        }
+    }
+}
+
+/// The angular velocity that rotates `from` into `to` over `1/inv_dt` seconds.
+fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
+    // Relative rotation in `from`'s frame, matching the composition order above.
+    const inv_from: Quat = .{ -from[0], -from[1], -from[2], from[3] };
+    var rel: Quat = qmul(inv_from, to);
+    // q and -q are the same rotation; pick the short way round so the velocity is minimal
+    // rather than taking the long path over the double cover.
+    if (rel[3] < 0.0) {
+        rel = -rel;
+    }
+    const sin_half: f32 = @sqrt(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]);
+    if (sin_half < 1.0e-12) {
+        return vec_zero;
+    }
+    const angle: f32 = 2.0 * atan2Rad(sin_half, rel[3]);
+    const axis: Vec = vec(rel[0], rel[1], rel[2]) / splat(sin_half);
+    return axis * splat(angle * inv_dt);
+}
+
+/// The inverse of `integratePos`: the velocity that carries `from` to `to` in `dt`.
+/// MuJoCo calls this `mj_differentiatePos`, and it exists because "subtract two positions"
+/// is not a meaningful operation on a model containing a quaternion.
+pub fn differentiatePos(
+    m: *const Model,
+    vel: []f32,
+    from: []const f32,
+    to: []const f32,
+    dt: f32,
+) void {
+    assertf(dt > 0.0, @src(), "differentiatePos needs a positive dt, got {d}", .{dt});
+    const inv_dt: f32 = 1.0 / dt;
+
+    for (0..m.njnt) |ji| {
+        const qadr: u32 = m.jnt_qpos_adr[ji];
+        const vadr: u32 = m.jnt_dof_adr[ji];
+        switch (m.jnt_type[ji]) {
+            .slide, .hinge => {
+                vel[vadr] = (to[qadr] - from[qadr]) * inv_dt;
+            },
+            .free => {
+                inline for (0..3) |k| {
+                    vel[vadr + k] = (to[qadr + k] - from[qadr + k]) * inv_dt;
+                }
+                const qa: Quat = .{ from[qadr + 3], from[qadr + 4], from[qadr + 5], from[qadr + 6] };
+                const qb: Quat = .{ to[qadr + 3], to[qadr + 4], to[qadr + 5], to[qadr + 6] };
+                const w: Vec = angularVelBetween(qa, qb, inv_dt);
+                inline for (0..3) |k| {
+                    vel[vadr + 3 + k] = w[k];
+                }
+            },
+            .ball => {
+                const qa: Quat = .{ from[qadr], from[qadr + 1], from[qadr + 2], from[qadr + 3] };
+                const qb: Quat = .{ to[qadr], to[qadr + 1], to[qadr + 2], to[qadr + 3] };
+                const w: Vec = angularVelBetween(qa, qb, inv_dt);
+                inline for (0..3) |k| {
+                    vel[vadr + k] = w[k];
+                }
+            },
+        }
+    }
+}
+
+/// Renormalize every quaternion in `pos`. Integration walks a quaternion off the unit
+/// sphere a little each step, and the error compounds, so this runs after every advance.
+pub fn normalizeQuats(m: *const Model, pos: []f32) void {
+    for (0..m.njnt) |ji| {
+        const qadr: u32 = m.jnt_qpos_adr[ji];
+        const base: u32 = switch (m.jnt_type[ji]) {
+            .free => qadr + 3,
+            .ball => qadr,
+            .slide, .hinge => continue,
+        };
+        const q: Quat = .{ pos[base], pos[base + 1], pos[base + 2], pos[base + 3] };
+        const fixed: Quat = normalizeQuat(q);
+        inline for (0..4) |k| {
+            pos[base + k] = fixed[k];
+        }
+    }
 }
 
 // =============================================================================
@@ -6392,6 +6457,37 @@ fn dampedVelocityStep(m: *const Model, d: *Data, dt: f32) void {
     // - but if this step ever needs to be twice as fast, this is a known 4.5% with a known
     // and testable price.
     factorM(m, d);
+}
+
+/// Keep velocities inside a physically meaningful range, and stop a non-finite one spreading.
+///
+/// -- ** WHY A HARD BOUND IS RIGHT, NOT A PLASTER --
+///
+/// Every production engine has one, because a rigid-body step has a maximum speed it can
+/// describe at all. A body moving further than its own size in one timestep is past the point
+/// where the discretisation means anything, and letting it continue turns a visible glitch
+/// into a corrupted model.
+///
+/// **The failure this ends, measured:** a KUKA driven by IK at a target INSIDE a stack of
+/// 6.8 kg crates, at a gain high enough to keep trying. Accelerations sat at ~10,000 - a
+/// thousand g - for forty steps with the solver capped at 60 iterations, a row reached
+/// 1536 N, and then the mass matrix went NaN: `factorM: pivot 24 is nan`, on screen, in a
+/// demo someone was using.
+///
+/// * THE NON-FINITE CHECK IS THE IMPORTANT HALF. A clamp alone passes NaN straight through,
+/// because every comparison against NaN is false. Zeroing it contains the corruption at the
+/// one place all motion flows through, rather than letting it reach `crb` and take the whole
+/// model with it.
+fn boundVelocity(m: *const Model, d: *Data) void {
+    const bound: f32 = m.opt.max_velocity;
+    for (d.vel) |*v| {
+        if (!isFinite(v.*)) {
+            // Not recoverable, but containable: the body stops rather than poisoning `M`.
+            v.* = 0;
+            continue;
+        }
+        v.* = clamp(v.*, -bound, bound);
+    }
 }
 
 fn advanceEuler(m: *const Model, d: *Data, dt: f32) void {
@@ -6545,6 +6641,16 @@ pub fn step2(m: *const Model, d: *Data) void {
 // For a damped, actuated mechanism - which is what a robot is - the first two carry the
 // stability, and that is the trade this integrator makes.
 
+/// Write `skew(v)` - the matrix with `skew(v)*x = v x x` - into a 6x6 block at `(row, col)`.
+fn setSkew(out: *[36]f32, row: usize, col: usize, v: Vec) void {
+    out[(row + 0) * 6 + col + 1] += -v[2];
+    out[(row + 0) * 6 + col + 2] += v[1];
+    out[(row + 1) * 6 + col + 0] += v[2];
+    out[(row + 1) * 6 + col + 2] += -v[0];
+    out[(row + 2) * 6 + col + 0] += -v[1];
+    out[(row + 2) * 6 + col + 1] += v[0];
+}
+
 /// `d(v x f)/dv` for a fixed force `f` - a 6x6 block, row-major.
 ///
 /// `crossForce(v, f)` is bilinear, so its derivative in `v` is just the other operand arranged
@@ -6569,14 +6675,16 @@ fn crossMotionVelJacobian(mo: Motion, out: *[36]f32) void {
     setSkew(out, 3, 3, -mo.ang);
 }
 
-/// Write `skew(v)` - the matrix with `skew(v)*x = v x x` - into a 6x6 block at `(row, col)`.
-fn setSkew(out: *[36]f32, row: usize, col: usize, v: Vec) void {
-    out[(row + 0) * 6 + col + 1] += -v[2];
-    out[(row + 0) * 6 + col + 2] += v[1];
-    out[(row + 1) * 6 + col + 0] += v[2];
-    out[(row + 1) * 6 + col + 2] += -v[0];
-    out[(row + 2) * 6 + col + 0] += -v[1];
-    out[(row + 2) * 6 + col + 1] += v[0];
+/// Apply a 6x6 block to a motion vector.
+fn applyBlock(block: *const [36]f32, v: Motion) Motion {
+    const x = [6]f32{ v.ang[0], v.ang[1], v.ang[2], v.lin[0], v.lin[1], v.lin[2] };
+    var y: [6]f32 = @splat(0);
+    for (0..6) |r| {
+        for (0..6) |c| {
+            y[r] += block[r * 6 + c] * x[c];
+        }
+    }
+    return .{ .ang = vec(y[0], y[1], y[2]), .lin = vec(y[3], y[4], y[5]) };
 }
 
 /// The derivative of `rotationTriple`, for a ball joint or a free joint's rotational half.
@@ -6608,6 +6716,12 @@ fn rotationTripleDerivative(
     inline for (0..3) |k| {
         dcvel[body * nv + dof + k] = dcvel[body * nv + dof + k].add(d.cdof[dof + k]);
     }
+}
+
+/// Apply a 6x6 block to a motion vector, producing a force.
+fn applyBlockForce(block: *const [36]f32, v: Motion) Force {
+    const out: Motion = applyBlock(block, v);
+    return .{ .ang = out.ang, .lin = out.lin };
 }
 
 /// `d(bias force)/dv` - the Coriolis and centrifugal derivative, added into `out`.
@@ -6770,24 +6884,6 @@ fn rneVelDerivative(m: *const Model, d: *Data, out: []f32) void {
     }
 }
 
-/// Apply a 6x6 block to a motion vector.
-fn applyBlock(block: *const [36]f32, v: Motion) Motion {
-    const x = [6]f32{ v.ang[0], v.ang[1], v.ang[2], v.lin[0], v.lin[1], v.lin[2] };
-    var y: [6]f32 = @splat(0);
-    for (0..6) |r| {
-        for (0..6) |c| {
-            y[r] += block[r * 6 + c] * x[c];
-        }
-    }
-    return .{ .ang = vec(y[0], y[1], y[2]), .lin = vec(y[3], y[4], y[5]) };
-}
-
-/// Apply a 6x6 block to a motion vector, producing a force.
-fn applyBlockForce(block: *const [36]f32, v: Motion) Force {
-    const out: Motion = applyBlock(block, v);
-    return .{ .ang = out.ang, .lin = out.lin };
-}
-
 /// `D = d(velocity-dependent smooth forces)/dv`, dense and row-major.
 ///
 /// Dense on purpose, for now. `D` is NOT tree-sparse: a tendon couples every DOF it touches
@@ -6892,7 +6988,7 @@ fn luFactor(a: []f32, n: u32, pivot: []u32) bool {
         pivot[k] = @intCast(best);
         if (best != k) {
             for (0..n) |col| {
-                std.mem.swap(f32, &a[k * n + col], &a[best * n + col]);
+                swap(f32, &a[k * n + col], &a[best * n + col]);
             }
         }
         const inv_diagonal: f32 = 1.0 / a[k * n + k];
@@ -6914,7 +7010,7 @@ fn luSolve(a: []const f32, n: u32, pivot: []const u32, x: []f32) void {
     for (0..n) |k| {
         const p: u32 = pivot[k];
         if (p != k) {
-            std.mem.swap(f32, &x[k], &x[p]);
+            swap(f32, &x[k], &x[p]);
         }
     }
     // Forward substitution through L (unit diagonal).
@@ -7028,37 +7124,6 @@ pub fn step(m: *const Model, d: *Data) void {
     d.stage = .stale;
 }
 
-/// Keep velocities inside a physically meaningful range, and stop a non-finite one spreading.
-///
-/// -- ** WHY A HARD BOUND IS RIGHT, NOT A PLASTER --
-///
-/// Every production engine has one, because a rigid-body step has a maximum speed it can
-/// describe at all. A body moving further than its own size in one timestep is past the point
-/// where the discretisation means anything, and letting it continue turns a visible glitch
-/// into a corrupted model.
-///
-/// **The failure this ends, measured:** a KUKA driven by IK at a target INSIDE a stack of
-/// 6.8 kg crates, at a gain high enough to keep trying. Accelerations sat at ~10,000 - a
-/// thousand g - for forty steps with the solver capped at 60 iterations, a row reached
-/// 1536 N, and then the mass matrix went NaN: `factorM: pivot 24 is nan`, on screen, in a
-/// demo someone was using.
-///
-/// * THE NON-FINITE CHECK IS THE IMPORTANT HALF. A clamp alone passes NaN straight through,
-/// because every comparison against NaN is false. Zeroing it contains the corruption at the
-/// one place all motion flows through, rather than letting it reach `crb` and take the whole
-/// model with it.
-fn boundVelocity(m: *const Model, d: *Data) void {
-    const bound: f32 = m.opt.max_velocity;
-    for (d.vel) |*v| {
-        if (!isFinite(v.*)) {
-            // Not recoverable, but containable: the body stops rather than poisoning `M`.
-            v.* = 0;
-            continue;
-        }
-        v.* = clamp(v.*, -bound, bound);
-    }
-}
-
 /// Total mechanical energy, for testing and for a HUD. Kinetic is `1/2v^TMv`; potential is
 /// `-sum m_i*g*x_i` over the bodies' centres of mass.
 ///
@@ -7085,150 +7150,99 @@ pub fn energy(m: *const Model, d: *const Data) f32 {
     return kinetic + potential;
 }
 
-/// Normalize a quaternion, falling back to identity if it has collapsed. Integration and
-/// user input both walk quaternions off the unit sphere, and a zero-norm quaternion has no
-/// orientation to recover - identity keeps the simulation running instead of emitting NaN.
-fn normalizeQuat(q: Quat) Quat {
-    const n: f32 = @sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
-    return if (n > 1.0e-9) q / splat(n) else quat_identity;
-}
-
 // =============================================================================
-// Position coordinates
-//
-// `pos` and `vel` have different lengths and different geometry. Orientations live on the
-// unit sphere in 4D; velocities live in its 3D tangent space. So you cannot subtract two
-// positions to get a velocity, and you cannot add a velocity to a position. These three
-// functions are the only legal bridges, and everything else must go through them.
+// Placing a built robot - lowest points, resting on the floor
 // =============================================================================
 
-/// Advance `pos` by `vel` over `dt`, respecting the geometry of each joint type.
-pub fn integratePos(m: *const Model, pos: []f32, vel: []const f32, dt: f32) void {
-    assertf(pos.len == m.nq, @src(), "pos has {d} entries, model wants {d}", .{ pos.len, m.nq });
-    assertf(vel.len == m.nv, @src(), "vel has {d} entries, model wants {d}", .{ vel.len, m.nv });
+/// The lowest point (world z) of one collision shape at the current kinematics. Plain geometry: the lowest of a
+/// sphere's, a capsule's or cylinder's (along local Y), a box's corners, a hull's points.
+fn geomLowestPoint(m: *const Model, d: *const Data, g: usize) f32 {
+    const body: u32 = m.geom_body[g];
+    const rot: Quat = qmul(d.body_xrot[body], m.geom_rot[g]);
+    const center: Vec = d.body_xpos[body] + rotate(d.body_xrot[body], m.geom_pos[g]);
+    switch (m.geom_shape[g]) {
+        .sphere => |shape| return center[2] - shape.radius,
+        .capsule => |shape| {
+            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
+            return center[2] - @abs(axis[2]) - shape.radius;
+        },
+        .cylinder => |shape| {
+            const axis: Vec = rotate(rot, vec(0, shape.half_height, 0));
+            return center[2] - @abs(axis[2]) - shape.radius;
+        },
+        .box => |shape| {
+            var lowest: f32 = no_shape_height;
+            for (0..8) |corner| {
+                const h: Vec = shape.half_extent;
+                const x: f32 = if (corner & 1 == 0) -h[0] else h[0];
+                const y: f32 = if (corner & 2 == 0) -h[1] else h[1];
+                const z: f32 = if (corner & 4 == 0) -h[2] else h[2];
+                lowest = @min(lowest, center[2] + rotate(rot, vec(x, y, z))[2]);
+            }
+            return lowest;
+        },
+        .hull => |shape| {
+            var lowest: f32 = no_shape_height;
+            for (shape.points) |point| {
+                lowest = @min(lowest, center[2] + rotate(rot, point)[2]);
+            }
+            return lowest;
+        },
+    }
+}
 
-    for (0..m.njnt) |ji| {
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const vadr: u32 = m.jnt_dof_adr[ji];
-        switch (m.jnt_type[ji]) {
-            .slide, .hinge => {
-                pos[qadr] += dt * vel[vadr];
-            },
-            .free => {
-                // Translation is ordinary integration; rotation is not.
-                inline for (0..3) |k| {
-                    pos[qadr + k] += dt * vel[vadr + k];
-                }
-                const w: Vec = vec(vel[vadr + 3], vel[vadr + 4], vel[vadr + 5]);
-                const q: Quat = .{ pos[qadr + 3], pos[qadr + 4], pos[qadr + 5], pos[qadr + 6] };
-                const rotated: Quat = rotateQuatByAngularVel(q, w, dt);
-                inline for (0..4) |k| {
-                    pos[qadr + 3 + k] = rotated[k];
-                }
-            },
-            .ball => {
-                const w: Vec = vec(vel[vadr], vel[vadr + 1], vel[vadr + 2]);
-                const q: Quat = .{ pos[qadr], pos[qadr + 1], pos[qadr + 2], pos[qadr + 3] };
-                const rotated: Quat = rotateQuatByAngularVel(q, w, dt);
-                inline for (0..4) |k| {
-                    pos[qadr + k] = rotated[k];
-                }
-            },
+/// Each body's own lowest point, the same geometry as `lowestPoint` (run `forward` first): `out[b]` is the lowest
+/// point of body `b`'s collision shapes, `no_shape_height` for a body with none (the world body always - it is the
+/// floor). What lets a tracker ask WHICH body touches the floor, not just whether something does.
+pub fn bodyLowestPoints(m: *const Model, d: *const Data, out: []f32) void {
+    assertf(out.len == m.nbody, @src(), "{d} heights for {d} bodies", .{ out.len, m.nbody });
+    @memset(out, no_shape_height);
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        if (body == 0) {
+            continue;
         }
+        out[body] = @min(out[body], geomLowestPoint(m, d, g));
     }
 }
 
-/// The inverse of `integratePos`: the velocity that carries `from` to `to` in `dt`.
-/// MuJoCo calls this `mj_differentiatePos`, and it exists because "subtract two positions"
-/// is not a meaningful operation on a model containing a quaternion.
-pub fn differentiatePos(
-    m: *const Model,
-    vel: []f32,
-    from: []const f32,
-    to: []const f32,
-    dt: f32,
-) void {
-    assertf(dt > 0.0, @src(), "differentiatePos needs a positive dt, got {d}", .{dt});
-    const inv_dt: f32 = 1.0 / dt;
-
-    for (0..m.njnt) |ji| {
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const vadr: u32 = m.jnt_dof_adr[ji];
-        switch (m.jnt_type[ji]) {
-            .slide, .hinge => {
-                vel[vadr] = (to[qadr] - from[qadr]) * inv_dt;
-            },
-            .free => {
-                inline for (0..3) |k| {
-                    vel[vadr + k] = (to[qadr + k] - from[qadr + k]) * inv_dt;
-                }
-                const qa: Quat = .{ from[qadr + 3], from[qadr + 4], from[qadr + 5], from[qadr + 6] };
-                const qb: Quat = .{ to[qadr + 3], to[qadr + 4], to[qadr + 5], to[qadr + 6] };
-                const w: Vec = angularVelBetween(qa, qb, inv_dt);
-                inline for (0..3) |k| {
-                    vel[vadr + 3 + k] = w[k];
-                }
-            },
-            .ball => {
-                const qa: Quat = .{ from[qadr], from[qadr + 1], from[qadr + 2], from[qadr + 3] };
-                const qb: Quat = .{ to[qadr], to[qadr + 1], to[qadr + 2], to[qadr + 3] };
-                const w: Vec = angularVelBetween(qa, qb, inv_dt);
-                inline for (0..3) |k| {
-                    vel[vadr + k] = w[k];
-                }
-            },
+/// A collision/inertia shape attached to a body. Only the primitives that can be written
+/// as a comptime literal live here; hulls and meshes need allocation and arrive through a
+/// runtime model path later.
+/// The lowest point of all the model's collision shapes at the current kinematics (run `forward` first) - how
+/// far a pose reaches below the floor (z = 0) when negative. Shapes on the world body (the floor itself) are
+/// skipped. Plain geometry: the lowest of a sphere's, a capsule's or cylinder's (along local Y), a box's
+/// corners, a hull's points.
+pub fn lowestPoint(m: *const Model, d: *const Data) f32 {
+    // Higher than any robot will ever stand: the first shape replaces it.
+    var lowest: f32 = no_shape_height;
+    for (0..m.ngeom) |g| {
+        if (m.geom_body[g] == 0) {
+            continue;
         }
+        lowest = @min(lowest, geomLowestPoint(m, d, g));
     }
+    return lowest;
 }
 
-/// Renormalize every quaternion in `pos`. Integration walks a quaternion off the unit
-/// sphere a little each step, and the error compounds, so this runs after every advance.
-pub fn normalizeQuats(m: *const Model, pos: []f32) void {
-    for (0..m.njnt) |ji| {
-        const qadr: u32 = m.jnt_qpos_adr[ji];
-        const base: u32 = switch (m.jnt_type[ji]) {
-            .free => qadr + 3,
-            .ball => qadr,
-            .slide, .hinge => continue,
-        };
-        const q: Quat = .{ pos[base], pos[base + 1], pos[base + 2], pos[base + 3] };
-        const fixed: Quat = normalizeQuat(q);
-        inline for (0..4) |k| {
-            pos[base + k] = fixed[k];
+/// Lift a free-rooted robot so its lowest point sits `clearance` above the floor - a pose copied from a
+/// capture puts feet INTO the floor (Geno's soles rest 4.5 mm below it, a walk's heel deeper), and the contact
+/// solver resolves that overlap in one step with an impulse that throws the robot up and spins it. Never
+/// lowers: a clip may start in the air. Returns the lift; the data is forwarded again when it moved.
+pub fn restOnFloor(m: *const Model, d: *Data, clearance: f32) f32 {
+    const root: usize = for (m.jnt_type, 0..) |kind, j| {
+        if (kind == .free) {
+            break j;
         }
+    } else return 0.0;
+    const lift: f32 = clearance - lowestPoint(m, d);
+    if (!(lift > 0.0)) {
+        return 0.0;
     }
-}
-
-/// Rotate `q` by an angular velocity applied for `dt`. Exact for a constant `w`: build the
-/// rotation the velocity describes over the interval, then compose.
-fn rotateQuatByAngularVel(q: Quat, w: Vec, dt: f32) Quat {
-    const speed: f32 = length3(w);
-    if (speed < 1.0e-12) {
-        return q;
-    }
-    const axis: Vec = w / splat(speed);
-    const delta: Quat = zm.quatFromNormAxisAngle(axis, speed * dt);
-    // The velocity is in the joint's own frame, so the increment applies on the right.
-    return normalizeQuat(qmul(q, delta));
-}
-
-/// The angular velocity that rotates `from` into `to` over `1/inv_dt` seconds.
-fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
-    // Relative rotation in `from`'s frame, matching the composition order above.
-    const inv_from: Quat = .{ -from[0], -from[1], -from[2], from[3] };
-    var rel: Quat = qmul(inv_from, to);
-    // q and -q are the same rotation; pick the short way round so the velocity is minimal
-    // rather than taking the long path over the double cover.
-    if (rel[3] < 0.0) {
-        rel = -rel;
-    }
-    const sin_half: f32 = @sqrt(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]);
-    if (sin_half < 1.0e-12) {
-        return vec_zero;
-    }
-    const angle: f32 = 2.0 * atan2Rad(sin_half, rel[3]);
-    const axis: Vec = vec(rel[0], rel[1], rel[2]) / splat(sin_half);
-    return axis * splat(angle * inv_dt);
+    d.pos[m.jnt_qpos_adr[root] + 2] += lift;
+    d.stage = .stale;
+    forward(m, d);
+    return lift;
 }
 
 // =============================================================================
@@ -7241,8 +7255,11 @@ fn angularVelBetween(from: Quat, to: Quat, inv_dt: f32) Vec {
 // =============================================================================
 
 const expect = std.testing.expect;
+
 const expectEqual = std.testing.expectEqual;
+
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+
 const reference = @import("tests/fixtures/robot/reference.zig");
 
 /// The double pendulum from the plan's phase-3 demo, and from the oracle fixtures.
@@ -7278,7 +7295,7 @@ test "spec: counts and generated enums" {
     // The enum tag IS the index, which is what makes enum lookup free.
     try expectEqual(@as(u32, 0), @backingInt(DoublePendulum.Joint.shoulder));
     try expectEqual(@as(u32, 1), @backingInt(DoublePendulum.Joint.elbow));
-    try expect(std.mem.eql(u8, "elbow", @tagName(DoublePendulum.Joint.elbow)));
+    try expect(eql(u8, "elbow", @tagName(DoublePendulum.Joint.elbow)));
 }
 
 test "spec: nq exceeds nv when a quaternion is present" {
@@ -7294,7 +7311,7 @@ test "spec: nq exceeds nv when a quaternion is present" {
 }
 
 test "build: tree topology, dof chains and mass-matrix sparsity" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
 
@@ -7318,7 +7335,7 @@ test "build: tree topology, dof chains and mass-matrix sparsity" {
 }
 
 test "build: geoms give a body mass, and armature defaults are positive" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
 
@@ -7359,7 +7376,7 @@ test "welded bodies are transparent to the dof chain" {
             },
         },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Welded.build(gpa);
     defer m.deinit();
 
@@ -7375,10 +7392,10 @@ test "data: reset returns to qpos0, including quaternion identity" {
             .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = vec(0.1, 0.1, 0.1) } } }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Floating.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // zm stores a quaternion as (x, y, z, w), so only the w lane starts at one.
@@ -7394,10 +7411,10 @@ test "data: reset returns to qpos0, including quaternion identity" {
 }
 
 test "data: joint accessors take an enum" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.setJointPos(&m, DoublePendulum.Joint.elbow, 0.75);
@@ -7409,10 +7426,10 @@ test "data: joint accessors take an enum" {
 }
 
 test "data: the stage watermark tracks what is current" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     try expectEqual(Stage.stale, d.stage);
@@ -7441,15 +7458,15 @@ test "kinematics: body positions match MuJoCo" {
     // The `double_pendulum` fixture is authored to be the same model as `DoublePendulum`
     // above: same lengths, same radii, same density, same hinge axis, Y-up in both. If
     // that ever drifts, this test is the thing that notices.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "double_pendulum")) {
+        if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
         try expectEqual(m.nq, @as(u32, @intCast(c.nq)));
@@ -7482,15 +7499,15 @@ test "comPos: subtree com, cinert and cdof all match MuJoCo" {
     // P2 - the highest-cost trap in the port, because a wrong sign or a wrong offset there
     // produces a simulation that runs and looks alive and is quietly wrong. Comparing
     // against an independent implementation is the only way to be sure.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "double_pendulum")) {
+        if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -7529,17 +7546,17 @@ test "comPos: subtree com, cinert and cdof all match MuJoCo" {
 }
 
 test "crb: the mass matrix matches MuJoCo" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var dense: [4]f32 = undefined; // nv = 2
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "double_pendulum")) {
+        if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -7570,10 +7587,10 @@ test "factorM: solving M x = y round-trips through the dense matrix" {
     // x, form y = M*x with the dense matrix, solve M*x' = y, and require x' == x. It
     // checks the factorization and the three back-substitution passes together, and it
     // cannot be satisfied by a factorization that is merely self-consistent.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var dense: [4]f32 = undefined;
@@ -7603,10 +7620,10 @@ test "factorM: no fill-in, and the factor reproduces M" {
     // Two structural claims. First, the factorization writes only where M already had
     // entries -- that is the no-fill-in property, and it is why the sparsity tables can be
     // shared between M and its factor. Second, reassembling L^T*D*L must give M back.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 0.4;
@@ -7637,15 +7654,15 @@ test "factorM: solveM agrees with MuJoCo's own solve" {
     // Independent check of the whole chain, against the oracle's mass matrix rather than
     // our own: build y from MUJOCO's M, solve with OUR factorization, and require the
     // answer back. If our M and our solve were wrong in compensating ways, this catches it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "double_pendulum")) {
+        if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -7671,10 +7688,10 @@ test "factorM: solveM agrees with MuJoCo's own solve" {
 }
 
 test "conditionEstimate: a balanced arm is well conditioned" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     kinematics(&m, &d);
@@ -7691,15 +7708,15 @@ test "conditionEstimate: a balanced arm is well conditioned" {
 }
 
 test "dynamics: bias force and acceleration match MuJoCo" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "double_pendulum")) {
+        if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -7726,10 +7743,10 @@ test "dynamics: forward then inverse returns the force you started with" {
     // what force would produce that acceleration -- and get the original back. It exercises
     // M, its factorization, c, and every frame convention between them, simultaneously.
     // MuJoCo ships this as a pipeline stage for exactly that reason.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     const poses = [_][2]f32{ .{ 0.3, -0.7 }, .{ -1.1, 2.2 }, .{ 0.0, 0.0 } };
@@ -7753,10 +7770,10 @@ test "dynamics: gravity compensation is inverse dynamics at rest" {
     // A practical corollary of the round trip, and the first genuinely USEFUL thing the
     // engine can do: the force that holds an arm still against gravity is exactly the bias
     // force. Apply it and the arm does not move.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 0.6;
@@ -7774,7 +7791,7 @@ test "dynamics: RK4 conserves energy where Euler leaks it" {
     // The property that distinguishes the integrators, measured rather than asserted. No
     // damping, no contact, no actuation -- a closed system, so total energy is conserved
     // exactly in the continuous problem and any drift is the integrator's.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     var rk_model: Model = try DoublePendulum.build(gpa);
     defer rk_model.deinit();
@@ -7788,7 +7805,7 @@ test "dynamics: RK4 conserves energy where Euler leaks it" {
 
     var drift: [2]f32 = undefined;
     inline for (.{ &rk_model, &eu_model }, 0..) |mm, idx| {
-        var d: Data = try Data.init(gpa, mm);
+        var d: Data = try .init(gpa, mm);
         defer d.deinit();
         // Start well away from equilibrium so there is real energy to lose.
         d.pos[0] = 1.4;
@@ -7821,10 +7838,10 @@ test "dynamics: a free body follows a parabola" {
         }},
         .options = .{ .timestep = 1.0 / 1000.0 },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Falling.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[1] = 10.0; // start 10 m up
@@ -7849,10 +7866,10 @@ test "jacobian: agrees with a finite difference of the kinematics" {
     // where the point went. It needs no reference values and it validates the frame
     // conventions of phases 1 and 2 at the same time -- if `cdof` were built about the
     // wrong origin, or with a sign flipped, the derivative would simply not match.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var jac_p: [2]Vec = undefined;
@@ -7895,10 +7912,10 @@ test "jacobian: agrees with a finite difference of the kinematics" {
 }
 
 test "jacobian: matches MuJoCo for every body" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var jac_p: [2]Vec = undefined;
@@ -7906,7 +7923,7 @@ test "jacobian: matches MuJoCo for every body" {
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "double_pendulum")) {
+        if (!eql(u8, c.model, "double_pendulum")) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -7933,10 +7950,10 @@ test "jacobian: J v is the point's actual velocity" {
     // A different kind of check: the Jacobian must reproduce the velocity the DYNAMICS
     // pipeline computed independently, via `cvel`. Two paths to the same number, and they
     // do not share a code path -- one walks cdof, the other accumulates body velocities.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 0.55;
@@ -7969,10 +7986,10 @@ test "jacobian: transpose turns a tip force into joint torques" {
     // The practical use, checked against a case anyone can verify by hand. Hold the arm
     // straight down and push the tip sideways with 1 N: the shoulder must feel a torque of
     // (force x lever arm) = 1 N x 0.9 m, and the elbow 1 N x 0.4 m.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     kinematics(&m, &d); // qpos0: both links hang straight down along -Y
@@ -8015,10 +8032,10 @@ const ServoArm = Spec(.{
 test "actuator: a position servo is a PD controller in disguise" {
     // The claim from the docs, tested: `gain*u + bias1*l + bias2*l_dot` with the servo's
     // coefficients must equal `kp*(u - l) - kv*l_dot` exactly.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ServoArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     const kp: f32 = 30;
@@ -8036,10 +8053,10 @@ test "actuator: a position servo holds a load against gravity" {
     // The practical test. A servo with finite gain does NOT reach its target: it settles
     // where the restoring torque balances gravity, and that steady-state error is
     // predictable. Asserting the analytic value catches a servo that merely looks stable.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ServoArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     const target: f32 = 0.0; // straight down is qpos0; command it to stay there
@@ -8063,7 +8080,7 @@ test "actuator: filter_exact survives a time constant shorter than the timestep"
     // dt/tau exceeds 1, so the activation overshoots and oscillates with growing amplitude.
     // The exact form's factor is 1 - exp(-dt/tau), which is bounded by 1 for any positive
     // tau, so it simply snaps to the command.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const dt: f32 = 1.0 / 100.0;
     const time_const: f32 = 1.0 / 400.0; // four times shorter than the step
 
@@ -8086,7 +8103,7 @@ test "actuator: filter_exact survives a time constant shorter than the timestep"
         });
         var m: Model = try Arm.build(gpa);
         defer m.deinit();
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
         d.ctrl[0] = 1.0;
@@ -8104,10 +8121,10 @@ test "actuator: filter_exact survives a time constant shorter than the timestep"
 }
 
 test "actuator: ctrl and force ranges clamp" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ServoArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // ctrl_range is [-2, 2]; command far outside it and the servo must behave as if 2.
@@ -8123,7 +8140,7 @@ test "actuator: gear scales the whole affine law" {
     // A geared actuator produces more force for the same control AND more restoring force
     // for the same error -- gear multiplies gain and bias alike, which is what a gearbox
     // physically does.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Geared = Spec(.{
         .bodies = &.{.{
             .name = "link",
@@ -8137,7 +8154,7 @@ test "actuator: gear scales the whole affine law" {
     });
     var m: Model = try Geared.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.ctrl[0] = 1.0;
@@ -8191,10 +8208,10 @@ test "integration: Jacobian-transpose IK reaches an off-axis target" {
         },
         .options = .{ .timestep = 1.0 / 240.0 },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Arm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     var jac_p: [2]Vec = undefined;
 
@@ -8280,7 +8297,7 @@ fn checkAgainstOracle(
 ) !void {
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, name)) {
+        if (!eql(u8, c.model, name)) {
             continue;
         }
         try expectEqual(m.nq, @as(u32, @intCast(c.nq)));
@@ -8319,10 +8336,10 @@ fn checkAgainstOracle(
 }
 
 test "oracle: single pendulum" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try SinglePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try checkAgainstOracle("single_pendulum", &m, &d, 1.0e-4);
 }
@@ -8331,10 +8348,10 @@ test "oracle: free body - the nq != nv path, and the quaternion ordering" {
     // A free joint is 7 position coordinates and 6 velocity ones, and its quaternion is
     // stored (x, y, z, w) here against MuJoCo's (w, x, y, z). The fixture generator
     // converts, so a mismatch here means either the conversion or our layout is wrong.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try FreeBody.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expectEqual(@as(u32, 7), m.nq);
     try expectEqual(@as(u32, 6), m.nv);
@@ -8342,15 +8359,18 @@ test "oracle: free body - the nq != nv path, and the quaternion ordering" {
 }
 
 test "oracle: ball chain - three rotational DOFs from one joint" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try BallChain.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expectEqual(@as(u32, 5), m.nq); // 4 (quat) + 1 (hinge)
     try expectEqual(@as(u32, 4), m.nv); // 3 + 1
     try checkAgainstOracle("ball_chain", &m, &d, 2.0e-4);
 }
+
+/// Takes local +Y (zimr's capsule axis) to +X. A quarter turn the negative way about Z.
+const y_to_x: Quat = zm.quatFromNormAxisAngle(vec(0, 0, 1), -pi * 0.5);
 
 /// Three hinges on three axes, with capsules running along X. Two things no other test
 /// model reaches: mixed rotation axes (a planar chain cannot expose a frame error that
@@ -8395,9 +8415,6 @@ const Arm3 = Spec(.{
     },
 });
 
-/// Takes local +Y (zimr's capsule axis) to +X. A quarter turn the negative way about Z.
-const y_to_x: Quat = zm.quatFromNormAxisAngle(vec(0, 0, 1), -pi * 0.5);
-
 /// A 1000:1 mass ratio - a heavy box driving a tiny sliver. The P1 conditioning probe,
 /// made into a model so the diagnostic can be checked against a case that should trip it.
 const MassRatio = Spec(.{
@@ -8426,20 +8443,20 @@ const MassRatio = Spec(.{
 });
 
 test "oracle: arm3 - mixed axes and rotated geoms" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Arm3.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expectEqual(@as(u32, 3), m.nv);
     try checkAgainstOracle("arm3", &m, &d, 3.0e-4);
 }
 
 test "oracle: mass ratio, and the conditioning probe earns its keep" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try MassRatio.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try checkAgainstOracle("mass_ratio", &m, &d, 1.0e-3);
 
@@ -8450,7 +8467,7 @@ test "oracle: mass ratio, and the conditioning probe earns its keep" {
     const bad: f32 = conditionEstimate(&m, &d);
     var balanced: Model = try DoublePendulum.build(gpa);
     defer balanced.deinit();
-    var bd: Data = try Data.init(gpa, &balanced);
+    var bd: Data = try .init(gpa, &balanced);
     defer bd.deinit();
     forward(&balanced, &bd);
     try expect(bad > 100.0 * conditionEstimate(&balanced, &bd));
@@ -8459,7 +8476,7 @@ test "oracle: mass ratio, and the conditioning probe earns its keep" {
 test "passive: damping removes energy, and only damping does" {
     // Damping is the one force that cannot inject energy. Two runs of the same swing, one
     // damped and one not, and the damped one must end with strictly less.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var totals: [2]f32 = undefined;
 
     inline for (.{ 0.0, 0.15 }, 0..) |damping, idx| {
@@ -8481,7 +8498,7 @@ test "passive: damping removes energy, and only damping does" {
         });
         var m: Model = try Swing.build(gpa);
         defer m.deinit();
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
         d.pos[0] = 1.5;
@@ -8502,7 +8519,7 @@ test "passive: damping removes energy, and only damping does" {
 }
 
 test "passive: stiffness is a spring about ref, and it conserves" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Sprung = Spec(.{
         .bodies = &.{.{
             .name = "link",
@@ -8520,7 +8537,7 @@ test "passive: stiffness is a spring about ref, and it conserves" {
     });
     var m: Model = try Sprung.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Displaced from ref, the spring must push back TOWARD ref, not toward zero.
@@ -8544,14 +8561,14 @@ test "step1/step2 is exactly equivalent to step" {
     // The split exists so a controller can intervene without paying for a second forward
     // pass. It is only useful if it is the SAME computation -- so run both and require
     // bit-comparable trajectories.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var a_model: Model = try DoublePendulum.build(gpa);
     defer a_model.deinit();
     var b_model: Model = try DoublePendulum.build(gpa);
     defer b_model.deinit();
-    var a: Data = try Data.init(gpa, &a_model);
+    var a: Data = try .init(gpa, &a_model);
     defer a.deinit();
-    var b: Data = try Data.init(gpa, &b_model);
+    var b: Data = try .init(gpa, &b_model);
     defer b.deinit();
 
     inline for (.{ &a, &b }) |dd| {
@@ -8571,11 +8588,15 @@ test "step1/step2 is exactly equivalent to step" {
     }
 }
 
+const rbt_euler: Integrator = .euler;
+
+const rbt_rk4: Integrator = .rk4;
+
 test "actuator: activation advances once per step under RK4 too" {
     // The regression for the act_dot split. An `actuation` that integrated its own state
     // would advance it FOUR times per RK4 step, so an integrator actuator commanded at 1.0
     // would ramp four times too fast. Euler and RK4 must agree on the activation.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var reached: [2]f32 = undefined;
 
     inline for (.{ rbt_euler, rbt_rk4 }, 0..) |integ, idx| {
@@ -8594,7 +8615,7 @@ test "actuator: activation advances once per step under RK4 too" {
         });
         var m: Model = try Ramp.build(gpa);
         defer m.deinit();
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
         d.ctrl[0] = 1.0;
@@ -8608,13 +8629,10 @@ test "actuator: activation advances once per step under RK4 too" {
     try expectApproxEqAbs(@as(f32, 1.0), reached[1], 1.0e-3);
 }
 
-const rbt_euler: Integrator = .euler;
-const rbt_rk4: Integrator = .rk4;
-
 test "slide joint: a prismatic DOF falls like a free mass" {
     // The whole joint type was previously untested. A vertical slider under gravity has an
     // exact answer -- it is a 1-DOF free fall -- so this needs no oracle.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Slider = Spec(.{
         .bodies = &.{.{
             .name = "car",
@@ -8630,7 +8648,7 @@ test "slide joint: a prismatic DOF falls like a free mass" {
     });
     var m: Model = try Slider.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expectEqual(@as(u32, 1), m.nq);
     try expectEqual(@as(u32, 1), m.nv);
@@ -8656,7 +8674,7 @@ test "several joints on one body chain, and gimbal-lock like real hinges" {
     // three parallel branches off the parent), and that they are genuinely NOT a ball
     // joint, because three sequential rotations have singular configurations a ball joint
     // does not.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Triple = Spec(.{
         .bodies = &.{.{
             .name = "head",
@@ -8673,7 +8691,7 @@ test "several joints on one body chain, and gimbal-lock like real hinges" {
     });
     var m: Model = try Triple.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expectEqual(@as(u32, 3), m.nv);
 
@@ -8704,10 +8722,10 @@ test "several joints on one body chain, and gimbal-lock like real hinges" {
 }
 
 test "mulM agrees with the dense matrix" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 0.7;
@@ -8727,12 +8745,12 @@ test "determinism: the same initial state gives the same trajectory" {
     // P12 in miniature. Nothing here is random, but nothing GUARANTEES that until it is
     // asserted -- and the moment contacts arrive (phase 7) this becomes the test that
     // catches an unsorted manifold list.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var a: Data = try Data.init(gpa, &m);
+    var a: Data = try .init(gpa, &m);
     defer a.deinit();
-    var b: Data = try Data.init(gpa, &m);
+    var b: Data = try .init(gpa, &m);
     defer b.deinit();
 
     inline for (.{ &a, &b }) |dd| {
@@ -8754,10 +8772,10 @@ test "determinism: the same initial state gives the same trajectory" {
 }
 
 test "setCtrl and jacSite accept generated enums" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ServoArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     setCtrl(&m, &d, ServoArm.Actuator.servo, 0.42);
@@ -8766,6 +8784,8 @@ test "setCtrl and jacSite accept generated enums" {
     setCtrl(&m, &d, @as(u32, 0), -0.17);
     try expectApproxEqAbs(@as(f32, -0.17), d.ctrl[0], 1.0e-9);
 }
+
+const deg30: f32 = 30.0 * pi / 180.0;
 
 // Limit models, transcribed from scripts/robot_oracle.py.
 const LimitSoft = Spec(.{
@@ -8787,6 +8807,8 @@ const LimitSoft = Spec(.{
     }},
 });
 
+const deg90: f32 = 90.0 * pi / 180.0;
+
 const LimitDefault = Spec(.{
     .bodies = &.{.{
         .name = "link",
@@ -8803,6 +8825,12 @@ const LimitDefault = Spec(.{
         }},
     }},
 });
+
+const deg20: f32 = 20.0 * pi / 180.0;
+
+const deg45: f32 = 45.0 * pi / 180.0;
+
+const deg10: f32 = 10.0 * pi / 180.0;
 
 const LimitChain = Spec(.{
     .bodies = &.{
@@ -8840,11 +8868,6 @@ const LimitChain = Spec(.{
 });
 
 const deg5: f32 = 5.0 * pi / 180.0;
-const deg10: f32 = 10.0 * pi / 180.0;
-const deg20: f32 = 20.0 * pi / 180.0;
-const deg30: f32 = 30.0 * pi / 180.0;
-const deg45: f32 = 45.0 * pi / 180.0;
-const deg90: f32 = 90.0 * pi / 180.0;
 
 /// Compare every constraint row against MuJoCo for one model. Phase 6a's whole point is
 /// that this passes BEFORE any solver exists - a wrong row and a wrong solver produce the
@@ -8856,12 +8879,12 @@ fn checkConstraintRows(
     tol: f32,
 ) !void {
     // A model whose margin exceeds its range is active at every reachable state.
-    const expect_always_active: bool = std.mem.eql(u8, name, "limit_both_sides");
+    const expect_always_active: bool = eql(u8, name, "limit_both_sides");
     var compared: u32 = 0;
     var saw_active: bool = false;
     var saw_inactive: bool = false;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, name)) {
+        if (!eql(u8, c.model, name)) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -8918,10 +8941,10 @@ fn checkConstraintRows(
 }
 
 test "constraints: limit rows match MuJoCo, with authored softness" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitSoft.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     // Two per limited joint (both ends can be within margin at once), plus the contact
     // budget from Options.max_contacts.
@@ -8930,19 +8953,19 @@ test "constraints: limit rows match MuJoCo, with authored softness" {
 }
 
 test "constraints: limit rows match MuJoCo, with default softness" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitDefault.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try checkConstraintRows("limit_default", &m, &d, 1.0e-4);
 }
 
 test "constraints: two limited joints give two rows, in declaration order" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitChain.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expectEqual(@as(u32, 4) + rows_per_contact * m.opt.max_contacts, m.constraint_capacity);
     try checkConstraintRows("limit_chain", &m, &d, 1.0e-4);
@@ -8969,10 +8992,10 @@ test "constraints: a narrow range with a wide margin activates BOTH ends" {
             }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try BothSides.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     try checkConstraintRows("limit_both_sides", &m, &d, 1.0e-4);
@@ -9001,15 +9024,15 @@ test "contact: pyramidal rows match MuJoCo, fed MuJoCo's own contact" {
     // and we build rows from THAT. So a mismatch here is a bug in the constraint algebra
     // and cannot be a difference of opinion about where two shapes touch, which is the
     // same separation that made 6a debuggable.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var compared: u32 = 0;
     for (reference.cases) |c| {
-        if (!std.mem.eql(u8, c.model, "contact_ground")) {
+        if (!eql(u8, c.model, "contact_ground")) {
             continue;
         }
         @memcpy(d.pos, c.qpos);
@@ -9071,10 +9094,10 @@ test "contact: pyramidal rows match MuJoCo, fed MuJoCo's own contact" {
 test "contact: the pyramid's edge rows are normal +/- mu*tangent" {
     // The structural claim behind the whole pyramid trick, checked directly: opposing edges
     // must average back to the pure normal direction, and differ by exactly 2*mu*tangent.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     const mu: f32 = 0.7;
@@ -9122,7 +9145,7 @@ test "contact: row order is deterministic whatever order the detector reports" {
     // a different row order gives a different (equally valid) answer - and collision
     // detectors do not promise a stable order. Feed the SAME contacts in reversed order and
     // the resulting rows, forces and acceleration must be identical.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
 
@@ -9144,7 +9167,7 @@ test "contact: row order is deterministic whatever order the detector reports" {
     var acc: [2]f32 = undefined;
     var force_sum: [2]f32 = undefined;
     inline for (.{ [_]Contact{ a, b }, [_]Contact{ b, a } }, 0..) |order, idx| {
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
         d.setContacts(&order);
         forward(&m, &d);
@@ -9165,10 +9188,10 @@ test "contact: forward() enforces contacts, and a resting link stops falling" {
     // ordinary entry point. Before the refactor `forward` ran the constraint stages back to
     // back, so there was no moment at which a caller could inject a contact and the main
     // path silently ignored them.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // No contact: the link accelerates under gravity once displaced.
@@ -9220,10 +9243,10 @@ test "contact: a row the mechanism cannot move along carries no force" {
     // force around 1e11. It is invisible in the acceleration (their `M^-1J^T` is zero too),
     // which is exactly why it needs asserting rather than eyeballing: it silently corrupts
     // the reported forces and the convergence residual.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Straight down, touching the floor: the tip's only motion is along X, so the normal
@@ -9278,10 +9301,10 @@ test "contact: a row the mechanism cannot move along carries no force" {
 }
 
 test "contact: a separated contact produces no rows" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try ContactGround.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.setContacts(&.{.{
@@ -9304,10 +9327,10 @@ test "constraints: the Jacobian sign always pushes back into range" {
     // The convention the solver depends on: whichever end is violated, a POSITIVE force
     // must restore. Without it the solver would need to know each row's direction, and
     // clamping to f >= 0 would be wrong for half of them.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitDefault.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = deg90 + 0.2; // past the UPPER limit
@@ -9349,7 +9372,7 @@ test "constraints: R scales with constraint-space inertia, which is the whole po
     // The invariance that makes `Softness` mean the same thing across mass scales. Two
     // models identical but for a 100x heavier link must produce the same IMPEDANCE and
     // therefore the same softness, while R tracks the inertia.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ratio_diag: [2]f32 = undefined;
     var ratio_r: [2]f32 = undefined;
 
@@ -9373,7 +9396,7 @@ test "constraints: R scales with constraint-space inertia, which is the whole po
         });
         var m: Model = try Heavy.build(gpa);
         defer m.deinit();
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
         d.pos[0] = deg30 + 0.05;
         forward(&m, &d);
@@ -9397,10 +9420,10 @@ test "solver: converges, and the residual says so" {
     // The honest convergence check. A solver that STOPPED is not a solver that CONVERGED,
     // and the iteration count alone cannot distinguish them - which is exactly why
     // `constraintResidual` exists.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitChain.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Drive both joints past their limits, hard.
@@ -9421,10 +9444,10 @@ test "solver: converges, and the residual says so" {
 test "solver: the KKT conditions actually hold at the answer" {
     // Checked directly rather than through the residual's own arithmetic, so a bug in
     // `constraintResidual` cannot certify a bug in `solveConstraints`.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitChain.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = deg20 + 0.25;
@@ -9504,10 +9527,10 @@ test "unified tree: a robot pushing a FREE BODY conserves momentum" {
         // drift is the coupling's own error and nothing else's.
         .options = .{ .gravity = vec_zero, .max_contacts = 4 },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Scene.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // One slide DOF plus six for the free body; seven positions plus a quaternion.
@@ -9589,7 +9612,7 @@ test "warm start: same answer, far fewer iterations" {
             }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     var cold_iterations: u32 = 0;
     var warm_iterations: u32 = 0;
@@ -9602,7 +9625,7 @@ test "warm start: same answer, far fewer iterations" {
         var m: Model = try Held.build(gpa);
         defer m.deinit();
         m.opt.warm_start = warm;
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
         d.pos[0] = 45.0 * pi / 180.0; // above the limit, free to fall onto it
@@ -9659,10 +9682,10 @@ test "solver: a joint held against its limit comes to rest there" {
             }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Held.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = deg45; // above the limit, free to fall onto it
@@ -9687,7 +9710,7 @@ test "solver: penetration under load is independent of mass - the A_hat payoff" 
     //
     // Without the A_hat scaling this test fails by two orders of magnitude, and every model in
     // a scene would need its limits retuned by hand.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var penetration: [2]f32 = undefined;
 
     inline for (.{ 1000.0, 100000.0 }, 0..) |density, idx| {
@@ -9714,7 +9737,7 @@ test "solver: penetration under load is independent of mass - the A_hat payoff" 
         });
         var m: Model = try Pressed.build(gpa);
         defer m.deinit();
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
         d.pos[0] = deg45;
@@ -9731,10 +9754,10 @@ test "solver: penetration under load is independent of mass - the A_hat payoff" 
 }
 
 test "solver: no constraints means no work and no force" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitDefault.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Displaced but comfortably inside the range. Note it must be DISPLACED: at q = 0 this
@@ -9757,10 +9780,10 @@ test "solver: no constraints means no work and no force" {
 }
 
 test "solver: constraint force is reported in joint coordinates as J^T f" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try LimitDefault.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = deg90 + 0.2; // past the upper limit
@@ -9814,10 +9837,10 @@ const DifferentialDrive = Spec(.{
 });
 
 test "tendon: length and velocity are the linear combination they are defined as" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DifferentialDrive.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     try expectEqual(@as(u32, 2), m.ntendon);
@@ -9839,10 +9862,10 @@ test "tendon: a differential drive turns two controls into forward and turn" {
     // * The phase's stated goal, and the thing tendons are FOR. Two wheels, two controls,
     // and neither control is a wheel: one drives, one steers, and the coupling is exact
     // because it is a definition rather than a constraint the solver has to hold.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DifferentialDrive.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Drive only: both wheels must turn the SAME way, by the same amount.
@@ -9874,10 +9897,10 @@ test "tendon: one scalar force spreads across the DOFs by its coefficients" {
     // The J^T half. A tendon actuator's force reaches each joint in proportion to that
     // joint's coefficient - the same transpose that carries a contact force into joint
     // space, applied to a one-row Jacobian.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DifferentialDrive.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.ctrl[0] = 2.0; // forward: coefficients (+1, +1)
@@ -9920,10 +9943,10 @@ test "tendon: a spring on the tendon pulls its length toward rest" {
         }},
         .options = .{ .gravity = vec(0, 0, 0) },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Sprung.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 0.6;
@@ -9965,10 +9988,10 @@ const SensedArm = Spec(.{
 });
 
 test "sensor: layout is packed by declaration order, and each kind has its width" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try SensedArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // 1 + 1 + 3 + 3 + 3 + 3 + 3 + 1
@@ -9981,10 +10004,10 @@ test "sensor: layout is packed by declaration order, and each kind has its width
 }
 
 test "sensor: position and velocity readings agree with the state they report" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try SensedArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 0.4;
@@ -10008,10 +10031,10 @@ test "sensor: a gyro reads in its OWN frame, which is the whole point of mountin
     // would be too, since the axis happens to be fixed. The discriminating check is the
     // velocimeter: in world axes the tip's velocity direction rotates with the arm, while
     // in the site's own frame it is always the same local direction.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try SensedArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var local_first: Vec = vec_zero;
@@ -10045,10 +10068,10 @@ test "sensor: an accelerometer reads PROPER acceleration - g at rest, zero in fr
     // per unit mass its case applies to the proof mass, so one sitting still on a table
     // reads g UPWARD, and one in free fall reads zero. Getting this right is what the
     // world-seeded-with--gravity trick in `bodyAccelerations` buys.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try SensedArm.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // HELD STILL at the bottom of its swing: the arm is in equilibrium there, so the site
@@ -10066,7 +10089,7 @@ test "sensor: an accelerometer reads PROPER acceleration - g at rest, zero in fr
     var falling: Model = try SensedArm.build(gpa);
     defer falling.deinit();
     falling.opt.gravity = vec_zero;
-    var fd: Data = try Data.init(gpa, &falling);
+    var fd: Data = try .init(gpa, &falling);
     defer fd.deinit();
     forward(&falling, &fd);
     const weightless: Vec = vec(fd.sensor_data[14], fd.sensor_data[15], fd.sensor_data[16]);
@@ -10078,11 +10101,11 @@ test "sensor: the accelerometer's Coriolis term is not optional" {
     // nothing is angularly accelerating. That term comes ONLY from the `omega x v_point`
     // correction, so this is the test that would fail if it were dropped - and note it
     // needs a nonzero angular VELOCITY, which is exactly why a static test cannot see it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try SensedArm.build(gpa);
     defer m.deinit();
     m.opt.gravity = vec_zero; // isolate the kinematic term
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     const rate: f32 = 3.0;
@@ -10102,7 +10125,7 @@ test "implicit: with no velocity-dependent forces it IS explicit Euler" {
     // zero the system collapses to `dv = h*a`, so implicitfast must agree with Euler to
     // the last bit - not approximately, EXACTLY. Any sign error, transpose, or stray term
     // in building `M - h*D` shows up here, on a model with no damping to hide behind.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var euler_model: Model = try DoublePendulum.build(gpa);
     defer euler_model.deinit();
     euler_model.opt.integrator = .euler;
@@ -10110,9 +10133,9 @@ test "implicit: with no velocity-dependent forces it IS explicit Euler" {
     defer implicit_model.deinit();
     implicit_model.opt.integrator = .implicitfast;
 
-    var euler_data: Data = try Data.init(gpa, &euler_model);
+    var euler_data: Data = try .init(gpa, &euler_model);
     defer euler_data.deinit();
-    var implicit_data: Data = try Data.init(gpa, &implicit_model);
+    var implicit_data: Data = try .init(gpa, &implicit_model);
     defer implicit_data.deinit();
 
     inline for (.{ &euler_data, &implicit_data }) |dd| {
@@ -10177,10 +10200,10 @@ test "implicit: the velocity derivative matches a finite difference of the force
             .kind = .{ .velocity = .{ .kv = 3.0 } },
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Damped.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var analytic: [4]f32 = undefined; // nv = 2
@@ -10234,14 +10257,14 @@ test "* integrators: joint damping is implicit in BOTH, as in MuJoCo" {
         }},
         .options = .{ .timestep = 1.0 / 60.0 },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     var results: [2]f32 = undefined;
     inline for (.{ Integrator.euler, Integrator.implicitfast }, 0..) |integrator, idx| {
         var m: Model = try Stiff.build(gpa);
         defer m.deinit();
         m.opt.integrator = integrator;
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
         d.vel[0] = 1.0;
         for (0..600) |_| {
@@ -10307,10 +10330,10 @@ test "implicit: a damped system loses energy monotonically, as damping must" {
         }},
         .options = .{ .timestep = 1.0 / 240.0, .integrator = .implicitfast },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Damped.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = 1.5;
@@ -10360,10 +10383,10 @@ test "inertial: a jointed body with mass but NO geoms is legal" {
             },
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Massive.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     try expectApproxEqAbs(@as(f32, 0.5), m.body_mass[1], 1.0e-6);
@@ -10399,7 +10422,7 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
             },
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Stated.build(gpa);
     defer m.deinit();
 
@@ -10421,7 +10444,7 @@ test "inertial: a stated mass tensor replaces the geom-derived one, verbatim" {
 
     // And the model actually SIMULATES with it: the mass matrix must still be positive
     // definite, which is the property a mis-transcribed tensor would break.
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     d.pos[0] = 0.5;
     forward(&m, &d);
@@ -10436,7 +10459,7 @@ test "inertial: geom-derived and stated agree when they describe the same body" 
     //
     // This is what makes the stated path trustworthy: it is not a second, parallel way of
     // describing mass that might disagree, it is the SAME quantity entered differently.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const Derived = Spec(.{
         .bodies = &.{.{
@@ -10474,9 +10497,9 @@ test "inertial: geom-derived and stated agree when they describe the same body" 
     var restated: Model = try Restated.build(gpa);
     defer restated.deinit();
 
-    var da: Data = try Data.init(gpa, &derived);
+    var da: Data = try .init(gpa, &derived);
     defer da.deinit();
-    var db: Data = try Data.init(gpa, &restated);
+    var db: Data = try .init(gpa, &restated);
     defer db.deinit();
 
     // Same mass to within the transcription's precision.
@@ -10493,10 +10516,10 @@ test "inertial: geom-derived and stated agree when they describe the same body" 
 test "crb: M is symmetric, positive definite, and configuration-dependent" {
     // Invariants, which keep testing when the numbers legitimately change. Together they
     // say "this is a mass matrix" without reference to any particular model.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     var dense: [4]f32 = undefined;
@@ -10559,11 +10582,11 @@ test "crb: a locked subtree behaves as one rigid body" {
             },
         },
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     var wm: Model = try Welded.build(gpa);
     defer wm.deinit();
-    var wd: Data = try Data.init(gpa, &wm);
+    var wd: Data = try .init(gpa, &wm);
     defer wd.deinit();
     try expectEqual(@as(u32, 1), wm.nv);
     kinematics(&wm, &wd);
@@ -10572,7 +10595,7 @@ test "crb: a locked subtree behaves as one rigid body" {
 
     var hm: Model = try DoublePendulum.build(gpa);
     defer hm.deinit();
-    var hd: Data = try Data.init(gpa, &hm);
+    var hd: Data = try .init(gpa, &hm);
     defer hd.deinit();
     kinematics(&hm, &hd);
     comPos(&hm, &hd);
@@ -10601,10 +10624,10 @@ test "kinematics: a hinge rotates about its ANCHOR, not the body origin" {
             .geoms = &.{.{ .shape = .{ .sphere = .{ .radius = 0.1 } } }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Offset.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.pos[0] = pi * 0.5;
@@ -10625,10 +10648,10 @@ test "kinematics: sites ride their body, and the stage advances" {
             .sites = &.{.{ .name = "tip", .pos = vec(2, 0, 0) }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Armed.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     try expectEqual(Stage.stale, d.stage);
@@ -10649,10 +10672,10 @@ test "position coordinates: integrate then differentiate is a round trip" {
             .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = vec(0.1, 0.2, 0.3) } } }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Floating.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     const dt: f32 = 0.01;
@@ -10678,10 +10701,10 @@ test "position coordinates: quaternions stay on the unit sphere" {
             .geoms = &.{.{ .shape = .{ .sphere = .{ .radius = 0.1 } } }},
         }},
     });
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try Spinner.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Spin hard, for a long time, on a deliberately awkward axis.
@@ -10836,7 +10859,7 @@ test "solver: Nesterov momentum reaches the same answer, in fewer iterations" {
     // The property that matters is that acceleration changes the PATH and not the DESTINATION:
     // a solver that reaches a different answer when accelerated is not converging, which is
     // the same argument the warm-start test makes.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm = Spec(.{
         .bodies = &.{.{
             .name = "link",
@@ -10863,7 +10886,7 @@ test "solver: Nesterov momentum reaches the same answer, in fewer iterations" {
         // Cold every time: warm starting would hide the difference by handing both runs the
         // answer, which is exactly what this test must not do.
         m.opt.warm_start = false;
-        var d: Data = try Data.init(gpa, &m);
+        var d: Data = try .init(gpa, &m);
         defer d.deinit();
 
         // Drive the joint hard into its lower limit so the solve has real work to do.
@@ -10899,7 +10922,7 @@ test "* equality: a four-bar linkage, which a tree cannot express" {
     //
     // Here: two arms hanging from the world, tied tip-to-tip by a connect constraint. As a
     // TREE they are independent and swing separately; as a LOOP they must move together.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Linkage = Spec(.{
         .bodies = &.{
             .{
@@ -10932,7 +10955,7 @@ test "* equality: a four-bar linkage, which a tree cannot express" {
     });
     var model: Model = try Linkage.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     try expect(model.neq == 1);
@@ -10995,7 +11018,7 @@ test "* equality: the partner anchor is derived, and the loop starts satisfied" 
     // MuJoCo derives it too, but only in its file format: `<connect anchor="...">` takes one
     // point and the compiler fills the other in. Having it in the API means a model assembled
     // in code gets the same protection.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Linkage = Spec(.{
         .bodies = &.{
             .{
@@ -11021,7 +11044,7 @@ test "* equality: the partner anchor is derived, and the loop starts satisfied" 
     });
     var model: Model = try Linkage.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     // * THE DERIVED POINT IS THE ONE A PERSON WOULD HAVE WRITTEN. `left` sits at x = -0.2 and
@@ -11048,7 +11071,7 @@ test "* equality: a geared gripper - two fingers, one motor" {
     // other exactly, driven by one actuator. Modelling that as two independent joints and
     // hoping the controller keeps them synchronised is how a gripper ends up gripping crooked;
     // stating the relationship makes it a property of the MECHANISM, which is what it is.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Gripper = Spec(.{
         .bodies = &.{
             .{
@@ -11072,7 +11095,7 @@ test "* equality: a geared gripper - two fingers, one motor" {
     });
     var model: Model = try Gripper.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     // * ONE ROW, not three: a scalar relationship needs one equation.
@@ -11101,7 +11124,7 @@ test "equality: a coupling with no driver locks a joint" {
     // A null driver pins the joint to a constant offset from its rest value - which is how a
     // joint is locked WITHOUT removing it from the model, so the same robot can be simulated
     // with a wrist free or fixed without two model definitions.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm = Spec(.{
         .bodies = &.{.{
             .name = "link",
@@ -11117,7 +11140,7 @@ test "equality: a coupling with no driver locks a joint" {
     });
     var model: Model = try Arm.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     // Gravity pulls the link down; the lock holds it at 0.4 rad.
@@ -11137,7 +11160,7 @@ test "* equality: a weld holds orientation, not just position" {
     //
     // The distinguishing property is ORIENTATION. A `connect` pins a point and leaves the two
     // free to pivot about it like a ball joint; a weld does not.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Pair = Spec(.{
         .bodies = &.{
             .{
@@ -11157,7 +11180,7 @@ test "* equality: a weld holds orientation, not just position" {
     });
     var model: Model = try Pair.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     // * SIX ROWS, not three: position and orientation both.
@@ -11337,7 +11360,7 @@ test "** state: a snapshot carries the warm-start KEYS, not just the forces" {
     // correct ones. The bug only appears when the contact set MOVES between the snapshot and
     // the restore - which is precisely what a planner branching from a state does, and what
     // every column of a finite-difference derivative does.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Ball = Spec(.{
         .bodies = &.{.{
             .name = "ball",
@@ -11348,7 +11371,7 @@ test "** state: a snapshot carries the warm-start KEYS, not just the forces" {
     });
     var model: Model = try Ball.build(gpa);
     defer model.deinit();
-    var d: Data = try Data.init(gpa, &model);
+    var d: Data = try .init(gpa, &model);
     defer d.deinit();
 
     // A state with TWO contacts, solved so the solver records warm data for both.
@@ -11366,7 +11389,7 @@ test "** state: a snapshot carries the warm-start KEYS, not just the forces" {
     step(&model, &d);
     try expect(d.warm_count > 0);
 
-    var saved: State = try State.init(gpa, &model);
+    var saved: State = try .init(gpa, &model);
     defer saved.deinit();
     saved.save(&d);
     const snapshot_key: u64 = d.warm_key[0];
@@ -11402,7 +11425,7 @@ test "* state: a saved state replays bit-for-bit" {
     //
     // So the test is a replay, not a spot check: run, snapshot, run further, restore, run the
     // same further steps again, and require the two continuations to be IDENTICAL - not close.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm = Spec(.{
         .bodies = &.{
             .{
@@ -11427,9 +11450,9 @@ test "* state: a saved state replays bit-for-bit" {
     });
     var model: Model = try Arm.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
-    var snapshot: State = try State.init(gpa, &model);
+    var snapshot: State = try .init(gpa, &model);
     defer snapshot.deinit();
 
     // * RUN INTO THE JOINT LIMIT FIRST, so the warm start is carrying real force when the
@@ -11479,7 +11502,7 @@ test "state: what a snapshot must carry, and what it need not" {
     // way, so on this scene the warm start is a cost optimisation and not state. The comment
     // at the end of this test is the finding; the assertions record it rather than argue with
     // it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Stack = Spec(.{
         .bodies = &.{
             .{
@@ -11498,9 +11521,9 @@ test "state: what a snapshot must carry, and what it need not" {
     });
     var model: Model = try Stack.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
-    var snapshot: State = try State.init(gpa, &model);
+    var snapshot: State = try .init(gpa, &model);
     defer snapshot.deinit();
 
     // Two boxes resting on each other, held by contacts written directly - enough rows that
@@ -11574,7 +11597,7 @@ test "* state: many Data against one Model do not interfere" {
     // The signature says `*const Model`, which is the compiler's half of the guarantee. This
     // is the other half: run three Data through the same model with DIFFERENT inputs, then
     // check each still matches what it produces alone.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm = Spec(.{
         .bodies = &.{
             .{
@@ -11607,7 +11630,7 @@ test "* state: many Data against one Model do not interfere" {
     // -- First: each one alone, start to finish --
     var alone: [3][2]f32 = undefined;
     for (torques, 0..) |torque, i| {
-        var data: Data = try Data.init(gpa, &model);
+        var data: Data = try .init(gpa, &model);
         defer data.deinit();
         for (0..800) |_| {
             forward(&model, &data);
@@ -11663,7 +11686,7 @@ test "** implicit: the Coriolis derivative, on every joint kind" {
     // * THE LESSON IS ABOUT COVERAGE, NOT ABOUT SPATIAL ALGEBRA. A mirror of an existing
     // function needs a case for every branch the original has, and the original's branches were
     // right there in `comVel`'s switch.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const Free = Spec(.{
         .bodies = &.{
@@ -11709,7 +11732,7 @@ test "** implicit: the Coriolis derivative, on every joint kind" {
     inline for (.{ Free, Ball }) |Shape| {
         var model: Model = try Shape.build(gpa);
         defer model.deinit();
-        var data: Data = try Data.init(gpa, &model);
+        var data: Data = try .init(gpa, &model);
         defer data.deinit();
         const nv: usize = model.nv;
 
@@ -11778,7 +11801,7 @@ test "* implicit: the Coriolis derivative matches finite differences" {
     //
     // A body TUMBLING is essential here. The Coriolis term is quadratic in velocity, so at
     // rest every entry is zero and the test would pass on a function that returned nothing.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Tumbler = Spec(.{
         .bodies = &.{
             .{
@@ -11809,7 +11832,7 @@ test "* implicit: the Coriolis derivative matches finite differences" {
     });
     var model: Model = try Tumbler.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     // Spinning hard enough that the gyroscopic terms dominate.
@@ -11894,7 +11917,7 @@ test "* integrators: what each one is actually for, measured" {
     // angular-momentum drift 0.00003, against `implicit`'s 0.272 and 0.114 - and `implicit` was
     // WORSE than `implicitfast` at the lower spin. Implicit methods buy stiffness, not
     // accuracy, and a torque-free tumbler is not stiff.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Rig = struct {
         fn Model_(comptime it: Integrator, comptime dt: f32) type {
             return Spec(.{
@@ -11930,7 +11953,7 @@ test "* integrators: what each one is actually for, measured" {
         fn go(comptime it: Integrator, comptime dt: f32, allocator: Allocator) ![2]f32 {
             var model: Model = try Rig.Model_(it, dt).build(allocator);
             defer model.deinit();
-            var data: Data = try Data.init(allocator, &model);
+            var data: Data = try .init(allocator, &model);
             defer data.deinit();
             // * 80 rad/s, DELIBERATELY UNDER the 100 rad/s velocity bound. A first attempt used
             // 200 and 600, where every integrator reported a "peak" of exactly 100 - the clamp,
@@ -11939,7 +11962,9 @@ test "* integrators: what each one is actually for, measured" {
             data.vel[0] = 0.4;
             data.stage = .stale;
             forward(&model, &data);
-            const steps: usize = @intFromFloat(1.0 / dt);
+            // ROUND, not truncate: in f32, 1 / (1/500) is 499.99997 - truncating ran 499 steps (0.998 s) and
+            // compared against a reference taken at exactly one second.
+            const steps: usize = @round(1.0 / dt);
             for (0..steps) |_| {
                 step(&model, &data);
             }
@@ -11975,7 +12000,7 @@ test "* constraints: a weld keeps its rows when contacts fill the buffer" {
     //
     // Two things now prevent it. Capacity counts per KIND, and equality rows are emitted BEFORE
     // contacts, so a mistake in either shows up as a dropped contact rather than a lost limb.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Held = Spec(.{
         .bodies = &.{
             .{
@@ -11997,7 +12022,7 @@ test "* constraints: a weld keeps its rows when contacts fill the buffer" {
     });
     var model: Model = try Held.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     // * THE WELD'S SIX ROWS FIT WITH EVERY CONTACT ROW ALSO ACCOUNTED FOR. Under the old flat
@@ -12009,7 +12034,7 @@ test "* constraints: a weld keeps its rows when contacts fill the buffer" {
     forward(&model, &data);
     for (0..4) |i| {
         data.pushContact(.{
-            .position = vec(0.3 + 0.02 * @as(f32, @floatFromInt(i)), -0.05, 0),
+            .position = vec(0.3 + 0.02 * float(i), -0.05, 0),
             .normal = vec(0, 1, 0),
             .tangent = .{ vec(1, 0, 0), vec(0, 0, 1) },
             .distance = -0.001,
@@ -12056,7 +12081,7 @@ test "** actuator forces match MuJoCo, all three transmissions" {
     // * THE SIGN ON `velocity` IS THE ONE WORTH HAVING PINNED. It is negative here because the
     // joint is moving FASTER than commanded, so the actuator brakes. A sign slip passes every
     // behavioural test that only ever accelerates from rest.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Case = struct { spec: ActuatorSpec, want: f32, name: []const u8 };
     inline for ([_]Case{
         .{
@@ -12100,7 +12125,7 @@ test "** actuator forces match MuJoCo, all three transmissions" {
         });
         var model: Model = try Link.build(gpa);
         defer model.deinit();
-        var data: Data = try Data.init(gpa, &model);
+        var data: Data = try .init(gpa, &model);
         defer data.deinit();
 
         data.pos[0] = 0.3;
@@ -12139,7 +12164,7 @@ test "** a fixed tendon matches MuJoCo - length, velocity, and the force it spre
     // pinning: a negative coefficient is how a differential is built, and dropping the sign in
     // the transpose gives a tendon that couples the joints the wrong way while still looking
     // like a spring.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Pair: type = Spec(.{
         .bodies = &.{
             .{
@@ -12178,7 +12203,7 @@ test "** a fixed tendon matches MuJoCo - length, velocity, and the force it spre
     });
     var model: Model = try Pair.build(gpa);
     defer model.deinit();
-    var data: Data = try Data.init(gpa, &model);
+    var data: Data = try .init(gpa, &model);
     defer data.deinit();
 
     data.pos[0] = 0.4;
@@ -12255,7 +12280,7 @@ pub fn skeletonToModel(
         return error.InvalidSkeleton;
     }
 
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a: Allocator = arena.allocator();
 
@@ -12355,7 +12380,7 @@ pub fn skeletonToModel(
 }
 
 test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // A three-bone chain: root, then a bone 1 m up, then another 1 m up.
     const names = [_][]const u8{ "root", "mid", "tip" };
@@ -12364,7 +12389,7 @@ test "skeletonToModel: the synthesized model reproduces the skeleton's rest pose
 
     var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // ** THE PROPERTY: at the identity configuration, forward kinematics must place every body
@@ -12460,7 +12485,7 @@ pub fn poseFromLocalRotations(
 }
 
 test "poseFromLocalRotations: robot kinematics reproduces the animation pose exactly" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // A four-bone chain with a bend, so a wrong quaternion order or a missed parent shows up
     // as a position error rather than cancelling out.
@@ -12470,7 +12495,7 @@ test "poseFromLocalRotations: robot kinematics reproduces the animation pose exa
 
     var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // A pose: root yawed, then each bone bent about a different axis.
@@ -12640,7 +12665,7 @@ pub fn fitLocalRotations(
 }
 
 test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // Two bodies: a free root, then a single HINGE about X - a knee.
     const names = [_][]const u8{ "thigh", "shin" };
@@ -12654,7 +12679,7 @@ test "fitLocalRotations: a hinge takes the bend it can and reports the rest" {
     m.jnt_axis[1] = vec(1, 0, 0);
     m.jnt_range[1] = .{ -2.8, 0.03 }; // humanoid.xml's knee: -160..2 degrees
 
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     var residual: [2]f32 = .{ 0, 0 };
 
@@ -12855,7 +12880,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
 /// prefixes. **Which is the point: a list of known prefixes is the same mistake as a list of
 /// known joint names**, one level up.
 fn jointNameMatches(candidate: []const u8, wanted: []const u8) bool {
-    if (std.mem.eql(u8, candidate, wanted)) {
+    if (eql(u8, candidate, wanted)) {
         return true;
     }
     // * Compare only what follows the last namespace separator.
@@ -12865,7 +12890,7 @@ fn jointNameMatches(candidate: []const u8, wanted: []const u8) bool {
             bare = bare[at + 1 ..];
         }
     }
-    return std.mem.eql(u8, bare, wanted);
+    return eql(u8, bare, wanted);
 }
 
 pub fn resolveMatchTable(
@@ -12880,7 +12905,7 @@ pub fn resolveMatchTable(
     for (table) |row| {
         var robot_body: ?usize = null;
         for (robot_body_names, 0..) |name, index| {
-            if (std.mem.eql(u8, name, row.robot_body)) {
+            if (eql(u8, name, row.robot_body)) {
                 robot_body = index;
                 break;
             }
@@ -12942,6 +12967,18 @@ pub fn referenceOrientationsFromRest(
     for (0..body_count) |body| {
         out_reference_orientations[body] = d.body_xrot[body];
     }
+}
+
+/// The angle of `rotation`'s twist about `axis` - the closed-form best a hinge can do.
+fn twistAngleAbout(rotation: Quat, axis: Vec) f32 {
+    const rotation_vector: Vec = .{ rotation[0], rotation[1], rotation[2], 0 };
+    const along_axis: f32 =
+        rotation_vector[0] * axis[0] + rotation_vector[1] * axis[1] + rotation_vector[2] * axis[2];
+    const twist_length: f32 = @sqrt(along_axis * along_axis + rotation[3] * rotation[3]);
+    if (twist_length < 1.0e-6) {
+        return 0;
+    }
+    return 2.0 * atan2Rad(along_axis / twist_length, rotation[3] / twist_length);
 }
 
 /// Fit a desired per-BODY rotation across whatever joints that body actually has.
@@ -13016,16 +13053,13 @@ pub fn fitBodyRotation(
     return 2.0 * acosRad(clamp(leftover_alignment, -1.0, 1.0));
 }
 
-/// The angle of `rotation`'s twist about `axis` - the closed-form best a hinge can do.
-fn twistAngleAbout(rotation: Quat, axis: Vec) f32 {
-    const rotation_vector: Vec = .{ rotation[0], rotation[1], rotation[2], 0 };
-    const along_axis: f32 =
-        rotation_vector[0] * axis[0] + rotation_vector[1] * axis[1] + rotation_vector[2] * axis[2];
-    const twist_length: f32 = @sqrt(along_axis * along_axis + rotation[3] * rotation[3]);
-    if (twist_length < 1.0e-6) {
-        return 0;
-    }
-    return 2.0 * atan2Rad(along_axis / twist_length, rotation[3] / twist_length);
+fn cross3(a: Vec, b: Vec) Vec {
+    return .{
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+        0,
+    };
 }
 
 /// The body Jacobian at a world point: how each DOF moves that point, and how it rotates it.
@@ -13108,17 +13142,8 @@ pub fn jacBody(
     }
 }
 
-fn cross3(a: Vec, b: Vec) Vec {
-    return .{
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-        0,
-    };
-}
-
 test "jacBody: every column matches a finite-difference perturbation of its own DOF" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // A three-bone chain with a FREE root, so `nq != nv` is exercised: the root contributes
     // 7 qpos entries against 6 DOF, and a Jacobian indexed by the wrong one is the classic
@@ -13128,7 +13153,7 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     const offsets = [_]Vec{ vec(0, 0, 0), vec(0, 0.4, 0), vec(0.1, 0.35, 0) };
     var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
     try expect(m.nq > m.nv);
 
@@ -13198,6 +13223,12 @@ test "jacBody: every column matches a finite-difference perturbation of its own 
     try expect(worst_error < 1.0e-2);
 }
 
+/// The other end of a relative task.
+pub const RelativePoint = struct {
+    body: usize,
+    point_local: Vec = .{ 0, 0, 0, 0 },
+};
+
 /// One position target: a point on a body that should reach a place in the world.
 ///
 /// ** POSITION, not rotation, is what a rotation-fit cannot do. GMR weights an ankle's position
@@ -13245,12 +13276,6 @@ pub const IkTask = struct {
     target_rotation: ?Quat = null,
     /// Orientation importance. GMR uses 10 against a position weight of 50 at the ankles.
     rotation_weight: f32 = 1.0,
-};
-
-/// The other end of a relative task.
-pub const RelativePoint = struct {
-    body: usize,
-    point_local: Vec = .{ 0, 0, 0, 0 },
 };
 
 pub const IkOptions = struct {
@@ -13318,6 +13343,60 @@ pub const IkOptions = struct {
     posture_target: ?[]const f32 = null,
     posture_weight: f32 = 0,
 };
+
+/// Floats `ikStep` needs in its scratch buffer for a model with `nv` degrees of freedom.
+pub fn ikScratchSize(nv: usize) usize {
+    // * 6nv jacobians + nv*nv normal matrix + nv gradient + nv step + 6nv for a RELATIVE task's
+    // second Jacobian pair.
+    return 6 * nv + nv * nv + 2 * nv + 6 * nv;
+}
+
+/// In-place Cholesky solve of a symmetric positive-definite system, `a x = b`.
+///
+/// * SPD is guaranteed here by construction: `J^TW J` is positive SEMI-definite for positive
+/// weights, and the damping term makes it strictly positive. That is what lets this be a
+/// Cholesky rather than a pivoting factorisation.
+fn solveSymmetricPositiveDefinite(
+    a: []f32,
+    b: []const f32,
+    out_x: []f32,
+    n: usize,
+) void {
+    // Factor a = L L^T, writing L into a's lower triangle.
+    for (0..n) |i| {
+        for (0..i + 1) |j| {
+            var sum: f32 = a[i * n + j];
+            for (0..j) |k| {
+                sum -= a[i * n + k] * a[j * n + k];
+            }
+            if (i == j) {
+                // A tiny floor keeps a degenerate system from producing NaNs that would
+                // propagate into `qpos` and be far harder to trace than a stalled solve.
+                a[i * n + j] = @sqrt(@max(sum, 1.0e-12));
+            } else {
+                a[i * n + j] = sum / a[j * n + j];
+            }
+        }
+    }
+    // Forward substitution: L y = b.
+    for (0..n) |i| {
+        var sum: f32 = b[i];
+        for (0..i) |k| {
+            sum -= a[i * n + k] * out_x[k];
+        }
+        out_x[i] = sum / a[i * n + i];
+    }
+    // Back substitution: L^T x = y.
+    var i: usize = n;
+    while (i > 0) {
+        i -= 1;
+        var sum: f32 = out_x[i];
+        for (i + 1..n) |k| {
+            sum -= a[k * n + i] * out_x[k];
+        }
+        out_x[i] = sum / a[i * n + i];
+    }
+}
 
 /// One damped-least-squares step toward a set of weighted position targets.
 ///
@@ -13639,62 +13718,8 @@ pub fn ikStep(
     return @sqrt(error_norm_squared);
 }
 
-/// In-place Cholesky solve of a symmetric positive-definite system, `a x = b`.
-///
-/// * SPD is guaranteed here by construction: `J^TW J` is positive SEMI-definite for positive
-/// weights, and the damping term makes it strictly positive. That is what lets this be a
-/// Cholesky rather than a pivoting factorisation.
-fn solveSymmetricPositiveDefinite(
-    a: []f32,
-    b: []const f32,
-    out_x: []f32,
-    n: usize,
-) void {
-    // Factor a = L L^T, writing L into a's lower triangle.
-    for (0..n) |i| {
-        for (0..i + 1) |j| {
-            var sum: f32 = a[i * n + j];
-            for (0..j) |k| {
-                sum -= a[i * n + k] * a[j * n + k];
-            }
-            if (i == j) {
-                // A tiny floor keeps a degenerate system from producing NaNs that would
-                // propagate into `qpos` and be far harder to trace than a stalled solve.
-                a[i * n + j] = @sqrt(@max(sum, 1.0e-12));
-            } else {
-                a[i * n + j] = sum / a[j * n + j];
-            }
-        }
-    }
-    // Forward substitution: L y = b.
-    for (0..n) |i| {
-        var sum: f32 = b[i];
-        for (0..i) |k| {
-            sum -= a[i * n + k] * out_x[k];
-        }
-        out_x[i] = sum / a[i * n + i];
-    }
-    // Back substitution: L^T x = y.
-    var i: usize = n;
-    while (i > 0) {
-        i -= 1;
-        var sum: f32 = out_x[i];
-        for (i + 1..n) |k| {
-            sum -= a[k * n + i] * out_x[k];
-        }
-        out_x[i] = sum / a[i * n + i];
-    }
-}
-
-/// Floats `ikStep` needs in its scratch buffer for a model with `nv` degrees of freedom.
-pub fn ikScratchSize(nv: usize) usize {
-    // * 6nv jacobians + nv*nv normal matrix + nv gradient + nv step + 6nv for a RELATIVE task's
-    // second Jacobian pair.
-    return 6 * nv + nv * nv + 2 * nv + 6 * nv;
-}
-
 test "ikStep: a single position target converges on a redundant chain" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // Four bodies, ball joints, free root: far more DOF than a point has coordinates. That
     // redundancy is the whole reason the solve must be DAMPED - a plain pseudo-inverse has no
@@ -13704,7 +13729,7 @@ test "ikStep: a single position target converges on a redundant chain" {
     const offsets = [_]Vec{ vec(0, 0, 0), vec(0, 0.4, 0), vec(0, 0.4, 0), vec(0, 0.4, 0) };
     var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     @memcpy(d.pos, m.qpos0);
@@ -13789,6 +13814,31 @@ test "ikStep: a single position target converges on a redundant chain" {
     }
 }
 
+/// The shortest rotation taking +Y onto `target_direction`. Mirrors the skeleton-side
+/// construction exactly, so both references are the same kind of measurement.
+fn shortestArcFromYAxis(target_direction: Vec) Quat {
+    const y_axis: Vec = vec(0, 1, 0);
+    const alignment: f32 = y_axis[0] * target_direction[0] +
+        y_axis[1] * target_direction[1] +
+        y_axis[2] * target_direction[2];
+
+    if (alignment > 0.99999) {
+        return quat_identity;
+    }
+    if (alignment < -0.99999) {
+        // A 180-degree flip has no unique axis; any perpendicular will do.
+        return quatFromAxisAngle(vec(0, 0, 1), 3.14159265);
+    }
+    const axis: Vec = .{
+        y_axis[1] * target_direction[2] - y_axis[2] * target_direction[1],
+        y_axis[2] * target_direction[0] - y_axis[0] * target_direction[2],
+        y_axis[0] * target_direction[1] - y_axis[1] * target_direction[0],
+        0,
+    };
+    const angle: f32 = acosRad(clamp(alignment, -1.0, 1.0));
+    return quatFromAxisAngle(normalize3(axis), angle);
+}
+
 /// Each body's rest orientation taken from WHICH WAY ITS BONE POINTS, not from its body frame.
 ///
 /// -- *** WHY `referenceOrientationsFromRest` IS THE WRONG TOOL FOR A RETARGET --
@@ -13857,33 +13907,8 @@ pub fn referenceOrientationsFromBoneDirections(
     }
 }
 
-/// The shortest rotation taking +Y onto `target_direction`. Mirrors the skeleton-side
-/// construction exactly, so both references are the same kind of measurement.
-fn shortestArcFromYAxis(target_direction: Vec) Quat {
-    const y_axis: Vec = vec(0, 1, 0);
-    const alignment: f32 = y_axis[0] * target_direction[0] +
-        y_axis[1] * target_direction[1] +
-        y_axis[2] * target_direction[2];
-
-    if (alignment > 0.99999) {
-        return quat_identity;
-    }
-    if (alignment < -0.99999) {
-        // A 180-degree flip has no unique axis; any perpendicular will do.
-        return quatFromAxisAngle(vec(0, 0, 1), 3.14159265);
-    }
-    const axis: Vec = .{
-        y_axis[1] * target_direction[2] - y_axis[2] * target_direction[1],
-        y_axis[2] * target_direction[0] - y_axis[0] * target_direction[2],
-        y_axis[0] * target_direction[1] - y_axis[1] * target_direction[0],
-        0,
-    };
-    const angle: f32 = acosRad(clamp(alignment, -1.0, 1.0));
-    return quatFromAxisAngle(normalize3(axis), angle);
-}
-
 test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-frame read finds nothing" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // Bodies with no rotation of their own, whose bones point in different directions purely
     // through their child offsets - the shape `humanoid.xml` actually has.
@@ -13892,7 +13917,7 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
     const offsets = [_]Vec{ vec(0, 0, 0), vec(0, 0.5, 0), vec(0.5, 0, 0) };
     var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     // ** THE BODY-FRAME READ FINDS NOTHING. Every body rotation is identity here, exactly as in
@@ -13929,14 +13954,14 @@ test "referenceOrientationsFromBoneDirections: reads the OFFSETS, where a body-f
 }
 
 test "ikStep: an ORIENTATION target is reached, and the short way round" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const names = [_][]const u8{ "root", "a", "b" };
     const parents = [_]i32{ -1, 0, 1 };
     const offsets = [_]Vec{ vec(0, 0, 0), vec(0, 0.4, 0), vec(0, 0.4, 0) };
     var m: Model = try skeletonToModel(gpa, &names, &parents, &offsets, .{});
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &m);
+    var d: Data = try .init(gpa, &m);
     defer d.deinit();
 
     @memcpy(d.pos, m.qpos0);
@@ -14013,6 +14038,39 @@ test "ikStep: an ORIENTATION target is reached, and the short way round" {
     try expect(long_alignment > 0.99);
 }
 
+fn crossVec(a: Vec, b: Vec) Vec {
+    return .{
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+        0,
+    };
+}
+
+fn shortestArcBetweenVectors(from: Vec, to: Vec) Quat {
+    const alignment: f32 = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+    if (alignment > 0.99999) {
+        return quat_identity;
+    }
+    if (alignment < -0.99999) {
+        const helper: Vec = if (@abs(from[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
+        return quatFromAxisAngle(normalize3(crossVec(from, helper)), 3.14159265);
+    }
+    return quatFromAxisAngle(
+        normalize3(crossVec(from, to)),
+        acosRad(clamp(alignment, -1.0, 1.0)),
+    );
+}
+
+fn removeComponentAlong(v: Vec, axis: Vec) Vec {
+    const along: f32 = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+    return v - axis * @as(Vec, @splat(along));
+}
+
+fn vecLength(v: Vec) f32 {
+    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
 /// Aim a bone at a direction AND choose its twist so a child hinge bends in the right plane.
 ///
 /// -- *** WHY A SHORTEST ARC IS NOT ENOUGH --
@@ -14076,39 +14134,6 @@ pub fn aimBoneWithTwist(
     const twist_angle: f32 = atan2Rad(sine, cosine);
 
     return qmul(quatFromAxisAngle(axis, twist_angle), swing);
-}
-
-fn shortestArcBetweenVectors(from: Vec, to: Vec) Quat {
-    const alignment: f32 = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
-    if (alignment > 0.99999) {
-        return quat_identity;
-    }
-    if (alignment < -0.99999) {
-        const helper: Vec = if (@abs(from[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
-        return quatFromAxisAngle(normalize3(crossVec(from, helper)), 3.14159265);
-    }
-    return quatFromAxisAngle(
-        normalize3(crossVec(from, to)),
-        acosRad(clamp(alignment, -1.0, 1.0)),
-    );
-}
-
-fn crossVec(a: Vec, b: Vec) Vec {
-    return .{
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-        0,
-    };
-}
-
-fn removeComponentAlong(v: Vec, axis: Vec) Vec {
-    const along: f32 = v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
-    return v - axis * @as(Vec, @splat(along));
-}
-
-fn vecLength(v: Vec) f32 {
-    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
 /// The per-joint twist that makes a robot bone point where the source's does.
@@ -14253,6 +14278,15 @@ test "applyTwist: a chain does NOT accumulate its parent's twist" {
         }
     }
     try expect(differs);
+}
+
+fn findBodyByName(names: []const []const u8, wanted: []const u8) ?usize {
+    for (names, 0..) |name, index| {
+        if (eql(u8, name, wanted)) {
+            return index;
+        }
+    }
+    return null;
 }
 
 /// Build per-body twist offsets along named chains, from two rest poses.
@@ -14415,14 +14449,28 @@ pub fn computeTwistChainOffsets(
     }
 }
 
-fn findBodyByName(names: []const []const u8, wanted: []const u8) ?usize {
-    for (names, 0..) |name, index| {
-        if (std.mem.eql(u8, name, wanted)) {
-            return index;
-        }
-    }
-    return null;
-}
+/// One body oriented by two capture directions.
+pub const DirectionPair = struct {
+    body: usize,
+    /// The capture joints whose difference gives each direction.
+    primary_from: usize,
+    primary_to: usize,
+    secondary_from: usize,
+    secondary_to: usize,
+    /// The robot's matching directions at rest, in world (= local at `qpos0`).
+    robot_primary: Vec,
+    robot_secondary: Vec,
+    /// How many ANCESTORS to fit the target through before the body itself.
+    ///
+    /// -- *** A BODY'S DOF MAY LIVE UPSTREAM --
+    ///
+    /// `humanoid.xml`'s waist is 3 DOF split across two bodies: `waist_lower` owns abdomen_z
+    /// and abdomen_y, `pelvis` owns abdomen_x. Fitting a pelvis target onto the pelvis alone
+    /// reaches ONE axis of three - measured 31-69 degrees off on the hip axis. With
+    /// `chain_depth = 1` the target is fitted onto `waist_lower` first, then the residual onto
+    /// the pelvis, and all three axes take part.
+    chain_depth: u8 = 0,
+};
 
 /// Everything the pose loop needs, already in the ROBOT's frame.
 ///
@@ -14533,28 +14581,310 @@ pub const RetargetPose = struct {
     direction_pairs: ?[]const DirectionPair = null,
 };
 
-/// One body oriented by two capture directions.
-pub const DirectionPair = struct {
-    body: usize,
-    /// The capture joints whose difference gives each direction.
-    primary_from: usize,
-    primary_to: usize,
-    secondary_from: usize,
-    secondary_to: usize,
-    /// The robot's matching directions at rest, in world (= local at `qpos0`).
-    robot_primary: Vec,
-    robot_secondary: Vec,
-    /// How many ANCESTORS to fit the target through before the body itself.
-    ///
-    /// -- *** A BODY'S DOF MAY LIVE UPSTREAM --
-    ///
-    /// `humanoid.xml`'s waist is 3 DOF split across two bodies: `waist_lower` owns abdomen_z
-    /// and abdomen_y, `pelvis` owns abdomen_x. Fitting a pelvis target onto the pelvis alone
-    /// reaches ONE axis of three - measured 31-69 degrees off on the hip axis. With
-    /// `chain_depth = 1` the target is fitted onto `waist_lower` first, then the residual onto
-    /// the pelvis, and all three axes take part.
-    chain_depth: u8 = 0,
+fn orthonormalBasis(primary: Vec, secondary: Vec) ?[3]Vec {
+    const p_len: f32 = vecLength(primary);
+    if (p_len < 1.0e-6) {
+        return null;
+    }
+    const x: Vec = primary / @as(Vec, @splat(p_len));
+    const along: f32 = secondary[0] * x[0] + secondary[1] * x[1] + secondary[2] * x[2];
+    const perpendicular: Vec = secondary - x * @as(Vec, @splat(along));
+    const s_len: f32 = vecLength(perpendicular);
+    if (s_len < 1.0e-6) {
+        return null;
+    }
+    const y: Vec = perpendicular / @as(Vec, @splat(s_len));
+    const z: Vec = crossVec(x, y);
+    return .{ x, y, z };
+}
+
+fn quatFromRotationMatrix(r: [3][3]f32) Quat {
+    const trace: f32 = r[0][0] + r[1][1] + r[2][2];
+    if (trace > 0) {
+        const s: f32 = @sqrt(trace + 1.0) * 2.0;
+        return normalizeQuat(.{
+            (r[2][1] - r[1][2]) / s,
+            (r[0][2] - r[2][0]) / s,
+            (r[1][0] - r[0][1]) / s,
+            0.25 * s,
+        });
+    } else if (r[0][0] > r[1][1] and r[0][0] > r[2][2]) {
+        const s: f32 = @sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
+        return normalizeQuat(.{
+            0.25 * s,
+            (r[0][1] + r[1][0]) / s,
+            (r[0][2] + r[2][0]) / s,
+            (r[2][1] - r[1][2]) / s,
+        });
+    } else if (r[1][1] > r[2][2]) {
+        const s: f32 = @sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
+        return normalizeQuat(.{
+            (r[0][1] + r[1][0]) / s,
+            0.25 * s,
+            (r[1][2] + r[2][1]) / s,
+            (r[0][2] - r[2][0]) / s,
+        });
+    } else {
+        const s: f32 = @sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
+        return normalizeQuat(.{
+            (r[0][2] + r[2][0]) / s,
+            (r[1][2] + r[2][1]) / s,
+            0.25 * s,
+            (r[1][0] - r[0][1]) / s,
+        });
+    }
+}
+
+/// The rotation that carries one pair of directions onto another.
+///
+/// -- *** TWO DIRECTIONS FULLY DETERMINE AN ORIENTATION --
+///
+/// A single bone direction leaves rotation ABOUT that bone free - the ambiguity that cost the
+/// retarget arc four experiments. Two non-parallel directions leave nothing free. For a torso
+/// the pair is obvious: the SPINE (up) and the SHOULDER AXIS (sideways). Match both and the
+/// torso is oriented, with no rest-pose algebra, no twist offsets and no chains.
+///
+/// * Both pairs must be expressed in the SAME frame. Each is built into an orthonormal basis
+/// (`primary`, then the part of `secondary` perpendicular to it, then their cross), and the
+/// rotation is the one taking the first basis onto the second.
+///
+/// * Returns identity when either pair is degenerate (parallel or zero), because a guess there
+/// would be a rotation about an axis nobody chose.
+pub fn rotationBetweenDirectionPairs(
+    from_primary: Vec,
+    from_secondary: Vec,
+    to_primary: Vec,
+    to_secondary: Vec,
+) Quat {
+    const from_basis: ?[3]Vec = orthonormalBasis(from_primary, from_secondary);
+    const to_basis: ?[3]Vec = orthonormalBasis(to_primary, to_secondary);
+    if (from_basis == null or to_basis == null) {
+        return quat_identity;
+    }
+    const f: [3]Vec = from_basis.?;
+    const t: [3]Vec = to_basis.?;
+
+    // R = T * F^T, as a rotation matrix with columns; then to a quaternion.
+    // R[i][j] = sum_k t[k][i] * f[k][j]   (T has columns t[k], F^T has rows f[k])
+    // * Vec lanes need comptime indices, so the 3x3 is unrolled rather than looped.
+    var r: [3][3]f32 = undefined;
+    inline for (0..3) |i| {
+        inline for (0..3) |j| {
+            r[i][j] = t[0][i] * f[0][j] + t[1][i] * f[1][j] + t[2][i] * f[2][j];
+        }
+    }
+    return quatFromRotationMatrix(r);
+}
+
+fn firstChildBody(m: *const Model, body: usize) ?usize {
+    for (1..m.nbody) |candidate| {
+        if (m.body_parent[candidate] == body) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+fn firstChildJoint(parents: []const i32, joint: usize) ?usize {
+    for (parents, 0..) |parent, candidate| {
+        if (parent == @as(i32, @intCast(joint))) {
+            return candidate;
+        }
+    }
+    return null;
+}
+
+/// Where a two-bone limb's middle joint must go, and how far it bends.
+pub const TwoBoneSolution = struct {
+    /// The elbow/knee position, in world coordinates.
+    joint_position: Vec,
+    /// Departure from straight, in radians. Zero is a fully extended limb.
+    flexion: f32,
+    /// True when the target was out of reach and the limb was extended toward it instead.
+    clamped: bool,
 };
+
+/// Solve a two-bone limb analytically: shoulder fixed, hand target given.
+///
+/// -- *** AN ARM IS EXACTLY DETERMINED, SO IT NEEDS NO SOLVER --
+///
+/// Shoulder (2 DOF) + elbow (1 DOF) is THREE degrees of freedom, and a hand position is THREE
+/// numbers. **No weights, no iteration, no damping, and no free twist to argue about** - the one
+/// remaining ambiguity is which PLANE the elbow bends in, and the capture answers that directly
+/// by saying where its own elbow is.
+///
+/// Measured motivation: hand errors up to 0.50 m on an arm spanning 0.62 m, with every wanted
+/// reach comfortably inside that span. **The arm can get there and does not.**
+///
+/// ** **EVERY LENGTH COMES FROM THE ROBOT, EVERY DIRECTION FROM THE CAPTURE.** That is the rule
+/// this arc arrived at three separate times; here it is applied to a whole limb at once.
+///
+/// * `upper_length` and `lower_length` are the ROBOT's own bone lengths. `hand_target` and
+/// `elbow_hint` are the capture's, in the robot's frame - the hint only picks the plane, so its
+/// distance from the shoulder is irrelevant and its direction is all that is read.
+pub fn solveTwoBoneLimb(
+    shoulder: Vec,
+    hand_target: Vec,
+    elbow_hint: Vec,
+    upper_length: f32,
+    lower_length: f32,
+) TwoBoneSolution {
+    const to_hand: Vec = hand_target - shoulder;
+    const reach: f32 = @sqrt(to_hand[0] * to_hand[0] + to_hand[1] * to_hand[1] +
+        to_hand[2] * to_hand[2]);
+
+    // * A limb cannot be shorter than the difference of its bones nor longer than their sum.
+    // Clamping INSIDE those bounds keeps the cosine in range without a special case, and the
+    // caller is told when it happened rather than left to infer it.
+    const minimum: f32 = @abs(upper_length - lower_length) + 1.0e-4;
+    const maximum: f32 = upper_length + lower_length - 1.0e-4;
+    const clamped_reach: f32 = clamp(reach, minimum, maximum);
+    const was_clamped: bool = reach > maximum or reach < minimum;
+
+    if (reach < 1.0e-5) {
+        return .{
+            .joint_position = shoulder + vec(0, upper_length, 0),
+            .flexion = 0,
+            .clamped = true,
+        };
+    }
+    const hand_direction: Vec = to_hand / @as(Vec, @splat(reach));
+
+    // Law of cosines: the interior angle at the middle joint, then its departure from straight.
+    const interior_cosine: f32 = clamp(
+        (upper_length * upper_length + lower_length * lower_length -
+            clamped_reach * clamped_reach) / (2.0 * upper_length * lower_length),
+        -1.0,
+        1.0,
+    );
+    const flexion: f32 = 3.14159265 - acosRad(interior_cosine);
+
+    // The angle between the upper bone and the line to the hand.
+    const swing_cosine: f32 = clamp(
+        (upper_length * upper_length + clamped_reach * clamped_reach -
+            lower_length * lower_length) / (2.0 * upper_length * clamped_reach),
+        -1.0,
+        1.0,
+    );
+    const swing: f32 = acosRad(swing_cosine);
+
+    // ** THE PLANE COMES FROM THE CAPTURE'S OWN MIDDLE JOINT. Without it the elbow could sit
+    // anywhere on a circle - which is precisely the free-twist ambiguity that has cost this arc
+    // four experiments. **The capture already knows the answer; it just was not being asked.**
+    const to_hint: Vec = elbow_hint - shoulder;
+    var normal: Vec = crossVec(to_hand, to_hint);
+    const normal_length: f32 = @sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
+        normal[2] * normal[2]);
+    if (normal_length < 1.0e-6) {
+        // Hint collinear with the target: any plane is equally right, so pick a stable one
+        // rather than whatever floating-point noise suggests.
+        const helper: Vec = if (@abs(hand_direction[2]) < 0.9) vec(0, 0, 1) else vec(1, 0, 0);
+        normal = crossVec(to_hand, helper);
+    }
+    const plane_normal: Vec = normalize3(normal);
+
+    const upper_direction: Vec =
+        zm.rotate(quatFromAxisAngle(plane_normal, swing), hand_direction);
+
+    return .{
+        .joint_position = shoulder + upper_direction * @as(Vec, @splat(upper_length)),
+        .flexion = flexion,
+        .clamped = was_clamped,
+    };
+}
+
+/// Pose a two-bone limb from `body` in closed form. Returns false when the shape does not fit
+/// (no hinge child, no mapped end effector), leaving the caller to fall through.
+fn solveLimbHere(
+    m: *const Model,
+    d: *Data,
+    in: RetargetPose,
+    body: usize,
+    joint: usize,
+) bool {
+    const middle: usize = firstChildBody(m, body) orelse return false;
+    const end: usize = firstChildBody(m, middle) orelse return false;
+    const middle_is_hinge: bool = m.body_jnt_num[middle] == 1 and
+        m.jnt_type[m.body_jnt_adr[middle]] == .hinge;
+    if (!middle_is_hinge) {
+        return false;
+    }
+    const human_middle: usize = firstChildJoint(in.human_parents, joint) orelse return false;
+    const human_end: usize = firstChildJoint(in.human_parents, human_middle) orelse return false;
+
+    // * LENGTHS FROM THE ROBOT, positions from the capture - the rule this arc arrived at three
+    // times over.
+    const upper_length: f32 = vecLength(m.body_pos[middle]);
+    const lower_length: f32 = vecLength(m.body_pos[end]);
+    if (upper_length < 1.0e-5 or lower_length < 1.0e-5) {
+        return false;
+    }
+
+    // -- *** TARGETS RELATIVE TO THE SHOULDER, NOT ABSOLUTE --
+    //
+    // The robot's shoulder is NOT where the capture's is - the scorecard puts it 0.086 m off
+    // before the torso's own placement error. **Aiming at the capture's absolute hand from the
+    // robot's shoulder asks for a vector that includes that offset**, and the limb spends its
+    // whole reach cancelling a torso error instead of making an arm shape.
+    //
+    // ** Measured cost of getting this wrong: hand error 0.19-0.50 m became 0.43-0.74. The
+    // closed form was exact all along - it was being handed the wrong triangle.
+    //
+    // * The error METRIC in `ARM FOCUS` already measured relative to the shoulder, for exactly
+    // this reason. **I applied the principle to the measurement and not to the target.**
+    const shoulder: Vec = d.body_xpos[body];
+    const capture_shoulder: Vec = in.positions[joint];
+    const solution: TwoBoneSolution = solveTwoBoneLimb(
+        shoulder,
+        shoulder + (in.positions[human_end] - capture_shoulder),
+        shoulder + (in.positions[human_middle] - capture_shoulder),
+        upper_length,
+        lower_length,
+    );
+
+    // -- *** WHY THE ANALYTIC TWO-BONE SOLVE CANNOT BE EXACT ON THIS SHOULDER --
+    //
+    // Isolated on a bare model, step by step:
+    //
+    //     shortest-arc aim:       elbow 0.004 m   hand 0.620 m   bend angle correct
+    //     aim WITH chosen twist:  elbow 0.296 m   hand 0.739 m
+    //
+    // The closed form assumes the arm has 2 DOF for the elbow's DIRECTION plus 1 for the bend,
+    // with the bend PLANE free to choose. **A 2-DOF shoulder has no spare DOF for the plane**:
+    // whatever two angles put the elbow on a direction also fix the hinge axis, so the plane is
+    // a CONSEQUENCE of the direction, not a choice. Asking for both costs the direction - the
+    // same trade measured at section 13p and section 21, now with the mechanism visible.
+    //
+    // *** So "choose the elbow, then bend" is the WRONG DECOMPOSITION for this robot. The arm is
+    // still exactly determined - 3 DOF against a 3-number hand - but as a coupled 3x3 system,
+    // which is what NUMERICAL IK on the hand position solves and a closed form cannot. The
+    // shortest-arc aim is kept (elbow exact) and the hand is left to the solver.
+    const local_bone: Vec = normalize3(m.body_pos[middle]);
+    const to_joint: Vec = solution.joint_position - shoulder;
+    const to_joint_length: f32 = vecLength(to_joint);
+    if (to_joint_length < 1.0e-6) {
+        return false;
+    }
+    const world_target: Quat = shortestArcBetweenVectors(
+        local_bone,
+        to_joint / @as(Vec, @splat(to_joint_length)),
+    );
+    const parent_world: Quat = d.body_xrot[m.body_parent[body]];
+    _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world_target));
+
+    // -- *** THE HINGE: SUBTRACT THE REST BEND, NO SIGN FLIP --
+    //
+    // Measured on a bare model: `bend = rest_bend + qpos`, and this elbow rests at 109.5
+    // degrees. The earlier write here flipped the sign from the joint's range and wrote the
+    // flexion as an absolute - which is why two-bone was switched off as "the hand does not
+    // respond". It responded exactly to what it was given; what it was given was wrong.
+    const hinge: usize = m.body_jnt_adr[middle];
+    const range: [2]f32 = m.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
+    const rest_flexion: f32 = if (in.rest_flexion) |rest| rest[middle] else 0;
+    d.pos[m.jnt_qpos_adr[hinge]] = clamp(solution.flexion - rest_flexion, range[0], range[1]);
+    kinematics(m, d);
+    return true;
+}
 
 /// Pose the whole robot for one frame. The single implementation, called by example and test.
 ///
@@ -14945,117 +15275,6 @@ pub fn poseFromRetarget(m: *const Model, d: *Data, in: RetargetPose) void {
     }
 }
 
-/// Pose a two-bone limb from `body` in closed form. Returns false when the shape does not fit
-/// (no hinge child, no mapped end effector), leaving the caller to fall through.
-fn solveLimbHere(
-    m: *const Model,
-    d: *Data,
-    in: RetargetPose,
-    body: usize,
-    joint: usize,
-) bool {
-    const middle: usize = firstChildBody(m, body) orelse return false;
-    const end: usize = firstChildBody(m, middle) orelse return false;
-    const middle_is_hinge: bool = m.body_jnt_num[middle] == 1 and
-        m.jnt_type[m.body_jnt_adr[middle]] == .hinge;
-    if (!middle_is_hinge) {
-        return false;
-    }
-    const human_middle: usize = firstChildJoint(in.human_parents, joint) orelse return false;
-    const human_end: usize = firstChildJoint(in.human_parents, human_middle) orelse return false;
-
-    // * LENGTHS FROM THE ROBOT, positions from the capture - the rule this arc arrived at three
-    // times over.
-    const upper_length: f32 = vecLength(m.body_pos[middle]);
-    const lower_length: f32 = vecLength(m.body_pos[end]);
-    if (upper_length < 1.0e-5 or lower_length < 1.0e-5) {
-        return false;
-    }
-
-    // -- *** TARGETS RELATIVE TO THE SHOULDER, NOT ABSOLUTE --
-    //
-    // The robot's shoulder is NOT where the capture's is - the scorecard puts it 0.086 m off
-    // before the torso's own placement error. **Aiming at the capture's absolute hand from the
-    // robot's shoulder asks for a vector that includes that offset**, and the limb spends its
-    // whole reach cancelling a torso error instead of making an arm shape.
-    //
-    // ** Measured cost of getting this wrong: hand error 0.19-0.50 m became 0.43-0.74. The
-    // closed form was exact all along - it was being handed the wrong triangle.
-    //
-    // * The error METRIC in `ARM FOCUS` already measured relative to the shoulder, for exactly
-    // this reason. **I applied the principle to the measurement and not to the target.**
-    const shoulder: Vec = d.body_xpos[body];
-    const capture_shoulder: Vec = in.positions[joint];
-    const solution: TwoBoneSolution = solveTwoBoneLimb(
-        shoulder,
-        shoulder + (in.positions[human_end] - capture_shoulder),
-        shoulder + (in.positions[human_middle] - capture_shoulder),
-        upper_length,
-        lower_length,
-    );
-
-    // -- *** WHY THE ANALYTIC TWO-BONE SOLVE CANNOT BE EXACT ON THIS SHOULDER --
-    //
-    // Isolated on a bare model, step by step:
-    //
-    //     shortest-arc aim:       elbow 0.004 m   hand 0.620 m   bend angle correct
-    //     aim WITH chosen twist:  elbow 0.296 m   hand 0.739 m
-    //
-    // The closed form assumes the arm has 2 DOF for the elbow's DIRECTION plus 1 for the bend,
-    // with the bend PLANE free to choose. **A 2-DOF shoulder has no spare DOF for the plane**:
-    // whatever two angles put the elbow on a direction also fix the hinge axis, so the plane is
-    // a CONSEQUENCE of the direction, not a choice. Asking for both costs the direction - the
-    // same trade measured at section 13p and section 21, now with the mechanism visible.
-    //
-    // *** So "choose the elbow, then bend" is the WRONG DECOMPOSITION for this robot. The arm is
-    // still exactly determined - 3 DOF against a 3-number hand - but as a coupled 3x3 system,
-    // which is what NUMERICAL IK on the hand position solves and a closed form cannot. The
-    // shortest-arc aim is kept (elbow exact) and the hand is left to the solver.
-    const local_bone: Vec = normalize3(m.body_pos[middle]);
-    const to_joint: Vec = solution.joint_position - shoulder;
-    const to_joint_length: f32 = vecLength(to_joint);
-    if (to_joint_length < 1.0e-6) {
-        return false;
-    }
-    const world_target: Quat = shortestArcBetweenVectors(
-        local_bone,
-        to_joint / @as(Vec, @splat(to_joint_length)),
-    );
-    const parent_world: Quat = d.body_xrot[m.body_parent[body]];
-    _ = fitBodyRotation(m, d, body, qmul(conjugate(parent_world), world_target));
-
-    // -- *** THE HINGE: SUBTRACT THE REST BEND, NO SIGN FLIP --
-    //
-    // Measured on a bare model: `bend = rest_bend + qpos`, and this elbow rests at 109.5
-    // degrees. The earlier write here flipped the sign from the joint's range and wrote the
-    // flexion as an absolute - which is why two-bone was switched off as "the hand does not
-    // respond". It responded exactly to what it was given; what it was given was wrong.
-    const hinge: usize = m.body_jnt_adr[middle];
-    const range: [2]f32 = m.jnt_range[hinge] orelse .{ -3.14159, 3.14159 };
-    const rest_flexion: f32 = if (in.rest_flexion) |rest| rest[middle] else 0;
-    d.pos[m.jnt_qpos_adr[hinge]] = clamp(solution.flexion - rest_flexion, range[0], range[1]);
-    kinematics(m, d);
-    return true;
-}
-
-fn firstChildBody(m: *const Model, body: usize) ?usize {
-    for (1..m.nbody) |candidate| {
-        if (m.body_parent[candidate] == body) {
-            return candidate;
-        }
-    }
-    return null;
-}
-
-fn firstChildJoint(parents: []const i32, joint: usize) ?usize {
-    for (parents, 0..) |parent, candidate| {
-        if (parent == @as(i32, @intCast(joint))) {
-            return candidate;
-        }
-    }
-    return null;
-}
-
 /// Solve the robot into the source's rest pose, and return the configuration.
 ///
 /// -- *** WHY THE ROBOT'S OWN `qpos0` IS NOT A USABLE REFERENCE --
@@ -15249,105 +15468,6 @@ pub fn solveRestPoseFromSource(
     @memcpy(out_qpos, d.pos);
 }
 
-/// Where a two-bone limb's middle joint must go, and how far it bends.
-pub const TwoBoneSolution = struct {
-    /// The elbow/knee position, in world coordinates.
-    joint_position: Vec,
-    /// Departure from straight, in radians. Zero is a fully extended limb.
-    flexion: f32,
-    /// True when the target was out of reach and the limb was extended toward it instead.
-    clamped: bool,
-};
-
-/// Solve a two-bone limb analytically: shoulder fixed, hand target given.
-///
-/// -- *** AN ARM IS EXACTLY DETERMINED, SO IT NEEDS NO SOLVER --
-///
-/// Shoulder (2 DOF) + elbow (1 DOF) is THREE degrees of freedom, and a hand position is THREE
-/// numbers. **No weights, no iteration, no damping, and no free twist to argue about** - the one
-/// remaining ambiguity is which PLANE the elbow bends in, and the capture answers that directly
-/// by saying where its own elbow is.
-///
-/// Measured motivation: hand errors up to 0.50 m on an arm spanning 0.62 m, with every wanted
-/// reach comfortably inside that span. **The arm can get there and does not.**
-///
-/// ** **EVERY LENGTH COMES FROM THE ROBOT, EVERY DIRECTION FROM THE CAPTURE.** That is the rule
-/// this arc arrived at three separate times; here it is applied to a whole limb at once.
-///
-/// * `upper_length` and `lower_length` are the ROBOT's own bone lengths. `hand_target` and
-/// `elbow_hint` are the capture's, in the robot's frame - the hint only picks the plane, so its
-/// distance from the shoulder is irrelevant and its direction is all that is read.
-pub fn solveTwoBoneLimb(
-    shoulder: Vec,
-    hand_target: Vec,
-    elbow_hint: Vec,
-    upper_length: f32,
-    lower_length: f32,
-) TwoBoneSolution {
-    const to_hand: Vec = hand_target - shoulder;
-    const reach: f32 = @sqrt(to_hand[0] * to_hand[0] + to_hand[1] * to_hand[1] +
-        to_hand[2] * to_hand[2]);
-
-    // * A limb cannot be shorter than the difference of its bones nor longer than their sum.
-    // Clamping INSIDE those bounds keeps the cosine in range without a special case, and the
-    // caller is told when it happened rather than left to infer it.
-    const minimum: f32 = @abs(upper_length - lower_length) + 1.0e-4;
-    const maximum: f32 = upper_length + lower_length - 1.0e-4;
-    const clamped_reach: f32 = clamp(reach, minimum, maximum);
-    const was_clamped: bool = reach > maximum or reach < minimum;
-
-    if (reach < 1.0e-5) {
-        return .{
-            .joint_position = shoulder + vec(0, upper_length, 0),
-            .flexion = 0,
-            .clamped = true,
-        };
-    }
-    const hand_direction: Vec = to_hand / @as(Vec, @splat(reach));
-
-    // Law of cosines: the interior angle at the middle joint, then its departure from straight.
-    const interior_cosine: f32 = clamp(
-        (upper_length * upper_length + lower_length * lower_length -
-            clamped_reach * clamped_reach) / (2.0 * upper_length * lower_length),
-        -1.0,
-        1.0,
-    );
-    const flexion: f32 = 3.14159265 - acosRad(interior_cosine);
-
-    // The angle between the upper bone and the line to the hand.
-    const swing_cosine: f32 = clamp(
-        (upper_length * upper_length + clamped_reach * clamped_reach -
-            lower_length * lower_length) / (2.0 * upper_length * clamped_reach),
-        -1.0,
-        1.0,
-    );
-    const swing: f32 = acosRad(swing_cosine);
-
-    // ** THE PLANE COMES FROM THE CAPTURE'S OWN MIDDLE JOINT. Without it the elbow could sit
-    // anywhere on a circle - which is precisely the free-twist ambiguity that has cost this arc
-    // four experiments. **The capture already knows the answer; it just was not being asked.**
-    const to_hint: Vec = elbow_hint - shoulder;
-    var normal: Vec = crossVec(to_hand, to_hint);
-    const normal_length: f32 = @sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
-        normal[2] * normal[2]);
-    if (normal_length < 1.0e-6) {
-        // Hint collinear with the target: any plane is equally right, so pick a stable one
-        // rather than whatever floating-point noise suggests.
-        const helper: Vec = if (@abs(hand_direction[2]) < 0.9) vec(0, 0, 1) else vec(1, 0, 0);
-        normal = crossVec(to_hand, helper);
-    }
-    const plane_normal: Vec = normalize3(normal);
-
-    const upper_direction: Vec =
-        zm.rotate(quatFromAxisAngle(plane_normal, swing), hand_direction);
-
-    return .{
-        .joint_position = shoulder + upper_direction * @as(Vec, @splat(upper_length)),
-        .flexion = flexion,
-        .clamped = was_clamped,
-    };
-}
-
 test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach" {
     // -- *** THE DEFINING PROPERTY, AND IT IS AN EQUALITY --
     //
@@ -15418,6 +15538,10 @@ test "solveTwoBoneLimb: the hand lands EXACTLY on the target when it is in reach
     try expect(far.joint_position[0] == far.joint_position[0]);
 }
 
+fn acos_cos(angle: f32) f32 {
+    return @cos(angle);
+}
+
 /// The hinge coordinate that produces a given bend, for an axis not perpendicular to the bone.
 ///
 /// -- *** `qpos` IS A COORDINATE, NOT AN ANGLE BETWEEN BONES --
@@ -15484,10 +15608,6 @@ pub fn maximumFlexion(axis: Vec, bone: Vec) f32 {
     return 2.0 * @min(acosRad(cos_gamma), 3.14159265 - acosRad(cos_gamma));
 }
 
-fn acos_cos(angle: f32) f32 {
-    return @cos(angle);
-}
-
 test "hingeAngleForFlexion: the returned coordinate produces exactly the requested bend" {
     // -- *** THE ROUND TRIP, WHICH IS THE ONLY THING THAT MATTERS --
     //
@@ -15541,101 +15661,6 @@ test "hingeAngleForFlexion: the returned coordinate produces exactly the request
 
     // * Axis along the bone bends nothing, whatever is written into it.
     try expect(hingeAngleForFlexion(vec(1, 0, 0), vec(1, 0, 0), 0.3) == null);
-}
-
-/// The rotation that carries one pair of directions onto another.
-///
-/// -- *** TWO DIRECTIONS FULLY DETERMINE AN ORIENTATION --
-///
-/// A single bone direction leaves rotation ABOUT that bone free - the ambiguity that cost the
-/// retarget arc four experiments. Two non-parallel directions leave nothing free. For a torso
-/// the pair is obvious: the SPINE (up) and the SHOULDER AXIS (sideways). Match both and the
-/// torso is oriented, with no rest-pose algebra, no twist offsets and no chains.
-///
-/// * Both pairs must be expressed in the SAME frame. Each is built into an orthonormal basis
-/// (`primary`, then the part of `secondary` perpendicular to it, then their cross), and the
-/// rotation is the one taking the first basis onto the second.
-///
-/// * Returns identity when either pair is degenerate (parallel or zero), because a guess there
-/// would be a rotation about an axis nobody chose.
-pub fn rotationBetweenDirectionPairs(
-    from_primary: Vec,
-    from_secondary: Vec,
-    to_primary: Vec,
-    to_secondary: Vec,
-) Quat {
-    const from_basis: ?[3]Vec = orthonormalBasis(from_primary, from_secondary);
-    const to_basis: ?[3]Vec = orthonormalBasis(to_primary, to_secondary);
-    if (from_basis == null or to_basis == null) {
-        return quat_identity;
-    }
-    const f: [3]Vec = from_basis.?;
-    const t: [3]Vec = to_basis.?;
-
-    // R = T * F^T, as a rotation matrix with columns; then to a quaternion.
-    // R[i][j] = sum_k t[k][i] * f[k][j]   (T has columns t[k], F^T has rows f[k])
-    // * Vec lanes need comptime indices, so the 3x3 is unrolled rather than looped.
-    var r: [3][3]f32 = undefined;
-    inline for (0..3) |i| {
-        inline for (0..3) |j| {
-            r[i][j] = t[0][i] * f[0][j] + t[1][i] * f[1][j] + t[2][i] * f[2][j];
-        }
-    }
-    return quatFromRotationMatrix(r);
-}
-
-fn orthonormalBasis(primary: Vec, secondary: Vec) ?[3]Vec {
-    const p_len: f32 = vecLength(primary);
-    if (p_len < 1.0e-6) {
-        return null;
-    }
-    const x: Vec = primary / @as(Vec, @splat(p_len));
-    const along: f32 = secondary[0] * x[0] + secondary[1] * x[1] + secondary[2] * x[2];
-    const perpendicular: Vec = secondary - x * @as(Vec, @splat(along));
-    const s_len: f32 = vecLength(perpendicular);
-    if (s_len < 1.0e-6) {
-        return null;
-    }
-    const y: Vec = perpendicular / @as(Vec, @splat(s_len));
-    const z: Vec = crossVec(x, y);
-    return .{ x, y, z };
-}
-
-fn quatFromRotationMatrix(r: [3][3]f32) Quat {
-    const trace: f32 = r[0][0] + r[1][1] + r[2][2];
-    if (trace > 0) {
-        const s: f32 = @sqrt(trace + 1.0) * 2.0;
-        return normalizeQuat(.{
-            (r[2][1] - r[1][2]) / s,
-            (r[0][2] - r[2][0]) / s,
-            (r[1][0] - r[0][1]) / s,
-            0.25 * s,
-        });
-    } else if (r[0][0] > r[1][1] and r[0][0] > r[2][2]) {
-        const s: f32 = @sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
-        return normalizeQuat(.{
-            0.25 * s,
-            (r[0][1] + r[1][0]) / s,
-            (r[0][2] + r[2][0]) / s,
-            (r[2][1] - r[1][2]) / s,
-        });
-    } else if (r[1][1] > r[2][2]) {
-        const s: f32 = @sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
-        return normalizeQuat(.{
-            (r[0][1] + r[1][0]) / s,
-            0.25 * s,
-            (r[1][2] + r[2][1]) / s,
-            (r[0][2] - r[2][0]) / s,
-        });
-    } else {
-        const s: f32 = @sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
-        return normalizeQuat(.{
-            (r[0][2] + r[2][0]) / s,
-            (r[1][2] + r[2][1]) / s,
-            0.25 * s,
-            (r[1][0] - r[0][1]) / s,
-        });
-    }
 }
 
 test "rotationBetweenDirectionPairs: carries BOTH directions onto their targets" {
@@ -15733,7 +15758,7 @@ test "lafan_to_humanoid resolves against a Mixamo skeleton, not just LAFAN1" {
     for (lafan_to_humanoid) |row| {
         var already: bool = false;
         for (0..robot_count) |i| {
-            if (std.mem.eql(u8, robot_names[i], row.robot_body)) {
+            if (eql(u8, robot_names[i], row.robot_body)) {
                 already = true;
             }
         }
@@ -16379,12 +16404,12 @@ pub fn buildPointSamples(
             continue;
         }
         const name: []const u8 = in.body_names[b];
-        if (std.mem.startsWith(u8, name, "hand") or std.mem.startsWith(u8, name, "foot") or
-            std.mem.eql(u8, name, "head"))
+        if (startsWith(u8, name, "hand") or startsWith(u8, name, "foot") or
+            eql(u8, name, "head"))
         {
             out[i].weight *= in.extremity_weight;
         }
-        if (std.mem.indexOf(u8, name, "arm") != null) {
+        if (indexOf(u8, name, "arm") != null) {
             out[i].weight *= in.arm_weight;
         }
     }

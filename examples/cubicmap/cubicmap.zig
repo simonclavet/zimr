@@ -20,6 +20,10 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
+const ArrayList = std.ArrayList;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -68,7 +72,7 @@ const GpuMesh = struct {
 
 /// Carve a maze into an RGBA8 image: start all-wall (white), then a
 /// randomized DFS knocks out corridors (black) on a 2-step lattice.
-fn carveMaze(gpa: Allocator, rng: *std.Random.DefaultPrng, offset: i32) !z.Image {
+fn carveMaze(gpa: Allocator, rng: *Random.DefaultPrng, offset: i32) !z.Image {
     _ = offset;
     const img: z.Image = try z.genImageColor(gpa, grid_w, grid_h, white);
     const px: [*]Color = @ptrCast(@alignCast(img.data.?));
@@ -76,9 +80,9 @@ fn carveMaze(gpa: Allocator, rng: *std.Random.DefaultPrng, offset: i32) !z.Image
     const h: usize = @intCast(grid_h);
     const black: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
 
-    const rand: std.Random = rng.random();
+    const rand: Random = rng.random();
     // Stack of visited cells (odd coords). Start at (1,1).
-    var stack: std.ArrayList([2]usize) = .empty;
+    var stack: ArrayList([2]usize) = .empty;
     defer stack.deinit(gpa);
     px[1 * w + 1] = black;
     try stack.append(gpa, .{ 1, 1 });
@@ -132,7 +136,7 @@ fn fillMesh(
             .normal = .{ mesh.normals[i * 3 + 0], mesh.normals[i * 3 + 1], mesh.normals[i * 3 + 2] },
         };
     }
-    z.wgpu.queueWriteBuffer(queue, vbo, 0, std.mem.sliceAsBytes(scratch[0..vcount]));
+    z.wgpu.queueWriteBuffer(queue, vbo, 0, sliceAsBytes(scratch[0..vcount]));
     return @intCast(vcount);
 }
 
@@ -140,7 +144,7 @@ fn fillMesh(
 fn regen(
     gpa: Allocator,
     f: *z.Frame,
-    rng: *std.Random.DefaultPrng,
+    rng: *Random.DefaultPrng,
     vbo: z.wgpu.BufferHandle,
     scratch: []MeshVertex,
     preview: *z.WgpuTexture,
@@ -171,7 +175,7 @@ const State = struct {
     g2_bg: z.wgpu.BindGroupHandle,
     preview: z.WgpuTexture = .{},
 
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     offset: i32 = 0,
     regen_requested: bool = false,
 
@@ -279,7 +283,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, maze_fs_wgsl, "maze_fs");
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -316,7 +320,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .g0_bg = g0_bg,
         .fs_ubo = fs_ubo,
         .g2_bg = g2_bg,
-        .rng = std.Random.DefaultPrng.init(0xC0FFEE13579),
+        .rng = Random.DefaultPrng.init(0xC0FFEE13579),
         .rt = .{},
         .font = ui_font,
         .ui_host = z.UiHost.init(gpa, ui_font),
@@ -417,7 +421,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var vs_io: mat_vs.Io = undefined;
     vs_io.u = .{ .mvp = cam_vp, .model = zm.identity(), .normal_matrix = zm.identity() };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, asBytes(&vs_io.u));
 
     var fs_io: mat_fs.Io = undefined;
     fs_io.u = .{
@@ -427,7 +431,7 @@ fn update(f: *z.Frame, s: *State) void {
         .col_wall_x = .{ 0.40, 0.55, 0.80, 1 }, // walls facing +/-X (blue)
         .col_wall_z = .{ 0.80, 0.50, 0.38, 1 }, // walls facing +/-Z (terracotta)
     };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, asBytes(&fs_io.u));
 
     // ---- the maze pass ----
     const Backend: type = z.WgpuBackend;

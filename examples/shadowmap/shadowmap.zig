@@ -26,6 +26,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Mat = zm.Mat;
@@ -344,14 +345,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const static_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(sverts[0..]),
+        sliceAsBytes(sverts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "sm_static_vbo",
     );
     const static_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(sidxs[0..]),
+        sliceAsBytes(sidxs[0..]),
         .{ .index = true, .copy_dst = true },
         "sm_static_ibo",
     );
@@ -403,7 +404,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const bunny_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(bverts),
+        sliceAsBytes(bverts),
         .{ .vertex = true, .copy_dst = true },
         "sm_bunny_vbo",
     );
@@ -411,7 +412,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const bunny_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(bidx),
+        sliceAsBytes(bidx),
         .{ .index = true, .copy_dst = true },
         "sm_bunny_ibo",
     );
@@ -424,7 +425,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // enough to avoid both acne and peter-panning. Sampled with a NEAREST
     // sampler below - linear filtering would blend depths across silhouette
     // edges and corrupt the comparison.
-    const rt: z.RenderTexture = z.RenderTexture.create(device, .{
+    const rt: z.RenderTexture = .create(device, .{
         .width = @intCast(rt_size),
         .height = @intCast(rt_size),
         .format = .rgba16_float,
@@ -484,7 +485,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const depth_pl: z.wgpu.PipelineLayoutHandle = z.wgpu.createPipelineLayout(device, depth_bgls[0..], "sm_depth_pl");
     const depth_vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, depth_vs_wgsl, "depth_vs");
     const depth_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, depth_fs_wgsl, "depth_fs");
-    const depth_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const depth_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -516,7 +517,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const lit_fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, lit_fs_wgsl, "lit_shadow_fs");
     // Cull .none until the winding of every caster is device-confirmed; back
     // faces are depth-occluded anyway. Tighten to .back once verified clean.
-    const lit_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const lit_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less,

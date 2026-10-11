@@ -20,6 +20,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const asBytes = std.mem.asBytes;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -52,9 +54,9 @@ const FogFsUbo = @FieldType(fog_fs.Io, "u");
 /// fog fold, so distant geometry melts into the background seamlessly.
 const fog_rgb: [3]f32 = .{ 0.33, 0.36, 0.44 };
 const fog_clear: Color = .{
-    .r = @intFromFloat(fog_rgb[0] * 255.0),
-    .g = @intFromFloat(fog_rgb[1] * 255.0),
-    .b = @intFromFloat(fog_rgb[2] * 255.0),
+    .r = @round(fog_rgb[0] * 255.0),
+    .g = @round(fog_rgb[1] * 255.0),
+    .b = @round(fog_rgb[2] * 255.0),
     .a = 255,
 };
 
@@ -75,8 +77,6 @@ const Placement = struct {
     base_color: [4]f32,
 };
 
-const placements: [total_objects]Placement = buildPlacements();
-
 fn buildPlacements() [total_objects]Placement {
     var out: [total_objects]Placement = undefined;
     // The showcase trio (raylib's modelA/B/C at 0 / -2.6 / +2.6).
@@ -91,6 +91,8 @@ fn buildPlacements() [total_objects]Placement {
     }
     return out;
 }
+
+const placements: [total_objects]Placement = buildPlacements();
 
 // ============================================================================
 // GPU plumbing - one pipeline, per-object uniform pairs.
@@ -146,14 +148,14 @@ fn uploadMesh(
         .vbo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(verts),
+            sliceAsBytes(verts),
             .{ .vertex = true, .copy_dst = true },
             label,
         ),
         .ibo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(indices),
+            sliceAsBytes(indices),
             .{ .index = true, .copy_dst = true },
             label,
         ),
@@ -286,7 +288,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, fog_fs_wgsl, "fog_fs");
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -420,7 +422,7 @@ fn writeUniforms(
             .model = model,
             .normal_matrix = spin,
         };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, asBytes(&vs_io.u));
 
         var fs_io: fog_fs.Io = undefined;
         fs_io.u = .{
@@ -430,7 +432,7 @@ fn writeUniforms(
             .fog_color = .{ fog_rgb[0], fog_rgb[1], fog_rgb[2], 1 },
             .params = .{ s.fog_density, 0, 0, 0 },
         };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, asBytes(&fs_io.u));
     }
 }
 

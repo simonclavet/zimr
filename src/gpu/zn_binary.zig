@@ -1,9 +1,12 @@
 //! zn_binary.zig - zimrnum's elementwise kernels on the GPU: dense f32, two inputs, one output.
 //!
 //! ** DENSE ONLY, AND THAT IS THE POINT OF THE EXAMPLE. The kernel takes flat buffers and a
-//! count - no shape, no strides - exactly like znum's `k_binary.zig`. `zn.zip` on the CPU accepts
+//! count - no shape, no strides. `zn.zip` on the CPU accepts
 //! any rank up to 6 with arbitrary strides, so the GPU's domain is NARROWER: a broadcast view has
 //! to be materialised before it can be bound. The host does that explicitly and shows it.
+//!
+//! The reinforcement-learning kernels - the cartpole steps, PPO's clipped sample and the discriminator reward -
+//! are in zrl_binary.zig, beside the zimrrl functions they call.
 const k = @import("kompute");
 const zm = @import("zm");
 const float = zm.float;
@@ -132,19 +135,6 @@ pub fn div(c: k.Ctx(@This())) void {
     bout[c.id] = ba[c.id] / bb[c.id];
 }
 
-/// `out = a + b` with each operand read through its own row/column strides, so a stride of 0
-/// broadcasts that axis. The bias add of a dense layer: `(m, n) + (1, n)`.
-/// The COLUMN grid of a mesh: `out[i][j] = x[j]`.
-///
-/// TWO KERNELS, NOT ONE WRITING TWICE
-///
-/// The first version filled both grids in one dispatch, writing the second to
-/// `bout[count + id]` - past the end of a buffer sized for `count`. It passed every test I had
-/// and the smoke caught it as a LEAK: the runtime grew the buffer, and 2 pipelines x 45
-/// lifecycles showed up as `compute_pipeline+90`.
-///
-/// **A kernel that needs more output than the harness gives it is the harness telling you the
-/// shape is wrong.** One grid per dispatch fits, and the pair is two rows instead of one.
 /// Columns `[b_col, b_col + cols)` of `ba`, which is `a_row` wide.
 ///
 /// PURE ADDRESSING - AND THAT IS WHY IT BELONGS ON THE GPU AT ALL
@@ -156,55 +146,6 @@ pub fn div(c: k.Ctx(@This())) void {
 /// The host width is `a_row` and the output width is `cols`; they differ, which is the whole
 /// point. A kernel that assumed they matched would read the right values for one head and the
 /// wrong ones for every other.
-/// One cartpole timestep per thread: 1024 environments in one dispatch.
-///
-/// THE HOST TWIN IS `zn.cartpoleStep`, WHICH ALREADY EXISTED
-///
-/// This is the arithmetic of that function transcribed, and the sweep row runs the two against
-/// each other like every other kernel here. **The pure scalar step is what made the twin free** -
-/// there was nothing to write on the host side, because the definition a caller uses IS the
-/// reference.
-///
-/// `ba` is the state, four floats per row: cart, cart rate, pole angle in RADIANS, pole rate.
-/// `bb` is the push, one per row, negative for left. `bout` takes the next state in the same
-/// layout, and the reward and failure flag go in the two slots after the state block.
-///
-/// Radians here, not turns, for the reason the host function gives: the dynamics are
-/// differential equations and a derivative costs a tau in turns.
-pub fn cartpole_step(c: k.Ctx(@This())) void {
-    if (c.id >= c.params.count) {
-        return;
-    }
-    const base: u32 = c.id * 4;
-    // THE HOST FUNCTION ITSELF - NOT A TRANSCRIPTION OF IT
-    //
-    // This kernel used to restate `zn.cartpoleStep`'s arithmetic by hand, and a transcription is
-    // a second definition that can drift. It calls the host function now: **zimrnum compiles to
-    // SPIR-V**, so the GPU runs the same code the CPU runs and the sweep row compares a function
-    // against itself.
-    //
-    // The opt-in is `.wants_zimrnum` on this kernel's build entry. Per-kernel, because Zig
-    // rejects a `--dep` for a module the file does not import - passing `zn` to every kernel
-    // fails on the ones with no use for it, which is what blocked the first attempt.
-    //
-    // `ba` is the state, four floats per row; `bb` is the push, negative for left. Radians and
-    // not turns for the reason the host function gives: the dynamics are differential equations,
-    // and a derivative costs a tau in turns.
-    const state: zn.CartpoleState(f32) = .{
-        .cart = ba[base + 0],
-        .cart_rate = ba[base + 1],
-        .pole_rad = ba[base + 2],
-        .pole_rate_rad = ba[base + 3],
-    };
-    const stepped = zn.cartpoleStep(f32, state, if (bb[c.id] < 0) .left else .right);
-    // The state block only: four floats per environment exactly fills the output buffer, and
-    // writing the reward and flag after it runs off the end - the `mesh_grid` mistake.
-    bout[base + 0] = stepped.state.cart;
-    bout[base + 1] = stepped.state.cart_rate;
-    bout[base + 2] = stepped.state.pole_rad;
-    bout[base + 3] = stepped.state.pole_rate_rad;
-}
-
 pub fn slice_columns(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
         return;
@@ -243,6 +184,17 @@ pub fn concat_columns(c: k.Ctx(@This())) void {
     }
 }
 
+/// The COLUMN grid of a mesh: `out[i][j] = x[j]`.
+///
+/// TWO KERNELS, NOT ONE WRITING TWICE
+///
+/// The first version filled both grids in one dispatch, writing the second to
+/// `bout[count + id]` - past the end of a buffer sized for `count`. It passed every test I had
+/// and the smoke caught it as a LEAK: the runtime grew the buffer, and 2 pipelines x 45
+/// lifecycles showed up as `compute_pipeline+90`.
+///
+/// **A kernel that needs more output than the harness gives it is the harness telling you the
+/// shape is wrong.** One grid per dispatch fits, and the pair is two rows instead of one.
 pub fn mesh_grid_x(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
         return;
@@ -279,6 +231,8 @@ pub fn repeat_each(c: k.Ctx(@This())) void {
     bout[c.id] = ba[row * c.params.a_row + col / c.params.repeat_count];
 }
 
+/// `out = a + b` with each operand read through its own row/column strides, so a stride of 0
+/// broadcasts that axis. The bias add of a dense layer: `(m, n) + (1, n)`.
 pub fn bcast_add(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
         return;
@@ -542,76 +496,6 @@ pub fn adam_step(k_ctx: k.Ctx(@This())) void {
 // a line, and that realignment silently broke an append anchor three times during the
 // port. A vertical list is stable under formatting, so adding a kernel is a one-line
 // diff that no tooling will reflow.
-/// PPO's clipped surrogate, per sample, on the device.
-///
-/// ---- WHY THIS ROW EXISTS ----
-///
-/// `ppoClipSample` was written scalar-first - no allocation, no error union, no slice - SO THAT
-/// a kernel and the CPU loop could call the same function rather than two transcriptions of one
-/// formula. Two transcriptions is how a CPU/GPU comparison becomes circular: it compares a
-/// formula against itself and passes while both are wrong.
-///
-/// Until this row, that was an intention. The SPIR-V probe proved the shape COMPILES; only the
-/// sweep proves the device produces the same numbers.
-///
-/// The clip is fixed at 0.2 - the standard value, and a constant here so the row tests the
-/// arithmetic rather than a parameter the harness would have to carry.
-pub fn ppo_clip(k_ctx: k.Ctx(@This())) void {
-    if (k_ctx.id >= k_ctx.params.count) {
-        return;
-    }
-    const id: u32 = k_ctx.id;
-    // `a` is the LOG-RATIO and `b` the advantage, so `logp_old` is zero and `logp_new` is the
-    // ratio's log directly. Two inputs, not three - the harness fills `a` and `b` for every row
-    // and `c` only for the kernels that populate it themselves.
-    //
-    // This encoding is not a compromise: with the advantage varying in sign across the input
-    // field, BOTH clip branches are exercised. A row that fixed the advantage positive would
-    // only ever test the upper one, and the `@min` that makes this a trust region would be
-    // half-verified.
-    bout[id] = zn.ppoClipSample(f32, ba[id], 0.0, bb[id], 0.2);
-}
-
-/// One cartpole step's pole angle, under a continuous force.
-///
-/// Collection is where on-policy RL spends its wall clock and it is embarrassingly parallel
-/// across environments, so the dynamics belong on a device. This row is the narrow version of
-/// that claim: the same equations, the same answer, both sides.
-///
-/// The pole angle and the applied force are the row's two inputs.
-pub fn cartpole_pole(k_ctx: k.Ctx(@This())) void {
-    if (k_ctx.id >= k_ctx.params.count) {
-        return;
-    }
-    const id: u32 = k_ctx.id;
-    // `a` is the pole angle, `b` the applied force. The cart and the pole's rate start at zero
-    // so the row has one degree of freedom to disagree on rather than four - a mismatch here
-    // names the term that caused it.
-    const start: zn.CartpoleState(f32) = .{
-        .cart = 0,
-        .cart_rate = 0,
-        .pole_rad = ba[id],
-        .pole_rate_rad = 0,
-    };
-    bout[id] = zn.cartpoleContinuousStep(f32, start, bb[id]).state.pole_rad;
-}
-
-/// The adversarial style reward, on the device.
-///
-/// `a` is the discriminator's logit, `b` the reward scale. The floor is fixed at 1e-4 - the
-/// value AMP uses - so the row tests the arithmetic rather than a parameter the harness would
-/// have to carry.
-///
-/// The input field spans both regimes: a losing policy where the log is gentle, and a winning
-/// one where `1 - sigmoid` underflows and the floor is the only thing keeping the reward finite.
-pub fn disc_reward(k_ctx: k.Ctx(@This())) void {
-    if (k_ctx.id >= k_ctx.params.count) {
-        return;
-    }
-    const id: u32 = k_ctx.id;
-    bout[id] = zn.discriminatorReward(f32, ba[id] * 20.0, bb[id], 1.0e-4);
-}
-
 /// Adam at a LATER step, with moments that already carry history.
 ///
 /// ---- THE GAP THIS CLOSES, AND WHY IT IS THE SHAPE OF A REAL BUG ----
@@ -702,25 +586,10 @@ pub fn squash_correction(k_ctx: k.Ctx(@This())) void {
     bout[id] = zn.squashCorrection(f32, ba[id] * 12.0);
 }
 
-// ---- `sacTarget` IS NOT KERNEL-CALLABLE, AND THAT IS WORTH RECORDING ----
-//
-// A row for it was written and removed. `sacTarget` takes `next_estimates: []const T` - a slice,
-// because it aggregates over however many critics there are - and SPIR-V rejects constructing a
-// slice from a local array: "cannot construct slices without the variable_pointers capability".
-//
-// So despite reading like a scalar-first function, it cannot run on a device as written. For a
-// GPU-resident trainer the aggregation would have to be unrolled at the call site, or the
-// function would need a fixed-arity twin for the common twin-critic case.
-//
-// Recorded here rather than in a plan file because this is where someone will next try it.
-
 pub const kernels = [_][:0]const u8{
     "squash_correction",
     "polyak_follow",
     "adam_step_warm",
-    "disc_reward",
-    "ppo_clip",
-    "cartpole_pole",
     "add",
     "mul",
     "sub",
@@ -754,7 +623,6 @@ pub const kernels = [_][:0]const u8{
     "repeat_each",
     "slice_columns",
     "concat_columns",
-    "cartpole_step",
 };
 
 comptime {

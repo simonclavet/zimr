@@ -23,6 +23,8 @@ const assert = zm.assert;
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
 const indexOf = std.mem.indexOf;
+const testing_allocator = std.testing.allocator;
+const ArrayList = std.ArrayList;
 
 /// The six BVH channel kinds, spelled as they appear in a file.
 pub const Channel = enum {
@@ -100,13 +102,13 @@ pub const Options = struct {
     root_step: [3]f32 = .{ 0.0, 0.0, 0.0 },
 };
 
-fn writeIndent(out: *std.ArrayList(u8), gpa: Allocator, depth: usize) !void {
+fn writeIndent(out: *ArrayList(u8), gpa: Allocator, depth: usize) !void {
     for (0..depth) |_| {
         try out.append(gpa, '\t');
     }
 }
 
-fn writeLine(out: *std.ArrayList(u8), gpa: Allocator, crlf: bool) !void {
+fn writeLine(out: *ArrayList(u8), gpa: Allocator, crlf: bool) !void {
     if (crlf) {
         try out.append(gpa, '\r');
     }
@@ -121,9 +123,9 @@ fn writeLine(out: *std.ArrayList(u8), gpa: Allocator, crlf: bool) !void {
 pub fn generate(gpa: Allocator, opts: Options) ![]u8 {
     assert(opts.joint_count >= 1, @src());
 
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
-    const w: *std.ArrayList(u8) = &out;
+    const w: *ArrayList(u8) = &out;
 
     const rot: [3]Channel = opts.rotation_order.channels();
     // The bone points along +Z for a Z-up file and +Y otherwise. This is the ONLY difference
@@ -232,7 +234,7 @@ pub fn generate(gpa: Allocator, opts: Options) ![]u8 {
 }
 
 test "synth: the generated document has the shape the options asked for" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bytes: []u8 = try generate(gpa, .{
         .joint_count = 2,
         .frame_count = 3,
@@ -251,7 +253,7 @@ test "synth: the generated document has the shape the options asked for" {
 }
 
 test "synth: rotation order and layout are free parameters, not constants" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const zyx: []u8 = try generate(gpa, .{ .rotation_order = .zyx, .layout = .all_joints, .joint_count = 2 });
     defer gpa.free(zyx);
     // dance1's shape: 6 channels on EVERY joint, ZYX order.

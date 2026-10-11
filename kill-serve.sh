@@ -1,8 +1,12 @@
 #!/usr/bin/env sh
-# kill-serve.sh - kill whatever is holding the bun dev server port.
-# Use when `zig build serve` reports "Is port 8000 in use?".
+# kill-serve.sh - kill whatever is listening on the dev server's port.
+# Use when a dev server (`zig build serve` / `serve-only`, tools/serve.zig)
+# from an earlier session still holds it. PORT defaults to 8080, the one
+# serve.zig listens on. A new serve uses a running one of the same directory
+# as it is, so this is for one serving another directory, an older serve that
+# does not say what it serves, or any other program on the port.
 
-PORT=${PORT:-8000}
+PORT=${PORT:-8080}
 
 PIDS=$(lsof -ti :"$PORT" 2>/dev/null || true)
 if [ -z "$PIDS" ]; then

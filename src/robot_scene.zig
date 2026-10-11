@@ -42,7 +42,11 @@ const Quat = zm.Quat;
 const vec = zm.vec;
 const vec_zero = zm.vec_zero;
 const quat_identity = zm.quat_identity;
+const splat = zm.splat;
 const allocPrint = std.fmt.allocPrint;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 
 /// One loose object: a rigid body free to move in all six degrees of freedom.
 pub const FreeBody = struct {
@@ -94,14 +98,14 @@ pub const Scene = struct {
     /// solver sees a body index, the mass matrix sees six more DOFs, and `A_hat` picks up their
     /// inertia because it always did for tree bodies.
     pub fn build(self: Scene, gpa: Allocator) !rbt.Model {
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         const a: Allocator = scratch.allocator();
 
-        var bodies: std.ArrayListUnmanaged(rbt.BodySpec) = .empty;
-        var actuators: std.ArrayListUnmanaged(rbt.ActuatorSpec) = .empty;
-        var tendons: std.ArrayListUnmanaged(rbt.TendonSpec) = .empty;
-        var sensors: std.ArrayListUnmanaged(rbt.SensorSpec) = .empty;
+        var bodies: ArrayListUnmanaged(rbt.BodySpec) = .empty;
+        var actuators: ArrayListUnmanaged(rbt.ActuatorSpec) = .empty;
+        var tendons: ArrayListUnmanaged(rbt.TendonSpec) = .empty;
+        var sensors: ArrayListUnmanaged(rbt.SensorSpec) = .empty;
 
         // * NAMES MUST STAY UNIQUE ACROSS ROBOTS, and two copies of the same arm is the
         // obvious case that breaks it. A second KUKA brings a second `lbr_iiwa_joint_4`, and
@@ -245,7 +249,7 @@ fn crate(name: []const u8, at: Vec) FreeBody {
     return .{
         .name = name,
         .pos = at,
-        .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = zm.splat(@as(f32, 0.05)) } } }},
+        .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = splat(@as(f32, 0.05)) } } }},
         .inertial = .{
             .mass = 0.5,
             .pos = vec_zero,
@@ -255,7 +259,7 @@ fn crate(name: []const u8, at: Vec) FreeBody {
 }
 
 test "scene: free bodies add six DOFs each and keep the robot's indices" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const scene: Scene = .{
         .robots = &.{test_arm},
         .options = test_options,
@@ -288,7 +292,7 @@ test "scene: free bodies add six DOFs each and keep the robot's indices" {
 test "scene: a robot pushing a scene crate conserves momentum" {
     // The section 4k proof, now through the API a scene actually uses rather than a hand-written
     // spec. Same physics, same guarantee: one tree, one solver, one ledger.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const scene: Scene = .{
         .robots = &.{test_arm},
         .options = test_options,
@@ -296,7 +300,7 @@ test "scene: a robot pushing a scene crate conserves momentum" {
     };
     var m: rbt.Model = try scene.build(gpa);
     defer m.deinit();
-    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    var d: rbt.Data = try .init(gpa, &m);
     defer d.deinit();
 
     d.vel[0] = 1.0;
@@ -309,7 +313,7 @@ test "scene: a robot pushing a scene crate conserves momentum" {
         const gap: f32 = d.body_xpos[box][0] - d.body_xpos[1][0] - 0.10;
         if (gap < 0.01) {
             d.pushContact(.{
-                .position = (d.body_xpos[1] + d.body_xpos[box]) * zm.splat(@as(f32, 0.5)),
+                .position = (d.body_xpos[1] + d.body_xpos[box]) * splat(@as(f32, 0.5)),
                 .normal = vec(1, 0, 0),
                 .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                 .distance = gap,
@@ -335,7 +339,7 @@ test "scene: a heavier crate resists more - the property the old seam could not 
     // immovable and zimrphysics treated every proxy as a wall.
     //
     // In one tree the crate's mass is IN the mass matrix, so it cannot fail to matter.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var speeds: [2]f32 = undefined;
     for ([_]f32{ 0.5, 50.0 }, 0..) |mass, trial| {
         var heavy: FreeBody = crate("box", vec(0.2, 0, 0));
@@ -347,7 +351,7 @@ test "scene: a heavier crate resists more - the property the old seam could not 
         const scene: Scene = .{ .robots = &.{test_arm}, .options = test_options, .free_bodies = &.{heavy} };
         var m: rbt.Model = try scene.build(gpa);
         defer m.deinit();
-        var d: rbt.Data = try rbt.Data.init(gpa, &m);
+        var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
 
         d.vel[0] = 1.0;
@@ -358,7 +362,7 @@ test "scene: a heavier crate resists more - the property the old seam could not 
             const gap: f32 = d.body_xpos[box][0] - d.body_xpos[1][0] - 0.10;
             if (gap < 0.01) {
                 d.pushContact(.{
-                    .position = (d.body_xpos[1] + d.body_xpos[box]) * zm.splat(@as(f32, 0.5)),
+                    .position = (d.body_xpos[1] + d.body_xpos[box]) * splat(@as(f32, 0.5)),
                     .normal = vec(1, 0, 0),
                     .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                     .distance = gap,
@@ -392,7 +396,7 @@ test "scene: two robots and a crate share one tree, with names kept apart" {
     // The trap is NAMES. A second copy of an arm brings a second joint called `slide`, and
     // `jointIndexByName` returns the first match - so an actuator meant for robot 2 would
     // silently drive robot 1, which is a wrong robot moving with no error anywhere.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const scene: Scene = .{
         .robots = &.{ test_arm, test_arm },
         .options = test_options,
@@ -421,7 +425,7 @@ test "scene: two robots and a crate share one tree, with names kept apart" {
 test "scene: two robots can push the same crate, and the books still balance" {
     // The property that makes a shared tree worth the cost: two robots and an object are one
     // system, so momentum is conserved across ALL of them - not per robot, not approximately.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const scene: Scene = .{
         .robots = &.{ test_arm, test_arm },
         .options = test_options,
@@ -429,7 +433,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
     };
     var m: rbt.Model = try scene.build(gpa);
     defer m.deinit();
-    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    var d: rbt.Data = try .init(gpa, &m);
     defer d.deinit();
 
     const box: u32 = scene.freeBodyIndex(0);
@@ -447,7 +451,7 @@ test "scene: two robots can push the same crate, and the books still balance" {
             if (gap < 0.01) {
                 const toward: f32 = if (d.body_xpos[box][0] > d.body_xpos[link][0]) 1.0 else -1.0;
                 d.pushContact(.{
-                    .position = (d.body_xpos[link] + d.body_xpos[box]) * zm.splat(@as(f32, 0.5)),
+                    .position = (d.body_xpos[link] + d.body_xpos[box]) * splat(@as(f32, 0.5)),
                     .normal = vec(toward, 0, 0),
                     .tangent = .{ vec(0, 1, 0), vec(0, 0, 1) },
                     .distance = gap,
@@ -485,11 +489,11 @@ test "scene: the degenerate shapes all build" {
     // All three work. Pinning them means a future change to the build path cannot quietly
     // require a robot to be present, which is the kind of assumption that creeps in when
     // every test happens to satisfy it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const lone_box: FreeBody = .{
         .name = "c",
         .pos = vec(0, 1, 0),
-        .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = zm.splat(@as(f32, 0.05)) } }, .mass = 1 }},
+        .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = splat(@as(f32, 0.05)) } }, .mass = 1 }},
     };
 
     // Loose objects, no robot at all: six DOFs and nothing else.

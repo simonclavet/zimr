@@ -28,6 +28,7 @@ const Vec2 = zm.Vec2;
 // (`ffBridge` below): the immediate-mode triangles render through this
 // exact pair on `raster_shader.rasterizeTriangles` - the same shader the GPU
 // side runs - so the two halves match through one rasteriser, no drift.
+const requireGlScene = z.renderer_trait.requireGlScene;
 const ff_vs = z.default_shapes.vs;
 const ff_fs = z.default_shapes.fs;
 const clamp = zm.clamp;
@@ -61,8 +62,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    var sw: z.raster.Context = try z.raster.Context.init(gpa, @intCast(sw_w), @intCast(sw_h));
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    var sw: z.raster.Context = try .init(gpa, @intCast(sw_w), @intCast(sw_h));
+    const sw_fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         sw_w,
@@ -174,6 +175,7 @@ fn fillCircle(
 }
 
 fn drawScene(gl: anytype, t: f32) void {
+    requireGlScene(gl);
     gl.clearColor(.{ .r = 12, .g = 14, .b = 22, .a = 255 });
     gl.clear(.{ .color = true });
 
@@ -233,7 +235,7 @@ fn update(f: *z.Frame, s: *State) void {
     // framebuffer at low res, which we upload + blit on the left.
     {
         s.sw.ff_triangle = ffBridge;
-        var sw_gl: z.SwGl = z.SwGl.init(&s.sw);
+        var sw_gl: z.SwGl = .init(&s.sw);
         drawScene(&sw_gl, s.t);
         s.sw_fb.update(f.gpu.queue, s.sw.colorBufferBytes());
     }

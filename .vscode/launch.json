@@ -13,6 +13,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: audio-amp-envelope",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_amp_envelope/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-amp-envelope",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: audio-basic",
             "type": "chrome",
             "request": "launch",
@@ -24,12 +35,56 @@
             "smartStep": true
         },
         {
+            "name": "Debug: audio-mixer",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_mixer/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-mixer",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: audio-sound-lab",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_sound_lab/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-sound-lab",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: audio-spectrum-visualizer",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/audio_spectrum_visualizer/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build audio-spectrum-visualizer",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: audio-stream-synth",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/audio_stream_synth/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build audio-stream-synth",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: balance-flywheel",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/balance_flywheel/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build balance-flywheel",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -79,17 +134,6 @@
             "smartStep": true
         },
         {
-            "name": "Debug: bouncing-ball",
-            "type": "chrome",
-            "request": "launch",
-            "url": "http://localhost:8080/bouncing_ball/",
-            "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build bouncing-ball",
-            "sourceMaps": true,
-            "userDataDir": true,
-            "smartStep": true
-        },
-        {
             "name": "Debug: box-collisions",
             "type": "chrome",
             "request": "launch",
@@ -101,23 +145,23 @@
             "smartStep": true
         },
         {
-            "name": "Debug: bridge-classic-probe",
+            "name": "Debug: bullet-hell",
             "type": "chrome",
             "request": "launch",
-            "url": "http://localhost:8080/bridge_classic_probe/",
+            "url": "http://localhost:8080/bullet_hell/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build bridge-classic-probe",
+            "preLaunchTask": "zig: build bullet-hell",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
         },
         {
-            "name": "Debug: bridge-slice",
+            "name": "Debug: camera-controls",
             "type": "chrome",
             "request": "launch",
-            "url": "http://localhost:8080/bridge_slice/",
+            "url": "http://localhost:8080/camera_controls/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build bridge-slice",
+            "preLaunchTask": "zig: build camera-controls",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -129,6 +173,72 @@
             "url": "http://localhost:8080/camera2d/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build camera2d",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: cartpole",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/cartpole/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build cartpole",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: cartpole-duel",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/cartpole_duel/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build cartpole-duel",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: catch",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/catch/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build catch",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: cel-shading",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/cel_shading/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build cel-shading",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: cellular-automata",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/cellular_automata/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build cellular-automata",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: chain-ik",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/chain_ik/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build chain-ik",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -244,6 +354,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: crane",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/crane/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build crane",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: cube-demo",
             "type": "chrome",
             "request": "launch",
@@ -332,12 +453,34 @@
             "smartStep": true
         },
         {
+            "name": "Debug: decals",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/decals/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build decals",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: deferred-render",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/deferred_render/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build deferred-render",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: delta-time",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/delta_time/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build delta-time",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -387,12 +530,34 @@
             "smartStep": true
         },
         {
+            "name": "Debug: directional-billboard",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/directional_billboard/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build directional-billboard",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: double-pendulum",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/double_pendulum/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build double-pendulum",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: draw2d-demo",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/draw2d_demo/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build draw2d-demo",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -497,12 +662,12 @@
             "smartStep": true
         },
         {
-            "name": "Debug: fluid-gpu",
+            "name": "Debug: first-person-maze",
             "type": "chrome",
             "request": "launch",
-            "url": "http://localhost:8080/fluid_gpu/",
+            "url": "http://localhost:8080/first_person_maze/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build fluid-gpu",
+            "preLaunchTask": "zig: build first-person-maze",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -541,12 +706,23 @@
             "smartStep": true
         },
         {
-            "name": "Debug: forward-kinematics",
+            "name": "Debug: four-ways",
             "type": "chrome",
             "request": "launch",
-            "url": "http://localhost:8080/forward_kinematics/",
+            "url": "http://localhost:8080/four_ways/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build forward-kinematics",
+            "preLaunchTask": "zig: build four-ways",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: fps-playground",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/fps_playground/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build fps-playground",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -558,6 +734,17 @@
             "url": "http://localhost:8080/fractal_tree/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build fractal-tree",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: friction-slope",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/friction_slope/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build friction-slope",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -580,6 +767,17 @@
             "url": "http://localhost:8080/gallery_all/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build gallery-all",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: geno-dance",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/geno_dance/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build geno-dance",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -695,6 +893,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: gripper",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/gripper/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build gripper",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: heightmap",
             "type": "chrome",
             "request": "launch",
@@ -739,12 +948,34 @@
             "smartStep": true
         },
         {
+            "name": "Debug: humanoid",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/humanoid/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build humanoid",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: hybrid-render",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/hybrid_render/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build hybrid-render",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: icosphere-demo",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/icosphere_demo/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build icosphere-demo",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -767,6 +998,39 @@
             "url": "http://localhost:8080/imgui_phone_demo/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build imgui-phone-demo",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: input-actions",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/input_actions/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build input-actions",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: input-cursor-shapes",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/input_cursor_shapes/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build input-cursor-shapes",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: input-gamepad",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/input_gamepad/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build input-gamepad",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -816,6 +1080,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: input-pointer-lock",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/input_pointer_lock/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build input-pointer-lock",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: input-virtual-controls",
             "type": "chrome",
             "request": "launch",
@@ -860,6 +1135,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: kaleidoscope",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/kaleidoscope/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build kaleidoscope",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: keys",
             "type": "chrome",
             "request": "launch",
@@ -877,6 +1163,17 @@
             "url": "http://localhost:8080/lambert_demo/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build lambert-demo",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: langton-ant",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/langton_ant/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build langton-ant",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -992,12 +1289,56 @@
             "smartStep": true
         },
         {
+            "name": "Debug: mesh-builder",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/mesh_builder/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build mesh-builder",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: mesh-picking",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/mesh_picking/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build mesh-picking",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: mocap-viewer",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/mocap_viewer/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build mocap-viewer",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: models-animation-blend-custom",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/models_animation_blend_custom/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build models-animation-blend-custom",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: models-geometric-shapes",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/models_geometric_shapes/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build models-geometric-shapes",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1014,12 +1355,78 @@
             "smartStep": true
         },
         {
+            "name": "Debug: monitors",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/monitors/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build monitors",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: mpc-cartpole",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/mpc_cartpole/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build mpc-cartpole",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: mpc-quadruped",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/mpc_quadruped/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build mpc-quadruped",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: music-streaming",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/music_streaming/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build music-streaming",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: net-cursors",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/net_cursors/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build net-cursors",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: net-rtc-smoke",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/net_rtc_smoke/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build net-rtc-smoke",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: net-ws-smoke",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/net_ws_smoke/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build net-ws-smoke",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1042,6 +1449,17 @@
             "url": "http://localhost:8080/obj_simple/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build obj-simple",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: orthographic-projection",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/orthographic_projection/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build orthographic-projection",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1102,17 +1520,6 @@
             "smartStep": true
         },
         {
-            "name": "Debug: pipeline-array",
-            "type": "chrome",
-            "request": "launch",
-            "url": "http://localhost:8080/pipeline_array/",
-            "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build pipeline-array",
-            "sourceMaps": true,
-            "userDataDir": true,
-            "smartStep": true
-        },
-        {
             "name": "Debug: pipeline-basic",
             "type": "chrome",
             "request": "launch",
@@ -1135,34 +1542,12 @@
             "smartStep": true
         },
         {
-            "name": "Debug: pipeline-constants",
-            "type": "chrome",
-            "request": "launch",
-            "url": "http://localhost:8080/pipeline_constants/",
-            "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build pipeline-constants",
-            "sourceMaps": true,
-            "userDataDir": true,
-            "smartStep": true
-        },
-        {
             "name": "Debug: pipeline-instancing",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/pipeline_instancing/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build pipeline-instancing",
-            "sourceMaps": true,
-            "userDataDir": true,
-            "smartStep": true
-        },
-        {
-            "name": "Debug: pipeline-mipmap",
-            "type": "chrome",
-            "request": "launch",
-            "url": "http://localhost:8080/pipeline_mipmap/",
-            "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build pipeline-mipmap",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1223,23 +1608,23 @@
             "smartStep": true
         },
         {
-            "name": "Debug: pipeline-storage",
-            "type": "chrome",
-            "request": "launch",
-            "url": "http://localhost:8080/pipeline_storage/",
-            "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build pipeline-storage",
-            "sourceMaps": true,
-            "userDataDir": true,
-            "smartStep": true
-        },
-        {
             "name": "Debug: pipeline-uniforms",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/pipeline_uniforms/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build pipeline-uniforms",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: platonic-solids",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/platonic_solids/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build platonic-solids",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1311,6 +1696,50 @@
             "smartStep": true
         },
         {
+            "name": "Debug: quadruped",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/quadruped/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build quadruped",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: ragdoll-compare",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/ragdoll_compare/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build ragdoll-compare",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: random-sequence",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/random_sequence/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build random-sequence",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: random-values",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/random_values/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build random-values",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: raytracer",
             "type": "chrome",
             "request": "launch",
@@ -1377,6 +1806,94 @@
             "smartStep": true
         },
         {
+            "name": "Debug: rl-humanoid",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/rl_humanoid/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build rl-humanoid",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: robot-3d",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robot_3d/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robot-3d",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: robot-contact",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robot_contact/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robot-contact",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: robot-demo",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robot_demo/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robot-demo",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: robot-pendulum",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robot_pendulum/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robot-pendulum",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: robot-sidebyside",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/robot_sidebyside/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build robot-sidebyside",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: rock-demo",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/rock_demo/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build rock-demo",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: rocket",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/rocket/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build rocket",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: rounded-rectangle",
             "type": "chrome",
             "request": "launch",
@@ -1410,12 +1927,89 @@
             "smartStep": true
         },
         {
-            "name": "Debug: shader-inspection",
+            "name": "Debug: rt-workers",
             "type": "chrome",
             "request": "launch",
-            "url": "http://localhost:8080/shader_inspection/",
+            "url": "http://localhost:8080/rt_workers/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build shader-inspection",
+            "preLaunchTask": "zig: build rt-workers",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: scissor-test",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/scissor_test/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build scissor-test",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shader-effects",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shader_effects/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shader-effects",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shaders-lightmap-rendering",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shaders_lightmap_rendering/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shaders-lightmap-rendering",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shaders-multi-texture",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shaders_multi_texture/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shaders-multi-texture",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shaders-normalmap-rendering",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shaders_normalmap_rendering/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shaders-normalmap-rendering",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shaders-shapes-textures",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shaders_shapes_textures/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shaders-shapes-textures",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shaders-vertex-displacement",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shaders_vertex_displacement/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shaders-vertex-displacement",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1465,12 +2059,45 @@
             "smartStep": true
         },
         {
+            "name": "Debug: shapes-gallery",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shapes_gallery/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shapes-gallery",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shapes-procedural",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shapes_procedural/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shapes-procedural",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: shapes-showcase",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/shapes_showcase/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build shapes-showcase",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: shapes-top-down-lights",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/shapes_top_down_lights/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build shapes-top-down-lights",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1531,6 +2158,39 @@
             "smartStep": true
         },
         {
+            "name": "Debug: smooth-pixelperfect",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/smooth_pixelperfect/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build smooth-pixelperfect",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: snake",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/snake/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build snake",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: sort-smoke",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/sort_smoke/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build sort-smoke",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: sph-fluid-2d",
             "type": "chrome",
             "request": "launch",
@@ -1564,6 +2224,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: srcrec-dstrec",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/srcrec_dstrec/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build srcrec-dstrec",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: starfield",
             "type": "chrome",
             "request": "launch",
@@ -1586,12 +2257,89 @@
             "smartStep": true
         },
         {
+            "name": "Debug: state-persistence",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/state_persistence/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build state-persistence",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: tesseract-view",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/tesseract_view/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build tesseract-view",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-codepoints-loading",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_codepoints_loading/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-codepoints-loading",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: text-field",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/text_field/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build text-field",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-font-filters",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_font_filters/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-font-filters",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-font-loading",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_font_loading/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-font-loading",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-font-sdf",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_font_sdf/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-font-sdf",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-inline-styling",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_inline_styling/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-inline-styling",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1619,12 +2367,56 @@
             "smartStep": true
         },
         {
+            "name": "Debug: text-sprite-fonts",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_sprite_fonts/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-sprite-fonts",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-strings-management",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_strings_management/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-strings-management",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: text-unicode-ranges",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/text_unicode_ranges/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build text-unicode-ranges",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: texture-readback",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/texture_readback/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build texture-readback",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: texture-views",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/texture_views/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build texture-views",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1658,6 +2450,226 @@
             "url": "http://localhost:8080/textures_background_scrolling/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build textures-background-scrolling",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-blend-modes",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_blend_modes/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-blend-modes",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-bunnymark",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_bunnymark/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-bunnymark",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-fog-of-war",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_fog_of_war/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-fog-of-war",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-framebuffer-rendering",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_framebuffer_rendering/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-framebuffer-rendering",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-gif-player",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_gif_player/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-gif-player",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-image-channel",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_image_channel/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-image-channel",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-image-rotate",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_image_rotate/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-image-rotate",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-image-text",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_image_text/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-image-text",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-magnifying-glass",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_magnifying_glass/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-magnifying-glass",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-mouse-painting",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_mouse_painting/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-mouse-painting",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-npatch-drawing",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_npatch_drawing/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-npatch-drawing",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-polygon-drawing",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_polygon_drawing/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-polygon-drawing",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-raw-data",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_raw_data/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-raw-data",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-screen-buffer",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_screen_buffer/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-screen-buffer",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-sprite-animation",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_sprite_animation/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-sprite-animation",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-sprite-button",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_sprite_button/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-sprite-button",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-sprite-explosion",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_sprite_explosion/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-sprite-explosion",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-sprite-stacking",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_sprite_stacking/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-sprite-stacking",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: textures-tiled-drawing",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/textures_tiled_drawing/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build textures-tiled-drawing",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: three-leg",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/three_leg/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build three-leg",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -1702,6 +2714,17 @@
             "url": "http://localhost:8080/track_train/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build track-train",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: tracking",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/tracking/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build tracking",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -2246,6 +3269,17 @@
             "smartStep": true
         },
         {
+            "name": "Debug: ui-text-editing",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/ui_text_editing/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build ui-text-editing",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: ui-widgets-data-types",
             "type": "chrome",
             "request": "launch",
@@ -2263,6 +3297,17 @@
             "url": "http://localhost:8080/ui_window_menubar/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build ui-window-menubar",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: undo-redo",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/undo_redo/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build undo-redo",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -2290,12 +3335,56 @@
             "smartStep": true
         },
         {
-            "name": "Debug: weight-store",
+            "name": "Debug: vertex-texture-test",
             "type": "chrome",
             "request": "launch",
-            "url": "http://localhost:8080/weight_store/",
+            "url": "http://localhost:8080/vertex_texture_test/",
             "webRoot": "${workspaceFolder}/zig-out/web",
-            "preLaunchTask": "zig: build weight-store",
+            "preLaunchTask": "zig: build vertex-texture-test",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: viewport-scaling",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/viewport_scaling/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build viewport-scaling",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: voxel",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/voxel/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build voxel",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: waving-cubes",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/waving_cubes/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build waving-cubes",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: window-requests",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/window_requests/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build window-requests",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true
@@ -2312,12 +3401,56 @@
             "smartStep": true
         },
         {
+            "name": "Debug: worker-png",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/worker_png/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build worker-png",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
             "name": "Debug: writing-anim",
             "type": "chrome",
             "request": "launch",
             "url": "http://localhost:8080/writing_anim/",
             "webRoot": "${workspaceFolder}/zig-out/web",
             "preLaunchTask": "zig: build writing-anim",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: yaw-pitch-roll",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/yaw_pitch_roll/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build yaw-pitch-roll",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: zimrnum-field",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/zimrnum_field/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build zimrnum-field",
+            "sourceMaps": true,
+            "userDataDir": true,
+            "smartStep": true
+        },
+        {
+            "name": "Debug: zimrnum-train",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:8080/zimrnum_train/",
+            "webRoot": "${workspaceFolder}/zig-out/web",
+            "preLaunchTask": "zig: build zimrnum-train",
             "sourceMaps": true,
             "userDataDir": true,
             "smartStep": true

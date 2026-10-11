@@ -17,11 +17,14 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
 const float = zm.float;
 const rotationZ = zm.rotationZ;
+const Color = zm.Color;
+const Mat = zm.Mat;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -50,7 +53,7 @@ const vertices = [_]Vertex{
     .{ .x = 0.7, .y = -0.6, .r = 0.3, .g = 0.4, .b = 1.0 },
 };
 
-const tints = [grid_cols * grid_rows]zm.Color{
+const tints = [grid_cols * grid_rows]Color{
     .{ .r = 255, .g = 255, .b = 255, .a = 255 },
     .{ .r = 255, .g = 220, .b = 180, .a = 255 },
     .{ .r = 180, .g = 230, .b = 255, .a = 255 },
@@ -79,7 +82,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "rt_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(&vertices));
 
     const shader: z.shader.LoadedShader(vs_io) = try z.shader.loadShaderVF(vs_io, fs_io, .{
         .f = f.gpu,
@@ -102,10 +105,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 fn update(f: *z.Frame, s: *State) void {
     // 1) Render the custom pipeline ONCE into the offscreen render texture.
-    const m: zm.Mat = rotationZ(f.time.time * 0.7);
+    const m: Mat = rotationZ(f.time.time * 0.7);
     s.shader.pushUbo(f.gpu.queue, .{ .transform = m });
 
-    const tile_bg: zm.Color = .{ .r = 16, .g = 20, .b = 30, .a = 255 };
+    const tile_bg: Color = .{ .r = 16, .g = 20, .b = 30, .a = 255 };
     z.beginTextureMode(f.gl, s.rt, tile_bg);
     const rps: *z.PassState = f.gl.pass;
     s.shader.bindForDraw(rps);
@@ -129,7 +132,7 @@ fn update(f: *z.Frame, s: *State) void {
         for (0..grid_cols) |gx| {
             const dx: f32 = pad + float(gx) * (cell_w + pad);
             const dy: f32 = y0 + float(gy) * (cell_h + pad);
-            const tint: zm.Color = tints[gy * grid_cols + gx];
+            const tint: Color = tints[gy * grid_cols + gx];
             f.gl.texture(.{ .x = dx, .y = dy, .width = cell_w, .height = cell_h }, tex, .{ .tint = tint });
         }
     }

@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const eql = std.mem.eql;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -189,7 +190,7 @@ fn update(f: *z.Frame, s: *State) void {
             s.png_kb = png.len / 1024;
             // Cheap end-to-end proof that the bytes really crossed two wasm instances
             // intact: a PNG starts with this signature.
-            s.png_ok = png.len > 8 and std.mem.eql(u8, png[0..4], &[_]u8{ 0x89, 'P', 'N', 'G' });
+            s.png_ok = png.len > 8 and eql(u8, png[0..4], &[_]u8{ 0x89, 'P', 'N', 'G' });
             s.phase = .landed; // the copy-out cost shows up on the NEXT frame
             s.settle = 3;
             s.job.deinit();

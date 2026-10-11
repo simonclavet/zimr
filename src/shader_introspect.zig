@@ -36,6 +36,8 @@ const eql = std.mem.eql;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
+const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const wgpu = @import("wgpu.zig");
 
 // ============================================================================
@@ -66,6 +68,8 @@ fn isAlignedField(comptime T: type) bool {
         else => false,
     };
 }
+
+const shader = @import("shader_interface");
 
 /// Validate a struct type intended as a UBO.  Fires `@compileError`
 /// with a specific, actionable message on failure.  Call from inside
@@ -639,6 +643,17 @@ pub const LayoutWgslMismatch = struct {
     found: []const u8,
 };
 
+// ============================================================================
+// SECTION 4 - WGSL binding reflection
+// ============================================================================
+// The scanner itself lives in `wgsl_reflect.zig` (std-only, host-only), so the
+// build-time shader check in tools/gen_shader_externs.zig can link it without
+// pulling in wgpu.zig. Re-exported here so `material.reflectWgslBindings` and
+// friends keep their names.
+const wgsl_reflect = @import("wgsl_reflect.zig");
+
+pub const WgslBinding = wgsl_reflect.WgslBinding;
+
 fn kindLabelWgsl(k: WgslBinding.Kind) []const u8 {
     return switch (k) {
         .uniform => "uniform",
@@ -649,6 +664,10 @@ fn kindLabelWgsl(k: WgslBinding.Kind) []const u8 {
         .unknown => "unknown",
     };
 }
+
+pub const reflectWgslBindings = wgsl_reflect.reflectWgslBindings;
+
+pub const freeWgslBindings = wgsl_reflect.freeWgslBindings;
 
 /// Independent host<->WGSL binding cross-check for the RENDER path (the compute
 /// path has its own in `compute_host.zig`). Reflects the WGSL's actual
@@ -666,7 +685,7 @@ fn kindLabelWgsl(k: WgslBinding.Kind) []const u8 {
 /// allowed (WebGPU permits over-provisioned layouts, and Tint may drop unused
 /// bindings). Caller owns nothing; the function frees its own scratch.
 pub fn layoutWgslMismatch(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     comptime SchemaT: type,
     wgsl: []const u8,
 ) !?LayoutWgslMismatch {
@@ -738,18 +757,6 @@ pub fn validateSchemaMatchesWgsl(
     // TODO: when shader_compile.zig's transpiler returns reflection
     // metadata, walk both sides and emit @compileError on any mismatch.
 }
-
-// ============================================================================
-// SECTION 4 - WGSL binding reflection
-// ============================================================================
-// The scanner itself lives in `wgsl_reflect.zig` (std-only, host-only), so the
-// build-time shader check in tools/gen_shader_externs.zig can link it without
-// pulling in wgpu.zig. Re-exported here so `material.reflectWgslBindings` and
-// friends keep their names.
-const wgsl_reflect = @import("wgsl_reflect.zig");
-pub const WgslBinding = wgsl_reflect.WgslBinding;
-pub const reflectWgslBindings = wgsl_reflect.reflectWgslBindings;
-pub const freeWgslBindings = wgsl_reflect.freeWgslBindings;
 
 // ============================================================================
 // Tests
@@ -833,8 +840,6 @@ test "schema with neither Ubo nor Samplers yields empty layout" {
 }
 
 // ---- solveLayout tests (turn 1 of finishing_new_gpu_foundations.md) ----
-
-const shader = @import("shader_interface");
 
 test "solveLayout empty schema produces empty layout" {
     const Empty = struct {};
@@ -1009,8 +1014,8 @@ test "reflectWgslBindings: classifies uniform/storage/texture/sampler" {
         \\@group(2) @binding(0) var img: texture_storage_2d<rgba8unorm, write>;
         \\var<private> not_a_binding: f32;
     ;
-    const bindings: []WgslBinding = try reflectWgslBindings(std.testing.allocator, wgsl);
-    defer freeWgslBindings(std.testing.allocator, bindings);
+    const bindings: []WgslBinding = try reflectWgslBindings(testing_allocator, wgsl);
+    defer freeWgslBindings(testing_allocator, bindings);
 
     try expectEqual(@as(usize, 5), bindings.len);
 
@@ -1034,8 +1039,8 @@ test "reflectWgslBindings: empty when no bindings" {
         \\  return vec4<f32>(0.0);
         \\}
     ;
-    const bindings: []WgslBinding = try reflectWgslBindings(std.testing.allocator, wgsl);
-    defer freeWgslBindings(std.testing.allocator, bindings);
+    const bindings: []WgslBinding = try reflectWgslBindings(testing_allocator, wgsl);
+    defer freeWgslBindings(testing_allocator, bindings);
     try expectEqual(@as(usize, 0), bindings.len);
 }
 
@@ -1058,7 +1063,7 @@ test "layoutWgslMismatch: interleaved WGSL matches the host layout" {
         \\@group(1) @binding(2) var normal: texture_2d<f32>;
         \\@group(1) @binding(3) var normal_s: sampler;
     ;
-    const m = try layoutWgslMismatch(std.testing.allocator, TwoSamplerFs, wgsl);
+    const m = try layoutWgslMismatch(testing_allocator, TwoSamplerFs, wgsl);
     try expect(m == null);
 }
 
@@ -1074,7 +1079,7 @@ test "layoutWgslMismatch: catches the block-scheme drift (device bug #3 shape)" 
         \\@group(1) @binding(2) var albedo_s: sampler;
         \\@group(1) @binding(3) var normal_s: sampler;
     ;
-    const m = try layoutWgslMismatch(std.testing.allocator, TwoSamplerFs, wgsl);
+    const m = try layoutWgslMismatch(testing_allocator, TwoSamplerFs, wgsl);
     try expect(m != null);
     try expectEqual(@as(u32, 1), m.?.group);
     try expectEqual(@as(u32, 1), m.?.binding);
@@ -1089,7 +1094,7 @@ test "layoutWgslMismatch: catches a binding the host never lays out" {
         \\@group(1) @binding(1) var albedo_s: sampler;
         \\@group(3) @binding(7) var rogue: texture_2d<f32>;
     ;
-    const m = try layoutWgslMismatch(std.testing.allocator, TwoSamplerFs, wgsl);
+    const m = try layoutWgslMismatch(testing_allocator, TwoSamplerFs, wgsl);
     try expect(m != null);
     try expectEqual(@as(u32, 3), m.?.group);
     try expectEqual(@as(u32, 7), m.?.binding);

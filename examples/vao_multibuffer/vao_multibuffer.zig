@@ -17,9 +17,11 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const scaling = zm.scaling;
+const Mat = zm.Mat;
 const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -71,7 +73,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 /// Aspect-scale (no rotation): keep the triangle upright so the colour swap
 /// reads clearly. zm row convention so `mulMatPoint` matches WGSL `m * vec4`.
-fn scale2d(sx: f32, sy: f32) zm.Mat {
+fn scale2d(sx: f32, sy: f32) Mat {
     return scaling(sx, sy, 1.0);
 }
 
@@ -90,9 +92,9 @@ fn makeVertexBuffer(
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const pos_vbo: z.wgpu.BufferHandle = makeVertexBuffer(f, std.mem.sliceAsBytes(&positions), "pos_vbo");
-    const col_a_vbo: z.wgpu.BufferHandle = makeVertexBuffer(f, std.mem.sliceAsBytes(&colors_a), "col_a_vbo");
-    const col_b_vbo: z.wgpu.BufferHandle = makeVertexBuffer(f, std.mem.sliceAsBytes(&colors_b), "col_b_vbo");
+    const pos_vbo: z.wgpu.BufferHandle = makeVertexBuffer(f, sliceAsBytes(&positions), "pos_vbo");
+    const col_a_vbo: z.wgpu.BufferHandle = makeVertexBuffer(f, sliceAsBytes(&colors_a), "col_a_vbo");
+    const col_b_vbo: z.wgpu.BufferHandle = makeVertexBuffer(f, sliceAsBytes(&colors_b), "col_b_vbo");
 
     // TWO vertex-buffer layouts: slot 0 = positions (loc 0), slot 1 = colours
     // (loc 1). Each is its own buffer, so the shader_location numbering spans

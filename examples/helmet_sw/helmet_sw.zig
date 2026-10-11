@@ -351,7 +351,7 @@ fn loadCpuMap(
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // ---- GPU half: pbr3d renderer targeting the RTT's format ----
     const gf: *z.GpuFrame = f.gpu;
-    var renderer: z.pbr3d.Renderer = try z.pbr3d.Renderer.init(.{
+    var renderer: z.pbr3d.Renderer = try .init(.{
         .device = gf.device,
         .queue = gf.queue,
         .gpa = gpa,
@@ -400,8 +400,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // Placeholder dims - `ensureTargets` re-derives both halves' sizes from
     // the live canvas on the first frame (and every rotation/resize after).
-    const sw: z.raster.Context = try z.raster.Context.init(gpa, 220, 124);
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    const sw: z.raster.Context = try .init(gpa, 220, 124);
+    const sw_fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         220,

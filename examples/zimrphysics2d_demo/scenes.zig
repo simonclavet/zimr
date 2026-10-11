@@ -11,6 +11,7 @@ const zm = @import("zm");
 const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
 const std = @import("std");
+const eql = std.mem.eql;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -429,7 +430,7 @@ fn pinPrismatic(
     b: BodyHandle,
     p: Prism,
 ) !void {
-    const q: Rot2 = Rot2.fromAngle(p.axis_angle);
+    const q: Rot2 = .fromAngle(p.axis_angle);
     _ = try phys.createPrismaticJoint(world, .{
         .base = .{
             .body_a = a,
@@ -465,7 +466,7 @@ fn pinWheel(
     b: BodyHandle,
     w: Whl,
 ) !void {
-    const q: Rot2 = Rot2.fromAngle(w.axis_angle);
+    const q: Rot2 = .fromAngle(w.axis_angle);
     _ = try phys.createWheelJoint(world, .{
         .base = .{
             .body_a = a,
@@ -496,8 +497,58 @@ fn attachHull(
     });
 }
 
+fn makeRagdoll(
+    world: *phys.World,
+    cx: f32,
+    cy: f32,
+    s: f32,
+) !void {
+    const torso: BodyHandle = try addBody(world, .{ .x = cx, .y = cy });
+    try attachCapsule(world, torso, .{ .half_len = 0.6 * s, .r = 0.28 * s });
+    const head: BodyHandle = try addBody(world, .{ .x = cx, .y = cy + 1.3 * s });
+    try attachCircle(world, head, .{ .r = 0.3 * s });
+    try pinRevolute(world, torso, head, .{
+        .anchor = .{ cx, cy + 0.9 * s },
+        .limit = true,
+        .lo = -0.4,
+        .hi = 0.4,
+    });
+    const arm_l: BodyHandle = try addBody(world, .{ .x = cx - 0.9 * s, .y = cy + 0.4 * s, .angle = 1.2 });
+    try attachCapsule(world, arm_l, .{ .half_len = 0.45 * s, .r = 0.14 * s });
+    try pinRevolute(world, torso, arm_l, .{
+        .anchor = .{ cx - 0.35 * s, cy + 0.5 * s },
+        .limit = true,
+        .lo = -1.6,
+        .hi = 1.6,
+    });
+    const arm_r: BodyHandle = try addBody(world, .{ .x = cx + 0.9 * s, .y = cy + 0.4 * s, .angle = -1.2 });
+    try attachCapsule(world, arm_r, .{ .half_len = 0.45 * s, .r = 0.14 * s });
+    try pinRevolute(world, torso, arm_r, .{
+        .anchor = .{ cx + 0.35 * s, cy + 0.5 * s },
+        .limit = true,
+        .lo = -1.6,
+        .hi = 1.6,
+    });
+    const leg_l: BodyHandle = try addBody(world, .{ .x = cx - 0.3 * s, .y = cy - 1.3 * s, .angle = 0.15 });
+    try attachCapsule(world, leg_l, .{ .half_len = 0.6 * s, .r = 0.17 * s });
+    try pinRevolute(world, torso, leg_l, .{
+        .anchor = .{ cx - 0.25 * s, cy - 0.6 * s },
+        .limit = true,
+        .lo = -1.0,
+        .hi = 1.0,
+    });
+    const leg_r: BodyHandle = try addBody(world, .{ .x = cx + 0.3 * s, .y = cy - 1.3 * s, .angle = -0.15 });
+    try attachCapsule(world, leg_r, .{ .half_len = 0.6 * s, .r = 0.17 * s });
+    try pinRevolute(world, torso, leg_r, .{
+        .anchor = .{ cx + 0.25 * s, cy - 0.6 * s },
+        .limit = true,
+        .lo = -1.0,
+        .hi = 1.0,
+    });
+}
+
 // ================================================================================
-// Registry
+// Scenes - robustness, bodies, continuous, joints, shapes, benchmarks, showcase
 // ================================================================================
 
 // ---- Robustness ----
@@ -1933,8 +1984,8 @@ fn benchmarkWasher(world: *phys.World) !void {
         .vx = 0.001,
         .vy = -0.002,
     });
-    const seg: Rot2 = Rot2.fromAngle(pi / 18.0); // 10 deg per wedge
-    const qo: Rot2 = Rot2.fromAngle(0.1 * (pi / 18.0));
+    const seg: Rot2 = .fromAngle(pi / 18.0); // 10 deg per wedge
+    const qo: Rot2 = .fromAngle(0.1 * (pi / 18.0));
     const qo_inv: Rot2 = qo.invert();
     var dir_a: Vec2 = .{ 1, 0 };
     var i: usize = 0;
@@ -2317,10 +2368,15 @@ fn collisionDynamicTreeLab(ctx: *render.LabCtx) void {
 // here to a readable grid: a static field of sensor boxes that dynamic balls fall straight through
 // (sensors don't collide), and benchmarkSensorLab flashes each cell as a sensor BEGIN event fires.
 const sensor_cols: u32 = 9;
+
 const sensor_rows: u32 = 3;
+
 const sensor_half: f32 = 0.55;
+
 const sensor_dx: f32 = 2.4;
+
 const sensor_y0: f32 = 5.0;
+
 const sensor_dy: f32 = 2.6;
 
 fn sensorCellCenter(i: u32) Vec2 {
@@ -2420,7 +2476,7 @@ fn jointsGearLift(world: *phys.World, st: *SceneState) !void {
     try attachCircle(world, gear1, .{ .r = gear_radius, .friction = 0.1 });
     var k1: u32 = 0;
     while (k1 < 16) : (k1 += 1) {
-        const rot: Rot2 = Rot2.fromAngle(float(k1) * da);
+        const rot: Rot2 = .fromAngle(float(k1) * da);
         const center: Vec2 = rotateVec2(rot, .{ gear_radius + tooth_hh, 0 });
         _ = try phys.createShape(world, gear1, .{
             .geom = .{ .polygon = phys.makeOffsetRoundedBox(tooth_hw, tooth_hh, center, rot, tooth_r) },
@@ -2444,7 +2500,7 @@ fn jointsGearLift(world: *phys.World, st: *SceneState) !void {
     try attachCircle(world, gear2, .{ .r = gear_radius, .friction = 0.1 });
     var k2: u32 = 0;
     while (k2 < 16) : (k2 += 1) {
-        const rot: Rot2 = Rot2.fromAngle(float(k2) * da);
+        const rot: Rot2 = .fromAngle(float(k2) * da);
         const center: Vec2 = rotateVec2(rot, .{ gear_radius + tooth_hw, 0 });
         _ = try phys.createShape(world, gear2, .{
             .geom = .{ .polygon = phys.makeOffsetRoundedBox(tooth_hw, tooth_hh, center, rot, tooth_r) },
@@ -2864,567 +2920,6 @@ fn eventsJointUpdate(world: *phys.World, st: *SceneState) void {
         st.u[0] |= bit;
         phys.destroyJoint(world, st.joint[i]);
     }
-}
-
-pub const list = [_]Scene{
-    // Stacking
-    .{ .category = "Stacking", .name = "Single Box", .build = stackSingleBox },
-    .{ .category = "Stacking", .name = "Vertical Stack", .build = stackVertical },
-    .{ .category = "Stacking", .name = "Tilted Stack", .build = stackTilted },
-    .{ .category = "Stacking", .name = "Circle Stack", .build = stackCircles },
-    .{ .category = "Stacking", .name = "Capsule Stack", .build = stackCapsules },
-    .{ .category = "Stacking", .name = "Confined", .build = stackConfined },
-    .{ .category = "Stacking", .name = "Double Domino", .build = stackDomino },
-    .{ .category = "Stacking", .name = "Pyramid", .build = stackPyramid },
-    .{ .category = "Stacking", .name = "Arch", .build = stackArch },
-    .{ .category = "Stacking", .name = "Card House", .build = stackCardHouse },
-    .{ .category = "Stacking", .name = "Cliff", .build = stackCliff },
-    // Bodies
-    .{ .category = "Bodies", .name = "Body Type", .build = bodyType },
-    .{ .category = "Bodies", .name = "Sleep", .build = bodySleep },
-    .{ .category = "Bodies", .name = "Weeble", .build = bodyWeeble },
-    .{ .category = "Bodies", .name = "Pivot", .build = bodyPivot },
-    .{ .category = "Bodies", .name = "Kinematic", .build = bodyKinematic, .update = kinematicUpdate },
-    .{ .category = "Bodies", .name = "Set Velocity", .build = bodySetVelocity },
-    // Continuous
-    .{ .category = "Continuous", .name = "Drop", .build = contDrop },
-    .{ .category = "Continuous", .name = "Skinny Box", .build = contSkinny },
-    .{ .category = "Continuous", .name = "Bounce House", .build = contBounce },
-    .{ .category = "Continuous", .name = "Wedge", .build = contWedge },
-    .{ .category = "Continuous", .name = "Chain Drop", .build = chainDrop },
-    .{ .category = "Continuous", .name = "Ghost Bumps", .build = continuousGhostBumps },
-    // Shapes
-    .{ .category = "Shapes", .name = "Friction", .build = shapeFriction },
-    .{ .category = "Shapes", .name = "Restitution", .build = shapeRestitution },
-    .{ .category = "Shapes", .name = "Rounded", .build = shapeRounded },
-    .{ .category = "Shapes", .name = "Ellipse", .build = shapeEllipse },
-    .{ .category = "Shapes", .name = "Compound Shapes", .build = shapeCompound },
-    .{ .category = "Shapes", .name = "Offset", .build = shapeOffset },
-    .{ .category = "Shapes", .name = "Rolling Resistance", .build = shapeRolling },
-    .{ .category = "Shapes", .name = "Conveyor Belt", .build = shapeConveyor },
-    .{ .category = "Shapes", .name = "Explosion", .build = shapeExplosion },
-    .{ .category = "Shapes", .name = "Wind", .build = shapeWind, .update = windUpdate },
-    .{ .category = "Shapes", .name = "Chain Shape", .build = chainShape },
-    .{ .category = "Shapes", .name = "Box Restitution", .build = shapeBoxRestitution },
-    .{ .category = "Shapes", .name = "Filter", .build = shapeFilter },
-    .{
-        .category = "Shapes",
-        .name = "Modify Geometry",
-        .build_s = shapesModifyGeometry,
-        .update_s = shapesModifyGeometryUpdate,
-    },
-    .{ .category = "Shapes", .name = "Custom Filter", .build = shapesCustomFilter },
-    // Joints
-    .{ .category = "Joints", .name = "Revolute", .build = jointRevolute },
-    .{
-        .category = "Joints",
-        .name = "Gear Lift",
-        .build_s = jointsGearLift,
-        .update_s = jointsGearLiftUpdate,
-        .cam = .{ .target = .{ -2, 6.5 }, .ppm = 30 },
-    },
-    .{
-        .category = "Joints",
-        .name = "User Constraint",
-        .build_s = jointsUserConstraint,
-        .update_s = jointsUserConstraintUpdate,
-        .cam = .{ .target = .{ 1.5, -1 }, .ppm = 30 },
-    },
-    .{ .category = "Joints", .name = "Bridge", .build = jointBridge },
-    .{ .category = "Joints", .name = "Ball & Chain", .build = jointBallChain },
-    .{ .category = "Joints", .name = "Cantilever", .build = jointCantilever },
-    .{ .category = "Joints", .name = "Soft Body", .build = jointSoftBody },
-    .{ .category = "Joints", .name = "Wheel", .build = jointWheel },
-    .{ .category = "Joints", .name = "Prismatic", .build = jointPrismatic },
-    .{ .category = "Joints", .name = "Distance Joint", .build = jointDistance },
-    .{ .category = "Joints", .name = "Motor Joint", .build = jointMotor },
-    .{ .category = "Joints", .name = "Door", .build = jointDoor },
-    .{ .category = "Joints", .name = "Ragdoll", .build = jointRagdoll },
-    .{ .category = "Joints", .name = "Doohickey", .build = jointDoohickey },
-    .{ .category = "Joints", .name = "Driving", .build = jointDriving },
-    .{
-        .category = "Joints",
-        .name = "Rube Goldberg",
-        .build = buildDominos,
-        .cam = .{ .target = .{ 8, 16 }, .ppm = 9 },
-    },
-    // World
-    .{ .category = "World", .name = "Tiles", .build = worldTiles },
-    // Benchmark
-    .{ .category = "Benchmark", .name = "Tumbler", .build = benchTumbler },
-    .{
-        .category = "Benchmark",
-        .name = "Large Compounds",
-        .build = benchmarkLargeCompounds,
-        .cam = .{ .target = .{ 0, 8 }, .ppm = 12 },
-    },
-    .{ .category = "Benchmark", .name = "Spinner", .build = benchSpinner },
-    .{ .category = "Benchmark", .name = "Large Pyramid", .build = benchLargePyramid },
-    .{ .category = "Benchmark", .name = "Joint Grid", .build = benchJointGrid },
-    .{ .category = "Benchmark", .name = "Many Tumblers", .build = benchManyTumblers },
-    .{ .category = "Benchmark", .name = "Barrel 2.4", .build = benchmarkBarrel24 },
-    .{
-        .category = "Events",
-        .name = "Circle Impulse",
-        .build = eventCircleImpulse,
-        .update = eventCircleImpulseUpdate,
-    },
-    .{ .category = "Events", .name = "Contact", .build = eventContact, .update = eventContactUpdate },
-    .{ .category = "Events", .name = "Platformer", .build_s = eventsPlatformer, .update_s = eventsPlatformerUpdate },
-    .{
-        .category = "Events",
-        .name = "Persistent Contact",
-        .build = eventsPersistentContact,
-        .lab = eventsPersistentContactLab,
-        .cam = .{ .target = .{ 0, 3 }, .ppm = 22 },
-    },
-    .{ .category = "Events", .name = "Foot Sensor", .build = eventFootSensor, .update = eventFootSensorUpdate },
-    .{ .category = "Events", .name = "Sensor Types", .build_s = eventSensorTypes, .update_s = eventSensorTypesUpdate },
-    .{ .category = "Events", .name = "Sensor Hits", .build_s = eventSensorHits, .update_s = eventSensorHitsUpdate },
-    .{
-        .category = "Events",
-        .name = "Sensor Funnel",
-        .build = eventSensorFunnel,
-        .update = eventSensorFunnelUpdate,
-    },
-    .{
-        .category = "Events",
-        .name = "Sensor Bookend",
-        .build = eventSensorBookend,
-        .update = eventSensorBookendUpdate,
-    },
-    .{ .category = "Events", .name = "Body Move", .build = eventBodyMove, .update = eventBodyMoveUpdate },
-    .{
-        .category = "Events",
-        .name = "Projectile Event",
-        .build_s = eventProjectile,
-        .update_s = eventProjectileUpdate,
-        .cam = .{ .target = .{ -2, 8 }, .ppm = 13 },
-    },
-    .{ .category = "Collision", .name = "Ray Cast", .build = labObstacles, .lab = labRayCastLab },
-    .{
-        .category = "Collision",
-        .name = "Dynamic Tree",
-        .build = collisionDynamicTree,
-        .lab = collisionDynamicTreeLab,
-        .cam = .{ .target = .{ 0, 6 }, .ppm = 20 },
-    },
-    .{ .category = "Collision", .name = "Shape Cast", .build = labObstacles, .lab = labShapeCastLab },
-    .{ .category = "Collision", .name = "Overlap World", .build = labObstacles, .lab = labOverlapLab },
-    .{
-        .category = "Collision",
-        .name = "Shape Distance",
-        .build = labEmpty,
-        .lab = labShapeDistance,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 44 },
-    },
-    .{
-        .category = "Collision",
-        .name = "Manifold",
-        .build = labEmpty,
-        .lab = labManifold,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 44 },
-    },
-    .{
-        .category = "Collision",
-        .name = "Cast World",
-        .build = labObstacles,
-        .lab = labCastWorldLab,
-        .cam = .{ .target = .{ 0, 1 }, .ppm = 30 },
-    },
-    .{
-        .category = "Collision",
-        .name = "Smooth Manifold",
-        .build = labEmpty,
-        .lab = labSmoothManifoldLab,
-        .cam = .{ .target = .{ 0, 1 }, .ppm = 38 },
-    },
-    .{
-        .category = "Collision",
-        .name = "Time of Impact",
-        .build = labEmpty,
-        .lab = labTimeOfImpactLab,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 28 },
-    },
-    .{ .category = "Geometry", .name = "Convex Hull", .build = labEmpty, .lab = labConvexHullLab },
-    .{
-        .category = "Robustness",
-        .name = "HighMassRatio1",
-        .build = robustHighMass1,
-        .cam = .{ .target = .{ 3, 14 }, .ppm = 12 },
-    },
-    .{
-        .category = "Robustness",
-        .name = "HighMassRatio2",
-        .build = robustHighMass2,
-        .cam = .{ .target = .{ 0, 16 }, .ppm = 12 },
-    },
-    .{
-        .category = "Robustness",
-        .name = "HighMassRatio3",
-        .build = robustHighMass3,
-        .cam = .{ .target = .{ 0, 12 }, .ppm = 14 },
-    },
-    .{
-        .category = "Robustness",
-        .name = "Overlap Recovery",
-        .build = robustOverlap,
-        .cam = .{ .target = .{ 0, 1.5 }, .ppm = 90 },
-    },
-    .{
-        .category = "Robustness",
-        .name = "Tiny Pyramid",
-        .build = robustTinyPyramid,
-        .cam = .{ .target = .{ 0, 0.7 }, .ppm = 190 },
-    },
-    .{
-        .category = "Bodies",
-        .name = "Bad",
-        .build = bodyBad,
-        .cam = .{ .target = .{ 1, 4 }, .ppm = 34 },
-    },
-    .{
-        .category = "Bodies",
-        .name = "Mixed Locks",
-        .build = bodyMixedLocks,
-        .cam = .{ .target = .{ 0, 2 }, .ppm = 64 },
-    },
-    .{
-        .category = "Bodies",
-        .name = "Wake Touching",
-        .build = bodyWakeTouching,
-        .cam = .{ .target = .{ 0, 3 }, .ppm = 32 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Speculative Fallback",
-        .build = continuousSpecFallback,
-        .cam = .{ .target = .{ 1, 5 }, .ppm = 44 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Speculative Sliver",
-        .build = continuousSpecSliver,
-        .cam = .{ .target = .{ 0, 1.75 }, .ppm = 110 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Speculative Ghost",
-        .build = continuousSpecGhost,
-        .cam = .{ .target = .{ 0, 1.75 }, .ppm = 140 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Pixel Imperfect",
-        .build = continuousPixelImperfect,
-        .cam = .{ .target = .{ 6.5, 6 }, .ppm = 46 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Restitution Threshold",
-        .build = continuousRestitutionThreshold,
-        .cam = .{ .target = .{ 6.5, 6 }, .ppm = 46 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Chain Slide",
-        .build = continuousChainSlide,
-        .cam = .{ .target = .{ 0, 9 }, .ppm = 18 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Segment Slide",
-        .build = continuousSegmentSlide,
-        .cam = .{ .target = .{ 0, 5 }, .ppm = 16 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Filter Joint",
-        .build = jointFilter,
-        .cam = .{ .target = .{ 0, 5 }, .ppm = 30 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Top Down Friction",
-        .build = jointTopDownFriction,
-        .cam = .{ .target = .{ 0, 10 }, .ppm = 26 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Scale Ragdoll",
-        .build = jointScaleRagdoll,
-        .cam = .{ .target = .{ 0, 4 }, .ppm = 22 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Breakable",
-        .build_s = jointBreakable,
-        .update_s = jointBreakableUpdate,
-        .cam = .{ .target = .{ 0, 4 }, .ppm = 22 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Motion Locks",
-        .build = jointMotionLocks,
-        .cam = .{ .target = .{ 0, 9 }, .ppm = 16 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Separation",
-        .build = jointSeparation,
-        .cam = .{ .target = .{ 0, 8 }, .ppm = 11 },
-    },
-    .{
-        .category = "Joints",
-        .name = "Scissor Lift",
-        .build = jointScissorLift,
-        .cam = .{ .target = .{ 0, 4 }, .ppm = 36 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Smash",
-        .build = benchmarkSmash,
-        .cam = .{ .target = .{ 15, 2 }, .ppm = 8 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Junkyard",
-        .build_s = benchmarkJunkyard,
-        .update_s = benchmarkJunkyardUpdate,
-        .cam = .{ .target = .{ 0, 10 }, .ppm = 7 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Sleep",
-        .build = benchmarkSleep,
-        .cam = .{ .target = .{ 0, 15 }, .ppm = 9 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Kinematic",
-        .build = benchmarkKinematic,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 16 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Rain",
-        .build_s = benchmarkRain,
-        .update_s = benchmarkRainUpdate,
-        .cam = .{ .target = .{ 0, 6 }, .ppm = 12 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Capacity",
-        .build = benchmarkCapacity,
-        .cam = .{ .target = .{ 0, 12 }, .ppm = 9 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Compounds",
-        .build = benchmarkCompounds,
-        .cam = .{ .target = .{ 0, 14 }, .ppm = 7 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Barrel",
-        .build = benchmarkBarrel,
-        .cam = .{ .target = .{ 0, 14 }, .ppm = 9 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Washer",
-        .build = benchmarkWasher,
-        .cam = .{ .target = .{ 0, 10 }, .ppm = 14 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Cast",
-        .build = benchmarkCast,
-        .lab = benchmarkCastLab,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 24 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Shape Distance",
-        .build = labEmpty,
-        .lab = benchmarkShapeDistanceLab,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 28 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "CreateDestroy",
-        .build_s = benchmarkCreateDestroy,
-        .update_s = benchmarkCreateDestroyUpdate,
-        .cam = .{ .target = .{ 0, 6 }, .ppm = 22 },
-    },
-    .{
-        .category = "Benchmark",
-        .name = "Sensor",
-        .build_s = benchmarkSensor,
-        .update_s = benchmarkSensorUpdate,
-        .lab = benchmarkSensorLab,
-        .cam = .{ .target = .{ 0, 6 }, .ppm = 20 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Bounce Humans",
-        .build_s = continuousBounceHumans,
-        .update_s = continuousBounceHumansUpdate,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 22 },
-    },
-    .{
-        .category = "Shapes",
-        .name = "Recreate Static",
-        .build_s = shapesRecreateStaticBuild,
-        .update_s = shapesRecreateStaticUpdate,
-        .cam = .{ .target = .{ 0, 5 }, .ppm = 30 },
-    },
-    .{
-        .category = "Shapes",
-        .name = "Tangent Speed",
-        .build = shapesTangentSpeed,
-        .cam = .{ .target = .{ 0, 2 }, .ppm = 12 },
-    },
-    .{
-        .category = "Shapes",
-        .name = "Chain Segment",
-        .build = shapesChainSegment,
-        .cam = .{ .target = .{ 0, 2 }, .ppm = 12 },
-    },
-    .{
-        .category = "Shapes",
-        .name = "Chain Link",
-        .build = shapesChainLink,
-        .cam = .{ .target = .{ 0, 0 }, .ppm = 16 },
-    },
-    .{
-        .category = "Determinism",
-        .name = "Falling Hinges",
-        .build = determinismFallingHinges,
-        .cam = .{ .target = .{ 0, 5 }, .ppm = 24 },
-    },
-    .{
-        .category = "Determinism",
-        .name = "SnapShot",
-        .build = determinismFallingHinges,
-        .auto_snapshot = true,
-        .cam = .{ .target = .{ 0, 5 }, .ppm = 24 },
-    },
-    .{
-        .category = "Robustness",
-        .name = "Multiple Prismatic",
-        .build = robustnessMultiplePrismatic,
-        .cam = .{ .target = .{ 0, 4 }, .ppm = 30 },
-    },
-    // Showcase
-    .{
-        .category = "Showcase",
-        .name = "Dominos",
-        .build = showcaseDominos,
-        .cam = .{ .target = .{ 6, 16 }, .ppm = 7 },
-    },
-    // Issues
-    .{ .category = "Issues", .name = "Disable", .build_s = issuesDisable, .update_s = issuesDisableUpdate },
-    .{
-        .category = "Issues",
-        .name = "Bad Steiner",
-        .build = issuesBadSteiner,
-        .cam = .{ .target = .{ 0, 1.75 }, .ppm = 90 },
-    },
-    .{
-        .category = "Issues",
-        .name = "Crash01",
-        .build = issuesCrash01,
-        .cam = .{ .target = .{ 0.8, 6.4 }, .ppm = 34 },
-    },
-    .{
-        .category = "Issues",
-        .name = "StaticVsBulletBug",
-        .build = issuesStaticVsBullet,
-        .cam = .{ .target = .{ 58, 72 }, .ppm = 16 },
-    },
-    .{
-        .category = "Issues",
-        .name = "Unstable Prismatic Joints",
-        .build = issuesUnstablePrismatic,
-        .cam = .{ .target = .{ 0, 2.5 }, .ppm = 34 },
-    },
-    .{
-        .category = "Issues",
-        .name = "Unstable Windmill",
-        .build = issuesUnstableWindmill,
-        .cam = .{ .target = .{ 10, 8 }, .ppm = 12 },
-    },
-    .{
-        .category = "Character",
-        .name = "Mover",
-        .build_s = characterMover,
-        .control = characterMoverControl,
-        .cam = .{ .target = .{ 0, 3 }, .ppm = 26 },
-    },
-    .{
-        .category = "Continuous",
-        .name = "Pinball",
-        .build_s = continuousPinball,
-        .control = continuousPinballControl,
-        .cam = .{ .target = .{ 0, 9 }, .ppm = 26 },
-    },
-    .{
-        .category = "Robustness",
-        .name = "Cart",
-        .build_s = robustnessCart,
-        .control = robustnessCartControl,
-        .cam = .{ .target = .{ 0, 1.2 }, .ppm = 50 },
-    },
-    .{
-        .category = "Events",
-        .name = "Joint",
-        .build_s = eventsJoint,
-        .update_s = eventsJointUpdate,
-        .cam = .{ .target = .{ 0, 7 }, .ppm = 23 },
-    },
-};
-
-/// Unique category names, in list order - drives the scene picker's category dropdown.
-pub const categories = blk: {
-    @setEvalBranchQuota(20000);
-    var buf: [list.len][]const u8 = undefined;
-    var n: usize = 0;
-    for (list) |sc| {
-        var found: bool = false;
-        for (buf[0..n]) |c| {
-            if (std.mem.eql(u8, c, sc.category)) {
-                found = true;
-            }
-        }
-        if (!found) {
-            buf[n] = sc.category;
-            n += 1;
-        }
-    }
-    break :blk buf[0..n].*;
-};
-
-/// Index into `categories` for a category name (0 if absent).
-pub fn categoryIndex(name: []const u8) usize {
-    var i: usize = 0;
-    while (i < categories.len) : (i += 1) {
-        if (std.mem.eql(u8, categories[i], name)) {
-            return i;
-        }
-    }
-    return 0;
-}
-
-/// First scene index in a category (0 if none) - used when the category changes.
-pub fn firstInCategory(cat: usize) usize {
-    var i: usize = 0;
-    while (i < list.len) : (i += 1) {
-        if (std.mem.eql(u8, list[i].category, categories[cat])) {
-            return i;
-        }
-    }
-    return 0;
 }
 
 // ================================================================================
@@ -4370,56 +3865,6 @@ fn buildDominos(world: *phys.World) !void {
     }
 }
 
-fn makeRagdoll(
-    world: *phys.World,
-    cx: f32,
-    cy: f32,
-    s: f32,
-) !void {
-    const torso: BodyHandle = try addBody(world, .{ .x = cx, .y = cy });
-    try attachCapsule(world, torso, .{ .half_len = 0.6 * s, .r = 0.28 * s });
-    const head: BodyHandle = try addBody(world, .{ .x = cx, .y = cy + 1.3 * s });
-    try attachCircle(world, head, .{ .r = 0.3 * s });
-    try pinRevolute(world, torso, head, .{
-        .anchor = .{ cx, cy + 0.9 * s },
-        .limit = true,
-        .lo = -0.4,
-        .hi = 0.4,
-    });
-    const arm_l: BodyHandle = try addBody(world, .{ .x = cx - 0.9 * s, .y = cy + 0.4 * s, .angle = 1.2 });
-    try attachCapsule(world, arm_l, .{ .half_len = 0.45 * s, .r = 0.14 * s });
-    try pinRevolute(world, torso, arm_l, .{
-        .anchor = .{ cx - 0.35 * s, cy + 0.5 * s },
-        .limit = true,
-        .lo = -1.6,
-        .hi = 1.6,
-    });
-    const arm_r: BodyHandle = try addBody(world, .{ .x = cx + 0.9 * s, .y = cy + 0.4 * s, .angle = -1.2 });
-    try attachCapsule(world, arm_r, .{ .half_len = 0.45 * s, .r = 0.14 * s });
-    try pinRevolute(world, torso, arm_r, .{
-        .anchor = .{ cx + 0.35 * s, cy + 0.5 * s },
-        .limit = true,
-        .lo = -1.6,
-        .hi = 1.6,
-    });
-    const leg_l: BodyHandle = try addBody(world, .{ .x = cx - 0.3 * s, .y = cy - 1.3 * s, .angle = 0.15 });
-    try attachCapsule(world, leg_l, .{ .half_len = 0.6 * s, .r = 0.17 * s });
-    try pinRevolute(world, torso, leg_l, .{
-        .anchor = .{ cx - 0.25 * s, cy - 0.6 * s },
-        .limit = true,
-        .lo = -1.0,
-        .hi = 1.0,
-    });
-    const leg_r: BodyHandle = try addBody(world, .{ .x = cx + 0.3 * s, .y = cy - 1.3 * s, .angle = -0.15 });
-    try attachCapsule(world, leg_r, .{ .half_len = 0.6 * s, .r = 0.17 * s });
-    try pinRevolute(world, torso, leg_r, .{
-        .anchor = .{ cx + 0.25 * s, cy - 0.6 * s },
-        .limit = true,
-        .lo = -1.0,
-        .hi = 1.0,
-    });
-}
-
 fn jointRagdoll(world: *phys.World) !void {
     _ = try groundBox(world, 40, 1);
     try makeRagdoll(world, 0, 9, 1);
@@ -4820,6 +4265,7 @@ fn benchManyTumblers(world: *phys.World) !void {
 // ================================================================================
 
 const tag_platform: u64 = 1;
+
 const tag_player: u64 = 2;
 
 fn platformerPreSolve(
@@ -5295,7 +4741,9 @@ fn eventProjectileUpdate(world: *phys.World, st: *SceneState) void {
         break;
     }
 }
+
 // as a draggable probe.
+
 // ================================================================================
 
 fn labObstacles(world: *phys.World) !void {
@@ -5394,4 +4842,569 @@ fn labConvexHullLab(ctx: *render.LabCtx) void {
 
 fn labEmpty(world: *phys.World) !void {
     _ = world; // convex hull queries nothing - the pointer is just a hull point
+}
+
+// ================================================================================
+// Registry - every scene, by category: the demo's menu
+// ================================================================================
+
+pub const list = [_]Scene{
+    // Stacking
+    .{ .category = "Stacking", .name = "Single Box", .build = stackSingleBox },
+    .{ .category = "Stacking", .name = "Vertical Stack", .build = stackVertical },
+    .{ .category = "Stacking", .name = "Tilted Stack", .build = stackTilted },
+    .{ .category = "Stacking", .name = "Circle Stack", .build = stackCircles },
+    .{ .category = "Stacking", .name = "Capsule Stack", .build = stackCapsules },
+    .{ .category = "Stacking", .name = "Confined", .build = stackConfined },
+    .{ .category = "Stacking", .name = "Double Domino", .build = stackDomino },
+    .{ .category = "Stacking", .name = "Pyramid", .build = stackPyramid },
+    .{ .category = "Stacking", .name = "Arch", .build = stackArch },
+    .{ .category = "Stacking", .name = "Card House", .build = stackCardHouse },
+    .{ .category = "Stacking", .name = "Cliff", .build = stackCliff },
+    // Bodies
+    .{ .category = "Bodies", .name = "Body Type", .build = bodyType },
+    .{ .category = "Bodies", .name = "Sleep", .build = bodySleep },
+    .{ .category = "Bodies", .name = "Weeble", .build = bodyWeeble },
+    .{ .category = "Bodies", .name = "Pivot", .build = bodyPivot },
+    .{ .category = "Bodies", .name = "Kinematic", .build = bodyKinematic, .update = kinematicUpdate },
+    .{ .category = "Bodies", .name = "Set Velocity", .build = bodySetVelocity },
+    // Continuous
+    .{ .category = "Continuous", .name = "Drop", .build = contDrop },
+    .{ .category = "Continuous", .name = "Skinny Box", .build = contSkinny },
+    .{ .category = "Continuous", .name = "Bounce House", .build = contBounce },
+    .{ .category = "Continuous", .name = "Wedge", .build = contWedge },
+    .{ .category = "Continuous", .name = "Chain Drop", .build = chainDrop },
+    .{ .category = "Continuous", .name = "Ghost Bumps", .build = continuousGhostBumps },
+    // Shapes
+    .{ .category = "Shapes", .name = "Friction", .build = shapeFriction },
+    .{ .category = "Shapes", .name = "Restitution", .build = shapeRestitution },
+    .{ .category = "Shapes", .name = "Rounded", .build = shapeRounded },
+    .{ .category = "Shapes", .name = "Ellipse", .build = shapeEllipse },
+    .{ .category = "Shapes", .name = "Compound Shapes", .build = shapeCompound },
+    .{ .category = "Shapes", .name = "Offset", .build = shapeOffset },
+    .{ .category = "Shapes", .name = "Rolling Resistance", .build = shapeRolling },
+    .{ .category = "Shapes", .name = "Conveyor Belt", .build = shapeConveyor },
+    .{ .category = "Shapes", .name = "Explosion", .build = shapeExplosion },
+    .{ .category = "Shapes", .name = "Wind", .build = shapeWind, .update = windUpdate },
+    .{ .category = "Shapes", .name = "Chain Shape", .build = chainShape },
+    .{ .category = "Shapes", .name = "Box Restitution", .build = shapeBoxRestitution },
+    .{ .category = "Shapes", .name = "Filter", .build = shapeFilter },
+    .{
+        .category = "Shapes",
+        .name = "Modify Geometry",
+        .build_s = shapesModifyGeometry,
+        .update_s = shapesModifyGeometryUpdate,
+    },
+    .{ .category = "Shapes", .name = "Custom Filter", .build = shapesCustomFilter },
+    // Joints
+    .{ .category = "Joints", .name = "Revolute", .build = jointRevolute },
+    .{
+        .category = "Joints",
+        .name = "Gear Lift",
+        .build_s = jointsGearLift,
+        .update_s = jointsGearLiftUpdate,
+        .cam = .{ .target = .{ -2, 6.5 }, .ppm = 30 },
+    },
+    .{
+        .category = "Joints",
+        .name = "User Constraint",
+        .build_s = jointsUserConstraint,
+        .update_s = jointsUserConstraintUpdate,
+        .cam = .{ .target = .{ 1.5, -1 }, .ppm = 30 },
+    },
+    .{ .category = "Joints", .name = "Bridge", .build = jointBridge },
+    .{ .category = "Joints", .name = "Ball & Chain", .build = jointBallChain },
+    .{ .category = "Joints", .name = "Cantilever", .build = jointCantilever },
+    .{ .category = "Joints", .name = "Soft Body", .build = jointSoftBody },
+    .{ .category = "Joints", .name = "Wheel", .build = jointWheel },
+    .{ .category = "Joints", .name = "Prismatic", .build = jointPrismatic },
+    .{ .category = "Joints", .name = "Distance Joint", .build = jointDistance },
+    .{ .category = "Joints", .name = "Motor Joint", .build = jointMotor },
+    .{ .category = "Joints", .name = "Door", .build = jointDoor },
+    .{ .category = "Joints", .name = "Ragdoll", .build = jointRagdoll },
+    .{ .category = "Joints", .name = "Doohickey", .build = jointDoohickey },
+    .{ .category = "Joints", .name = "Driving", .build = jointDriving },
+    .{
+        .category = "Joints",
+        .name = "Rube Goldberg",
+        .build = buildDominos,
+        .cam = .{ .target = .{ 8, 16 }, .ppm = 9 },
+    },
+    // World
+    .{ .category = "World", .name = "Tiles", .build = worldTiles },
+    // Benchmark
+    .{ .category = "Benchmark", .name = "Tumbler", .build = benchTumbler },
+    .{
+        .category = "Benchmark",
+        .name = "Large Compounds",
+        .build = benchmarkLargeCompounds,
+        .cam = .{ .target = .{ 0, 8 }, .ppm = 12 },
+    },
+    .{ .category = "Benchmark", .name = "Spinner", .build = benchSpinner },
+    .{ .category = "Benchmark", .name = "Large Pyramid", .build = benchLargePyramid },
+    .{ .category = "Benchmark", .name = "Joint Grid", .build = benchJointGrid },
+    .{ .category = "Benchmark", .name = "Many Tumblers", .build = benchManyTumblers },
+    .{ .category = "Benchmark", .name = "Barrel 2.4", .build = benchmarkBarrel24 },
+    .{
+        .category = "Events",
+        .name = "Circle Impulse",
+        .build = eventCircleImpulse,
+        .update = eventCircleImpulseUpdate,
+    },
+    .{ .category = "Events", .name = "Contact", .build = eventContact, .update = eventContactUpdate },
+    .{ .category = "Events", .name = "Platformer", .build_s = eventsPlatformer, .update_s = eventsPlatformerUpdate },
+    .{
+        .category = "Events",
+        .name = "Persistent Contact",
+        .build = eventsPersistentContact,
+        .lab = eventsPersistentContactLab,
+        .cam = .{ .target = .{ 0, 3 }, .ppm = 22 },
+    },
+    .{ .category = "Events", .name = "Foot Sensor", .build = eventFootSensor, .update = eventFootSensorUpdate },
+    .{ .category = "Events", .name = "Sensor Types", .build_s = eventSensorTypes, .update_s = eventSensorTypesUpdate },
+    .{ .category = "Events", .name = "Sensor Hits", .build_s = eventSensorHits, .update_s = eventSensorHitsUpdate },
+    .{
+        .category = "Events",
+        .name = "Sensor Funnel",
+        .build = eventSensorFunnel,
+        .update = eventSensorFunnelUpdate,
+    },
+    .{
+        .category = "Events",
+        .name = "Sensor Bookend",
+        .build = eventSensorBookend,
+        .update = eventSensorBookendUpdate,
+    },
+    .{ .category = "Events", .name = "Body Move", .build = eventBodyMove, .update = eventBodyMoveUpdate },
+    .{
+        .category = "Events",
+        .name = "Projectile Event",
+        .build_s = eventProjectile,
+        .update_s = eventProjectileUpdate,
+        .cam = .{ .target = .{ -2, 8 }, .ppm = 13 },
+    },
+    .{ .category = "Collision", .name = "Ray Cast", .build = labObstacles, .lab = labRayCastLab },
+    .{
+        .category = "Collision",
+        .name = "Dynamic Tree",
+        .build = collisionDynamicTree,
+        .lab = collisionDynamicTreeLab,
+        .cam = .{ .target = .{ 0, 6 }, .ppm = 20 },
+    },
+    .{ .category = "Collision", .name = "Shape Cast", .build = labObstacles, .lab = labShapeCastLab },
+    .{ .category = "Collision", .name = "Overlap World", .build = labObstacles, .lab = labOverlapLab },
+    .{
+        .category = "Collision",
+        .name = "Shape Distance",
+        .build = labEmpty,
+        .lab = labShapeDistance,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 44 },
+    },
+    .{
+        .category = "Collision",
+        .name = "Manifold",
+        .build = labEmpty,
+        .lab = labManifold,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 44 },
+    },
+    .{
+        .category = "Collision",
+        .name = "Cast World",
+        .build = labObstacles,
+        .lab = labCastWorldLab,
+        .cam = .{ .target = .{ 0, 1 }, .ppm = 30 },
+    },
+    .{
+        .category = "Collision",
+        .name = "Smooth Manifold",
+        .build = labEmpty,
+        .lab = labSmoothManifoldLab,
+        .cam = .{ .target = .{ 0, 1 }, .ppm = 38 },
+    },
+    .{
+        .category = "Collision",
+        .name = "Time of Impact",
+        .build = labEmpty,
+        .lab = labTimeOfImpactLab,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 28 },
+    },
+    .{ .category = "Geometry", .name = "Convex Hull", .build = labEmpty, .lab = labConvexHullLab },
+    .{
+        .category = "Robustness",
+        .name = "HighMassRatio1",
+        .build = robustHighMass1,
+        .cam = .{ .target = .{ 3, 14 }, .ppm = 12 },
+    },
+    .{
+        .category = "Robustness",
+        .name = "HighMassRatio2",
+        .build = robustHighMass2,
+        .cam = .{ .target = .{ 0, 16 }, .ppm = 12 },
+    },
+    .{
+        .category = "Robustness",
+        .name = "HighMassRatio3",
+        .build = robustHighMass3,
+        .cam = .{ .target = .{ 0, 12 }, .ppm = 14 },
+    },
+    .{
+        .category = "Robustness",
+        .name = "Overlap Recovery",
+        .build = robustOverlap,
+        .cam = .{ .target = .{ 0, 1.5 }, .ppm = 90 },
+    },
+    .{
+        .category = "Robustness",
+        .name = "Tiny Pyramid",
+        .build = robustTinyPyramid,
+        .cam = .{ .target = .{ 0, 0.7 }, .ppm = 190 },
+    },
+    .{
+        .category = "Bodies",
+        .name = "Bad",
+        .build = bodyBad,
+        .cam = .{ .target = .{ 1, 4 }, .ppm = 34 },
+    },
+    .{
+        .category = "Bodies",
+        .name = "Mixed Locks",
+        .build = bodyMixedLocks,
+        .cam = .{ .target = .{ 0, 2 }, .ppm = 64 },
+    },
+    .{
+        .category = "Bodies",
+        .name = "Wake Touching",
+        .build = bodyWakeTouching,
+        .cam = .{ .target = .{ 0, 3 }, .ppm = 32 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Speculative Fallback",
+        .build = continuousSpecFallback,
+        .cam = .{ .target = .{ 1, 5 }, .ppm = 44 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Speculative Sliver",
+        .build = continuousSpecSliver,
+        .cam = .{ .target = .{ 0, 1.75 }, .ppm = 110 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Speculative Ghost",
+        .build = continuousSpecGhost,
+        .cam = .{ .target = .{ 0, 1.75 }, .ppm = 140 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Pixel Imperfect",
+        .build = continuousPixelImperfect,
+        .cam = .{ .target = .{ 6.5, 6 }, .ppm = 46 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Restitution Threshold",
+        .build = continuousRestitutionThreshold,
+        .cam = .{ .target = .{ 6.5, 6 }, .ppm = 46 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Chain Slide",
+        .build = continuousChainSlide,
+        .cam = .{ .target = .{ 0, 9 }, .ppm = 18 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Segment Slide",
+        .build = continuousSegmentSlide,
+        .cam = .{ .target = .{ 0, 5 }, .ppm = 16 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Filter Joint",
+        .build = jointFilter,
+        .cam = .{ .target = .{ 0, 5 }, .ppm = 30 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Top Down Friction",
+        .build = jointTopDownFriction,
+        .cam = .{ .target = .{ 0, 10 }, .ppm = 26 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Scale Ragdoll",
+        .build = jointScaleRagdoll,
+        .cam = .{ .target = .{ 0, 4 }, .ppm = 22 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Breakable",
+        .build_s = jointBreakable,
+        .update_s = jointBreakableUpdate,
+        .cam = .{ .target = .{ 0, 4 }, .ppm = 22 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Motion Locks",
+        .build = jointMotionLocks,
+        .cam = .{ .target = .{ 0, 9 }, .ppm = 16 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Separation",
+        .build = jointSeparation,
+        .cam = .{ .target = .{ 0, 8 }, .ppm = 11 },
+    },
+    .{
+        .category = "Joints",
+        .name = "Scissor Lift",
+        .build = jointScissorLift,
+        .cam = .{ .target = .{ 0, 4 }, .ppm = 36 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Smash",
+        .build = benchmarkSmash,
+        .cam = .{ .target = .{ 15, 2 }, .ppm = 8 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Junkyard",
+        .build_s = benchmarkJunkyard,
+        .update_s = benchmarkJunkyardUpdate,
+        .cam = .{ .target = .{ 0, 10 }, .ppm = 7 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Sleep",
+        .build = benchmarkSleep,
+        .cam = .{ .target = .{ 0, 15 }, .ppm = 9 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Kinematic",
+        .build = benchmarkKinematic,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 16 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Rain",
+        .build_s = benchmarkRain,
+        .update_s = benchmarkRainUpdate,
+        .cam = .{ .target = .{ 0, 6 }, .ppm = 12 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Capacity",
+        .build = benchmarkCapacity,
+        .cam = .{ .target = .{ 0, 12 }, .ppm = 9 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Compounds",
+        .build = benchmarkCompounds,
+        .cam = .{ .target = .{ 0, 14 }, .ppm = 7 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Barrel",
+        .build = benchmarkBarrel,
+        .cam = .{ .target = .{ 0, 14 }, .ppm = 9 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Washer",
+        .build = benchmarkWasher,
+        .cam = .{ .target = .{ 0, 10 }, .ppm = 14 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Cast",
+        .build = benchmarkCast,
+        .lab = benchmarkCastLab,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 24 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Shape Distance",
+        .build = labEmpty,
+        .lab = benchmarkShapeDistanceLab,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 28 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "CreateDestroy",
+        .build_s = benchmarkCreateDestroy,
+        .update_s = benchmarkCreateDestroyUpdate,
+        .cam = .{ .target = .{ 0, 6 }, .ppm = 22 },
+    },
+    .{
+        .category = "Benchmark",
+        .name = "Sensor",
+        .build_s = benchmarkSensor,
+        .update_s = benchmarkSensorUpdate,
+        .lab = benchmarkSensorLab,
+        .cam = .{ .target = .{ 0, 6 }, .ppm = 20 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Bounce Humans",
+        .build_s = continuousBounceHumans,
+        .update_s = continuousBounceHumansUpdate,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 22 },
+    },
+    .{
+        .category = "Shapes",
+        .name = "Recreate Static",
+        .build_s = shapesRecreateStaticBuild,
+        .update_s = shapesRecreateStaticUpdate,
+        .cam = .{ .target = .{ 0, 5 }, .ppm = 30 },
+    },
+    .{
+        .category = "Shapes",
+        .name = "Tangent Speed",
+        .build = shapesTangentSpeed,
+        .cam = .{ .target = .{ 0, 2 }, .ppm = 12 },
+    },
+    .{
+        .category = "Shapes",
+        .name = "Chain Segment",
+        .build = shapesChainSegment,
+        .cam = .{ .target = .{ 0, 2 }, .ppm = 12 },
+    },
+    .{
+        .category = "Shapes",
+        .name = "Chain Link",
+        .build = shapesChainLink,
+        .cam = .{ .target = .{ 0, 0 }, .ppm = 16 },
+    },
+    .{
+        .category = "Determinism",
+        .name = "Falling Hinges",
+        .build = determinismFallingHinges,
+        .cam = .{ .target = .{ 0, 5 }, .ppm = 24 },
+    },
+    .{
+        .category = "Determinism",
+        .name = "SnapShot",
+        .build = determinismFallingHinges,
+        .auto_snapshot = true,
+        .cam = .{ .target = .{ 0, 5 }, .ppm = 24 },
+    },
+    .{
+        .category = "Robustness",
+        .name = "Multiple Prismatic",
+        .build = robustnessMultiplePrismatic,
+        .cam = .{ .target = .{ 0, 4 }, .ppm = 30 },
+    },
+    // Showcase
+    .{
+        .category = "Showcase",
+        .name = "Dominos",
+        .build = showcaseDominos,
+        .cam = .{ .target = .{ 6, 16 }, .ppm = 7 },
+    },
+    // Issues
+    .{ .category = "Issues", .name = "Disable", .build_s = issuesDisable, .update_s = issuesDisableUpdate },
+    .{
+        .category = "Issues",
+        .name = "Bad Steiner",
+        .build = issuesBadSteiner,
+        .cam = .{ .target = .{ 0, 1.75 }, .ppm = 90 },
+    },
+    .{
+        .category = "Issues",
+        .name = "Crash01",
+        .build = issuesCrash01,
+        .cam = .{ .target = .{ 0.8, 6.4 }, .ppm = 34 },
+    },
+    .{
+        .category = "Issues",
+        .name = "StaticVsBulletBug",
+        .build = issuesStaticVsBullet,
+        .cam = .{ .target = .{ 58, 72 }, .ppm = 16 },
+    },
+    .{
+        .category = "Issues",
+        .name = "Unstable Prismatic Joints",
+        .build = issuesUnstablePrismatic,
+        .cam = .{ .target = .{ 0, 2.5 }, .ppm = 34 },
+    },
+    .{
+        .category = "Issues",
+        .name = "Unstable Windmill",
+        .build = issuesUnstableWindmill,
+        .cam = .{ .target = .{ 10, 8 }, .ppm = 12 },
+    },
+    .{
+        .category = "Character",
+        .name = "Mover",
+        .build_s = characterMover,
+        .control = characterMoverControl,
+        .cam = .{ .target = .{ 0, 3 }, .ppm = 26 },
+    },
+    .{
+        .category = "Continuous",
+        .name = "Pinball",
+        .build_s = continuousPinball,
+        .control = continuousPinballControl,
+        .cam = .{ .target = .{ 0, 9 }, .ppm = 26 },
+    },
+    .{
+        .category = "Robustness",
+        .name = "Cart",
+        .build_s = robustnessCart,
+        .control = robustnessCartControl,
+        .cam = .{ .target = .{ 0, 1.2 }, .ppm = 50 },
+    },
+    .{
+        .category = "Events",
+        .name = "Joint",
+        .build_s = eventsJoint,
+        .update_s = eventsJointUpdate,
+        .cam = .{ .target = .{ 0, 7 }, .ppm = 23 },
+    },
+};
+
+/// Unique category names, in list order - drives the scene picker's category dropdown.
+pub const categories = blk: {
+    @setEvalBranchQuota(20000);
+    var buf: [list.len][]const u8 = undefined;
+    var n: usize = 0;
+    for (list) |sc| {
+        var found: bool = false;
+        for (buf[0..n]) |c| {
+            if (eql(u8, c, sc.category)) {
+                found = true;
+            }
+        }
+        if (!found) {
+            buf[n] = sc.category;
+            n += 1;
+        }
+    }
+    break :blk buf[0..n].*;
+};
+
+/// Index into `categories` for a category name (0 if absent).
+pub fn categoryIndex(name: []const u8) usize {
+    var i: usize = 0;
+    while (i < categories.len) : (i += 1) {
+        if (eql(u8, categories[i], name)) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+/// First scene index in a category (0 if none) - used when the category changes.
+pub fn firstInCategory(cat: usize) usize {
+    var i: usize = 0;
+    while (i < list.len) : (i += 1) {
+        if (eql(u8, list[i].category, categories[cat])) {
+            return i;
+        }
+    }
+    return 0;
 }

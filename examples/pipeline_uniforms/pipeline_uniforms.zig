@@ -19,11 +19,13 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const mulMat = zm.mulMat;
 const scaling = zm.scaling;
 const rotationZ = zm.rotationZ;
+const Mat = zm.Mat;
 const common = @import("example_common");
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -64,7 +66,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// transform = scale(sx, sy) * rotateZ(angle), in zm row convention so
 /// `mulMatPoint` in the shader matches WGSL `m * vec4(p, 1)`. Rotating first
 /// then aspect-scaling keeps the triangle equilateral on any window shape.
-fn transform2d(angle: f32, sx: f32, sy: f32) zm.Mat {
+fn transform2d(angle: f32, sx: f32, sy: f32) Mat {
     return mulMat(scaling(sx, sy, 1.0), rotationZ(angle));
 }
 
@@ -74,7 +76,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "tri_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(&vertices));
 
     // The pipeline, UBO buffer + bind group, and the @group(0) routing are all
     // derived from the typed schemas - no bind-group boilerplate in the app.

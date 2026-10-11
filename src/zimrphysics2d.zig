@@ -55,6 +55,13 @@
 //! queries, CCD, sensors, the character mover, and the SIMD solve path.
 
 const std = @import("std");
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const testing_allocator = std.testing.allocator;
+const asBytes = std.mem.asBytes;
+const zeroes = std.mem.zeroes;
+const swap = std.mem.swap;
+const sortSlice = std.mem.sort;
 const zm = @import("zm");
 const assertUnreachable = zm.assertUnreachable;
 const float = zm.float;
@@ -653,6 +660,32 @@ fn computePolygonCentroid(vertices: []const Vec2) Vec2 {
     return origin + center;
 }
 
+/// An axis-aligned box centered at the origin, given its half-extents. Vertices are
+/// wound CCW starting at the bottom-left; normals are the axis directions.
+/// box2d: b2MakeBox  geometry.c:139
+pub fn makeBox(half_width: f32, half_height: f32) Polygon {
+    assert(half_width > 0.0 and half_height > 0.0, @src());
+    var shape: Polygon = undefined;
+    shape.count = 4;
+    shape.vertices[0] = .{ -half_width, -half_height };
+    shape.vertices[1] = .{ half_width, -half_height };
+    shape.vertices[2] = .{ half_width, half_height };
+    shape.vertices[3] = .{ -half_width, half_height };
+    shape.normals[0] = .{ 0.0, -1.0 };
+    shape.normals[1] = .{ 1.0, 0.0 };
+    shape.normals[2] = .{ 0.0, 1.0 };
+    shape.normals[3] = .{ -1.0, 0.0 };
+    shape.radius = 0.0;
+    shape.centroid = .{ 0.0, 0.0 };
+    return shape;
+}
+
+/// An axis-aligned square centered at the origin with the given half-width.
+/// box2d: b2MakeSquare  geometry.c:134
+pub fn makeSquare(half_width: f32) Polygon {
+    return makeBox(half_width, half_width);
+}
+
 /// Build a convex polygon from a hull with an optional rounding `radius`. Computes
 /// outward edge normals (the right perpendicular of each CCW edge) and the centroid.
 /// Falls back to a unit square if the hull is degenerate.
@@ -683,12 +716,6 @@ pub fn makePolygon(hull: Hull, radius: f32) Polygon {
 
     shape.centroid = computePolygonCentroid(shape.vertices[0..shape.count]);
     return shape;
-}
-
-/// Build a convex polygon from a hull, transformed by `position` + `rotation`.
-/// box2d: b2MakeOffsetPolygon  geometry.c:92
-pub fn makeOffsetPolygon(hull: Hull, position: Vec2, rotation: Rot2) Polygon {
-    return makeOffsetRoundedPolygon(hull, position, rotation, 0.0);
 }
 
 /// Build a (optionally rounded) convex polygon from a hull, transformed by
@@ -724,30 +751,10 @@ pub fn makeOffsetRoundedPolygon(
     return shape;
 }
 
-/// An axis-aligned square centered at the origin with the given half-width.
-/// box2d: b2MakeSquare  geometry.c:134
-pub fn makeSquare(half_width: f32) Polygon {
-    return makeBox(half_width, half_width);
-}
-
-/// An axis-aligned box centered at the origin, given its half-extents. Vertices are
-/// wound CCW starting at the bottom-left; normals are the axis directions.
-/// box2d: b2MakeBox  geometry.c:139
-pub fn makeBox(half_width: f32, half_height: f32) Polygon {
-    assert(half_width > 0.0 and half_height > 0.0, @src());
-    var shape: Polygon = undefined;
-    shape.count = 4;
-    shape.vertices[0] = .{ -half_width, -half_height };
-    shape.vertices[1] = .{ half_width, -half_height };
-    shape.vertices[2] = .{ half_width, half_height };
-    shape.vertices[3] = .{ -half_width, half_height };
-    shape.normals[0] = .{ 0.0, -1.0 };
-    shape.normals[1] = .{ 1.0, 0.0 };
-    shape.normals[2] = .{ 0.0, 1.0 };
-    shape.normals[3] = .{ -1.0, 0.0 };
-    shape.radius = 0.0;
-    shape.centroid = .{ 0.0, 0.0 };
-    return shape;
+/// Build a convex polygon from a hull, transformed by `position` + `rotation`.
+/// box2d: b2MakeOffsetPolygon  geometry.c:92
+pub fn makeOffsetPolygon(hull: Hull, position: Vec2, rotation: Rot2) Polygon {
+    return makeOffsetRoundedPolygon(hull, position, rotation, 0.0);
 }
 
 /// An axis-aligned box with a rounding radius.
@@ -1005,12 +1012,6 @@ fn segmentFatAabb(shape: Segment, xf: Transform2, extra: f32) Aabb2 {
     return .{ .lower = @min(v1, v2) - ev, .upper = @max(v1, v2) + ev };
 }
 
-/// The tight world-space AABB of a shape at transform `xf`.
-/// box2d: b2ComputeShapeAABB  shape.c (via the per-type b2Compute*AABB)
-pub fn computeShapeAabb(geom: Geometry, xf: Transform2) Aabb2 {
-    return computeFatShapeAabb(geom, xf, 0.0);
-}
-
 /// The world-space AABB of a shape at transform `xf`, grown by `extra` on all sides.
 /// box2d: b2ComputeFatShapeAABB  geometry.c:485
 pub fn computeFatShapeAabb(geom: Geometry, xf: Transform2, extra: f32) Aabb2 {
@@ -1021,6 +1022,12 @@ pub fn computeFatShapeAabb(geom: Geometry, xf: Transform2, extra: f32) Aabb2 {
         .segment => |s| segmentFatAabb(s, xf, extra),
         .chain_segment => |cs| segmentFatAabb(cs.segment, xf, extra),
     };
+}
+
+/// The tight world-space AABB of a shape at transform `xf`.
+/// box2d: b2ComputeShapeAABB  shape.c (via the per-type b2Compute*AABB)
+pub fn computeShapeAabb(geom: Geometry, xf: Transform2) Aabb2 {
+    return computeFatShapeAabb(geom, xf, 0.0);
 }
 
 // ================================================================================
@@ -1207,6 +1214,15 @@ fn simplexVertex(s: *Simplex, i: usize) *SimplexVertex {
     };
 }
 
+/// The result of `segmentDistance`. box2d: b2SegmentDistanceResult  collision.h
+pub const SegmentDistanceResult = struct {
+    closest1: Vec2,
+    closest2: Vec2,
+    fraction1: f32,
+    fraction2: f32,
+    distance_squared: f32,
+};
+
 /// Closest points between two line segments [p1,q1] and [p2,q2], with the
 /// barycentric fractions and the squared distance. Handles degenerate (point-like)
 /// segments. box2d: b2SegmentDistance  distance.c:33
@@ -1272,15 +1288,6 @@ pub fn segmentDistance(
     result.distance_squared = lengthSq2(result.closest1 - result.closest2);
     return result;
 }
-
-/// The result of `segmentDistance`. box2d: b2SegmentDistanceResult  collision.h
-pub const SegmentDistanceResult = struct {
-    closest1: Vec2,
-    closest2: Vec2,
-    fraction1: f32,
-    fraction2: f32,
-    distance_squared: f32,
-};
 
 /// Build a shape proxy from up to `max_polygon_vertices` local points and a radius.
 /// box2d: b2MakeProxy  distance.c:108
@@ -2234,7 +2241,7 @@ pub const Manifold = struct {
     points: [2]ManifoldPoint,
     count: u32,
 
-    pub const empty: Manifold = std.mem.zeroes(Manifold);
+    pub const empty: Manifold = zeroes(Manifold);
 };
 
 /// Pack two feature indices into a stable 16-bit contact-point id (high byte = A's
@@ -3620,6 +3627,32 @@ pub const Body = struct {
     user_data: u64,
 };
 
+/// One shape instance in the world: its geometry, the body it rides on, surface/filter
+/// properties, the cached broad-phase bounds and proxy, and its link in the owning
+/// body's intrusive shape list. The shape's pool slot index is its ShapeIndex.
+/// box2d: b2Shape  shape.h
+pub const Shape = struct {
+    geom: Geometry,
+    body: BodyIndex,
+    material: SurfaceMaterial = .{},
+    filter: Filter = .{},
+    density: f32 = 1.0,
+    aabb: Aabb2 = .{ .lower = .{ 0, 0 }, .upper = .{ 0, 0 } }, // tight world AABB
+    fat_aabb: Aabb2 = .{ .lower = .{ 0, 0 }, .upper = .{ 0, 0 } }, // enlarged AABB stored in the tree
+    local_centroid: Vec2 = .{ 0, 0 }, // centroid in the body-origin frame (for CCD)
+    aabb_margin: f32 = 0, // adaptive broad-phase margin, computed at creation
+    proxy_key: u32 = null_index, // broad-phase proxy key ((proxyId << 2) | bodyType)
+    next_shape: u32 = null_index, // next shape in the owning body's list
+    prev_shape: u32 = null_index, // previous shape (doubly-linked, for O(1) removal)
+    sensor_index: u32 = null_index, // index into world.sensors, or null_index if solid
+    enable_contact_events: bool = true,
+    enable_sensor_events: bool = true,
+    enable_pre_solve: bool = false,
+    enable_custom_filtering: bool = false,
+    enable_hit_events: bool = false,
+    user_data: u64 = 0,
+};
+
 /// Side-table indexed by BodyIndex: velocity, solver-inverse mass, damping, and the
 /// per-step accumulated force/torque. Zeroed for static bodies.
 pub const Motion = struct {
@@ -3706,7 +3739,11 @@ pub const TreeNode = struct {
 
 /// A leaf-visit callback for tree queries: return false to stop the query early.
 /// box2d: b2TreeQueryCallbackFcn
-pub const TreeQueryCallback = *const fn (proxy_id: i32, user_data: u64, ctx: *anyopaque) bool;
+pub const TreeQueryCallback = *const fn (
+    proxy_id: i32,
+    user_data: u64,
+    ctx: *anyopaque,
+) bool;
 
 /// Grow `a` to contain `b`, reporting whether it changed. box2d: b2EnlargeAABB  aabb.h:21
 fn enlargeAabb(a: *Aabb2, b: Aabb2) bool {
@@ -3741,12 +3778,77 @@ pub const TreeStats = struct {
     area_ratio: f32,
 };
 
+/// One frame of the explicit-stack tree build: the internal node being built, which child
+/// is in progress, and the leaf range it covers (split at `split`). box2d: b2RebuildItem
+const RebuildItem = struct {
+    node_index: i32,
+    child_count: i32, // -1 before either child, 0/1 while building child1/child2, 2 when done
+    start: usize,
+    end: usize,
+    split: usize,
+};
+
+/// Partition a leaf range about the median of its longest axis, swapping indices and
+/// centers in tandem. Returns the split offset within the range. box2d: b2PartitionMid
+fn partitionMid(indices: []i32, centers: []Vec2, count: usize) usize {
+    if (count <= 2) {
+        return count / 2;
+    }
+    var lower: Vec2 = centers[0];
+    var upper: Vec2 = centers[0];
+    var k: usize = 1;
+    while (k < count) : (k += 1) {
+        lower = @min(lower, centers[k]);
+        upper = @max(upper, centers[k]);
+    }
+    const d: Vec2 = upper - lower;
+    var left: usize = 0;
+    var right: usize = count;
+    if (d[0] > d[1]) {
+        const pivot: f32 = 0.5 * (lower[0] + upper[0]);
+        while (left < right) {
+            while (left < right and centers[left][0] < pivot) {
+                left += 1;
+            }
+            while (left < right and centers[right - 1][0] >= pivot) {
+                right -= 1;
+            }
+            if (left < right) {
+                swap(i32, &indices[left], &indices[right - 1]);
+                swap(Vec2, &centers[left], &centers[right - 1]);
+                left += 1;
+                right -= 1;
+            }
+        }
+    } else {
+        const pivot: f32 = 0.5 * (lower[1] + upper[1]);
+        while (left < right) {
+            while (left < right and centers[left][1] < pivot) {
+                left += 1;
+            }
+            while (left < right and centers[right - 1][1] >= pivot) {
+                right -= 1;
+            }
+            if (left < right) {
+                swap(i32, &indices[left], &indices[right - 1]);
+                swap(Vec2, &centers[left], &centers[right - 1]);
+                left += 1;
+                right -= 1;
+            }
+        }
+    }
+    if (left > 0 and left < count) {
+        return left;
+    }
+    return count / 2;
+}
+
 pub const DynamicTree = struct {
-    nodes: std.ArrayListUnmanaged(TreeNode) = .empty,
+    nodes: ArrayListUnmanaged(TreeNode) = .empty,
     root: i32 = node_null,
     free_list: i32 = node_null, // head of the free-node singly-linked list
     proxy_count: i32 = 0, // number of leaves
-    refit_order: std.ArrayListUnmanaged(i32) = .empty, // reused pre-order internal-node list for refitTight
+    refit_order: ArrayListUnmanaged(i32) = .empty, // reused pre-order internal-node list for refitTight
 
     pub fn deinit(self: *DynamicTree, gpa: Allocator) void {
         self.nodes.deinit(gpa);
@@ -3939,9 +4041,9 @@ pub const DynamicTree = struct {
             const g: *TreeNode = &nodes[@intCast(ig)];
 
             const cost_base: f32 = c.aabb.perimeter();
-            const aabb_bg: Aabb2 = Aabb2.combine(b.aabb, g.aabb);
+            const aabb_bg: Aabb2 = .combine(b.aabb, g.aabb);
             const cost_bf: f32 = aabb_bg.perimeter();
-            const aabb_bf: Aabb2 = Aabb2.combine(b.aabb, f.aabb);
+            const aabb_bf: Aabb2 = .combine(b.aabb, f.aabb);
             const cost_bg: f32 = aabb_bf.perimeter();
 
             if (cost_base < cost_bf and cost_base < cost_bg) {
@@ -3983,9 +4085,9 @@ pub const DynamicTree = struct {
             const e: *TreeNode = &nodes[@intCast(ie)];
 
             const cost_base: f32 = b.aabb.perimeter();
-            const aabb_ce: Aabb2 = Aabb2.combine(c.aabb, e.aabb);
+            const aabb_ce: Aabb2 = .combine(c.aabb, e.aabb);
             const cost_cd: f32 = aabb_ce.perimeter();
-            const aabb_cd: Aabb2 = Aabb2.combine(c.aabb, d.aabb);
+            const aabb_cd: Aabb2 = .combine(c.aabb, d.aabb);
             const cost_ce: f32 = aabb_cd.perimeter();
 
             if (cost_base < cost_cd and cost_base < cost_ce) {
@@ -4036,25 +4138,25 @@ pub const DynamicTree = struct {
             var best: u8 = 0; // 0 none, 1 BF, 2 BG, 3 CD, 4 CE
             var best_cost: f32 = cost_base;
 
-            const aabb_bg: Aabb2 = Aabb2.combine(b.aabb, g.aabb);
+            const aabb_bg: Aabb2 = .combine(b.aabb, g.aabb);
             const cost_bf: f32 = area_b + aabb_bg.perimeter();
             if (cost_bf < best_cost) {
                 best = 1;
                 best_cost = cost_bf;
             }
-            const aabb_bf: Aabb2 = Aabb2.combine(b.aabb, f.aabb);
+            const aabb_bf: Aabb2 = .combine(b.aabb, f.aabb);
             const cost_bg: f32 = area_b + aabb_bf.perimeter();
             if (cost_bg < best_cost) {
                 best = 2;
                 best_cost = cost_bg;
             }
-            const aabb_ce: Aabb2 = Aabb2.combine(c.aabb, e.aabb);
+            const aabb_ce: Aabb2 = .combine(c.aabb, e.aabb);
             const cost_cd: f32 = area_c + aabb_ce.perimeter();
             if (cost_cd < best_cost) {
                 best = 3;
                 best_cost = cost_cd;
             }
-            const aabb_cd: Aabb2 = Aabb2.combine(c.aabb, d.aabb);
+            const aabb_cd: Aabb2 = .combine(c.aabb, d.aabb);
             const cost_ce: f32 = area_c + aabb_cd.perimeter();
             if (cost_ce < best_cost) {
                 best = 4;
@@ -4535,71 +4637,6 @@ pub const DynamicTree = struct {
     }
 };
 
-/// One frame of the explicit-stack tree build: the internal node being built, which child
-/// is in progress, and the leaf range it covers (split at `split`). box2d: b2RebuildItem
-const RebuildItem = struct {
-    node_index: i32,
-    child_count: i32, // -1 before either child, 0/1 while building child1/child2, 2 when done
-    start: usize,
-    end: usize,
-    split: usize,
-};
-
-/// Partition a leaf range about the median of its longest axis, swapping indices and
-/// centers in tandem. Returns the split offset within the range. box2d: b2PartitionMid
-fn partitionMid(indices: []i32, centers: []Vec2, count: usize) usize {
-    if (count <= 2) {
-        return count / 2;
-    }
-    var lower: Vec2 = centers[0];
-    var upper: Vec2 = centers[0];
-    var k: usize = 1;
-    while (k < count) : (k += 1) {
-        lower = @min(lower, centers[k]);
-        upper = @max(upper, centers[k]);
-    }
-    const d: Vec2 = upper - lower;
-    var left: usize = 0;
-    var right: usize = count;
-    if (d[0] > d[1]) {
-        const pivot: f32 = 0.5 * (lower[0] + upper[0]);
-        while (left < right) {
-            while (left < right and centers[left][0] < pivot) {
-                left += 1;
-            }
-            while (left < right and centers[right - 1][0] >= pivot) {
-                right -= 1;
-            }
-            if (left < right) {
-                std.mem.swap(i32, &indices[left], &indices[right - 1]);
-                std.mem.swap(Vec2, &centers[left], &centers[right - 1]);
-                left += 1;
-                right -= 1;
-            }
-        }
-    } else {
-        const pivot: f32 = 0.5 * (lower[1] + upper[1]);
-        while (left < right) {
-            while (left < right and centers[left][1] < pivot) {
-                left += 1;
-            }
-            while (left < right and centers[right - 1][1] >= pivot) {
-                right -= 1;
-            }
-            if (left < right) {
-                std.mem.swap(i32, &indices[left], &indices[right - 1]);
-                std.mem.swap(Vec2, &centers[left], &centers[right - 1]);
-                left += 1;
-                right -= 1;
-            }
-        }
-    }
-    if (left > 0 and left < count) {
-        return left;
-    }
-    return count / 2;
-}
-
 // ================================================================================
 // Broad phase
 //
@@ -4786,9 +4823,9 @@ pub const BroadPhase = struct {
     /// Indexed by @intFromEnum(MotionType): static, kinematic, dynamic.
     trees: [3]DynamicTree = .{ .{}, .{}, .{} },
     /// Per-proxy "moved this step" flags, one list per tree (indexed by tree proxy id).
-    moved: [3]std.ArrayListUnmanaged(bool) = .{ .empty, .empty, .empty },
+    moved: [3]ArrayListUnmanaged(bool) = .{ .empty, .empty, .empty },
     /// Proxy keys queued for pair-finding this step (a sentinel slot can be cleared).
-    move_array: std.ArrayListUnmanaged(u32) = .empty,
+    move_array: ArrayListUnmanaged(u32) = .empty,
     /// The set of shape pairs that currently have a contact (dedup for pair-finding).
     pair_set: PairSet = .{},
 
@@ -4809,7 +4846,7 @@ pub const BroadPhase = struct {
     fn bufferMove(self: *BroadPhase, gpa: Allocator, key: u32) !void {
         const tree_index: usize = @backingInt(proxyKeyType(key));
         const proxy_id: usize = @intCast(proxyKeyId(key));
-        var moved: *std.ArrayListUnmanaged(bool) = &self.moved[tree_index];
+        var moved: *ArrayListUnmanaged(bool) = &self.moved[tree_index];
         while (moved.items.len <= proxy_id) {
             try moved.append(gpa, false);
         }
@@ -4824,7 +4861,7 @@ pub const BroadPhase = struct {
     fn unBufferMove(self: *BroadPhase, key: u32) void {
         const tree_index: usize = @backingInt(proxyKeyType(key));
         const proxy_id: usize = @intCast(proxyKeyId(key));
-        var moved: *std.ArrayListUnmanaged(bool) = &self.moved[tree_index];
+        var moved: *ArrayListUnmanaged(bool) = &self.moved[tree_index];
         if (proxy_id < moved.items.len and moved.items[proxy_id]) {
             moved.items[proxy_id] = false;
             // Linear search + swap-remove from the move array.
@@ -5996,271 +6033,6 @@ fn pointToPointMatrix(
 
 // -- Dispatch --------------------------------------------------------------------
 
-/// Set up a joint's per-step constraint state. box2d: b2PrepareJoint  joint.c:1301
-pub fn prepareJoint(
-    joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    h: f32,
-    inv_h: f32,
-    enable_warm_starting: bool,
-) void {
-    const hertz: f32 = @min(joint.constraint_hertz, 0.25 * inv_h);
-    joint.constraint_softness = makeSoft(hertz, joint.constraint_damping_ratio, h);
-    switch (joint.data) {
-        .distance => prepareDistanceJoint(joint, bodies, motion, h, enable_warm_starting),
-        .motor => prepareMotorJoint(joint, bodies, motion, h, enable_warm_starting),
-        .prismatic => preparePrismaticJoint(joint, bodies, motion, h, enable_warm_starting),
-        .pulley => preparePulleyJoint(joint, bodies, motion, enable_warm_starting),
-        .revolute => prepareRevoluteJoint(joint, bodies, motion, h, enable_warm_starting),
-        .weld => prepareWeldJoint(joint, bodies, motion, h, enable_warm_starting),
-        .wheel => prepareWheelJoint(joint, bodies, motion, h, enable_warm_starting),
-        .filter => {},
-    }
-}
-
-/// Re-apply each joint's stored impulses at the start of a sub-step.
-/// box2d: b2WarmStartJoint  joint.c:1341
-pub fn warmStartJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
-    switch (joint.data) {
-        .distance => warmStartDistanceJoint(joint, state, motion),
-        .motor => warmStartMotorJoint(joint, state, motion),
-        .prismatic => warmStartPrismaticJoint(joint, state, motion),
-        .pulley => warmStartPulleyJoint(joint, state, motion),
-        .revolute => warmStartRevoluteJoint(joint, state, motion),
-        .weld => warmStartWeldJoint(joint, state, motion),
-        .wheel => warmStartWheelJoint(joint, state, motion),
-        .filter => {},
-    }
-}
-
-/// Solve a joint for one sub-step. box2d: b2SolveJoint  joint.c:1377
-pub fn solveJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-    h: f32,
-    inv_h: f32,
-    use_bias: bool,
-) void {
-    switch (joint.data) {
-        .distance => solveDistanceJoint(joint, state, motion, h, inv_h, use_bias),
-        .motor => solveMotorJoint(joint, state, motion, h),
-        .prismatic => solvePrismaticJoint(joint, state, motion, h, inv_h, use_bias),
-        .pulley => solvePulleyJoint(joint, state, motion, use_bias),
-        .revolute => solveRevoluteJoint(joint, state, motion, h, inv_h, use_bias),
-        .weld => solveWeldJoint(joint, state, motion, use_bias),
-        .wheel => solveWheelJoint(joint, state, motion, h, inv_h, use_bias),
-        .filter => {},
-    }
-}
-
-// -- Revolute joint --------------------------------------------------------------
-
-fn prepareRevoluteJoint(
-    joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    h: f32,
-    enable_warm_starting: bool,
-) void {
-    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
-    const revolute: *RevoluteJoint = &joint.data.revolute;
-    revolute.frame_a = frames.frame_a;
-    revolute.frame_b = frames.frame_b;
-    revolute.delta_center = frames.delta_center;
-
-    const k: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
-    revolute.axial_mass = if (k > 0.0) 1.0 / k else 0.0;
-    revolute.spring_softness = makeSoft(revolute.hertz, revolute.damping_ratio, h);
-
-    if (enable_warm_starting == false) {
-        revolute.linear_impulse = .{ 0, 0 };
-        revolute.spring_impulse = 0;
-        revolute.motor_impulse = 0;
-        revolute.lower_impulse = 0;
-        revolute.upper_impulse = 0;
-    }
-}
-
-fn warmStartRevoluteJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const revolute: *const RevoluteJoint = &joint.data.revolute;
-
-    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, revolute.frame_a.p);
-    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, revolute.frame_b.p);
-    const axial_impulse: f32 =
-        revolute.spring_impulse + revolute.motor_impulse + revolute.lower_impulse - revolute.upper_impulse;
-
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-
-    vel_a = mulSub2(vel_a, inv_mass_a, revolute.linear_impulse);
-    ang_vel_a -= inv_inertia_a * (cross2(anchor_a, revolute.linear_impulse) + axial_impulse);
-    vel_b = mulAdd2(vel_b, inv_mass_b, revolute.linear_impulse);
-    ang_vel_b += inv_inertia_b * (cross2(anchor_b, revolute.linear_impulse) + axial_impulse);
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-fn solveRevoluteJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-    h: f32,
-    inv_h: f32,
-    use_bias: bool,
-) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const revolute: *RevoluteJoint = &joint.data.revolute;
-
-    const state_a: BodyState = state[joint.body_a];
-    const state_b: BodyState = state[joint.body_b];
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-
-    // The joint frames in world orientation, advanced by this sub-step's delta rotations.
-    // The relative rotation between them is what the angular spring/motor/limit act on.
-    const world_q_a: Rot2 = mulRot2(state_a.delta_rotation, revolute.frame_a.q);
-    const world_q_b: Rot2 = mulRot2(state_b.delta_rotation, revolute.frame_b.q);
-    const relative_q: Rot2 = invMulRot2(world_q_a, world_q_b);
-    const fixed_rotation: bool = (inv_inertia_a + inv_inertia_b == 0.0);
-
-    // Angular spring drives the relative angle toward the target angle.
-    if (revolute.enable_spring and fixed_rotation == false) {
-        const joint_angle: f32 = relative_q.angle();
-        const angle_error: f32 = unwindAngle(joint_angle - revolute.target_angle);
-        const bias: f32 = revolute.spring_softness.bias_rate * angle_error;
-        const mass_scale: f32 = revolute.spring_softness.mass_scale;
-        const impulse_scale: f32 = revolute.spring_softness.impulse_scale;
-        const c_dot: f32 = ang_vel_b - ang_vel_a;
-        const impulse: f32 =
-            -mass_scale * revolute.axial_mass * (c_dot + bias) - impulse_scale * revolute.spring_impulse;
-        revolute.spring_impulse += impulse;
-        ang_vel_a -= inv_inertia_a * impulse;
-        ang_vel_b += inv_inertia_b * impulse;
-    }
-
-    // Angular motor drives the relative angular velocity toward the motor speed.
-    if (revolute.enable_motor and fixed_rotation == false) {
-        const c_dot: f32 = ang_vel_b - ang_vel_a - revolute.motor_speed;
-        var impulse: f32 = -revolute.axial_mass * c_dot;
-        const old_impulse: f32 = revolute.motor_impulse;
-        const max_impulse: f32 = h * revolute.max_motor_torque;
-        revolute.motor_impulse = clamp(revolute.motor_impulse + impulse, -max_impulse, max_impulse);
-        impulse = revolute.motor_impulse - old_impulse;
-        ang_vel_a -= inv_inertia_a * impulse;
-        ang_vel_b += inv_inertia_b * impulse;
-    }
-
-    // Angle limits (one-sided constraints with speculation).
-    if (revolute.enable_limit and fixed_rotation == false) {
-        const joint_angle: f32 = relative_q.angle();
-
-        // Lower limit: keep jointAngle >= lowerAngle.
-        {
-            const limit_error: f32 = joint_angle - revolute.lower_angle;
-            var bias: f32 = 0.0;
-            var mass_scale: f32 = 1.0;
-            var impulse_scale: f32 = 0.0;
-            if (limit_error > 0.0) {
-                bias = limit_error * inv_h; // speculative
-            } else if (use_bias) {
-                bias = joint.constraint_softness.bias_rate * limit_error;
-                mass_scale = joint.constraint_softness.mass_scale;
-                impulse_scale = joint.constraint_softness.impulse_scale;
-            }
-            const c_dot: f32 = ang_vel_b - ang_vel_a;
-            const old_impulse: f32 = revolute.lower_impulse;
-            var impulse: f32 =
-                -mass_scale * revolute.axial_mass * (c_dot + bias) - impulse_scale * old_impulse;
-            revolute.lower_impulse = @max(old_impulse + impulse, 0.0);
-            impulse = revolute.lower_impulse - old_impulse;
-            ang_vel_a -= inv_inertia_a * impulse;
-            ang_vel_b += inv_inertia_b * impulse;
-        }
-
-        // Upper limit: signs flipped so C stays positive when satisfied.
-        {
-            const limit_error: f32 = revolute.upper_angle - joint_angle;
-            var bias: f32 = 0.0;
-            var mass_scale: f32 = 1.0;
-            var impulse_scale: f32 = 0.0;
-            if (limit_error > 0.0) {
-                bias = limit_error * inv_h;
-            } else if (use_bias) {
-                bias = joint.constraint_softness.bias_rate * limit_error;
-                mass_scale = joint.constraint_softness.mass_scale;
-                impulse_scale = joint.constraint_softness.impulse_scale;
-            }
-            const c_dot: f32 = ang_vel_a - ang_vel_b; // flipped
-            const old_impulse: f32 = revolute.upper_impulse;
-            var impulse: f32 =
-                -mass_scale * revolute.axial_mass * (c_dot + bias) - impulse_scale * old_impulse;
-            revolute.upper_impulse = @max(old_impulse + impulse, 0.0);
-            impulse = revolute.upper_impulse - old_impulse;
-            ang_vel_a += inv_inertia_a * impulse; // flipped
-            ang_vel_b -= inv_inertia_b * impulse;
-        }
-    }
-
-    // Point-to-point: hold the two anchors coincident (this is the actual pin). Solved as
-    // a 2D linear constraint via the point-to-point effective-mass matrix.
-    {
-        const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, revolute.frame_a.p);
-        const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, revolute.frame_b.p);
-        const point_vel_a: Vec2 = vel_a + crossSV2(ang_vel_a, anchor_a);
-        const point_vel_b: Vec2 = vel_b + crossSV2(ang_vel_b, anchor_b);
-        const constraint_velocity: Vec2 = point_vel_b - point_vel_a;
-
-        // In the biased pass, push the anchors back together softly; relax passes don't.
-        var bias: Vec2 = .{ 0, 0 };
-        var mass_scale: f32 = 1.0;
-        var impulse_scale: f32 = 0.0;
-        if (use_bias) {
-            const relative_drift: Vec2 = state_b.delta_position - state_a.delta_position;
-            const separation: Vec2 = relative_drift + (anchor_b - anchor_a) + revolute.delta_center;
-            bias = separation * splat2(joint.constraint_softness.bias_rate);
-            mass_scale = joint.constraint_softness.mass_scale;
-            impulse_scale = joint.constraint_softness.impulse_scale;
-        }
-
-        const effective_mass: Mat22 =
-            pointToPointMatrix(inv_mass_a, inv_mass_b, inv_inertia_a, inv_inertia_b, anchor_a, anchor_b);
-        const unscaled_impulse: Vec2 = solve22(effective_mass, constraint_velocity + bias);
-        const impulse: Vec2 = .{
-            -mass_scale * unscaled_impulse[0] - impulse_scale * revolute.linear_impulse[0],
-            -mass_scale * unscaled_impulse[1] - impulse_scale * revolute.linear_impulse[1],
-        };
-        revolute.linear_impulse = revolute.linear_impulse + impulse;
-
-        vel_a = mulSub2(vel_a, inv_mass_a, impulse);
-        ang_vel_a -= inv_inertia_a * cross2(anchor_a, impulse);
-        vel_b = mulAdd2(vel_b, inv_mass_b, impulse);
-        ang_vel_b += inv_inertia_b * cross2(anchor_b, impulse);
-    }
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-// -- Distance joint --------------------------------------------------------------
-
 fn prepareDistanceJoint(
     joint: *Joint,
     bodies: []const Body,
@@ -6288,6 +6060,228 @@ fn prepareDistanceJoint(
         dist.lower_impulse = 0;
         dist.upper_impulse = 0;
         dist.motor_impulse = 0;
+    }
+}
+
+fn prepareMotorJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    h: f32,
+    enable_warm_starting: bool,
+) void {
+    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
+    const motor: *MotorJoint = &joint.data.motor;
+    motor.frame_a = frames.frame_a;
+    motor.frame_b = frames.frame_b;
+    motor.delta_center = frames.delta_center;
+
+    motor.linear_spring = makeSoft(motor.linear_hertz, motor.linear_damping_ratio, h);
+    motor.angular_spring = makeSoft(motor.angular_hertz, motor.angular_damping_ratio, h);
+
+    const k_linear: Mat22 = pointToPointMatrix(
+        joint.inv_mass_a,
+        joint.inv_mass_b,
+        joint.inv_inertia_a,
+        joint.inv_inertia_b,
+        motor.frame_a.p,
+        motor.frame_b.p,
+    );
+    motor.linear_mass = inverse22(k_linear);
+
+    const k_angular: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
+    motor.angular_mass = if (k_angular > 0.0) 1.0 / k_angular else 0.0;
+
+    if (enable_warm_starting == false) {
+        motor.linear_velocity_impulse = .{ 0, 0 };
+        motor.angular_velocity_impulse = 0;
+        motor.linear_spring_impulse = .{ 0, 0 };
+        motor.angular_spring_impulse = 0;
+    }
+}
+
+fn preparePrismaticJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    h: f32,
+    enable_warm_starting: bool,
+) void {
+    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
+    const prismatic: *PrismaticJoint = &joint.data.prismatic;
+    prismatic.frame_a = frames.frame_a;
+    prismatic.frame_b = frames.frame_b;
+    prismatic.delta_center = frames.delta_center;
+    prismatic.spring_softness = makeSoft(prismatic.hertz, prismatic.damping_ratio, h);
+
+    if (enable_warm_starting == false) {
+        prismatic.impulse = .{ 0, 0 };
+        prismatic.spring_impulse = 0;
+        prismatic.motor_impulse = 0;
+        prismatic.lower_impulse = 0;
+        prismatic.upper_impulse = 0;
+    }
+}
+
+fn preparePulleyJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    enable_warm_starting: bool,
+) void {
+    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
+    const pul: *PulleyJoint = &joint.data.pulley;
+    pul.anchor_a = frames.frame_a.p;
+    pul.anchor_b = frames.frame_b.p;
+
+    const com_a: Vec2 = bodies[joint.body_a].center;
+    const com_b: Vec2 = bodies[joint.body_b].center;
+    pul.s_a0 = (com_a + pul.anchor_a) - pul.ground_anchor_a;
+    pul.s_b0 = (com_b + pul.anchor_b) - pul.ground_anchor_b;
+    pul.u_a = normalizeOrZero2(pul.s_a0);
+    pul.u_b = normalizeOrZero2(pul.s_b0);
+
+    // Lazily capture the constant rope length from the initial configuration.
+    if (pul.constant < 0.0) {
+        pul.constant = length2(pul.s_a0) + pul.ratio * length2(pul.s_b0);
+    }
+
+    const cr_a: f32 = cross2(pul.anchor_a, pul.u_a);
+    const cr_b: f32 = cross2(pul.anchor_b, pul.u_b);
+    const m_a: f32 = joint.inv_mass_a + joint.inv_inertia_a * cr_a * cr_a;
+    const m_b: f32 = joint.inv_mass_b + joint.inv_inertia_b * cr_b * cr_b;
+    const k: f32 = m_a + pul.ratio * pul.ratio * m_b;
+    pul.mass = if (k > 0.0) 1.0 / k else 0.0;
+
+    if (enable_warm_starting == false) {
+        pul.impulse = 0;
+    }
+}
+
+fn prepareRevoluteJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    h: f32,
+    enable_warm_starting: bool,
+) void {
+    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
+    const revolute: *RevoluteJoint = &joint.data.revolute;
+    revolute.frame_a = frames.frame_a;
+    revolute.frame_b = frames.frame_b;
+    revolute.delta_center = frames.delta_center;
+
+    const k: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
+    revolute.axial_mass = if (k > 0.0) 1.0 / k else 0.0;
+    revolute.spring_softness = makeSoft(revolute.hertz, revolute.damping_ratio, h);
+
+    if (enable_warm_starting == false) {
+        revolute.linear_impulse = .{ 0, 0 };
+        revolute.spring_impulse = 0;
+        revolute.motor_impulse = 0;
+        revolute.lower_impulse = 0;
+        revolute.upper_impulse = 0;
+    }
+}
+
+fn prepareWeldJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    h: f32,
+    enable_warm_starting: bool,
+) void {
+    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
+    const weld: *WeldJoint = &joint.data.weld;
+    weld.frame_a = frames.frame_a;
+    weld.frame_b = frames.frame_b;
+    weld.delta_center = frames.delta_center;
+
+    const ka: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
+    weld.axial_mass = if (ka > 0.0) 1.0 / ka else 0.0;
+
+    // A zero spring hertz means "use the rigid constraint softness".
+    weld.linear_spring = if (weld.linear_hertz == 0.0)
+        joint.constraint_softness
+    else
+        makeSoft(weld.linear_hertz, weld.linear_damping_ratio, h);
+    weld.angular_spring = if (weld.angular_hertz == 0.0)
+        joint.constraint_softness
+    else
+        makeSoft(weld.angular_hertz, weld.angular_damping_ratio, h);
+
+    if (enable_warm_starting == false) {
+        weld.linear_impulse = .{ 0, 0 };
+        weld.angular_impulse = 0;
+    }
+}
+
+fn prepareWheelJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    h: f32,
+    enable_warm_starting: bool,
+) void {
+    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
+    const wheel: *WheelJoint = &joint.data.wheel;
+    wheel.frame_a = frames.frame_a;
+    wheel.frame_b = frames.frame_b;
+    wheel.delta_center = frames.delta_center;
+
+    const anchor_a: Vec2 = wheel.frame_a.p;
+    const anchor_b: Vec2 = wheel.frame_b.p;
+    const separation: Vec2 = wheel.delta_center + (anchor_b - anchor_a);
+    const axis_a: Vec2 = rotateVec2(wheel.frame_a.q, .{ 1.0, 0.0 });
+    const perp_a: Vec2 = leftPerp2(axis_a);
+
+    const perp_arm_a: f32 = cross2(separation + anchor_a, perp_a);
+    const perp_arm_b: f32 = cross2(anchor_b, perp_a);
+    const k_perp: f32 =
+        joint.inv_mass_a + joint.inv_mass_b +
+        joint.inv_inertia_a * perp_arm_a * perp_arm_a + joint.inv_inertia_b * perp_arm_b * perp_arm_b;
+    wheel.perp_mass = if (k_perp > 0.0) 1.0 / k_perp else 0.0;
+
+    const axial_arm_a: f32 = cross2(separation + anchor_a, axis_a);
+    const axial_arm_b: f32 = cross2(anchor_b, axis_a);
+    const k_axial: f32 =
+        joint.inv_mass_a + joint.inv_mass_b +
+        joint.inv_inertia_a * axial_arm_a * axial_arm_a + joint.inv_inertia_b * axial_arm_b * axial_arm_b;
+    wheel.axial_mass = if (k_axial > 0.0) 1.0 / k_axial else 0.0;
+    wheel.spring_softness = makeSoft(wheel.hertz, wheel.damping_ratio, h);
+
+    const k_motor: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
+    wheel.motor_mass = if (k_motor > 0.0) 1.0 / k_motor else 0.0;
+
+    if (enable_warm_starting == false) {
+        wheel.perp_impulse = 0;
+        wheel.spring_impulse = 0;
+        wheel.motor_impulse = 0;
+        wheel.lower_impulse = 0;
+        wheel.upper_impulse = 0;
+    }
+}
+
+/// Set up a joint's per-step constraint state. box2d: b2PrepareJoint  joint.c:1301
+pub fn prepareJoint(
+    joint: *Joint,
+    bodies: []const Body,
+    motion: []const Motion,
+    h: f32,
+    inv_h: f32,
+    enable_warm_starting: bool,
+) void {
+    const hertz: f32 = @min(joint.constraint_hertz, 0.25 * inv_h);
+    joint.constraint_softness = makeSoft(hertz, joint.constraint_damping_ratio, h);
+    switch (joint.data) {
+        .distance => prepareDistanceJoint(joint, bodies, motion, h, enable_warm_starting),
+        .motor => prepareMotorJoint(joint, bodies, motion, h, enable_warm_starting),
+        .prismatic => preparePrismaticJoint(joint, bodies, motion, h, enable_warm_starting),
+        .pulley => preparePulleyJoint(joint, bodies, motion, enable_warm_starting),
+        .revolute => prepareRevoluteJoint(joint, bodies, motion, h, enable_warm_starting),
+        .weld => prepareWeldJoint(joint, bodies, motion, h, enable_warm_starting),
+        .wheel => prepareWheelJoint(joint, bodies, motion, h, enable_warm_starting),
+        .filter => {},
     }
 }
 
@@ -6324,6 +6318,210 @@ fn warmStartDistanceJoint(
 
     writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
     writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn warmStartMotorJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const motor: *const MotorJoint = &joint.data.motor;
+
+    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, motor.frame_a.p);
+    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, motor.frame_b.p);
+    const linear_impulse: Vec2 = motor.linear_velocity_impulse + motor.linear_spring_impulse;
+    const angular_impulse: f32 = motor.angular_velocity_impulse + motor.angular_spring_impulse;
+
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+    vel_a = mulSub2(vel_a, inv_mass_a, linear_impulse);
+    ang_vel_a -= inv_inertia_a * (cross2(anchor_a, linear_impulse) + angular_impulse);
+    vel_b = mulAdd2(vel_b, inv_mass_b, linear_impulse);
+    ang_vel_b += inv_inertia_b * (cross2(anchor_b, linear_impulse) + angular_impulse);
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn warmStartPrismaticJoint(
+    joint: *Joint,
+    state: []const BodyState,
+    motion: []Motion,
+) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const prismatic: *const PrismaticJoint = &joint.data.prismatic;
+    const state_a: BodyState = state[joint.body_a];
+    const state_b: BodyState = state[joint.body_b];
+
+    const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, prismatic.frame_a.p);
+    const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, prismatic.frame_b.p);
+    const separation: Vec2 =
+        (state_b.delta_position - state_a.delta_position) + prismatic.delta_center + (anchor_b - anchor_a);
+    var axis_a: Vec2 = rotateVec2(prismatic.frame_a.q, .{ 1.0, 0.0 });
+    axis_a = rotateVec2(state_a.delta_rotation, axis_a);
+
+    const axial_arm_a: f32 = cross2(anchor_a + separation, axis_a);
+    const axial_arm_b: f32 = cross2(anchor_b, axis_a);
+    const axial_impulse: f32 = prismatic.spring_impulse + prismatic.motor_impulse +
+        prismatic.lower_impulse - prismatic.upper_impulse;
+
+    const perp_a: Vec2 = leftPerp2(axis_a);
+    const perp_arm_a: f32 = cross2(anchor_a + separation, perp_a);
+    const perp_arm_b: f32 = cross2(anchor_b, perp_a);
+    const perp_impulse: f32 = prismatic.impulse[0];
+    const angle_impulse: f32 = prismatic.impulse[1];
+
+    const p: Vec2 = axis_a * splat2(axial_impulse) + perp_a * splat2(perp_impulse);
+    const angular_a: f32 = axial_impulse * axial_arm_a + perp_impulse * perp_arm_a + angle_impulse;
+    const angular_b: f32 = axial_impulse * axial_arm_b + perp_impulse * perp_arm_b + angle_impulse;
+
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+    vel_a = mulSub2(vel_a, inv_mass_a, p);
+    ang_vel_a -= inv_inertia_a * angular_a;
+    vel_b = mulAdd2(vel_b, inv_mass_b, p);
+    ang_vel_b += inv_inertia_b * angular_b;
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn warmStartPulleyJoint(
+    joint: *Joint,
+    state: []const BodyState,
+    motion: []Motion,
+) void {
+    const pul: *const PulleyJoint = &joint.data.pulley;
+    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, pul.anchor_a);
+    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, pul.anchor_b);
+    const p_a: Vec2 = pul.u_a * splat2(-pul.impulse);
+    const p_b: Vec2 = pul.u_b * splat2(-pul.ratio * pul.impulse);
+
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+    vel_a = mulAdd2(vel_a, joint.inv_mass_a, p_a);
+    ang_vel_a += joint.inv_inertia_a * cross2(anchor_a, p_a);
+    vel_b = mulAdd2(vel_b, joint.inv_mass_b, p_b);
+    ang_vel_b += joint.inv_inertia_b * cross2(anchor_b, p_b);
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn warmStartRevoluteJoint(
+    joint: *Joint,
+    state: []const BodyState,
+    motion: []Motion,
+) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const revolute: *const RevoluteJoint = &joint.data.revolute;
+
+    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, revolute.frame_a.p);
+    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, revolute.frame_b.p);
+    const axial_impulse: f32 =
+        revolute.spring_impulse + revolute.motor_impulse + revolute.lower_impulse - revolute.upper_impulse;
+
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+
+    vel_a = mulSub2(vel_a, inv_mass_a, revolute.linear_impulse);
+    ang_vel_a -= inv_inertia_a * (cross2(anchor_a, revolute.linear_impulse) + axial_impulse);
+    vel_b = mulAdd2(vel_b, inv_mass_b, revolute.linear_impulse);
+    ang_vel_b += inv_inertia_b * (cross2(anchor_b, revolute.linear_impulse) + axial_impulse);
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn warmStartWeldJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const weld: *const WeldJoint = &joint.data.weld;
+
+    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, weld.frame_a.p);
+    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, weld.frame_b.p);
+
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+    vel_a = mulSub2(vel_a, inv_mass_a, weld.linear_impulse);
+    ang_vel_a -= inv_inertia_a * (cross2(anchor_a, weld.linear_impulse) + weld.angular_impulse);
+    vel_b = mulAdd2(vel_b, inv_mass_b, weld.linear_impulse);
+    ang_vel_b += inv_inertia_b * (cross2(anchor_b, weld.linear_impulse) + weld.angular_impulse);
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn warmStartWheelJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const wheel: *const WheelJoint = &joint.data.wheel;
+    const state_a: BodyState = state[joint.body_a];
+    const state_b: BodyState = state[joint.body_b];
+
+    const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, wheel.frame_a.p);
+    const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, wheel.frame_b.p);
+    const separation: Vec2 =
+        (state_b.delta_position - state_a.delta_position) + wheel.delta_center + (anchor_b - anchor_a);
+    var axis_a: Vec2 = rotateVec2(wheel.frame_a.q, .{ 1.0, 0.0 });
+    axis_a = rotateVec2(state_a.delta_rotation, axis_a);
+    const perp_a: Vec2 = leftPerp2(axis_a);
+
+    const axial_arm_a: f32 = cross2(separation + anchor_a, axis_a);
+    const axial_arm_b: f32 = cross2(anchor_b, axis_a);
+    const perp_arm_a: f32 = cross2(separation + anchor_a, perp_a);
+    const perp_arm_b: f32 = cross2(anchor_b, perp_a);
+    const axial_impulse: f32 = wheel.spring_impulse + wheel.lower_impulse - wheel.upper_impulse;
+
+    const p: Vec2 = axis_a * splat2(axial_impulse) + perp_a * splat2(wheel.perp_impulse);
+    const angular_a: f32 = axial_impulse * axial_arm_a + wheel.perp_impulse * perp_arm_a + wheel.motor_impulse;
+    const angular_b: f32 = axial_impulse * axial_arm_b + wheel.perp_impulse * perp_arm_b + wheel.motor_impulse;
+
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+    vel_a = mulSub2(vel_a, inv_mass_a, p);
+    ang_vel_a -= inv_inertia_a * angular_a;
+    vel_b = mulAdd2(vel_b, inv_mass_b, p);
+    ang_vel_b += inv_inertia_b * angular_b;
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+/// Re-apply each joint's stored impulses at the start of a sub-step.
+/// box2d: b2WarmStartJoint  joint.c:1341
+pub fn warmStartJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
+    switch (joint.data) {
+        .distance => warmStartDistanceJoint(joint, state, motion),
+        .motor => warmStartMotorJoint(joint, state, motion),
+        .prismatic => warmStartPrismaticJoint(joint, state, motion),
+        .pulley => warmStartPulleyJoint(joint, state, motion),
+        .revolute => warmStartRevoluteJoint(joint, state, motion),
+        .weld => warmStartWeldJoint(joint, state, motion),
+        .wheel => warmStartWheelJoint(joint, state, motion),
+        .filter => {},
+    }
 }
 
 /// Solve the distance joint: a single constraint along the line between the two anchors.
@@ -6480,322 +6678,6 @@ fn solveDistanceJoint(
     writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
 }
 
-// -- Pulley joint ----------------------------------------------------------------
-
-fn preparePulleyJoint(
-    joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    enable_warm_starting: bool,
-) void {
-    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
-    const pul: *PulleyJoint = &joint.data.pulley;
-    pul.anchor_a = frames.frame_a.p;
-    pul.anchor_b = frames.frame_b.p;
-
-    const com_a: Vec2 = bodies[joint.body_a].center;
-    const com_b: Vec2 = bodies[joint.body_b].center;
-    pul.s_a0 = (com_a + pul.anchor_a) - pul.ground_anchor_a;
-    pul.s_b0 = (com_b + pul.anchor_b) - pul.ground_anchor_b;
-    pul.u_a = normalizeOrZero2(pul.s_a0);
-    pul.u_b = normalizeOrZero2(pul.s_b0);
-
-    // Lazily capture the constant rope length from the initial configuration.
-    if (pul.constant < 0.0) {
-        pul.constant = length2(pul.s_a0) + pul.ratio * length2(pul.s_b0);
-    }
-
-    const cr_a: f32 = cross2(pul.anchor_a, pul.u_a);
-    const cr_b: f32 = cross2(pul.anchor_b, pul.u_b);
-    const m_a: f32 = joint.inv_mass_a + joint.inv_inertia_a * cr_a * cr_a;
-    const m_b: f32 = joint.inv_mass_b + joint.inv_inertia_b * cr_b * cr_b;
-    const k: f32 = m_a + pul.ratio * pul.ratio * m_b;
-    pul.mass = if (k > 0.0) 1.0 / k else 0.0;
-
-    if (enable_warm_starting == false) {
-        pul.impulse = 0;
-    }
-}
-
-fn warmStartPulleyJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-) void {
-    const pul: *const PulleyJoint = &joint.data.pulley;
-    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, pul.anchor_a);
-    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, pul.anchor_b);
-    const p_a: Vec2 = pul.u_a * splat2(-pul.impulse);
-    const p_b: Vec2 = pul.u_b * splat2(-pul.ratio * pul.impulse);
-
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-    vel_a = mulAdd2(vel_a, joint.inv_mass_a, p_a);
-    ang_vel_a += joint.inv_inertia_a * cross2(anchor_a, p_a);
-    vel_b = mulAdd2(vel_b, joint.inv_mass_b, p_b);
-    ang_vel_b += joint.inv_inertia_b * cross2(anchor_b, p_b);
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-/// Solve the pulley: a single equality constraint coupling the two rope segments,
-/// C = constant - lengthA - ratio*lengthB = 0. Each ground anchor is a fixed world point,
-/// so the current segment is the anchor's moved position minus that fixed point.
-fn solvePulleyJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-    use_bias: bool,
-) void {
-    const pul: *PulleyJoint = &joint.data.pulley;
-    const state_a: BodyState = state[joint.body_a];
-    const state_b: BodyState = state[joint.body_b];
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-
-    const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, pul.anchor_a);
-    const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, pul.anchor_b);
-    const s_a: Vec2 = pul.s_a0 + state_a.delta_position + (anchor_a - pul.anchor_a);
-    const s_b: Vec2 = pul.s_b0 + state_b.delta_position + (anchor_b - pul.anchor_b);
-    const len_a: f32 = length2(s_a);
-    const len_b: f32 = length2(s_b);
-    const u_a: Vec2 = normalizeOrZero2(s_a);
-    const u_b: Vec2 = normalizeOrZero2(s_b);
-
-    const c: f32 = pul.constant - len_a - pul.ratio * len_b;
-    var bias: f32 = 0.0;
-    var mass_scale: f32 = 1.0;
-    var impulse_scale: f32 = 0.0;
-    if (use_bias) {
-        bias = joint.constraint_softness.bias_rate * c;
-        mass_scale = joint.constraint_softness.mass_scale;
-        impulse_scale = joint.constraint_softness.impulse_scale;
-    }
-
-    const vp_a: Vec2 = vel_a + crossSV2(ang_vel_a, anchor_a);
-    const vp_b: Vec2 = vel_b + crossSV2(ang_vel_b, anchor_b);
-    const c_dot: f32 = -dot2(u_a, vp_a) - pul.ratio * dot2(u_b, vp_b);
-
-    const impulse: f32 = -mass_scale * pul.mass * (c_dot + bias) - impulse_scale * pul.impulse;
-    pul.impulse += impulse;
-
-    const p_a: Vec2 = u_a * splat2(-impulse);
-    const p_b: Vec2 = u_b * splat2(-pul.ratio * impulse);
-    vel_a = mulAdd2(vel_a, joint.inv_mass_a, p_a);
-    ang_vel_a += joint.inv_inertia_a * cross2(anchor_a, p_a);
-    vel_b = mulAdd2(vel_b, joint.inv_mass_b, p_b);
-    ang_vel_b += joint.inv_inertia_b * cross2(anchor_b, p_b);
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-// -- Weld joint ------------------------------------------------------------------
-
-fn prepareWeldJoint(
-    joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    h: f32,
-    enable_warm_starting: bool,
-) void {
-    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
-    const weld: *WeldJoint = &joint.data.weld;
-    weld.frame_a = frames.frame_a;
-    weld.frame_b = frames.frame_b;
-    weld.delta_center = frames.delta_center;
-
-    const ka: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
-    weld.axial_mass = if (ka > 0.0) 1.0 / ka else 0.0;
-
-    // A zero spring hertz means "use the rigid constraint softness".
-    weld.linear_spring = if (weld.linear_hertz == 0.0)
-        joint.constraint_softness
-    else
-        makeSoft(weld.linear_hertz, weld.linear_damping_ratio, h);
-    weld.angular_spring = if (weld.angular_hertz == 0.0)
-        joint.constraint_softness
-    else
-        makeSoft(weld.angular_hertz, weld.angular_damping_ratio, h);
-
-    if (enable_warm_starting == false) {
-        weld.linear_impulse = .{ 0, 0 };
-        weld.angular_impulse = 0;
-    }
-}
-
-fn warmStartWeldJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const weld: *const WeldJoint = &joint.data.weld;
-
-    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, weld.frame_a.p);
-    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, weld.frame_b.p);
-
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-    vel_a = mulSub2(vel_a, inv_mass_a, weld.linear_impulse);
-    ang_vel_a -= inv_inertia_a * (cross2(anchor_a, weld.linear_impulse) + weld.angular_impulse);
-    vel_b = mulAdd2(vel_b, inv_mass_b, weld.linear_impulse);
-    ang_vel_b += inv_inertia_b * (cross2(anchor_b, weld.linear_impulse) + weld.angular_impulse);
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-fn solveWeldJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-    use_bias: bool,
-) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const weld: *WeldJoint = &joint.data.weld;
-
-    const state_a: BodyState = state[joint.body_a];
-    const state_b: BodyState = state[joint.body_b];
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-
-    // Angular constraint (scalar).
-    {
-        const qa: Rot2 = mulRot2(state_a.delta_rotation, weld.frame_a.q);
-        const qb: Rot2 = mulRot2(state_b.delta_rotation, weld.frame_b.q);
-        const relative_q: Rot2 = invMulRot2(qa, qb);
-        const joint_angle: f32 = relative_q.angle();
-
-        var bias: f32 = 0.0;
-        var mass_scale: f32 = 1.0;
-        var impulse_scale: f32 = 0.0;
-        if (use_bias or weld.angular_hertz > 0.0) {
-            bias = weld.angular_spring.bias_rate * joint_angle;
-            mass_scale = weld.angular_spring.mass_scale;
-            impulse_scale = weld.angular_spring.impulse_scale;
-        }
-        const c_dot: f32 = ang_vel_b - ang_vel_a;
-        const impulse: f32 =
-            -mass_scale * weld.axial_mass * (c_dot + bias) - impulse_scale * weld.angular_impulse;
-        weld.angular_impulse += impulse;
-        ang_vel_a -= inv_inertia_a * impulse;
-        ang_vel_b += inv_inertia_b * impulse;
-    }
-
-    // Linear constraint (2x2).
-    {
-        const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, weld.frame_a.p);
-        const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, weld.frame_b.p);
-
-        var bias: Vec2 = .{ 0, 0 };
-        var mass_scale: f32 = 1.0;
-        var impulse_scale: f32 = 0.0;
-        if (use_bias or weld.linear_hertz > 0.0) {
-            const c: Vec2 = (state_b.delta_position - state_a.delta_position) +
-                (anchor_b - anchor_a) + weld.delta_center;
-            bias = c * splat2(weld.linear_spring.bias_rate);
-            mass_scale = weld.linear_spring.mass_scale;
-            impulse_scale = weld.linear_spring.impulse_scale;
-        }
-        const c_dot: Vec2 = (vel_b + crossSV2(ang_vel_b, anchor_b)) - (vel_a + crossSV2(ang_vel_a, anchor_a));
-        const k: Mat22 =
-            pointToPointMatrix(inv_mass_a, inv_mass_b, inv_inertia_a, inv_inertia_b, anchor_a, anchor_b);
-        const b: Vec2 = solve22(k, c_dot + bias);
-        const impulse: Vec2 = .{
-            -mass_scale * b[0] - impulse_scale * weld.linear_impulse[0],
-            -mass_scale * b[1] - impulse_scale * weld.linear_impulse[1],
-        };
-        weld.linear_impulse = weld.linear_impulse + impulse;
-
-        vel_a = mulSub2(vel_a, inv_mass_a, impulse);
-        ang_vel_a -= inv_inertia_a * cross2(anchor_a, impulse);
-        vel_b = mulAdd2(vel_b, inv_mass_b, impulse);
-        ang_vel_b += inv_inertia_b * cross2(anchor_b, impulse);
-    }
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-// -- Motor joint -----------------------------------------------------------------
-//
-// A pure actuator: it has no biased (position-correcting) pass. It drives the relative
-// motion of the two bodies toward target velocities (capped by max force/torque) and
-// optionally applies soft springs toward the target pose.
-
-fn prepareMotorJoint(
-    joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    h: f32,
-    enable_warm_starting: bool,
-) void {
-    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
-    const motor: *MotorJoint = &joint.data.motor;
-    motor.frame_a = frames.frame_a;
-    motor.frame_b = frames.frame_b;
-    motor.delta_center = frames.delta_center;
-
-    motor.linear_spring = makeSoft(motor.linear_hertz, motor.linear_damping_ratio, h);
-    motor.angular_spring = makeSoft(motor.angular_hertz, motor.angular_damping_ratio, h);
-
-    const k_linear: Mat22 = pointToPointMatrix(
-        joint.inv_mass_a,
-        joint.inv_mass_b,
-        joint.inv_inertia_a,
-        joint.inv_inertia_b,
-        motor.frame_a.p,
-        motor.frame_b.p,
-    );
-    motor.linear_mass = inverse22(k_linear);
-
-    const k_angular: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
-    motor.angular_mass = if (k_angular > 0.0) 1.0 / k_angular else 0.0;
-
-    if (enable_warm_starting == false) {
-        motor.linear_velocity_impulse = .{ 0, 0 };
-        motor.angular_velocity_impulse = 0;
-        motor.linear_spring_impulse = .{ 0, 0 };
-        motor.angular_spring_impulse = 0;
-    }
-}
-
-fn warmStartMotorJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const motor: *const MotorJoint = &joint.data.motor;
-
-    const anchor_a: Vec2 = rotateVec2(state[joint.body_a].delta_rotation, motor.frame_a.p);
-    const anchor_b: Vec2 = rotateVec2(state[joint.body_b].delta_rotation, motor.frame_b.p);
-    const linear_impulse: Vec2 = motor.linear_velocity_impulse + motor.linear_spring_impulse;
-    const angular_impulse: f32 = motor.angular_velocity_impulse + motor.angular_spring_impulse;
-
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-    vel_a = mulSub2(vel_a, inv_mass_a, linear_impulse);
-    ang_vel_a -= inv_inertia_a * (cross2(anchor_a, linear_impulse) + angular_impulse);
-    vel_b = mulAdd2(vel_b, inv_mass_b, linear_impulse);
-    ang_vel_b += inv_inertia_b * (cross2(anchor_b, linear_impulse) + angular_impulse);
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
 fn solveMotorJoint(
     joint: *Joint,
     state: []const BodyState,
@@ -6906,84 +6788,6 @@ fn solveMotorJoint(
         vel_b = mulAdd2(vel_b, inv_mass_b, impulse);
         ang_vel_b += inv_inertia_b * cross2(anchor_b, impulse);
     }
-
-    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
-    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
-}
-
-// -- Prismatic joint -------------------------------------------------------------
-//
-// B slides along an axis fixed in A. The free axial direction carries an optional
-// spring / motor / limits; the two locked directions (perpendicular translation and
-// relative rotation) are enforced by a 2x2 block. `axial_arm_*` and `perp_arm_*` are
-// the moment arms of the axial and perpendicular forces about each body's center.
-
-fn preparePrismaticJoint(
-    joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    h: f32,
-    enable_warm_starting: bool,
-) void {
-    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
-    const prismatic: *PrismaticJoint = &joint.data.prismatic;
-    prismatic.frame_a = frames.frame_a;
-    prismatic.frame_b = frames.frame_b;
-    prismatic.delta_center = frames.delta_center;
-    prismatic.spring_softness = makeSoft(prismatic.hertz, prismatic.damping_ratio, h);
-
-    if (enable_warm_starting == false) {
-        prismatic.impulse = .{ 0, 0 };
-        prismatic.spring_impulse = 0;
-        prismatic.motor_impulse = 0;
-        prismatic.lower_impulse = 0;
-        prismatic.upper_impulse = 0;
-    }
-}
-
-fn warmStartPrismaticJoint(
-    joint: *Joint,
-    state: []const BodyState,
-    motion: []Motion,
-) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const prismatic: *const PrismaticJoint = &joint.data.prismatic;
-    const state_a: BodyState = state[joint.body_a];
-    const state_b: BodyState = state[joint.body_b];
-
-    const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, prismatic.frame_a.p);
-    const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, prismatic.frame_b.p);
-    const separation: Vec2 =
-        (state_b.delta_position - state_a.delta_position) + prismatic.delta_center + (anchor_b - anchor_a);
-    var axis_a: Vec2 = rotateVec2(prismatic.frame_a.q, .{ 1.0, 0.0 });
-    axis_a = rotateVec2(state_a.delta_rotation, axis_a);
-
-    const axial_arm_a: f32 = cross2(anchor_a + separation, axis_a);
-    const axial_arm_b: f32 = cross2(anchor_b, axis_a);
-    const axial_impulse: f32 = prismatic.spring_impulse + prismatic.motor_impulse +
-        prismatic.lower_impulse - prismatic.upper_impulse;
-
-    const perp_a: Vec2 = leftPerp2(axis_a);
-    const perp_arm_a: f32 = cross2(anchor_a + separation, perp_a);
-    const perp_arm_b: f32 = cross2(anchor_b, perp_a);
-    const perp_impulse: f32 = prismatic.impulse[0];
-    const angle_impulse: f32 = prismatic.impulse[1];
-
-    const p: Vec2 = axis_a * splat2(axial_impulse) + perp_a * splat2(perp_impulse);
-    const angular_a: f32 = axial_impulse * axial_arm_a + perp_impulse * perp_arm_a + angle_impulse;
-    const angular_b: f32 = axial_impulse * axial_arm_b + perp_impulse * perp_arm_b + angle_impulse;
-
-    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
-    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
-    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
-    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-    vel_a = mulSub2(vel_a, inv_mass_a, p);
-    ang_vel_a -= inv_inertia_a * angular_a;
-    vel_b = mulAdd2(vel_b, inv_mass_b, p);
-    ang_vel_b += inv_inertia_b * angular_b;
 
     writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
     writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
@@ -7177,93 +6981,278 @@ fn solvePrismaticJoint(
     writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
 }
 
-// -- Wheel joint -----------------------------------------------------------------
-//
-// A sprung slider that also lets B spin freely: a perpendicular constraint keeps the
-// anchor on the axis line, an optional spring acts along the axis, an optional motor
-// drives the relative spin, and optional limits bound the axial travel.
-
-fn prepareWheelJoint(
+/// Solve the pulley: a single equality constraint coupling the two rope segments,
+/// C = constant - lengthA - ratio*lengthB = 0. Each ground anchor is a fixed world point,
+/// so the current segment is the anchor's moved position minus that fixed point.
+fn solvePulleyJoint(
     joint: *Joint,
-    bodies: []const Body,
-    motion: []const Motion,
-    h: f32,
-    enable_warm_starting: bool,
+    state: []const BodyState,
+    motion: []Motion,
+    use_bias: bool,
 ) void {
-    const frames: PreparedFrames = computeJointFrames(joint, bodies, motion);
-    const wheel: *WheelJoint = &joint.data.wheel;
-    wheel.frame_a = frames.frame_a;
-    wheel.frame_b = frames.frame_b;
-    wheel.delta_center = frames.delta_center;
-
-    const anchor_a: Vec2 = wheel.frame_a.p;
-    const anchor_b: Vec2 = wheel.frame_b.p;
-    const separation: Vec2 = wheel.delta_center + (anchor_b - anchor_a);
-    const axis_a: Vec2 = rotateVec2(wheel.frame_a.q, .{ 1.0, 0.0 });
-    const perp_a: Vec2 = leftPerp2(axis_a);
-
-    const perp_arm_a: f32 = cross2(separation + anchor_a, perp_a);
-    const perp_arm_b: f32 = cross2(anchor_b, perp_a);
-    const k_perp: f32 =
-        joint.inv_mass_a + joint.inv_mass_b +
-        joint.inv_inertia_a * perp_arm_a * perp_arm_a + joint.inv_inertia_b * perp_arm_b * perp_arm_b;
-    wheel.perp_mass = if (k_perp > 0.0) 1.0 / k_perp else 0.0;
-
-    const axial_arm_a: f32 = cross2(separation + anchor_a, axis_a);
-    const axial_arm_b: f32 = cross2(anchor_b, axis_a);
-    const k_axial: f32 =
-        joint.inv_mass_a + joint.inv_mass_b +
-        joint.inv_inertia_a * axial_arm_a * axial_arm_a + joint.inv_inertia_b * axial_arm_b * axial_arm_b;
-    wheel.axial_mass = if (k_axial > 0.0) 1.0 / k_axial else 0.0;
-    wheel.spring_softness = makeSoft(wheel.hertz, wheel.damping_ratio, h);
-
-    const k_motor: f32 = joint.inv_inertia_a + joint.inv_inertia_b;
-    wheel.motor_mass = if (k_motor > 0.0) 1.0 / k_motor else 0.0;
-
-    if (enable_warm_starting == false) {
-        wheel.perp_impulse = 0;
-        wheel.spring_impulse = 0;
-        wheel.motor_impulse = 0;
-        wheel.lower_impulse = 0;
-        wheel.upper_impulse = 0;
-    }
-}
-
-fn warmStartWheelJoint(joint: *Joint, state: []const BodyState, motion: []Motion) void {
-    const inv_mass_a: f32 = joint.inv_mass_a;
-    const inv_mass_b: f32 = joint.inv_mass_b;
-    const inv_inertia_a: f32 = joint.inv_inertia_a;
-    const inv_inertia_b: f32 = joint.inv_inertia_b;
-    const wheel: *const WheelJoint = &joint.data.wheel;
+    const pul: *PulleyJoint = &joint.data.pulley;
     const state_a: BodyState = state[joint.body_a];
     const state_b: BodyState = state[joint.body_b];
-
-    const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, wheel.frame_a.p);
-    const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, wheel.frame_b.p);
-    const separation: Vec2 =
-        (state_b.delta_position - state_a.delta_position) + wheel.delta_center + (anchor_b - anchor_a);
-    var axis_a: Vec2 = rotateVec2(wheel.frame_a.q, .{ 1.0, 0.0 });
-    axis_a = rotateVec2(state_a.delta_rotation, axis_a);
-    const perp_a: Vec2 = leftPerp2(axis_a);
-
-    const axial_arm_a: f32 = cross2(separation + anchor_a, axis_a);
-    const axial_arm_b: f32 = cross2(anchor_b, axis_a);
-    const perp_arm_a: f32 = cross2(separation + anchor_a, perp_a);
-    const perp_arm_b: f32 = cross2(anchor_b, perp_a);
-    const axial_impulse: f32 = wheel.spring_impulse + wheel.lower_impulse - wheel.upper_impulse;
-
-    const p: Vec2 = axis_a * splat2(axial_impulse) + perp_a * splat2(wheel.perp_impulse);
-    const angular_a: f32 = axial_impulse * axial_arm_a + wheel.perp_impulse * perp_arm_a + wheel.motor_impulse;
-    const angular_b: f32 = axial_impulse * axial_arm_b + wheel.perp_impulse * perp_arm_b + wheel.motor_impulse;
-
     var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
     var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
     var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
     var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
-    vel_a = mulSub2(vel_a, inv_mass_a, p);
-    ang_vel_a -= inv_inertia_a * angular_a;
-    vel_b = mulAdd2(vel_b, inv_mass_b, p);
-    ang_vel_b += inv_inertia_b * angular_b;
+
+    const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, pul.anchor_a);
+    const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, pul.anchor_b);
+    const s_a: Vec2 = pul.s_a0 + state_a.delta_position + (anchor_a - pul.anchor_a);
+    const s_b: Vec2 = pul.s_b0 + state_b.delta_position + (anchor_b - pul.anchor_b);
+    const len_a: f32 = length2(s_a);
+    const len_b: f32 = length2(s_b);
+    const u_a: Vec2 = normalizeOrZero2(s_a);
+    const u_b: Vec2 = normalizeOrZero2(s_b);
+
+    const c: f32 = pul.constant - len_a - pul.ratio * len_b;
+    var bias: f32 = 0.0;
+    var mass_scale: f32 = 1.0;
+    var impulse_scale: f32 = 0.0;
+    if (use_bias) {
+        bias = joint.constraint_softness.bias_rate * c;
+        mass_scale = joint.constraint_softness.mass_scale;
+        impulse_scale = joint.constraint_softness.impulse_scale;
+    }
+
+    const vp_a: Vec2 = vel_a + crossSV2(ang_vel_a, anchor_a);
+    const vp_b: Vec2 = vel_b + crossSV2(ang_vel_b, anchor_b);
+    const c_dot: f32 = -dot2(u_a, vp_a) - pul.ratio * dot2(u_b, vp_b);
+
+    const impulse: f32 = -mass_scale * pul.mass * (c_dot + bias) - impulse_scale * pul.impulse;
+    pul.impulse += impulse;
+
+    const p_a: Vec2 = u_a * splat2(-impulse);
+    const p_b: Vec2 = u_b * splat2(-pul.ratio * impulse);
+    vel_a = mulAdd2(vel_a, joint.inv_mass_a, p_a);
+    ang_vel_a += joint.inv_inertia_a * cross2(anchor_a, p_a);
+    vel_b = mulAdd2(vel_b, joint.inv_mass_b, p_b);
+    ang_vel_b += joint.inv_inertia_b * cross2(anchor_b, p_b);
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn solveRevoluteJoint(
+    joint: *Joint,
+    state: []const BodyState,
+    motion: []Motion,
+    h: f32,
+    inv_h: f32,
+    use_bias: bool,
+) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const revolute: *RevoluteJoint = &joint.data.revolute;
+
+    const state_a: BodyState = state[joint.body_a];
+    const state_b: BodyState = state[joint.body_b];
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+
+    // The joint frames in world orientation, advanced by this sub-step's delta rotations.
+    // The relative rotation between them is what the angular spring/motor/limit act on.
+    const world_q_a: Rot2 = mulRot2(state_a.delta_rotation, revolute.frame_a.q);
+    const world_q_b: Rot2 = mulRot2(state_b.delta_rotation, revolute.frame_b.q);
+    const relative_q: Rot2 = invMulRot2(world_q_a, world_q_b);
+    const fixed_rotation: bool = (inv_inertia_a + inv_inertia_b == 0.0);
+
+    // Angular spring drives the relative angle toward the target angle.
+    if (revolute.enable_spring and fixed_rotation == false) {
+        const joint_angle: f32 = relative_q.angle();
+        const angle_error: f32 = unwindAngle(joint_angle - revolute.target_angle);
+        const bias: f32 = revolute.spring_softness.bias_rate * angle_error;
+        const mass_scale: f32 = revolute.spring_softness.mass_scale;
+        const impulse_scale: f32 = revolute.spring_softness.impulse_scale;
+        const c_dot: f32 = ang_vel_b - ang_vel_a;
+        const impulse: f32 =
+            -mass_scale * revolute.axial_mass * (c_dot + bias) - impulse_scale * revolute.spring_impulse;
+        revolute.spring_impulse += impulse;
+        ang_vel_a -= inv_inertia_a * impulse;
+        ang_vel_b += inv_inertia_b * impulse;
+    }
+
+    // Angular motor drives the relative angular velocity toward the motor speed.
+    if (revolute.enable_motor and fixed_rotation == false) {
+        const c_dot: f32 = ang_vel_b - ang_vel_a - revolute.motor_speed;
+        var impulse: f32 = -revolute.axial_mass * c_dot;
+        const old_impulse: f32 = revolute.motor_impulse;
+        const max_impulse: f32 = h * revolute.max_motor_torque;
+        revolute.motor_impulse = clamp(revolute.motor_impulse + impulse, -max_impulse, max_impulse);
+        impulse = revolute.motor_impulse - old_impulse;
+        ang_vel_a -= inv_inertia_a * impulse;
+        ang_vel_b += inv_inertia_b * impulse;
+    }
+
+    // Angle limits (one-sided constraints with speculation).
+    if (revolute.enable_limit and fixed_rotation == false) {
+        const joint_angle: f32 = relative_q.angle();
+
+        // Lower limit: keep jointAngle >= lowerAngle.
+        {
+            const limit_error: f32 = joint_angle - revolute.lower_angle;
+            var bias: f32 = 0.0;
+            var mass_scale: f32 = 1.0;
+            var impulse_scale: f32 = 0.0;
+            if (limit_error > 0.0) {
+                bias = limit_error * inv_h; // speculative
+            } else if (use_bias) {
+                bias = joint.constraint_softness.bias_rate * limit_error;
+                mass_scale = joint.constraint_softness.mass_scale;
+                impulse_scale = joint.constraint_softness.impulse_scale;
+            }
+            const c_dot: f32 = ang_vel_b - ang_vel_a;
+            const old_impulse: f32 = revolute.lower_impulse;
+            var impulse: f32 =
+                -mass_scale * revolute.axial_mass * (c_dot + bias) - impulse_scale * old_impulse;
+            revolute.lower_impulse = @max(old_impulse + impulse, 0.0);
+            impulse = revolute.lower_impulse - old_impulse;
+            ang_vel_a -= inv_inertia_a * impulse;
+            ang_vel_b += inv_inertia_b * impulse;
+        }
+
+        // Upper limit: signs flipped so C stays positive when satisfied.
+        {
+            const limit_error: f32 = revolute.upper_angle - joint_angle;
+            var bias: f32 = 0.0;
+            var mass_scale: f32 = 1.0;
+            var impulse_scale: f32 = 0.0;
+            if (limit_error > 0.0) {
+                bias = limit_error * inv_h;
+            } else if (use_bias) {
+                bias = joint.constraint_softness.bias_rate * limit_error;
+                mass_scale = joint.constraint_softness.mass_scale;
+                impulse_scale = joint.constraint_softness.impulse_scale;
+            }
+            const c_dot: f32 = ang_vel_a - ang_vel_b; // flipped
+            const old_impulse: f32 = revolute.upper_impulse;
+            var impulse: f32 =
+                -mass_scale * revolute.axial_mass * (c_dot + bias) - impulse_scale * old_impulse;
+            revolute.upper_impulse = @max(old_impulse + impulse, 0.0);
+            impulse = revolute.upper_impulse - old_impulse;
+            ang_vel_a += inv_inertia_a * impulse; // flipped
+            ang_vel_b -= inv_inertia_b * impulse;
+        }
+    }
+
+    // Point-to-point: hold the two anchors coincident (this is the actual pin). Solved as
+    // a 2D linear constraint via the point-to-point effective-mass matrix.
+    {
+        const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, revolute.frame_a.p);
+        const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, revolute.frame_b.p);
+        const point_vel_a: Vec2 = vel_a + crossSV2(ang_vel_a, anchor_a);
+        const point_vel_b: Vec2 = vel_b + crossSV2(ang_vel_b, anchor_b);
+        const constraint_velocity: Vec2 = point_vel_b - point_vel_a;
+
+        // In the biased pass, push the anchors back together softly; relax passes don't.
+        var bias: Vec2 = .{ 0, 0 };
+        var mass_scale: f32 = 1.0;
+        var impulse_scale: f32 = 0.0;
+        if (use_bias) {
+            const relative_drift: Vec2 = state_b.delta_position - state_a.delta_position;
+            const separation: Vec2 = relative_drift + (anchor_b - anchor_a) + revolute.delta_center;
+            bias = separation * splat2(joint.constraint_softness.bias_rate);
+            mass_scale = joint.constraint_softness.mass_scale;
+            impulse_scale = joint.constraint_softness.impulse_scale;
+        }
+
+        const effective_mass: Mat22 =
+            pointToPointMatrix(inv_mass_a, inv_mass_b, inv_inertia_a, inv_inertia_b, anchor_a, anchor_b);
+        const unscaled_impulse: Vec2 = solve22(effective_mass, constraint_velocity + bias);
+        const impulse: Vec2 = .{
+            -mass_scale * unscaled_impulse[0] - impulse_scale * revolute.linear_impulse[0],
+            -mass_scale * unscaled_impulse[1] - impulse_scale * revolute.linear_impulse[1],
+        };
+        revolute.linear_impulse = revolute.linear_impulse + impulse;
+
+        vel_a = mulSub2(vel_a, inv_mass_a, impulse);
+        ang_vel_a -= inv_inertia_a * cross2(anchor_a, impulse);
+        vel_b = mulAdd2(vel_b, inv_mass_b, impulse);
+        ang_vel_b += inv_inertia_b * cross2(anchor_b, impulse);
+    }
+
+    writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
+    writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
+}
+
+fn solveWeldJoint(
+    joint: *Joint,
+    state: []const BodyState,
+    motion: []Motion,
+    use_bias: bool,
+) void {
+    const inv_mass_a: f32 = joint.inv_mass_a;
+    const inv_mass_b: f32 = joint.inv_mass_b;
+    const inv_inertia_a: f32 = joint.inv_inertia_a;
+    const inv_inertia_b: f32 = joint.inv_inertia_b;
+    const weld: *WeldJoint = &joint.data.weld;
+
+    const state_a: BodyState = state[joint.body_a];
+    const state_b: BodyState = state[joint.body_b];
+    var vel_a: Vec2 = motion[joint.body_a].linear_velocity;
+    var ang_vel_a: f32 = motion[joint.body_a].angular_velocity;
+    var vel_b: Vec2 = motion[joint.body_b].linear_velocity;
+    var ang_vel_b: f32 = motion[joint.body_b].angular_velocity;
+
+    // Angular constraint (scalar).
+    {
+        const qa: Rot2 = mulRot2(state_a.delta_rotation, weld.frame_a.q);
+        const qb: Rot2 = mulRot2(state_b.delta_rotation, weld.frame_b.q);
+        const relative_q: Rot2 = invMulRot2(qa, qb);
+        const joint_angle: f32 = relative_q.angle();
+
+        var bias: f32 = 0.0;
+        var mass_scale: f32 = 1.0;
+        var impulse_scale: f32 = 0.0;
+        if (use_bias or weld.angular_hertz > 0.0) {
+            bias = weld.angular_spring.bias_rate * joint_angle;
+            mass_scale = weld.angular_spring.mass_scale;
+            impulse_scale = weld.angular_spring.impulse_scale;
+        }
+        const c_dot: f32 = ang_vel_b - ang_vel_a;
+        const impulse: f32 =
+            -mass_scale * weld.axial_mass * (c_dot + bias) - impulse_scale * weld.angular_impulse;
+        weld.angular_impulse += impulse;
+        ang_vel_a -= inv_inertia_a * impulse;
+        ang_vel_b += inv_inertia_b * impulse;
+    }
+
+    // Linear constraint (2x2).
+    {
+        const anchor_a: Vec2 = rotateVec2(state_a.delta_rotation, weld.frame_a.p);
+        const anchor_b: Vec2 = rotateVec2(state_b.delta_rotation, weld.frame_b.p);
+
+        var bias: Vec2 = .{ 0, 0 };
+        var mass_scale: f32 = 1.0;
+        var impulse_scale: f32 = 0.0;
+        if (use_bias or weld.linear_hertz > 0.0) {
+            const c: Vec2 = (state_b.delta_position - state_a.delta_position) +
+                (anchor_b - anchor_a) + weld.delta_center;
+            bias = c * splat2(weld.linear_spring.bias_rate);
+            mass_scale = weld.linear_spring.mass_scale;
+            impulse_scale = weld.linear_spring.impulse_scale;
+        }
+        const c_dot: Vec2 = (vel_b + crossSV2(ang_vel_b, anchor_b)) - (vel_a + crossSV2(ang_vel_a, anchor_a));
+        const k: Mat22 =
+            pointToPointMatrix(inv_mass_a, inv_mass_b, inv_inertia_a, inv_inertia_b, anchor_a, anchor_b);
+        const b: Vec2 = solve22(k, c_dot + bias);
+        const impulse: Vec2 = .{
+            -mass_scale * b[0] - impulse_scale * weld.linear_impulse[0],
+            -mass_scale * b[1] - impulse_scale * weld.linear_impulse[1],
+        };
+        weld.linear_impulse = weld.linear_impulse + impulse;
+
+        vel_a = mulSub2(vel_a, inv_mass_a, impulse);
+        ang_vel_a -= inv_inertia_a * cross2(anchor_a, impulse);
+        vel_b = mulAdd2(vel_b, inv_mass_b, impulse);
+        ang_vel_b += inv_inertia_b * cross2(anchor_b, impulse);
+    }
 
     writeBackVelocity(state, motion, joint.body_a, vel_a, ang_vel_a);
     writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
@@ -7418,6 +7407,54 @@ fn solveWheelJoint(
     writeBackVelocity(state, motion, joint.body_b, vel_b, ang_vel_b);
 }
 
+/// Solve a joint for one sub-step. box2d: b2SolveJoint  joint.c:1377
+pub fn solveJoint(
+    joint: *Joint,
+    state: []const BodyState,
+    motion: []Motion,
+    h: f32,
+    inv_h: f32,
+    use_bias: bool,
+) void {
+    switch (joint.data) {
+        .distance => solveDistanceJoint(joint, state, motion, h, inv_h, use_bias),
+        .motor => solveMotorJoint(joint, state, motion, h),
+        .prismatic => solvePrismaticJoint(joint, state, motion, h, inv_h, use_bias),
+        .pulley => solvePulleyJoint(joint, state, motion, use_bias),
+        .revolute => solveRevoluteJoint(joint, state, motion, h, inv_h, use_bias),
+        .weld => solveWeldJoint(joint, state, motion, use_bias),
+        .wheel => solveWheelJoint(joint, state, motion, h, inv_h, use_bias),
+        .filter => {},
+    }
+}
+
+// -- Revolute joint --------------------------------------------------------------
+
+// -- Distance joint --------------------------------------------------------------
+
+// -- Pulley joint ----------------------------------------------------------------
+
+// -- Weld joint ------------------------------------------------------------------
+
+// -- Motor joint -----------------------------------------------------------------
+//
+// A pure actuator: it has no biased (position-correcting) pass. It drives the relative
+// motion of the two bodies toward target velocities (capped by max force/torque) and
+// optionally applies soft springs toward the target pose.
+
+// -- Prismatic joint -------------------------------------------------------------
+//
+// B slides along an axis fixed in A. The free axial direction carries an optional
+// spring / motor / limits; the two locked directions (perpendicular translation and
+// relative rotation) are enforced by a 2x2 block. `axial_arm_*` and `perp_arm_*` are
+// the moment arms of the axial and perpendicular forces about each body's center.
+
+// -- Wheel joint -----------------------------------------------------------------
+//
+// A sprung slider that also lets B spin freely: a perpendicular constraint keeps the
+// anchor on the axis line, an optional spring acts along the axis, an optional motor
+// drives the relative spin, and optional limits bound the axial travel.
+
 // ================================================================================
 // Islands & sleeping
 //
@@ -7569,7 +7606,7 @@ const Visitor = struct {
 /// (sorted by shape index) into begin/end events. `current` flips each pass.
 const Sensor = struct {
     shape: ShapeIndex,
-    overlaps: [2]std.ArrayListUnmanaged(Visitor) = .{ .empty, .empty },
+    overlaps: [2]ArrayListUnmanaged(Visitor) = .{ .empty, .empty },
     current: u1 = 0,
 
     fn deinit(self: *Sensor, gpa: Allocator) void {
@@ -7647,13 +7684,13 @@ pub const JointEvent = struct {
 /// start of each step; the two end-touch streams are double-buffered and swapped so that
 /// end events generated by inter-step destruction survive until the next read.
 pub const EventBuffers = struct {
-    contact_begin: std.ArrayListUnmanaged(ContactBeginTouchEvent) = .empty,
-    contact_hit: std.ArrayListUnmanaged(ContactHitEvent) = .empty,
-    sensor_begin: std.ArrayListUnmanaged(SensorBeginTouchEvent) = .empty,
-    body_move: std.ArrayListUnmanaged(BodyMoveEvent) = .empty,
-    joint_events: std.ArrayListUnmanaged(JointEvent) = .empty,
-    contact_end: [2]std.ArrayListUnmanaged(ContactEndTouchEvent) = .{ .empty, .empty },
-    sensor_end: [2]std.ArrayListUnmanaged(SensorEndTouchEvent) = .{ .empty, .empty },
+    contact_begin: ArrayListUnmanaged(ContactBeginTouchEvent) = .empty,
+    contact_hit: ArrayListUnmanaged(ContactHitEvent) = .empty,
+    sensor_begin: ArrayListUnmanaged(SensorBeginTouchEvent) = .empty,
+    body_move: ArrayListUnmanaged(BodyMoveEvent) = .empty,
+    joint_events: ArrayListUnmanaged(JointEvent) = .empty,
+    contact_end: [2]ArrayListUnmanaged(ContactEndTouchEvent) = .{ .empty, .empty },
+    sensor_end: [2]ArrayListUnmanaged(SensorEndTouchEvent) = .{ .empty, .empty },
     end_current: u1 = 0,
 
     fn deinit(self: *EventBuffers, gpa: Allocator) void {
@@ -7691,11 +7728,11 @@ pub const EventBuffers = struct {
 
     /// The end-touch buffer currently being written to (during the step and during
     /// inter-step destruction).
-    fn contactEnd(self: *EventBuffers) *std.ArrayListUnmanaged(ContactEndTouchEvent) {
+    fn contactEnd(self: *EventBuffers) *ArrayListUnmanaged(ContactEndTouchEvent) {
         return &self.contact_end[self.end_current];
     }
 
-    fn sensorEnd(self: *EventBuffers) *std.ArrayListUnmanaged(SensorEndTouchEvent) {
+    fn sensorEnd(self: *EventBuffers) *ArrayListUnmanaged(SensorEndTouchEvent) {
         return &self.sensor_end[self.end_current];
     }
 };
@@ -7712,32 +7749,6 @@ pub const EventBuffers = struct {
 // constraints can reference them without a null branch.
 // box2d: b2World + the body/shape/contact/joint lifecycle across {body,shape,contact,joint}.c
 // ================================================================================
-
-/// One shape instance in the world: its geometry, the body it rides on, surface/filter
-/// properties, the cached broad-phase bounds and proxy, and its link in the owning
-/// body's intrusive shape list. The shape's pool slot index is its ShapeIndex.
-/// box2d: b2Shape  shape.h
-pub const Shape = struct {
-    geom: Geometry,
-    body: BodyIndex,
-    material: SurfaceMaterial = .{},
-    filter: Filter = .{},
-    density: f32 = 1.0,
-    aabb: Aabb2 = .{ .lower = .{ 0, 0 }, .upper = .{ 0, 0 } }, // tight world AABB
-    fat_aabb: Aabb2 = .{ .lower = .{ 0, 0 }, .upper = .{ 0, 0 } }, // enlarged AABB stored in the tree
-    local_centroid: Vec2 = .{ 0, 0 }, // centroid in the body-origin frame (for CCD)
-    aabb_margin: f32 = 0, // adaptive broad-phase margin, computed at creation
-    proxy_key: u32 = null_index, // broad-phase proxy key ((proxyId << 2) | bodyType)
-    next_shape: u32 = null_index, // next shape in the owning body's list
-    prev_shape: u32 = null_index, // previous shape (doubly-linked, for O(1) removal)
-    sensor_index: u32 = null_index, // index into world.sensors, or null_index if solid
-    enable_contact_events: bool = true,
-    enable_sensor_events: bool = true,
-    enable_pre_solve: bool = false,
-    enable_custom_filtering: bool = false,
-    enable_hit_events: bool = false,
-    user_data: u64 = 0,
-};
 
 /// Stable-index pools. A pool slot index doubles as the entity's stable id, which the
 /// intrusive edge lists (contacts/joints) and the broad-phase proxies refer to.
@@ -7763,14 +7774,14 @@ const ContactPool = struct {
     data: []Contact,
     /// Ids returned by `free`, available for reuse (box2d: b2IdPool.freeArray). Its capacity is
     /// held >= `data.len`, so `free` never allocates - you cannot free more ids than slots exist.
-    free_list: std.ArrayListUnmanaged(u32) = .empty,
+    free_list: ArrayListUnmanaged(u32) = .empty,
     /// High-water mark: the next never-before-used id (box2d: b2IdPool.nextIndex).
     next_index: u32 = 0,
 
     fn init(gpa: Allocator, capacity: u32) Allocator.Error!ContactPool {
         const data: []Contact = try gpa.alloc(Contact, capacity);
         errdefer gpa.free(data);
-        var free_list: std.ArrayListUnmanaged(u32) = .empty;
+        var free_list: ArrayListUnmanaged(u32) = .empty;
         try free_list.ensureTotalCapacity(gpa, capacity);
         return .{ .data = data, .free_list = free_list };
     }
@@ -7849,8 +7860,8 @@ const graph_dynamic_color_count: u32 = graph_color_count - 4; // dynamic-dynamic
 const ConstraintGraph = struct {
     body_bits: []u64, // graph_color_count * words_per_color, indexed [color][body word]
     words_per_color: u32,
-    contact_color_begin: [graph_color_count + 1]u32 = std.mem.zeroes([graph_color_count + 1]u32),
-    joint_color_begin: [graph_color_count + 1]u32 = std.mem.zeroes([graph_color_count + 1]u32),
+    contact_color_begin: [graph_color_count + 1]u32 = zeroes([graph_color_count + 1]u32),
+    joint_color_begin: [graph_color_count + 1]u32 = zeroes([graph_color_count + 1]u32),
 
     fn clearBits(self: *ConstraintGraph) void {
         @memset(self.body_bits, 0);
@@ -7945,13 +7956,13 @@ pub const World = struct {
     shapes: Shapes,
     contacts: ContactPool,
     joints: Joints,
-    contact_ids: std.ArrayListUnmanaged(u32) = .empty, // dense list of live contact ids
-    joint_ids: std.ArrayListUnmanaged(u32) = .empty, // dense list of live joint ids
-    sensors: std.ArrayListUnmanaged(Sensor) = .empty,
+    contact_ids: ArrayListUnmanaged(u32) = .empty, // dense list of live contact ids
+    joint_ids: ArrayListUnmanaged(u32) = .empty, // dense list of live joint ids
+    sensors: ArrayListUnmanaged(Sensor) = .empty,
 
     /// Awake movable bodies (dynamic and kinematic). The solver and integration walk
     /// this list; everything else is left untouched until something wakes it.
-    active: std.ArrayListUnmanaged(BodyIndex) = .empty,
+    active: ArrayListUnmanaged(BodyIndex) = .empty,
 
     broadphase: BroadPhase = .{},
 
@@ -8039,12 +8050,12 @@ pub const World = struct {
 
         // Reserve the active list up front so waking a body (which may happen from
         // void contexts like destroyBody) never needs to allocate.
-        var active: std.ArrayListUnmanaged(BodyIndex) = .empty;
+        var active: ArrayListUnmanaged(BodyIndex) = .empty;
         try active.ensureTotalCapacity(gpa, capacity);
         errdefer active.deinit(gpa);
 
         // Constraint-graph coloring bitsets: one body-usage word array per color.
-        const words_per_color: u32 = (capacity + 63) / 64;
+        const words_per_color: u32 = @divCeil(capacity, 64);
         const body_bits: []u64 = try gpa.alloc(u64, graph_color_count * words_per_color);
         errdefer gpa.free(body_bits);
 
@@ -8118,7 +8129,7 @@ pub const World = struct {
         world.body_sleep = try regrowScratch(bool, gpa, world.body_sleep, new_cap);
         try world.active.ensureTotalCapacity(gpa, new_cap);
 
-        const new_wpc: u32 = (new_cap + 63) / 64;
+        const new_wpc: u32 = @divCeil(new_cap, 64);
         const new_bits: []u64 = try gpa.alloc(u64, graph_color_count * new_wpc);
         gpa.free(world.graph.body_bits);
         world.graph.body_bits = new_bits;
@@ -8751,7 +8762,7 @@ const PairQueryContext = struct {
     query_key: u32, // the moved proxy's key
     query_shape: ShapeIndex, // the moved proxy's shape index
     query_tree_type: MotionType, // which tree is currently being queried
-    pairs: *std.ArrayListUnmanaged([2]ShapeIndex),
+    pairs: *ArrayListUnmanaged([2]ShapeIndex),
     oom: bool = false,
 };
 
@@ -8851,7 +8862,7 @@ fn updateBroadPhasePairs(world: *World) !void {
         return;
     }
 
-    var pairs: std.ArrayListUnmanaged([2]ShapeIndex) = .empty;
+    var pairs: ArrayListUnmanaged([2]ShapeIndex) = .empty;
     defer pairs.deinit(world.allocator);
 
     var ctx: PairQueryContext = .{
@@ -9077,7 +9088,7 @@ fn destroyJointInternal(world: *World, joint_id: u32) void {
         world.joints.data[world.joint_ids.items[removed]].local_index = removed;
     }
 
-    const handle: JointHandle = JointHandle.pack(@intCast(joint_id), world.joints.cycle[joint_id]);
+    const handle: JointHandle = .pack(@intCast(joint_id), world.joints.cycle[joint_id]);
     _ = handle.destroy(&world.joints);
 }
 
@@ -9125,7 +9136,7 @@ pub fn destroyBody(world: *World, body_handle: BodyHandle) void {
     var shape_id: u32 = world.bodies.data[body_index].head_shape;
     while (shape_id != null_index) {
         const next: u32 = world.shapes.data[shape_id].next_shape;
-        const shape_handle: ShapeHandle = ShapeHandle.pack(@intCast(shape_id), world.shapes.cycle[shape_id]);
+        const shape_handle: ShapeHandle = .pack(@intCast(shape_id), world.shapes.cycle[shape_id]);
         destroyShape(world, shape_handle);
         shape_id = next;
     }
@@ -9295,7 +9306,7 @@ fn solveContinuous(world: *World, body_index: BodyIndex) void {
         const box1: Aabb2 = shape.aabb;
         const world_xf2: Transform2 = .{ .q = xf2.q, .p = xf2.p + base };
         const box2: Aabb2 = computeShapeAabb(shape.geom, world_xf2);
-        const swept: Aabb2 = Aabb2.combine(box1, box2);
+        const swept: Aabb2 = .combine(box1, box2);
 
         bp.trees[@backingInt(MotionType.static)]
             .query(swept, default_mask_bits, continuousQueryCallback, &ctx);
@@ -9388,6 +9399,30 @@ fn visitorLessThan(_: void, a: Visitor, b: Visitor) bool {
     return a.shape < b.shape;
 }
 
+/// Queue a sensor end-touch event into the double-buffered end-event list.
+fn emitSensorEnd(
+    world: *World,
+    sensor_shape: ShapeIndex,
+    visitor_shape: ShapeIndex,
+) void {
+    world.events.sensorEnd().append(world.allocator, .{
+        .sensor_shape = sensor_shape,
+        .visitor_shape = visitor_shape,
+    }) catch assertUnreachable(@src(), "OOM", .{});
+}
+
+/// Queue a sensor begin-touch event (best effort; dropped on allocation failure).
+fn emitSensorBegin(
+    world: *World,
+    sensor_shape: ShapeIndex,
+    visitor_shape: ShapeIndex,
+) void {
+    world.events.sensor_begin.append(world.allocator, .{
+        .sensor_shape = sensor_shape,
+        .visitor_shape = visitor_shape,
+    }) catch assertUnreachable(@src(), "OOM", .{});
+}
+
 /// Recompute every sensor's overlap set and emit begin/end events for the changes since
 /// the previous pass. box2d: b2SensorTask + b2OverlapSensors  sensor.c
 fn overlapSensors(world: *World) !void {
@@ -9425,7 +9460,7 @@ fn overlapSensors(world: *World) !void {
         }
 
         // Sort the current set and drop any duplicate shape indices.
-        std.mem.sort(Visitor, sensor.overlaps[cur].items, {}, visitorLessThan);
+        sortSlice(Visitor, sensor.overlaps[cur].items, {}, visitorLessThan);
         {
             const items: []Visitor = sensor.overlaps[cur].items;
             var unique: usize = 0;
@@ -9476,30 +9511,6 @@ fn overlapSensors(world: *World) !void {
     }
 }
 
-/// Queue a sensor begin-touch event (best effort; dropped on allocation failure).
-fn emitSensorBegin(
-    world: *World,
-    sensor_shape: ShapeIndex,
-    visitor_shape: ShapeIndex,
-) void {
-    world.events.sensor_begin.append(world.allocator, .{
-        .sensor_shape = sensor_shape,
-        .visitor_shape = visitor_shape,
-    }) catch assertUnreachable(@src(), "OOM", .{});
-}
-
-/// Queue a sensor end-touch event into the double-buffered end-event list.
-fn emitSensorEnd(
-    world: *World,
-    sensor_shape: ShapeIndex,
-    visitor_shape: ShapeIndex,
-) void {
-    world.events.sensorEnd().append(world.allocator, .{
-        .sensor_shape = sensor_shape,
-        .visitor_shape = visitor_shape,
-    }) catch assertUnreachable(@src(), "OOM", .{});
-}
-
 // -- The step --------------------------------------------------------------------
 // One simulation step runs a flat, single-threaded version of Box2D's TGS-Soft solve:
 // find new contacts, run the narrow phase, wake islands touched by awake bodies, prepare
@@ -9533,7 +9544,7 @@ fn colorConstraintGraph(
     {
         const n: usize = active_joints.len;
         const joint_color: []u8 = try gpa.alloc(u8, n);
-        var counts: [graph_color_count]u32 = std.mem.zeroes([graph_color_count]u32);
+        var counts: [graph_color_count]u32 = zeroes([graph_color_count]u32);
         for (active_joints, 0..) |joint_id, i| {
             const j: *const Joint = &world.joints.data[joint_id];
             const color: u32 = graph.assign(
@@ -9545,7 +9556,7 @@ fn colorConstraintGraph(
             joint_color[i] = @intCast(color);
             counts[color] += 1;
         }
-        var begin: [graph_color_count + 1]u32 = std.mem.zeroes([graph_color_count + 1]u32);
+        var begin: [graph_color_count + 1]u32 = zeroes([graph_color_count + 1]u32);
         var acc: u32 = 0;
         for (0..graph_color_count) |c| {
             begin[c] = acc;
@@ -9567,7 +9578,7 @@ fn colorConstraintGraph(
     {
         const n: usize = constraints.len;
         const contact_color: []u8 = try gpa.alloc(u8, n);
-        var counts: [graph_color_count]u32 = std.mem.zeroes([graph_color_count]u32);
+        var counts: [graph_color_count]u32 = zeroes([graph_color_count]u32);
         for (constraints, 0..) |*con, i| {
             const color: u32 = graph.assign(
                 con.body_a,
@@ -9578,7 +9589,7 @@ fn colorConstraintGraph(
             contact_color[i] = @intCast(color);
             counts[color] += 1;
         }
-        var begin: [graph_color_count + 1]u32 = std.mem.zeroes([graph_color_count + 1]u32);
+        var begin: [graph_color_count + 1]u32 = zeroes([graph_color_count + 1]u32);
         var acc: u32 = 0;
         for (0..graph_color_count) |c| {
             begin[c] = acc;
@@ -9597,6 +9608,57 @@ fn colorConstraintGraph(
     }
 }
 
+/// Reaction force this joint applied to body B last step (N), in world space. Useful for
+/// breakable joints. box2d: b2Joint_GetConstraintForce dispatch
+pub fn getConstraintForce(world: *const World, joint: JointHandle) Vec2 {
+    const j: *const Joint = &world.joints.data[joint.index()];
+    const inv_h: f32 = world.inv_h;
+    switch (j.data) {
+        .revolute => |rev| return rev.linear_impulse * splat2(inv_h),
+        .weld => |weld| return weld.linear_impulse * splat2(inv_h),
+        .motor => |m| return (m.linear_velocity_impulse + m.linear_spring_impulse) * splat2(inv_h),
+        .filter => return .{ 0, 0 },
+        .pulley => |pl| return pl.u_b * splat2(-pl.ratio * pl.impulse * inv_h),
+        .distance => |d| {
+            const pa: Vec2 = transformPoint2(world.bodies.data[j.body_a].transform, j.local_frame_a.p);
+            const pb: Vec2 = transformPoint2(world.bodies.data[j.body_b].transform, j.local_frame_b.p);
+            const axis: Vec2 = normalizeOrZero2(pb - pa);
+            const force: f32 = (d.impulse + d.lower_impulse - d.upper_impulse + d.motor_impulse) * inv_h;
+            return axis * splat2(force);
+        },
+        .prismatic => |pr| {
+            const axis_local: Vec2 = rotateVec2(j.local_frame_a.q, .{ 1, 0 });
+            const axis: Vec2 = rotateVec2(world.bodies.data[j.body_a].transform.q, axis_local);
+            const perp: Vec2 = leftPerp2(axis);
+            const perp_force: f32 = inv_h * pr.impulse[0];
+            const axial_force: f32 = inv_h * (pr.motor_impulse + pr.lower_impulse - pr.upper_impulse);
+            return perp * splat2(perp_force) + axis * splat2(axial_force);
+        },
+        .wheel => |wh| {
+            const axis_local: Vec2 = rotateVec2(j.local_frame_a.q, .{ 1, 0 });
+            const axis: Vec2 = rotateVec2(world.bodies.data[j.body_a].transform.q, axis_local);
+            const perp: Vec2 = leftPerp2(axis);
+            const perp_force: f32 = inv_h * wh.perp_impulse;
+            const axial_force: f32 = inv_h * (wh.spring_impulse + wh.lower_impulse - wh.upper_impulse);
+            return perp * splat2(perp_force) + axis * splat2(axial_force);
+        },
+    }
+}
+
+/// Reaction torque this joint applied last step (N*m). box2d: b2Joint_GetConstraintTorque dispatch
+pub fn getConstraintTorque(world: *const World, joint: JointHandle) f32 {
+    const j: *const Joint = &world.joints.data[joint.index()];
+    const inv_h: f32 = world.inv_h;
+    return switch (j.data) {
+        .revolute => |rev| inv_h * (rev.motor_impulse + rev.lower_impulse - rev.upper_impulse),
+        .prismatic => |pr| inv_h * pr.impulse[1],
+        .wheel => |wh| inv_h * wh.motor_impulse,
+        .weld => |weld| inv_h * weld.angular_impulse,
+        .motor => |m| inv_h * (m.angular_velocity_impulse + m.angular_spring_impulse),
+        .distance, .filter, .pulley => 0,
+    };
+}
+
 /// Queue a joint event for every active joint whose final-substep reaction force or torque
 /// reached its threshold. box2d checks the threshold inside each bias sub-step and flags the
 /// joint in a bitset; single-threaded here, we evaluate the settled reaction once after the
@@ -9610,7 +9672,7 @@ fn emitJointEvents(world: *World, active_joints: []const u32) void {
         if (j.force_threshold == float_max and j.torque_threshold == float_max) {
             continue;
         }
-        const handle: JointHandle = JointHandle.pack(@intCast(joint_id), world.joints.cycle[joint_id]);
+        const handle: JointHandle = .pack(@intCast(joint_id), world.joints.cycle[joint_id]);
         const force: f32 = length2(getConstraintForce(world, handle));
         const torque: f32 = @abs(getConstraintTorque(world, handle));
         if (force >= j.force_threshold or torque >= j.torque_threshold) {
@@ -9631,7 +9693,7 @@ fn emitJointEvents(world: *World, active_joints: []const u32) void {
 fn narrowPhase(world: *World) !void {
     // `disjoint` is consumed at the end of this call, so it lives in the step arena.
     const scratch: Allocator = world.step_arena.allocator();
-    var disjoint: std.ArrayListUnmanaged(u32) = .empty;
+    var disjoint: ArrayListUnmanaged(u32) = .empty;
 
     for (world.contact_ids.items) |contact_id| {
         const contact: *Contact = &world.contacts.data[contact_id];
@@ -9896,6 +9958,560 @@ fn sleepIslands(world: *World) void {
     }
 }
 
+// -- Wide (SIMD) contact solver --------------------------------------------------
+//
+// Each non-overflow graph color is solved four contacts at a time using @Vector(4, f32)
+// lanes (which the backend lowers to wasm128 / SSE). Because the coloring guarantees no
+// dynamic body appears twice in a color, the four contacts in a block touch eight distinct
+// dynamic bodies, so scattering the solved velocities back never races. Inactive lanes (a
+// color whose count is not a multiple of four) and one-point manifolds carry zeroed masses,
+// so they compute zero impulse and contribute nothing. This is a lane-parallel transcription
+// of the scalar contact kernels above; the overflow color stays scalar.
+// box2d: the SIMD half of contact_solver.c (b2*ContactsTask)
+const simd_width: u32 = 4;
+
+const FloatW = @Vector(simd_width, f32);
+
+/// A 2D vector with each component spread across the SIMD lanes.
+const Vec2W = struct { x: FloatW, y: FloatW };
+
+/// One block of up to four contacts in struct-of-arrays form. box2d: b2ContactConstraintWide
+const WideConstraint = struct {
+    index_a: [simd_width]u32, // body indices for gather/scatter (slot 0 for padding)
+    index_b: [simd_width]u32,
+    source: [simd_width]u32, // scalar-constraint index per lane (null_index if padding)
+    inv_mass_a: FloatW,
+    inv_mass_b: FloatW,
+    inv_inertia_a: FloatW,
+    inv_inertia_b: FloatW,
+    normal: Vec2W,
+    friction: FloatW,
+    tangent_speed: FloatW,
+    rolling_resistance: FloatW,
+    rolling_mass: FloatW,
+    rolling_impulse: FloatW,
+    bias_rate: FloatW,
+    mass_scale: FloatW,
+    impulse_scale: FloatW,
+    // Two manifold points (point 2 zeroed for one-point manifolds).
+    anchor_a1: Vec2W,
+    anchor_b1: Vec2W,
+    base_sep1: FloatW,
+    normal_mass1: FloatW,
+    tangent_mass1: FloatW,
+    normal_impulse1: FloatW,
+    tangent_impulse1: FloatW,
+    total_normal_impulse1: FloatW,
+    rel_vel1: FloatW,
+    anchor_a2: Vec2W,
+    anchor_b2: Vec2W,
+    base_sep2: FloatW,
+    normal_mass2: FloatW,
+    tangent_mass2: FloatW,
+    normal_impulse2: FloatW,
+    tangent_impulse2: FloatW,
+    total_normal_impulse2: FloatW,
+    rel_vel2: FloatW,
+    restitution: FloatW,
+};
+
+/// Pack the non-overflow color ranges of the (color-sorted) scalar constraints into wide
+/// blocks of four. Padding lanes and absent second points are left zeroed.
+fn buildWideBlocks(
+    world: *World,
+    constraints: []const ContactConstraint,
+    blocks: *ArrayListUnmanaged(WideConstraint),
+) !void {
+    // Wide blocks are step-scoped scratch: allocate from the per-step arena.
+    const gpa: Allocator = world.step_arena.allocator();
+    const graph: *const ConstraintGraph = &world.graph;
+    var color: u32 = 0;
+    while (color < graph_overflow_index) : (color += 1) {
+        const begin: u32 = graph.contact_color_begin[color];
+        const end: u32 = graph.contact_color_begin[color + 1];
+        var base: u32 = begin;
+        while (base < end) : (base += simd_width) {
+            const lanes: u32 = @min(simd_width, end - base);
+            var wc: WideConstraint = zeroes(WideConstraint);
+            wc.source = .{ null_index, null_index, null_index, null_index };
+            inline for (0..simd_width) |l| {
+                if (l < lanes) {
+                    const idx: usize = @as(usize, base) + l;
+                    const con: *const ContactConstraint = &constraints[idx];
+                    wc.index_a[l] = con.body_a;
+                    wc.index_b[l] = con.body_b;
+                    wc.source[l] = @intCast(idx);
+                    wc.inv_mass_a[l] = con.inv_mass_a;
+                    wc.inv_mass_b[l] = con.inv_mass_b;
+                    wc.inv_inertia_a[l] = con.inv_inertia_a;
+                    wc.inv_inertia_b[l] = con.inv_inertia_b;
+                    wc.normal.x[l] = con.normal[0];
+                    wc.normal.y[l] = con.normal[1];
+                    wc.friction[l] = con.friction;
+                    wc.tangent_speed[l] = con.tangent_speed;
+                    wc.rolling_resistance[l] = con.rolling_resistance;
+                    wc.rolling_mass[l] = con.rolling_mass;
+                    wc.rolling_impulse[l] = con.rolling_impulse;
+                    wc.bias_rate[l] = con.softness.bias_rate;
+                    wc.mass_scale[l] = con.softness.mass_scale;
+                    wc.impulse_scale[l] = con.softness.impulse_scale;
+                    wc.restitution[l] = con.restitution;
+                    const p1: ContactConstraintPoint = con.points[0];
+                    wc.anchor_a1.x[l] = p1.anchor_a[0];
+                    wc.anchor_a1.y[l] = p1.anchor_a[1];
+                    wc.anchor_b1.x[l] = p1.anchor_b[0];
+                    wc.anchor_b1.y[l] = p1.anchor_b[1];
+                    wc.base_sep1[l] = p1.base_separation;
+                    wc.normal_mass1[l] = p1.normal_mass;
+                    wc.tangent_mass1[l] = p1.tangent_mass;
+                    wc.normal_impulse1[l] = p1.normal_impulse;
+                    wc.tangent_impulse1[l] = p1.tangent_impulse;
+                    wc.total_normal_impulse1[l] = p1.total_normal_impulse;
+                    wc.rel_vel1[l] = p1.relative_velocity;
+                    if (con.count == 2) {
+                        const p2: ContactConstraintPoint = con.points[1];
+                        wc.anchor_a2.x[l] = p2.anchor_a[0];
+                        wc.anchor_a2.y[l] = p2.anchor_a[1];
+                        wc.anchor_b2.x[l] = p2.anchor_b[0];
+                        wc.anchor_b2.y[l] = p2.anchor_b[1];
+                        wc.base_sep2[l] = p2.base_separation;
+                        wc.normal_mass2[l] = p2.normal_mass;
+                        wc.tangent_mass2[l] = p2.tangent_mass;
+                        wc.normal_impulse2[l] = p2.normal_impulse;
+                        wc.tangent_impulse2[l] = p2.tangent_impulse;
+                        wc.total_normal_impulse2[l] = p2.total_normal_impulse;
+                        wc.rel_vel2[l] = p2.relative_velocity;
+                    }
+                }
+            }
+            try blocks.append(gpa, wc);
+        }
+    }
+}
+
+/// Gathered per-lane body velocity and the position deltas the solve reads.
+const BodyStateW = struct {
+    vx: FloatW,
+    vy: FloatW,
+    w: FloatW,
+    dpx: FloatW,
+    dpy: FloatW,
+    dqc: FloatW,
+    dqs: FloatW,
+};
+
+inline fn gatherBodies(
+    motion: []const Motion,
+    state: []const BodyState,
+    indices: [simd_width]u32,
+) BodyStateW {
+    var r: BodyStateW = undefined;
+    inline for (0..simd_width) |l| {
+        const i: u32 = indices[l];
+        const m: Motion = motion[i];
+        const s: BodyState = state[i];
+        r.vx[l] = m.linear_velocity[0];
+        r.vy[l] = m.linear_velocity[1];
+        r.w[l] = m.angular_velocity;
+        r.dpx[l] = s.delta_position[0];
+        r.dpy[l] = s.delta_position[1];
+        r.dqc[l] = s.delta_rotation.cosine;
+        r.dqs[l] = s.delta_rotation.sine;
+    }
+    return r;
+}
+
+/// Scalar cross product per lane: cross(a, b) = a.x*b.y - a.y*b.x.
+inline fn crossW(ax: FloatW, ay: FloatW, bx: FloatW, by: FloatW) FloatW {
+    return ax * by - ay * bx;
+}
+
+/// Write solved velocities back, per lane, only for dynamic bodies (matching
+/// writeBackVelocity). Static/kinematic/padding lanes are skipped, so duplicate static
+/// bodies across lanes are harmless.
+inline fn scatterBodies(
+    state: []const BodyState,
+    motion: []Motion,
+    indices: [simd_width]u32,
+    vx: FloatW,
+    vy: FloatW,
+    w: FloatW,
+) void {
+    inline for (0..simd_width) |l| {
+        const i: u32 = indices[l];
+        if (state[i].flags.dynamic) {
+            motion[i].linear_velocity = .{ vx[l], vy[l] };
+            motion[i].angular_velocity = w[l];
+        }
+    }
+}
+
+/// Re-apply stored impulses each sub-step, four contacts wide. box2d: b2WarmStartContactsTask
+fn warmStartWide(
+    blocks: []WideConstraint,
+    state: []const BodyState,
+    motion: []Motion,
+) void {
+    for (blocks) |*wc| {
+        var a: BodyStateW = gatherBodies(motion, state, wc.index_a);
+        var b: BodyStateW = gatherBodies(motion, state, wc.index_b);
+        const nx: FloatW = wc.normal.x;
+        const ny: FloatW = wc.normal.y;
+        const tx: FloatW = ny; // tangent = rightPerp(normal) = (ny, -nx)
+        const ty: FloatW = -nx;
+
+        // Point 1.
+        {
+            const px: FloatW = nx * wc.normal_impulse1 + tx * wc.tangent_impulse1;
+            const py: FloatW = ny * wc.normal_impulse1 + ty * wc.tangent_impulse1;
+            wc.total_normal_impulse1 += wc.normal_impulse1;
+            a.w -= wc.inv_inertia_a * crossW(wc.anchor_a1.x, wc.anchor_a1.y, px, py);
+            a.vx -= wc.inv_mass_a * px;
+            a.vy -= wc.inv_mass_a * py;
+            b.w += wc.inv_inertia_b * crossW(wc.anchor_b1.x, wc.anchor_b1.y, px, py);
+            b.vx += wc.inv_mass_b * px;
+            b.vy += wc.inv_mass_b * py;
+        }
+        // Point 2 (zeroed for one-point manifolds -> contributes nothing).
+        {
+            const px: FloatW = nx * wc.normal_impulse2 + tx * wc.tangent_impulse2;
+            const py: FloatW = ny * wc.normal_impulse2 + ty * wc.tangent_impulse2;
+            wc.total_normal_impulse2 += wc.normal_impulse2;
+            a.w -= wc.inv_inertia_a * crossW(wc.anchor_a2.x, wc.anchor_a2.y, px, py);
+            a.vx -= wc.inv_mass_a * px;
+            a.vy -= wc.inv_mass_a * py;
+            b.w += wc.inv_inertia_b * crossW(wc.anchor_b2.x, wc.anchor_b2.y, px, py);
+            b.vx += wc.inv_mass_b * px;
+            b.vy += wc.inv_mass_b * py;
+        }
+        a.w -= wc.inv_inertia_a * wc.rolling_impulse;
+        b.w += wc.inv_inertia_b * wc.rolling_impulse;
+
+        scatterBodies(state, motion, wc.index_a, a.vx, a.vy, a.w);
+        scatterBodies(state, motion, wc.index_b, b.vx, b.vy, b.w);
+    }
+}
+
+inline fn splatW(s: f32) FloatW {
+    return @splat(s);
+}
+
+inline fn dotW(ax: FloatW, ay: FloatW, bx: FloatW, by: FloatW) FloatW {
+    return ax * bx + ay * by;
+}
+
+const MaskW = @Vector(simd_width, bool);
+
+/// Solve one sub-step, four contacts wide. This is `solveContacts` transcribed into SIMD
+/// lanes: read it first for the commentary and the physics - every step here is the same,
+/// just done for four contacts at once. The `x`/`y` suffixes are the two components of a
+/// vector spread across lanes (struct-of-arrays); `block` is the four-contact block.
+/// Non-penetration runs in both passes; friction and rolling resistance only in the relax
+/// pass. box2d: b2SolveContactsTask
+fn solveWide(
+    blocks: []WideConstraint,
+    state: []const BodyState,
+    motion: []Motion,
+    inv_h: f32,
+    contact_push_speed: f32,
+    use_bias: bool,
+) void {
+    const inv_hW: FloatW = splatW(inv_h);
+    const neg_pushW: FloatW = splatW(-contact_push_speed);
+    const zeroW: FloatW = splatW(0.0);
+    const oneW: FloatW = splatW(1.0);
+    for (blocks) |*block| {
+        var a: BodyStateW = gatherBodies(motion, state, block.index_a);
+        var b: BodyStateW = gatherBodies(motion, state, block.index_b);
+        const nx: FloatW = block.normal.x;
+        const ny: FloatW = block.normal.y;
+        const tx: FloatW = ny;
+        const ty: FloatW = -nx;
+        const dpx: FloatW = b.dpx - a.dpx;
+        const dpy: FloatW = b.dpy - a.dpy;
+
+        var total1: FloatW = zeroW;
+        var total2: FloatW = zeroW;
+
+        // Non-penetration, point 1.
+        {
+            const rax: FloatW = block.anchor_a1.x;
+            const ray: FloatW = block.anchor_a1.y;
+            const rbx: FloatW = block.anchor_b1.x;
+            const rby: FloatW = block.anchor_b1.y;
+            // Rotate anchors by the bodies' accumulated delta-rotations.
+            const rotbx: FloatW = b.dqc * rbx - b.dqs * rby;
+            const rotby: FloatW = b.dqs * rbx + b.dqc * rby;
+            const rotax: FloatW = a.dqc * rax - a.dqs * ray;
+            const rotay: FloatW = a.dqs * rax + a.dqc * ray;
+            const dsx: FloatW = dpx + (rotbx - rotax);
+            const dsy: FloatW = dpy + (rotby - rotay);
+            const separation: FloatW = block.base_sep1 + dotW(dsx, dsy, nx, ny);
+
+            const mask_s: MaskW = separation > zeroW;
+            var velocity_bias: FloatW = undefined;
+            var mass_scale: FloatW = undefined;
+            var impulse_scale: FloatW = undefined;
+            if (use_bias) {
+                const soft: FloatW = @max(block.mass_scale * block.bias_rate * separation, neg_pushW);
+                velocity_bias = @select(f32, mask_s, separation * inv_hW, soft);
+                mass_scale = @select(f32, mask_s, oneW, block.mass_scale);
+                impulse_scale = @select(f32, mask_s, zeroW, block.impulse_scale);
+            } else {
+                velocity_bias = @select(f32, mask_s, separation * inv_hW, zeroW);
+                mass_scale = oneW;
+                impulse_scale = zeroW;
+            }
+
+            const vrx: FloatW = (b.vx - block.anchor_b1.y * b.w) - (a.vx - block.anchor_a1.y * a.w);
+            const vry: FloatW = (b.vy + block.anchor_b1.x * b.w) - (a.vy + block.anchor_a1.x * a.w);
+            const normal_speed: FloatW = dotW(vrx, vry, nx, ny);
+
+            var impulse: FloatW =
+                -block.normal_mass1 * (mass_scale * normal_speed + velocity_bias) -
+                impulse_scale * block.normal_impulse1;
+            const new_impulse: FloatW = @max(block.normal_impulse1 + impulse, zeroW);
+            impulse = new_impulse - block.normal_impulse1;
+            block.normal_impulse1 = new_impulse;
+            block.total_normal_impulse1 += impulse;
+            total1 = new_impulse;
+
+            const px: FloatW = nx * impulse;
+            const py: FloatW = ny * impulse;
+            a.vx -= block.inv_mass_a * px;
+            a.vy -= block.inv_mass_a * py;
+            a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
+            b.vx += block.inv_mass_b * px;
+            b.vy += block.inv_mass_b * py;
+            b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
+        }
+        // Non-penetration, point 2.
+        {
+            const rax: FloatW = block.anchor_a2.x;
+            const ray: FloatW = block.anchor_a2.y;
+            const rbx: FloatW = block.anchor_b2.x;
+            const rby: FloatW = block.anchor_b2.y;
+            const rotbx: FloatW = b.dqc * rbx - b.dqs * rby;
+            const rotby: FloatW = b.dqs * rbx + b.dqc * rby;
+            const rotax: FloatW = a.dqc * rax - a.dqs * ray;
+            const rotay: FloatW = a.dqs * rax + a.dqc * ray;
+            const dsx: FloatW = dpx + (rotbx - rotax);
+            const dsy: FloatW = dpy + (rotby - rotay);
+            const separation: FloatW = block.base_sep2 + dotW(dsx, dsy, nx, ny);
+
+            const mask_s: MaskW = separation > zeroW;
+            var velocity_bias: FloatW = undefined;
+            var mass_scale: FloatW = undefined;
+            var impulse_scale: FloatW = undefined;
+            if (use_bias) {
+                const soft: FloatW = @max(block.mass_scale * block.bias_rate * separation, neg_pushW);
+                velocity_bias = @select(f32, mask_s, separation * inv_hW, soft);
+                mass_scale = @select(f32, mask_s, oneW, block.mass_scale);
+                impulse_scale = @select(f32, mask_s, zeroW, block.impulse_scale);
+            } else {
+                velocity_bias = @select(f32, mask_s, separation * inv_hW, zeroW);
+                mass_scale = oneW;
+                impulse_scale = zeroW;
+            }
+
+            const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
+            const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
+            const normal_speed: FloatW = dotW(vrx, vry, nx, ny);
+
+            var impulse: FloatW =
+                -block.normal_mass2 * (mass_scale * normal_speed + velocity_bias) -
+                impulse_scale * block.normal_impulse2;
+            const new_impulse: FloatW = @max(block.normal_impulse2 + impulse, zeroW);
+            impulse = new_impulse - block.normal_impulse2;
+            block.normal_impulse2 = new_impulse;
+            block.total_normal_impulse2 += impulse;
+            total2 = new_impulse;
+
+            const px: FloatW = nx * impulse;
+            const py: FloatW = ny * impulse;
+            a.vx -= block.inv_mass_a * px;
+            a.vy -= block.inv_mass_a * py;
+            a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
+            b.vx += block.inv_mass_b * px;
+            b.vy += block.inv_mass_b * py;
+            b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
+        }
+
+        if (use_bias == false) {
+            // Friction, point 1.
+            {
+                const rax: FloatW = block.anchor_a1.x;
+                const ray: FloatW = block.anchor_a1.y;
+                const rbx: FloatW = block.anchor_b1.x;
+                const rby: FloatW = block.anchor_b1.y;
+                const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
+                const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
+                const vt: FloatW = dotW(vrx, vry, tx, ty) - block.tangent_speed;
+                var impulse: FloatW = block.tangent_mass1 * (-vt);
+                const max_friction: FloatW = block.friction * block.normal_impulse1;
+                const clamped: FloatW = @min(block.tangent_impulse1 + impulse, max_friction);
+                const new_impulse: FloatW = @max(clamped, -max_friction);
+                impulse = new_impulse - block.tangent_impulse1;
+                block.tangent_impulse1 = new_impulse;
+                const px: FloatW = tx * impulse;
+                const py: FloatW = ty * impulse;
+                a.vx -= block.inv_mass_a * px;
+                a.vy -= block.inv_mass_a * py;
+                a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
+                b.vx += block.inv_mass_b * px;
+                b.vy += block.inv_mass_b * py;
+                b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
+            }
+            // Friction, point 2.
+            {
+                const rax: FloatW = block.anchor_a2.x;
+                const ray: FloatW = block.anchor_a2.y;
+                const rbx: FloatW = block.anchor_b2.x;
+                const rby: FloatW = block.anchor_b2.y;
+                const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
+                const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
+                const vt: FloatW = dotW(vrx, vry, tx, ty) - block.tangent_speed;
+                var impulse: FloatW = block.tangent_mass2 * (-vt);
+                const max_friction: FloatW = block.friction * block.normal_impulse2;
+                const clamped: FloatW = @min(block.tangent_impulse2 + impulse, max_friction);
+                const new_impulse: FloatW = @max(clamped, -max_friction);
+                impulse = new_impulse - block.tangent_impulse2;
+                block.tangent_impulse2 = new_impulse;
+                const px: FloatW = tx * impulse;
+                const py: FloatW = ty * impulse;
+                a.vx -= block.inv_mass_a * px;
+                a.vy -= block.inv_mass_a * py;
+                a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
+                b.vx += block.inv_mass_b * px;
+                b.vy += block.inv_mass_b * py;
+                b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
+            }
+            // Rolling resistance, capped by the accumulated normal impulse.
+            const total_normal: FloatW = total1 + total2;
+            var delta_lambda: FloatW = -block.rolling_mass * (b.w - a.w);
+            const lambda: FloatW = block.rolling_impulse;
+            const max_lambda: FloatW = block.rolling_resistance * total_normal;
+            // Symmetric cap at +/- max_lambda. `clamp` applies the LOWER bound first where the old
+            // `@max(@min(v, hi), lo)` applied the upper first; the two agree only while lo <= hi, so
+            // this substitution rests on `max_lambda >= 0`. It holds: `rolling_resistance` is a
+            // non-negative material property times a radius, and both accumulated normal impulses
+            // are `@max(..., zeroW)` at the point they are stored.
+            block.rolling_impulse = clamp(lambda + delta_lambda, -max_lambda, max_lambda);
+            delta_lambda = block.rolling_impulse - lambda;
+            a.w -= block.inv_inertia_a * delta_lambda;
+            b.w += block.inv_inertia_b * delta_lambda;
+        }
+
+        scatterBodies(state, motion, block.index_a, a.vx, a.vy, a.w);
+        scatterBodies(state, motion, block.index_b, b.vx, b.vy, b.w);
+    }
+}
+
+/// Apply restitution once after the sub-step loop, four contacts wide. Lanes whose approach
+/// was too slow or that never developed a normal impulse are masked out. box2d:
+/// b2ApplyRestitutionTask
+fn applyRestitutionWide(
+    blocks: []WideConstraint,
+    state: []const BodyState,
+    motion: []Motion,
+    threshold: f32,
+) void {
+    const zeroW: FloatW = splatW(0.0);
+    const neg_thresholdW: FloatW = splatW(-threshold);
+    for (blocks) |*wc| {
+        // Skip blocks with no restitution in any lane (cheap early out preserves the scalar
+        // "restitution == 0 -> continue" behaviour without per-lane harm otherwise).
+        const any_restitution: bool = @reduce(.Or, wc.restitution > zeroW);
+        if (any_restitution == false) {
+            continue;
+        }
+
+        var a: BodyStateW = gatherBodies(motion, state, wc.index_a);
+        var b: BodyStateW = gatherBodies(motion, state, wc.index_b);
+        const nx: FloatW = wc.normal.x;
+        const ny: FloatW = wc.normal.y;
+
+        // Point 1.
+        {
+            const rax: FloatW = wc.anchor_a1.x;
+            const ray: FloatW = wc.anchor_a1.y;
+            const rbx: FloatW = wc.anchor_b1.x;
+            const rby: FloatW = wc.anchor_b1.y;
+            const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
+            const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
+            const vn: FloatW = dotW(vrx, vry, nx, ny);
+            const raw: FloatW = -wc.normal_mass1 * (vn + wc.restitution * wc.rel_vel1);
+            const new_impulse: FloatW = @max(wc.normal_impulse1 + raw, zeroW);
+            var impulse: FloatW = new_impulse - wc.normal_impulse1;
+            // Mask: only where approach was fast enough and a normal impulse exists.
+            const active: MaskW = (wc.rel_vel1 < neg_thresholdW) & (wc.total_normal_impulse1 != zeroW) &
+                (wc.restitution > zeroW);
+            impulse = @select(f32, active, impulse, zeroW);
+            wc.normal_impulse1 = @select(f32, active, new_impulse, wc.normal_impulse1);
+            wc.total_normal_impulse1 += impulse;
+            const px: FloatW = nx * impulse;
+            const py: FloatW = ny * impulse;
+            a.vx -= wc.inv_mass_a * px;
+            a.vy -= wc.inv_mass_a * py;
+            a.w -= wc.inv_inertia_a * crossW(rax, ray, px, py);
+            b.vx += wc.inv_mass_b * px;
+            b.vy += wc.inv_mass_b * py;
+            b.w += wc.inv_inertia_b * crossW(rbx, rby, px, py);
+        }
+        // Point 2.
+        {
+            const rax: FloatW = wc.anchor_a2.x;
+            const ray: FloatW = wc.anchor_a2.y;
+            const rbx: FloatW = wc.anchor_b2.x;
+            const rby: FloatW = wc.anchor_b2.y;
+            const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
+            const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
+            const vn: FloatW = dotW(vrx, vry, nx, ny);
+            const raw: FloatW = -wc.normal_mass2 * (vn + wc.restitution * wc.rel_vel2);
+            const new_impulse: FloatW = @max(wc.normal_impulse2 + raw, zeroW);
+            var impulse: FloatW = new_impulse - wc.normal_impulse2;
+            const active: MaskW = (wc.rel_vel2 < neg_thresholdW) & (wc.total_normal_impulse2 != zeroW) &
+                (wc.restitution > zeroW);
+            impulse = @select(f32, active, impulse, zeroW);
+            wc.normal_impulse2 = @select(f32, active, new_impulse, wc.normal_impulse2);
+            wc.total_normal_impulse2 += impulse;
+            const px: FloatW = nx * impulse;
+            const py: FloatW = ny * impulse;
+            a.vx -= wc.inv_mass_a * px;
+            a.vy -= wc.inv_mass_a * py;
+            a.w -= wc.inv_inertia_a * crossW(rax, ray, px, py);
+            b.vx += wc.inv_mass_b * px;
+            b.vy += wc.inv_mass_b * py;
+            b.w += wc.inv_inertia_b * crossW(rbx, rby, px, py);
+        }
+
+        scatterBodies(state, motion, wc.index_a, a.vx, a.vy, a.w);
+        scatterBodies(state, motion, wc.index_b, b.vx, b.vy, b.w);
+    }
+}
+
+/// Write the wide blocks' solved impulses back into the scalar constraints so that
+/// storeImpulses can persist them on the manifolds for next-step warm starting.
+fn unpackWideImpulses(blocks: []const WideConstraint, constraints: []ContactConstraint) void {
+    for (blocks) |*wc| {
+        inline for (0..simd_width) |l| {
+            const src: u32 = wc.source[l];
+            if (src != null_index) {
+                var con: *ContactConstraint = &constraints[src];
+                con.points[0].normal_impulse = wc.normal_impulse1[l];
+                con.points[0].tangent_impulse = wc.tangent_impulse1[l];
+                con.points[0].total_normal_impulse = wc.total_normal_impulse1[l];
+                if (con.count == 2) {
+                    con.points[1].normal_impulse = wc.normal_impulse2[l];
+                    con.points[1].tangent_impulse = wc.tangent_impulse2[l];
+                    con.points[1].total_normal_impulse = wc.total_normal_impulse2[l];
+                }
+                con.rolling_impulse = wc.rolling_impulse[l];
+            }
+        }
+    }
+}
+
 /// Advance the simulation by `dt` seconds using `sub_step_count` solver sub-steps.
 ///
 /// The pipeline, in order:
@@ -9969,7 +10585,7 @@ pub fn step(world: *World, dt: f32) !void {
         // Collect the touching contacts that involve an awake body and build constraints.
         // These live for the rest of the step only, so they come from the step arena.
         const scratch: Allocator = world.step_arena.allocator();
-        var touching_ids: std.ArrayListUnmanaged(u32) = .empty;
+        var touching_ids: ArrayListUnmanaged(u32) = .empty;
         for (world.contact_ids.items) |contact_id| {
             const contact: *const Contact = &world.contacts.data[contact_id];
             if (contact.flags.touching == false) {
@@ -9992,7 +10608,7 @@ pub fn step(world: *World, dt: f32) !void {
         );
 
         // Collect the joints that involve an awake body and prepare them.
-        var active_joints: std.ArrayListUnmanaged(u32) = .empty;
+        var active_joints: ArrayListUnmanaged(u32) = .empty;
         for (world.joint_ids.items) |joint_id| {
             const joint: *const Joint = &world.joints.data[joint_id];
             const enabled: bool = world.bodies.data[joint.body_a].flags.is_disabled == false and
@@ -10023,7 +10639,7 @@ pub fn step(world: *World, dt: f32) !void {
         const overflow_constraints: []ContactConstraint =
             if (use_simd) constraints[overflow_begin..] else constraints[0..0];
         const scalar_constraints: []ContactConstraint = if (use_simd) constraints[0..0] else constraints;
-        var wide_blocks: std.ArrayListUnmanaged(WideConstraint) = .empty;
+        var wide_blocks: ArrayListUnmanaged(WideConstraint) = .empty;
         if (use_simd) {
             try buildWideBlocks(world, constraints, &wide_blocks);
         }
@@ -10434,7 +11050,12 @@ pub fn rayCastShape(
 /// Callback for a tree ray cast: returns the new clip fraction (0 to stop the cast, a
 /// value in (0, maxFraction] to shrink it, or maxFraction to leave it unchanged).
 pub const TreeRayCastCallback =
-    *const fn (input: *const RayCastInput, proxy_id: i32, user_data: u64, ctx: *anyopaque) f32;
+    *const fn (
+        input: *const RayCastInput,
+        proxy_id: i32,
+        user_data: u64,
+        ctx: *anyopaque,
+    ) f32;
 
 /// Walk a tree along a ray, visiting leaves whose bounds the ray could cross and shrinking
 /// the search interval as the callback reports closer hits. box2d: b2DynamicTree_RayCast
@@ -10525,7 +11146,12 @@ pub const BoxCastInput = struct {
 /// Callback for a tree box cast: like the ray callback, returns the new clip fraction
 /// (0 to stop, a value in (0, maxFraction] to shrink the sweep, or maxFraction to leave it).
 pub const TreeBoxCastCallback =
-    *const fn (input: *const BoxCastInput, proxy_id: i32, user_data: u64, ctx: *anyopaque) f32;
+    *const fn (
+        input: *const BoxCastInput,
+        proxy_id: i32,
+        user_data: u64,
+        ctx: *anyopaque,
+    ) f32;
 /// Walk a tree along a swept box, visiting only leaves the box could cross and shrinking the
 /// sweep as the callback reports closer hits. The separating-axis test inflates each node's
 /// half-extents by the cast box's half-extents (Minkowski sum), turning the swept-box test
@@ -11264,20 +11890,20 @@ pub fn restore(
 }
 
 fn snapshotPositionHash(world: *const World) u64 {
-    var h: std.hash.Wyhash = std.hash.Wyhash.init(0);
+    var h: std.hash.Wyhash = .init(0);
     var i: u32 = 1;
     while (i < world.bodies.watermark) : (i += 1) {
         const t: Transform2 = world.bodies.data[i].transform;
-        h.update(std.mem.asBytes(&t.p));
-        h.update(std.mem.asBytes(&t.q));
-        h.update(std.mem.asBytes(&world.motion[i].linear_velocity));
+        h.update(asBytes(&t.p));
+        h.update(asBytes(&t.q));
+        h.update(asBytes(&world.motion[i].linear_velocity));
     }
     return h.final();
 }
 
 test "world snapshot/restore reproduces the captured geometry" {
     const gpa: Allocator = std.heap.page_allocator;
-    var world: World = try World.init(gpa, 64);
+    var world: World = try .init(gpa, 64);
     defer world.deinit(gpa);
     world.settings.gravity = .{ 0, -10 };
 
@@ -11323,11 +11949,74 @@ test "world snapshot/restore reproduces the captured geometry" {
     try expect(px == px and px > -1.0e9 and px < 1.0e9);
 }
 
+/// Fields common to every joint, mirroring Box2D's b2JointDef base. The two local frames
+/// place the joint relative to each body's origin; defaults pin them at the body origins.
+pub const JointBaseDef = struct {
+    body_a: BodyHandle,
+    body_b: BodyHandle,
+    local_frame_a: Transform2 = Transform2.identity,
+    local_frame_b: Transform2 = Transform2.identity,
+    constraint_hertz: f32 = 60,
+    constraint_damping_ratio: f32 = 2,
+    force_threshold: f32 = floatMax(f32),
+    torque_threshold: f32 = floatMax(f32),
+    collide_connected: bool = false,
+    user_data: u64 = 0,
+};
+
+/// A pin joint: the two anchor frames are held coincident. Optional angular spring (toward
+/// target_angle), motor, and angle limits. box2d: b2CreateRevoluteJoint
+pub const RevoluteJointDef = struct {
+    base: JointBaseDef,
+    enable_spring: bool = false,
+    hertz: f32 = 0,
+    damping_ratio: f32 = 0,
+    target_angle: f32 = 0,
+    enable_motor: bool = false,
+    motor_speed: f32 = 0,
+    max_motor_torque: f32 = 0,
+    enable_limit: bool = false,
+    lower_angle: f32 = 0,
+    upper_angle: f32 = 0,
+};
+
+fn createJointFromBase(world: *World, base: JointBaseDef, data: JointData) !JointHandle {
+    return createJoint(world, .{
+        .body_a = base.body_a,
+        .body_b = base.body_b,
+        .local_frame_a = base.local_frame_a,
+        .local_frame_b = base.local_frame_b,
+        .constraint_hertz = base.constraint_hertz,
+        .constraint_damping_ratio = base.constraint_damping_ratio,
+        .force_threshold = base.force_threshold,
+        .torque_threshold = base.torque_threshold,
+        .collide_connected = base.collide_connected,
+        .user_data = base.user_data,
+        .data = data,
+    });
+}
+
+pub fn createRevoluteJoint(world: *World, def: RevoluteJointDef) !JointHandle {
+    assert(def.lower_angle <= def.upper_angle, @src());
+    return createJointFromBase(world, def.base, .{ .revolute = .{
+        .enable_spring = def.enable_spring,
+        .hertz = def.hertz,
+        .damping_ratio = def.damping_ratio,
+        .target_angle = clamp(def.target_angle, -pi, pi),
+        .enable_motor = def.enable_motor,
+        .motor_speed = def.motor_speed,
+        .max_motor_torque = def.max_motor_torque,
+        .enable_limit = def.enable_limit,
+        .lower_angle = def.lower_angle,
+        .upper_angle = def.upper_angle,
+    } });
+}
+
 test "world snapshot/restore reproduces a jointed world" {
     // The SnapShot demo scene is falling hinges (revolute-jointed links), so exercise the
     // joint-bearing restore path directly: a swinging chain of boxes pinned to the ground.
     const gpa: Allocator = std.heap.page_allocator;
-    var world: World = try World.init(gpa, 64);
+    var world: World = try .init(gpa, 64);
     defer world.deinit(gpa);
     world.settings.gravity = .{ 0, -10 };
 
@@ -11390,69 +12079,6 @@ test "world snapshot/restore reproduces a jointed world" {
 // Sugar over createJoint: each takes the common base plus that joint's configuration,
 // packs the JointData variant (applying Box2D's construction-time clamps), and creates
 // the joint. box2d: b2Create<Type>Joint  joint.c
-
-/// Fields common to every joint, mirroring Box2D's b2JointDef base. The two local frames
-/// place the joint relative to each body's origin; defaults pin them at the body origins.
-pub const JointBaseDef = struct {
-    body_a: BodyHandle,
-    body_b: BodyHandle,
-    local_frame_a: Transform2 = Transform2.identity,
-    local_frame_b: Transform2 = Transform2.identity,
-    constraint_hertz: f32 = 60,
-    constraint_damping_ratio: f32 = 2,
-    force_threshold: f32 = floatMax(f32),
-    torque_threshold: f32 = floatMax(f32),
-    collide_connected: bool = false,
-    user_data: u64 = 0,
-};
-
-fn createJointFromBase(world: *World, base: JointBaseDef, data: JointData) !JointHandle {
-    return createJoint(world, .{
-        .body_a = base.body_a,
-        .body_b = base.body_b,
-        .local_frame_a = base.local_frame_a,
-        .local_frame_b = base.local_frame_b,
-        .constraint_hertz = base.constraint_hertz,
-        .constraint_damping_ratio = base.constraint_damping_ratio,
-        .force_threshold = base.force_threshold,
-        .torque_threshold = base.torque_threshold,
-        .collide_connected = base.collide_connected,
-        .user_data = base.user_data,
-        .data = data,
-    });
-}
-
-/// A pin joint: the two anchor frames are held coincident. Optional angular spring (toward
-/// target_angle), motor, and angle limits. box2d: b2CreateRevoluteJoint
-pub const RevoluteJointDef = struct {
-    base: JointBaseDef,
-    enable_spring: bool = false,
-    hertz: f32 = 0,
-    damping_ratio: f32 = 0,
-    target_angle: f32 = 0,
-    enable_motor: bool = false,
-    motor_speed: f32 = 0,
-    max_motor_torque: f32 = 0,
-    enable_limit: bool = false,
-    lower_angle: f32 = 0,
-    upper_angle: f32 = 0,
-};
-
-pub fn createRevoluteJoint(world: *World, def: RevoluteJointDef) !JointHandle {
-    assert(def.lower_angle <= def.upper_angle, @src());
-    return createJointFromBase(world, def.base, .{ .revolute = .{
-        .enable_spring = def.enable_spring,
-        .hertz = def.hertz,
-        .damping_ratio = def.damping_ratio,
-        .target_angle = clamp(def.target_angle, -pi, pi),
-        .enable_motor = def.enable_motor,
-        .motor_speed = def.motor_speed,
-        .max_motor_torque = def.max_motor_torque,
-        .enable_limit = def.enable_limit,
-        .lower_angle = def.lower_angle,
-        .upper_angle = def.upper_angle,
-    } });
-}
 
 /// A linear spring/limit/motor along the line between the two anchors. box2d: b2CreateDistanceJoint
 pub const DistanceJointDef = struct {
@@ -11912,57 +12538,6 @@ pub fn revoluteGetLowerLimit(world: *const World, joint: JointHandle) f32 {
 
 pub fn revoluteGetUpperLimit(world: *const World, joint: JointHandle) f32 {
     return world.joints.data[joint.index()].data.revolute.upper_angle;
-}
-
-/// Reaction force this joint applied to body B last step (N), in world space. Useful for
-/// breakable joints. box2d: b2Joint_GetConstraintForce dispatch
-pub fn getConstraintForce(world: *const World, joint: JointHandle) Vec2 {
-    const j: *const Joint = &world.joints.data[joint.index()];
-    const inv_h: f32 = world.inv_h;
-    switch (j.data) {
-        .revolute => |rev| return rev.linear_impulse * splat2(inv_h),
-        .weld => |weld| return weld.linear_impulse * splat2(inv_h),
-        .motor => |m| return (m.linear_velocity_impulse + m.linear_spring_impulse) * splat2(inv_h),
-        .filter => return .{ 0, 0 },
-        .pulley => |pl| return pl.u_b * splat2(-pl.ratio * pl.impulse * inv_h),
-        .distance => |d| {
-            const pa: Vec2 = transformPoint2(world.bodies.data[j.body_a].transform, j.local_frame_a.p);
-            const pb: Vec2 = transformPoint2(world.bodies.data[j.body_b].transform, j.local_frame_b.p);
-            const axis: Vec2 = normalizeOrZero2(pb - pa);
-            const force: f32 = (d.impulse + d.lower_impulse - d.upper_impulse + d.motor_impulse) * inv_h;
-            return axis * splat2(force);
-        },
-        .prismatic => |pr| {
-            const axis_local: Vec2 = rotateVec2(j.local_frame_a.q, .{ 1, 0 });
-            const axis: Vec2 = rotateVec2(world.bodies.data[j.body_a].transform.q, axis_local);
-            const perp: Vec2 = leftPerp2(axis);
-            const perp_force: f32 = inv_h * pr.impulse[0];
-            const axial_force: f32 = inv_h * (pr.motor_impulse + pr.lower_impulse - pr.upper_impulse);
-            return perp * splat2(perp_force) + axis * splat2(axial_force);
-        },
-        .wheel => |wh| {
-            const axis_local: Vec2 = rotateVec2(j.local_frame_a.q, .{ 1, 0 });
-            const axis: Vec2 = rotateVec2(world.bodies.data[j.body_a].transform.q, axis_local);
-            const perp: Vec2 = leftPerp2(axis);
-            const perp_force: f32 = inv_h * wh.perp_impulse;
-            const axial_force: f32 = inv_h * (wh.spring_impulse + wh.lower_impulse - wh.upper_impulse);
-            return perp * splat2(perp_force) + axis * splat2(axial_force);
-        },
-    }
-}
-
-/// Reaction torque this joint applied last step (N*m). box2d: b2Joint_GetConstraintTorque dispatch
-pub fn getConstraintTorque(world: *const World, joint: JointHandle) f32 {
-    const j: *const Joint = &world.joints.data[joint.index()];
-    const inv_h: f32 = world.inv_h;
-    return switch (j.data) {
-        .revolute => |rev| inv_h * (rev.motor_impulse + rev.lower_impulse - rev.upper_impulse),
-        .prismatic => |pr| inv_h * pr.impulse[1],
-        .wheel => |wh| inv_h * wh.motor_impulse,
-        .weld => |weld| inv_h * weld.angular_impulse,
-        .motor => |m| inv_h * (m.angular_velocity_impulse + m.angular_spring_impulse),
-        .distance, .filter, .pulley => 0,
-    };
 }
 
 // - Prismatic -
@@ -12586,6 +13161,23 @@ pub const ChainDef = struct {
     user_data: u64 = 0,
 };
 
+fn createChainSegmentShape(
+    world: *World,
+    body: BodyHandle,
+    cs: ChainSegment,
+    def: ChainDef,
+) !ShapeHandle {
+    return createShape(world, body, .{
+        .geom = .{ .chain_segment = cs },
+        .material = def.material,
+        .filter = def.filter,
+        .enable_contact_events = false,
+        .enable_sensor_events = def.enable_sensor_events,
+        .enable_hit_events = false,
+        .user_data = def.user_data,
+    });
+}
+
 /// Build a chain on `body`, returning its chain id (used to destroy it as a unit).
 /// box2d: b2CreateChain
 pub fn createChain(world: *World, body: BodyHandle, def: ChainDef) !u32 {
@@ -12619,23 +13211,6 @@ pub fn createChain(world: *World, body: BodyHandle, def: ChainDef) !u32 {
         }
     }
     return chain_id;
-}
-
-fn createChainSegmentShape(
-    world: *World,
-    body: BodyHandle,
-    cs: ChainSegment,
-    def: ChainDef,
-) !ShapeHandle {
-    return createShape(world, body, .{
-        .geom = .{ .chain_segment = cs },
-        .material = def.material,
-        .filter = def.filter,
-        .enable_contact_events = false,
-        .enable_sensor_events = def.enable_sensor_events,
-        .enable_hit_events = false,
-        .user_data = def.user_data,
-    });
 }
 
 /// Destroy every segment of a chain on `body`. box2d: b2DestroyChain
@@ -12890,7 +13465,12 @@ pub const DrawSolidPolygonFn = *const fn (
     color: HexColor,
     ctx: *anyopaque,
 ) void;
-pub const DrawCircleFn = *const fn (center: Vec2, radius: f32, color: HexColor, ctx: *anyopaque) void;
+pub const DrawCircleFn = *const fn (
+    center: Vec2,
+    radius: f32,
+    color: HexColor,
+    ctx: *anyopaque,
+) void;
 pub const DrawSolidCircleFn = *const fn (
     transform: Transform2,
     center: Vec2,
@@ -12905,10 +13485,25 @@ pub const DrawSolidCapsuleFn = *const fn (
     color: HexColor,
     ctx: *anyopaque,
 ) void;
-pub const DrawLineFn = *const fn (p1: Vec2, p2: Vec2, color: HexColor, ctx: *anyopaque) void;
+pub const DrawLineFn = *const fn (
+    p1: Vec2,
+    p2: Vec2,
+    color: HexColor,
+    ctx: *anyopaque,
+) void;
 pub const DrawTransformFn = *const fn (transform: Transform2, ctx: *anyopaque) void;
-pub const DrawPointFn = *const fn (p: Vec2, size: f32, color: HexColor, ctx: *anyopaque) void;
-pub const DrawStringFn = *const fn (p: Vec2, s: []const u8, color: HexColor, ctx: *anyopaque) void;
+pub const DrawPointFn = *const fn (
+    p: Vec2,
+    size: f32,
+    color: HexColor,
+    ctx: *anyopaque,
+) void;
+pub const DrawStringFn = *const fn (
+    p: Vec2,
+    s: []const u8,
+    color: HexColor,
+    ctx: *anyopaque,
+) void;
 pub const DrawAabbFn = *const fn (aabb: Aabb2, color: HexColor, ctx: *anyopaque) void;
 /// The drawing interface and feature flags. Fill in the callbacks you support; the rest
 /// are skipped. `context` is forwarded to every callback. box2d: b2DebugDraw
@@ -13032,6 +13627,191 @@ fn drawShapeGeom(
         },
     }
 }
+fn drawDistanceJoint(
+    dd: *const DebugDraw,
+    j: *const Joint,
+    d: DistanceJoint,
+    xf_a: Transform2,
+    xf_b: Transform2,
+) void {
+    const pa: Vec2 = transformPoint2(xf_a, j.local_frame_a.p);
+    const pb: Vec2 = transformPoint2(xf_b, j.local_frame_b.p);
+    const axis: Vec2 = normalizeOrZero2(pb - pa);
+    if (d.min_length < d.max_length and d.enable_limit) {
+        const p_min: Vec2 = mulAdd2(pa, d.min_length, axis);
+        const p_max: Vec2 = mulAdd2(pa, d.max_length, axis);
+        const offset: Vec2 = rightPerp2(axis) * splat2(0.05);
+        if (d.min_length > linear_slop) {
+            if (dd.draw_line) |f| {
+                f(p_min - offset, p_min + offset, colors.light_green, dd.context);
+            }
+        }
+        if (d.max_length < huge_length) {
+            if (dd.draw_line) |f| {
+                f(p_max - offset, p_max + offset, colors.red, dd.context);
+            }
+        }
+        if (d.min_length > linear_slop and d.max_length < huge_length) {
+            if (dd.draw_line) |f| {
+                f(p_min, p_max, colors.gray, dd.context);
+            }
+        }
+    }
+    if (dd.draw_line) |f| {
+        f(pa, pb, colors.white, dd.context);
+    }
+    if (dd.draw_point) |f| {
+        f(pa, 4.0, colors.white, dd.context);
+    }
+    if (dd.draw_point) |f| {
+        f(pb, 4.0, colors.white, dd.context);
+    }
+    if (d.hertz > 0.0 and d.enable_spring) {
+        const p_rest: Vec2 = mulAdd2(pa, d.length, axis);
+        if (dd.draw_point) |f| {
+            f(p_rest, 4.0, colors.blue, dd.context);
+        }
+    }
+}
+
+fn drawRevoluteJoint(
+    dd: *const DebugDraw,
+    j: *const Joint,
+    r: RevoluteJoint,
+    xf_a: Transform2,
+    xf_b: Transform2,
+    scale: f32,
+) void {
+    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
+    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
+    const radius: f32 = 0.25 * scale;
+    if (dd.draw_circle) |f| {
+        f(frame_b.p, radius, colors.gray, dd.context);
+    }
+    const rx: Vec2 = .{ radius, 0 };
+    if (dd.draw_line) |f| {
+        const ra: Vec2 = rotateVec2(frame_a.q, rx);
+        f(frame_a.p, frame_a.p + ra, colors.gray, dd.context);
+        const rb: Vec2 = rotateVec2(frame_b.q, rx);
+        f(frame_b.p, frame_b.p + rb, colors.blue, dd.context);
+    }
+    if (r.enable_limit) {
+        const rot_lo: Rot2 = mulRot2(frame_a.q, Rot2.fromAngle(r.lower_angle));
+        const rot_hi: Rot2 = mulRot2(frame_a.q, Rot2.fromAngle(r.upper_angle));
+        if (dd.draw_line) |f| {
+            f(frame_b.p, frame_b.p + rotateVec2(rot_lo, rx), colors.green, dd.context);
+            f(frame_b.p, frame_b.p + rotateVec2(rot_hi, rx), colors.red, dd.context);
+        }
+    }
+    if (r.enable_spring) {
+        const q: Rot2 = mulRot2(frame_a.q, Rot2.fromAngle(r.target_angle));
+        if (dd.draw_line) |f| {
+            f(frame_b.p, frame_b.p + rotateVec2(q, rx), colors.violet, dd.context);
+        }
+    }
+    if (dd.draw_line) |f| {
+        f(xf_a.p, frame_a.p, colors.gold, dd.context);
+        f(frame_a.p, frame_b.p, colors.gold, dd.context);
+        f(xf_b.p, frame_b.p, colors.gold, dd.context);
+    }
+}
+
+fn drawPrismaticJoint(
+    dd: *const DebugDraw,
+    j: *const Joint,
+    p: PrismaticJoint,
+    xf_a: Transform2,
+    xf_b: Transform2,
+    scale: f32,
+) void {
+    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
+    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
+    const axis: Vec2 = rotateVec2(frame_a.q, .{ 1, 0 });
+    if (dd.draw_line) |f| {
+        f(frame_a.p, frame_b.p, colors.dim_gray, dd.context);
+    }
+    if (p.enable_limit) {
+        const b: f32 = 0.25 * scale;
+        const lower: Vec2 = mulAdd2(frame_a.p, p.lower_translation, axis);
+        const upper: Vec2 = mulAdd2(frame_a.p, p.upper_translation, axis);
+        const perp: Vec2 = leftPerp2(axis);
+        if (dd.draw_line) |f| {
+            f(lower, upper, colors.gray, dd.context);
+            f(mulAdd2(lower, -b, perp), mulAdd2(lower, b, perp), colors.green, dd.context);
+            f(mulAdd2(upper, -b, perp), mulAdd2(upper, b, perp), colors.red, dd.context);
+        }
+    } else {
+        if (dd.draw_line) |f| {
+            f(frame_a.p - axis, frame_a.p + axis, colors.gray, dd.context);
+        }
+    }
+    if (p.enable_spring) {
+        const pt: Vec2 = mulAdd2(frame_a.p, p.target_translation, axis);
+        if (dd.draw_point) |f| {
+            f(pt, 8.0, colors.violet, dd.context);
+        }
+    }
+    if (dd.draw_point) |f| {
+        f(frame_a.p, 5.0, colors.gray, dd.context);
+    }
+    if (dd.draw_point) |f| {
+        f(frame_b.p, 5.0, colors.blue, dd.context);
+    }
+}
+
+fn drawWheelJoint(
+    dd: *const DebugDraw,
+    j: *const Joint,
+    w: WheelJoint,
+    xf_a: Transform2,
+    xf_b: Transform2,
+    scale: f32,
+) void {
+    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
+    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
+    const axis: Vec2 = rotateVec2(frame_a.q, .{ 1, 0 });
+    if (dd.draw_line) |f| {
+        f(frame_a.p, frame_b.p, colors.blue, dd.context);
+    }
+    if (w.enable_limit) {
+        const lower: Vec2 = mulAdd2(frame_a.p, w.lower_translation, axis);
+        const upper: Vec2 = mulAdd2(frame_a.p, w.upper_translation, axis);
+        const perp: Vec2 = leftPerp2(axis);
+        const b: f32 = 0.1 * scale;
+        if (dd.draw_line) |f| {
+            f(lower, upper, colors.gray, dd.context);
+            f(mulAdd2(lower, -b, perp), mulAdd2(lower, b, perp), colors.green, dd.context);
+            f(mulAdd2(upper, -b, perp), mulAdd2(upper, b, perp), colors.red, dd.context);
+        }
+    } else {
+        if (dd.draw_line) |f| {
+            f(frame_a.p - axis, frame_a.p + axis, colors.gray, dd.context);
+        }
+    }
+    if (dd.draw_point) |f| {
+        f(frame_a.p, 5.0, colors.gray, dd.context);
+    }
+    if (dd.draw_point) |f| {
+        f(frame_b.p, 5.0, colors.dim_gray, dd.context);
+    }
+}
+
+fn drawWeldJoint(
+    dd: *const DebugDraw,
+    j: *const Joint,
+    xf_a: Transform2,
+    xf_b: Transform2,
+    scale: f32,
+) void {
+    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
+    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
+    const box: Polygon = makeBox(0.25 * scale, 0.125 * scale);
+    if (dd.draw_polygon) |f| {
+        f(frame_a, box.vertices[0..box.count], colors.dark_orange, dd.context);
+        f(frame_b, box.vertices[0..box.count], colors.dark_cyan, dd.context);
+    }
+}
+
 /// Visualize one joint by type. box2d: b2DrawJoint + the per-type b2Draw*Joint helpers
 fn drawJoint(world: *World, dd: *const DebugDraw, joint_id: u32) void {
     const j: *const Joint = &world.joints.data[joint_id];
@@ -13080,7 +13860,7 @@ fn drawJoint(world: *World, dd: *const DebugDraw, joint_id: u32) void {
         },
     }
     if (dd.draw_joint_extras) {
-        const handle: JointHandle = JointHandle.pack(@intCast(joint_id), world.joints.cycle[joint_id]);
+        const handle: JointHandle = .pack(@intCast(joint_id), world.joints.cycle[joint_id]);
         const force: Vec2 = getConstraintForce(world, handle);
         const mid: Vec2 = (pa + pb) * splat2(0.5);
         if (dd.draw_line) |f| {
@@ -13088,186 +13868,72 @@ fn drawJoint(world: *World, dd: *const DebugDraw, joint_id: u32) void {
         }
     }
 }
-fn drawDistanceJoint(
+const DrawContext = struct {
+    world: *World,
     dd: *const DebugDraw,
-    j: *const Joint,
-    d: DistanceJoint,
-    xf_a: Transform2,
-    xf_b: Transform2,
-) void {
-    const pa: Vec2 = transformPoint2(xf_a, j.local_frame_a.p);
-    const pb: Vec2 = transformPoint2(xf_b, j.local_frame_b.p);
-    const axis: Vec2 = normalizeOrZero2(pb - pa);
-    if (d.min_length < d.max_length and d.enable_limit) {
-        const p_min: Vec2 = mulAdd2(pa, d.min_length, axis);
-        const p_max: Vec2 = mulAdd2(pa, d.max_length, axis);
-        const offset: Vec2 = rightPerp2(axis) * splat2(0.05);
-        if (d.min_length > linear_slop) {
-            if (dd.draw_line) |f| {
-                f(p_min - offset, p_min + offset, colors.light_green, dd.context);
+    seen: []bool,
+};
+
+fn drawShapeCallback(proxy_id: i32, user_data: u64, ctx_ptr: *anyopaque) bool {
+    _ = proxy_id;
+    const ctx: *DrawContext = @ptrCast(@alignCast(ctx_ptr));
+    const world: *World = ctx.world;
+    const dd: *const DebugDraw = ctx.dd;
+    const shape_id: ShapeIndex = @intCast(user_data);
+    const shape: *const Shape = &world.shapes.data[shape_id];
+    ctx.seen[shape.body] = true;
+    if (dd.draw_shapes) {
+        const xf: Transform2 = world.bodies.data[shape.body].transform;
+        drawShapeGeom(dd, shape.geom, xf, debugShapeColor(world, shape));
+    }
+    if (dd.draw_bounds) {
+        if (dd.draw_aabb) |f| {
+            f(shape.fat_aabb, colors.gold, dd.context);
+        }
+    }
+    return true;
+}
+
+/// Draw a touching contact's manifold points, normals, and force arrows. box2d: the contact
+/// block of b2World_Draw
+fn drawContact(world: *World, dd: *const DebugDraw, c: *const Contact) void {
+    const normal: Vec2 = c.manifold.normal;
+    const center_a: Vec2 = world.bodies.data[c.body_a].center;
+    const center_b: Vec2 = world.bodies.data[c.body_b].center;
+    const axis_scale: f32 = 0.3;
+    var k: u32 = 0;
+    while (k < c.manifold.count) : (k += 1) {
+        const mp: *const ManifoldPoint = &c.manifold.points[k];
+        const p: Vec2 = if (dd.draw_anchor_a) center_a + mp.anchor_a else center_b + mp.anchor_b;
+        if (dd.draw_contacts) {
+            if (mp.separation > linear_slop) {
+                if (dd.draw_point) |f| {
+                    f(p, 5.0, colors.gainsboro, dd.context);
+                }
+            } else if (mp.persisted == false) {
+                if (dd.draw_point) |f| {
+                    f(p, 10.0, colors.green, dd.context);
+                }
+            } else {
+                if (dd.draw_point) |f| {
+                    f(p, 5.0, colors.blue, dd.context);
+                }
             }
         }
-        if (d.max_length < huge_length) {
+        if (dd.draw_contact_normals) {
             if (dd.draw_line) |f| {
-                f(p_max - offset, p_max + offset, colors.red, dd.context);
+                f(p, mulAdd2(p, axis_scale, normal), colors.dim_gray, dd.context);
+            }
+        } else if (dd.draw_contact_forces) {
+            const force: f32 = 0.5 * mp.total_normal_impulse * world.inv_dt;
+            const tip: Vec2 = mulAdd2(p, dd.force_scale * force, normal);
+            if (dd.draw_line) |f| {
+                f(p, tip, colors.magenta, dd.context);
             }
         }
-        if (d.min_length > linear_slop and d.max_length < huge_length) {
-            if (dd.draw_line) |f| {
-                f(p_min, p_max, colors.gray, dd.context);
-            }
-        }
-    }
-    if (dd.draw_line) |f| {
-        f(pa, pb, colors.white, dd.context);
-    }
-    if (dd.draw_point) |f| {
-        f(pa, 4.0, colors.white, dd.context);
-    }
-    if (dd.draw_point) |f| {
-        f(pb, 4.0, colors.white, dd.context);
-    }
-    if (d.hertz > 0.0 and d.enable_spring) {
-        const p_rest: Vec2 = mulAdd2(pa, d.length, axis);
-        if (dd.draw_point) |f| {
-            f(p_rest, 4.0, colors.blue, dd.context);
-        }
     }
 }
-fn drawRevoluteJoint(
-    dd: *const DebugDraw,
-    j: *const Joint,
-    r: RevoluteJoint,
-    xf_a: Transform2,
-    xf_b: Transform2,
-    scale: f32,
-) void {
-    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
-    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
-    const radius: f32 = 0.25 * scale;
-    if (dd.draw_circle) |f| {
-        f(frame_b.p, radius, colors.gray, dd.context);
-    }
-    const rx: Vec2 = .{ radius, 0 };
-    if (dd.draw_line) |f| {
-        const ra: Vec2 = rotateVec2(frame_a.q, rx);
-        f(frame_a.p, frame_a.p + ra, colors.gray, dd.context);
-        const rb: Vec2 = rotateVec2(frame_b.q, rx);
-        f(frame_b.p, frame_b.p + rb, colors.blue, dd.context);
-    }
-    if (r.enable_limit) {
-        const rot_lo: Rot2 = mulRot2(frame_a.q, Rot2.fromAngle(r.lower_angle));
-        const rot_hi: Rot2 = mulRot2(frame_a.q, Rot2.fromAngle(r.upper_angle));
-        if (dd.draw_line) |f| {
-            f(frame_b.p, frame_b.p + rotateVec2(rot_lo, rx), colors.green, dd.context);
-            f(frame_b.p, frame_b.p + rotateVec2(rot_hi, rx), colors.red, dd.context);
-        }
-    }
-    if (r.enable_spring) {
-        const q: Rot2 = mulRot2(frame_a.q, Rot2.fromAngle(r.target_angle));
-        if (dd.draw_line) |f| {
-            f(frame_b.p, frame_b.p + rotateVec2(q, rx), colors.violet, dd.context);
-        }
-    }
-    if (dd.draw_line) |f| {
-        f(xf_a.p, frame_a.p, colors.gold, dd.context);
-        f(frame_a.p, frame_b.p, colors.gold, dd.context);
-        f(xf_b.p, frame_b.p, colors.gold, dd.context);
-    }
-}
-fn drawPrismaticJoint(
-    dd: *const DebugDraw,
-    j: *const Joint,
-    p: PrismaticJoint,
-    xf_a: Transform2,
-    xf_b: Transform2,
-    scale: f32,
-) void {
-    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
-    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
-    const axis: Vec2 = rotateVec2(frame_a.q, .{ 1, 0 });
-    if (dd.draw_line) |f| {
-        f(frame_a.p, frame_b.p, colors.dim_gray, dd.context);
-    }
-    if (p.enable_limit) {
-        const b: f32 = 0.25 * scale;
-        const lower: Vec2 = mulAdd2(frame_a.p, p.lower_translation, axis);
-        const upper: Vec2 = mulAdd2(frame_a.p, p.upper_translation, axis);
-        const perp: Vec2 = leftPerp2(axis);
-        if (dd.draw_line) |f| {
-            f(lower, upper, colors.gray, dd.context);
-            f(mulAdd2(lower, -b, perp), mulAdd2(lower, b, perp), colors.green, dd.context);
-            f(mulAdd2(upper, -b, perp), mulAdd2(upper, b, perp), colors.red, dd.context);
-        }
-    } else {
-        if (dd.draw_line) |f| {
-            f(frame_a.p - axis, frame_a.p + axis, colors.gray, dd.context);
-        }
-    }
-    if (p.enable_spring) {
-        const pt: Vec2 = mulAdd2(frame_a.p, p.target_translation, axis);
-        if (dd.draw_point) |f| {
-            f(pt, 8.0, colors.violet, dd.context);
-        }
-    }
-    if (dd.draw_point) |f| {
-        f(frame_a.p, 5.0, colors.gray, dd.context);
-    }
-    if (dd.draw_point) |f| {
-        f(frame_b.p, 5.0, colors.blue, dd.context);
-    }
-}
-fn drawWheelJoint(
-    dd: *const DebugDraw,
-    j: *const Joint,
-    w: WheelJoint,
-    xf_a: Transform2,
-    xf_b: Transform2,
-    scale: f32,
-) void {
-    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
-    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
-    const axis: Vec2 = rotateVec2(frame_a.q, .{ 1, 0 });
-    if (dd.draw_line) |f| {
-        f(frame_a.p, frame_b.p, colors.blue, dd.context);
-    }
-    if (w.enable_limit) {
-        const lower: Vec2 = mulAdd2(frame_a.p, w.lower_translation, axis);
-        const upper: Vec2 = mulAdd2(frame_a.p, w.upper_translation, axis);
-        const perp: Vec2 = leftPerp2(axis);
-        const b: f32 = 0.1 * scale;
-        if (dd.draw_line) |f| {
-            f(lower, upper, colors.gray, dd.context);
-            f(mulAdd2(lower, -b, perp), mulAdd2(lower, b, perp), colors.green, dd.context);
-            f(mulAdd2(upper, -b, perp), mulAdd2(upper, b, perp), colors.red, dd.context);
-        }
-    } else {
-        if (dd.draw_line) |f| {
-            f(frame_a.p - axis, frame_a.p + axis, colors.gray, dd.context);
-        }
-    }
-    if (dd.draw_point) |f| {
-        f(frame_a.p, 5.0, colors.gray, dd.context);
-    }
-    if (dd.draw_point) |f| {
-        f(frame_b.p, 5.0, colors.dim_gray, dd.context);
-    }
-}
-fn drawWeldJoint(
-    dd: *const DebugDraw,
-    j: *const Joint,
-    xf_a: Transform2,
-    xf_b: Transform2,
-    scale: f32,
-) void {
-    const frame_a: Transform2 = offsetTransform(xf_a, j.local_frame_a);
-    const frame_b: Transform2 = offsetTransform(xf_b, j.local_frame_b);
-    const box: Polygon = makeBox(0.25 * scale, 0.125 * scale);
-    if (dd.draw_polygon) |f| {
-        f(frame_a, box.vertices[0..box.count], colors.dark_orange, dd.context);
-        f(frame_b, box.vertices[0..box.count], colors.dark_cyan, dd.context);
-    }
-}
+
 /// Walk the world and emit debug primitives. Shapes (and the bodies they belong to) are
 /// found by querying the broad-phase trees against `drawing_bounds`, then joints, contacts,
 /// and mass markers are drawn for the bodies in view. box2d: b2World_Draw
@@ -13318,69 +13984,6 @@ pub fn draw(world: *World, dd: *const DebugDraw) !void {
             }
             if (dd.draw_transform) |f| {
                 f(.{ .q = b.transform.q, .p = b.center }, dd.context);
-            }
-        }
-    }
-}
-const DrawContext = struct {
-    world: *World,
-    dd: *const DebugDraw,
-    seen: []bool,
-};
-fn drawShapeCallback(proxy_id: i32, user_data: u64, ctx_ptr: *anyopaque) bool {
-    _ = proxy_id;
-    const ctx: *DrawContext = @ptrCast(@alignCast(ctx_ptr));
-    const world: *World = ctx.world;
-    const dd: *const DebugDraw = ctx.dd;
-    const shape_id: ShapeIndex = @intCast(user_data);
-    const shape: *const Shape = &world.shapes.data[shape_id];
-    ctx.seen[shape.body] = true;
-    if (dd.draw_shapes) {
-        const xf: Transform2 = world.bodies.data[shape.body].transform;
-        drawShapeGeom(dd, shape.geom, xf, debugShapeColor(world, shape));
-    }
-    if (dd.draw_bounds) {
-        if (dd.draw_aabb) |f| {
-            f(shape.fat_aabb, colors.gold, dd.context);
-        }
-    }
-    return true;
-}
-/// Draw a touching contact's manifold points, normals, and force arrows. box2d: the contact
-/// block of b2World_Draw
-fn drawContact(world: *World, dd: *const DebugDraw, c: *const Contact) void {
-    const normal: Vec2 = c.manifold.normal;
-    const center_a: Vec2 = world.bodies.data[c.body_a].center;
-    const center_b: Vec2 = world.bodies.data[c.body_b].center;
-    const axis_scale: f32 = 0.3;
-    var k: u32 = 0;
-    while (k < c.manifold.count) : (k += 1) {
-        const mp: *const ManifoldPoint = &c.manifold.points[k];
-        const p: Vec2 = if (dd.draw_anchor_a) center_a + mp.anchor_a else center_b + mp.anchor_b;
-        if (dd.draw_contacts) {
-            if (mp.separation > linear_slop) {
-                if (dd.draw_point) |f| {
-                    f(p, 5.0, colors.gainsboro, dd.context);
-                }
-            } else if (mp.persisted == false) {
-                if (dd.draw_point) |f| {
-                    f(p, 10.0, colors.green, dd.context);
-                }
-            } else {
-                if (dd.draw_point) |f| {
-                    f(p, 5.0, colors.blue, dd.context);
-                }
-            }
-        }
-        if (dd.draw_contact_normals) {
-            if (dd.draw_line) |f| {
-                f(p, mulAdd2(p, axis_scale, normal), colors.dim_gray, dd.context);
-            }
-        } else if (dd.draw_contact_forces) {
-            const force: f32 = 0.5 * mp.total_normal_impulse * world.inv_dt;
-            const tip: Vec2 = mulAdd2(p, dd.force_scale * force, normal);
-            if (dd.draw_line) |f| {
-                f(p, tip, colors.magenta, dd.context);
             }
         }
     }
@@ -13536,7 +14139,11 @@ fn collideMoverShape(mover: Capsule, geom: Geometry, transform: Transform2) Plan
 }
 /// User callback receiving each mover collision plane. Return false to stop the query.
 /// box2d: b2PlaneResultFcn
-pub const PlaneResultFcn = *const fn (shape: ShapeIndex, result: *const PlaneResult, ctx: *anyopaque) bool;
+pub const PlaneResultFcn = *const fn (
+    shape: ShapeIndex,
+    result: *const PlaneResult,
+    ctx: *anyopaque,
+) bool;
 const MoverCollideContext = struct {
     world: *World,
     origin: Vec2,
@@ -13670,558 +14277,9 @@ pub fn castMover(
     return ctx.fraction;
 }
 
-// -- Wide (SIMD) contact solver --------------------------------------------------
-//
-// Each non-overflow graph color is solved four contacts at a time using @Vector(4, f32)
-// lanes (which the backend lowers to wasm128 / SSE). Because the coloring guarantees no
-// dynamic body appears twice in a color, the four contacts in a block touch eight distinct
-// dynamic bodies, so scattering the solved velocities back never races. Inactive lanes (a
-// color whose count is not a multiple of four) and one-point manifolds carry zeroed masses,
-// so they compute zero impulse and contribute nothing. This is a lane-parallel transcription
-// of the scalar contact kernels above; the overflow color stays scalar.
-// box2d: the SIMD half of contact_solver.c (b2*ContactsTask)
-const simd_width: u32 = 4;
-const FloatW = @Vector(simd_width, f32);
-const MaskW = @Vector(simd_width, bool);
-/// A 2D vector with each component spread across the SIMD lanes.
-const Vec2W = struct { x: FloatW, y: FloatW };
-
-inline fn splatW(s: f32) FloatW {
-    return @splat(s);
-}
-inline fn dotW(ax: FloatW, ay: FloatW, bx: FloatW, by: FloatW) FloatW {
-    return ax * bx + ay * by;
-}
-/// Scalar cross product per lane: cross(a, b) = a.x*b.y - a.y*b.x.
-inline fn crossW(ax: FloatW, ay: FloatW, bx: FloatW, by: FloatW) FloatW {
-    return ax * by - ay * bx;
-}
-
-/// One block of up to four contacts in struct-of-arrays form. box2d: b2ContactConstraintWide
-const WideConstraint = struct {
-    index_a: [simd_width]u32, // body indices for gather/scatter (slot 0 for padding)
-    index_b: [simd_width]u32,
-    source: [simd_width]u32, // scalar-constraint index per lane (null_index if padding)
-    inv_mass_a: FloatW,
-    inv_mass_b: FloatW,
-    inv_inertia_a: FloatW,
-    inv_inertia_b: FloatW,
-    normal: Vec2W,
-    friction: FloatW,
-    tangent_speed: FloatW,
-    rolling_resistance: FloatW,
-    rolling_mass: FloatW,
-    rolling_impulse: FloatW,
-    bias_rate: FloatW,
-    mass_scale: FloatW,
-    impulse_scale: FloatW,
-    // Two manifold points (point 2 zeroed for one-point manifolds).
-    anchor_a1: Vec2W,
-    anchor_b1: Vec2W,
-    base_sep1: FloatW,
-    normal_mass1: FloatW,
-    tangent_mass1: FloatW,
-    normal_impulse1: FloatW,
-    tangent_impulse1: FloatW,
-    total_normal_impulse1: FloatW,
-    rel_vel1: FloatW,
-    anchor_a2: Vec2W,
-    anchor_b2: Vec2W,
-    base_sep2: FloatW,
-    normal_mass2: FloatW,
-    tangent_mass2: FloatW,
-    normal_impulse2: FloatW,
-    tangent_impulse2: FloatW,
-    total_normal_impulse2: FloatW,
-    rel_vel2: FloatW,
-    restitution: FloatW,
-};
-
-/// Gathered per-lane body velocity and the position deltas the solve reads.
-const BodyStateW = struct {
-    vx: FloatW,
-    vy: FloatW,
-    w: FloatW,
-    dpx: FloatW,
-    dpy: FloatW,
-    dqc: FloatW,
-    dqs: FloatW,
-};
-
-inline fn gatherBodies(
-    motion: []const Motion,
-    state: []const BodyState,
-    indices: [simd_width]u32,
-) BodyStateW {
-    var r: BodyStateW = undefined;
-    inline for (0..simd_width) |l| {
-        const i: u32 = indices[l];
-        const m: Motion = motion[i];
-        const s: BodyState = state[i];
-        r.vx[l] = m.linear_velocity[0];
-        r.vy[l] = m.linear_velocity[1];
-        r.w[l] = m.angular_velocity;
-        r.dpx[l] = s.delta_position[0];
-        r.dpy[l] = s.delta_position[1];
-        r.dqc[l] = s.delta_rotation.cosine;
-        r.dqs[l] = s.delta_rotation.sine;
-    }
-    return r;
-}
-
-/// Write solved velocities back, per lane, only for dynamic bodies (matching
-/// writeBackVelocity). Static/kinematic/padding lanes are skipped, so duplicate static
-/// bodies across lanes are harmless.
-inline fn scatterBodies(
-    state: []const BodyState,
-    motion: []Motion,
-    indices: [simd_width]u32,
-    vx: FloatW,
-    vy: FloatW,
-    w: FloatW,
-) void {
-    inline for (0..simd_width) |l| {
-        const i: u32 = indices[l];
-        if (state[i].flags.dynamic) {
-            motion[i].linear_velocity = .{ vx[l], vy[l] };
-            motion[i].angular_velocity = w[l];
-        }
-    }
-}
-
-/// Pack the non-overflow color ranges of the (color-sorted) scalar constraints into wide
-/// blocks of four. Padding lanes and absent second points are left zeroed.
-fn buildWideBlocks(
-    world: *World,
-    constraints: []const ContactConstraint,
-    blocks: *std.ArrayListUnmanaged(WideConstraint),
-) !void {
-    // Wide blocks are step-scoped scratch: allocate from the per-step arena.
-    const gpa: Allocator = world.step_arena.allocator();
-    const graph: *const ConstraintGraph = &world.graph;
-    var color: u32 = 0;
-    while (color < graph_overflow_index) : (color += 1) {
-        const begin: u32 = graph.contact_color_begin[color];
-        const end: u32 = graph.contact_color_begin[color + 1];
-        var base: u32 = begin;
-        while (base < end) : (base += simd_width) {
-            const lanes: u32 = @min(simd_width, end - base);
-            var wc: WideConstraint = std.mem.zeroes(WideConstraint);
-            wc.source = .{ null_index, null_index, null_index, null_index };
-            inline for (0..simd_width) |l| {
-                if (l < lanes) {
-                    const idx: usize = @as(usize, base) + l;
-                    const con: *const ContactConstraint = &constraints[idx];
-                    wc.index_a[l] = con.body_a;
-                    wc.index_b[l] = con.body_b;
-                    wc.source[l] = @intCast(idx);
-                    wc.inv_mass_a[l] = con.inv_mass_a;
-                    wc.inv_mass_b[l] = con.inv_mass_b;
-                    wc.inv_inertia_a[l] = con.inv_inertia_a;
-                    wc.inv_inertia_b[l] = con.inv_inertia_b;
-                    wc.normal.x[l] = con.normal[0];
-                    wc.normal.y[l] = con.normal[1];
-                    wc.friction[l] = con.friction;
-                    wc.tangent_speed[l] = con.tangent_speed;
-                    wc.rolling_resistance[l] = con.rolling_resistance;
-                    wc.rolling_mass[l] = con.rolling_mass;
-                    wc.rolling_impulse[l] = con.rolling_impulse;
-                    wc.bias_rate[l] = con.softness.bias_rate;
-                    wc.mass_scale[l] = con.softness.mass_scale;
-                    wc.impulse_scale[l] = con.softness.impulse_scale;
-                    wc.restitution[l] = con.restitution;
-                    const p1: ContactConstraintPoint = con.points[0];
-                    wc.anchor_a1.x[l] = p1.anchor_a[0];
-                    wc.anchor_a1.y[l] = p1.anchor_a[1];
-                    wc.anchor_b1.x[l] = p1.anchor_b[0];
-                    wc.anchor_b1.y[l] = p1.anchor_b[1];
-                    wc.base_sep1[l] = p1.base_separation;
-                    wc.normal_mass1[l] = p1.normal_mass;
-                    wc.tangent_mass1[l] = p1.tangent_mass;
-                    wc.normal_impulse1[l] = p1.normal_impulse;
-                    wc.tangent_impulse1[l] = p1.tangent_impulse;
-                    wc.total_normal_impulse1[l] = p1.total_normal_impulse;
-                    wc.rel_vel1[l] = p1.relative_velocity;
-                    if (con.count == 2) {
-                        const p2: ContactConstraintPoint = con.points[1];
-                        wc.anchor_a2.x[l] = p2.anchor_a[0];
-                        wc.anchor_a2.y[l] = p2.anchor_a[1];
-                        wc.anchor_b2.x[l] = p2.anchor_b[0];
-                        wc.anchor_b2.y[l] = p2.anchor_b[1];
-                        wc.base_sep2[l] = p2.base_separation;
-                        wc.normal_mass2[l] = p2.normal_mass;
-                        wc.tangent_mass2[l] = p2.tangent_mass;
-                        wc.normal_impulse2[l] = p2.normal_impulse;
-                        wc.tangent_impulse2[l] = p2.tangent_impulse;
-                        wc.total_normal_impulse2[l] = p2.total_normal_impulse;
-                        wc.rel_vel2[l] = p2.relative_velocity;
-                    }
-                }
-            }
-            try blocks.append(gpa, wc);
-        }
-    }
-}
-
-/// Re-apply stored impulses each sub-step, four contacts wide. box2d: b2WarmStartContactsTask
-fn warmStartWide(
-    blocks: []WideConstraint,
-    state: []const BodyState,
-    motion: []Motion,
-) void {
-    for (blocks) |*wc| {
-        var a: BodyStateW = gatherBodies(motion, state, wc.index_a);
-        var b: BodyStateW = gatherBodies(motion, state, wc.index_b);
-        const nx: FloatW = wc.normal.x;
-        const ny: FloatW = wc.normal.y;
-        const tx: FloatW = ny; // tangent = rightPerp(normal) = (ny, -nx)
-        const ty: FloatW = -nx;
-
-        // Point 1.
-        {
-            const px: FloatW = nx * wc.normal_impulse1 + tx * wc.tangent_impulse1;
-            const py: FloatW = ny * wc.normal_impulse1 + ty * wc.tangent_impulse1;
-            wc.total_normal_impulse1 += wc.normal_impulse1;
-            a.w -= wc.inv_inertia_a * crossW(wc.anchor_a1.x, wc.anchor_a1.y, px, py);
-            a.vx -= wc.inv_mass_a * px;
-            a.vy -= wc.inv_mass_a * py;
-            b.w += wc.inv_inertia_b * crossW(wc.anchor_b1.x, wc.anchor_b1.y, px, py);
-            b.vx += wc.inv_mass_b * px;
-            b.vy += wc.inv_mass_b * py;
-        }
-        // Point 2 (zeroed for one-point manifolds -> contributes nothing).
-        {
-            const px: FloatW = nx * wc.normal_impulse2 + tx * wc.tangent_impulse2;
-            const py: FloatW = ny * wc.normal_impulse2 + ty * wc.tangent_impulse2;
-            wc.total_normal_impulse2 += wc.normal_impulse2;
-            a.w -= wc.inv_inertia_a * crossW(wc.anchor_a2.x, wc.anchor_a2.y, px, py);
-            a.vx -= wc.inv_mass_a * px;
-            a.vy -= wc.inv_mass_a * py;
-            b.w += wc.inv_inertia_b * crossW(wc.anchor_b2.x, wc.anchor_b2.y, px, py);
-            b.vx += wc.inv_mass_b * px;
-            b.vy += wc.inv_mass_b * py;
-        }
-        a.w -= wc.inv_inertia_a * wc.rolling_impulse;
-        b.w += wc.inv_inertia_b * wc.rolling_impulse;
-
-        scatterBodies(state, motion, wc.index_a, a.vx, a.vy, a.w);
-        scatterBodies(state, motion, wc.index_b, b.vx, b.vy, b.w);
-    }
-}
-
-/// Solve one sub-step, four contacts wide. This is `solveContacts` transcribed into SIMD
-/// lanes: read it first for the commentary and the physics - every step here is the same,
-/// just done for four contacts at once. The `x`/`y` suffixes are the two components of a
-/// vector spread across lanes (struct-of-arrays); `block` is the four-contact block.
-/// Non-penetration runs in both passes; friction and rolling resistance only in the relax
-/// pass. box2d: b2SolveContactsTask
-fn solveWide(
-    blocks: []WideConstraint,
-    state: []const BodyState,
-    motion: []Motion,
-    inv_h: f32,
-    contact_push_speed: f32,
-    use_bias: bool,
-) void {
-    const inv_hW: FloatW = splatW(inv_h);
-    const neg_pushW: FloatW = splatW(-contact_push_speed);
-    const zeroW: FloatW = splatW(0.0);
-    const oneW: FloatW = splatW(1.0);
-    for (blocks) |*block| {
-        var a: BodyStateW = gatherBodies(motion, state, block.index_a);
-        var b: BodyStateW = gatherBodies(motion, state, block.index_b);
-        const nx: FloatW = block.normal.x;
-        const ny: FloatW = block.normal.y;
-        const tx: FloatW = ny;
-        const ty: FloatW = -nx;
-        const dpx: FloatW = b.dpx - a.dpx;
-        const dpy: FloatW = b.dpy - a.dpy;
-
-        var total1: FloatW = zeroW;
-        var total2: FloatW = zeroW;
-
-        // Non-penetration, point 1.
-        {
-            const rax: FloatW = block.anchor_a1.x;
-            const ray: FloatW = block.anchor_a1.y;
-            const rbx: FloatW = block.anchor_b1.x;
-            const rby: FloatW = block.anchor_b1.y;
-            // Rotate anchors by the bodies' accumulated delta-rotations.
-            const rotbx: FloatW = b.dqc * rbx - b.dqs * rby;
-            const rotby: FloatW = b.dqs * rbx + b.dqc * rby;
-            const rotax: FloatW = a.dqc * rax - a.dqs * ray;
-            const rotay: FloatW = a.dqs * rax + a.dqc * ray;
-            const dsx: FloatW = dpx + (rotbx - rotax);
-            const dsy: FloatW = dpy + (rotby - rotay);
-            const separation: FloatW = block.base_sep1 + dotW(dsx, dsy, nx, ny);
-
-            const mask_s: MaskW = separation > zeroW;
-            var velocity_bias: FloatW = undefined;
-            var mass_scale: FloatW = undefined;
-            var impulse_scale: FloatW = undefined;
-            if (use_bias) {
-                const soft: FloatW = @max(block.mass_scale * block.bias_rate * separation, neg_pushW);
-                velocity_bias = @select(f32, mask_s, separation * inv_hW, soft);
-                mass_scale = @select(f32, mask_s, oneW, block.mass_scale);
-                impulse_scale = @select(f32, mask_s, zeroW, block.impulse_scale);
-            } else {
-                velocity_bias = @select(f32, mask_s, separation * inv_hW, zeroW);
-                mass_scale = oneW;
-                impulse_scale = zeroW;
-            }
-
-            const vrx: FloatW = (b.vx - block.anchor_b1.y * b.w) - (a.vx - block.anchor_a1.y * a.w);
-            const vry: FloatW = (b.vy + block.anchor_b1.x * b.w) - (a.vy + block.anchor_a1.x * a.w);
-            const normal_speed: FloatW = dotW(vrx, vry, nx, ny);
-
-            var impulse: FloatW =
-                -block.normal_mass1 * (mass_scale * normal_speed + velocity_bias) -
-                impulse_scale * block.normal_impulse1;
-            const new_impulse: FloatW = @max(block.normal_impulse1 + impulse, zeroW);
-            impulse = new_impulse - block.normal_impulse1;
-            block.normal_impulse1 = new_impulse;
-            block.total_normal_impulse1 += impulse;
-            total1 = new_impulse;
-
-            const px: FloatW = nx * impulse;
-            const py: FloatW = ny * impulse;
-            a.vx -= block.inv_mass_a * px;
-            a.vy -= block.inv_mass_a * py;
-            a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
-            b.vx += block.inv_mass_b * px;
-            b.vy += block.inv_mass_b * py;
-            b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
-        }
-        // Non-penetration, point 2.
-        {
-            const rax: FloatW = block.anchor_a2.x;
-            const ray: FloatW = block.anchor_a2.y;
-            const rbx: FloatW = block.anchor_b2.x;
-            const rby: FloatW = block.anchor_b2.y;
-            const rotbx: FloatW = b.dqc * rbx - b.dqs * rby;
-            const rotby: FloatW = b.dqs * rbx + b.dqc * rby;
-            const rotax: FloatW = a.dqc * rax - a.dqs * ray;
-            const rotay: FloatW = a.dqs * rax + a.dqc * ray;
-            const dsx: FloatW = dpx + (rotbx - rotax);
-            const dsy: FloatW = dpy + (rotby - rotay);
-            const separation: FloatW = block.base_sep2 + dotW(dsx, dsy, nx, ny);
-
-            const mask_s: MaskW = separation > zeroW;
-            var velocity_bias: FloatW = undefined;
-            var mass_scale: FloatW = undefined;
-            var impulse_scale: FloatW = undefined;
-            if (use_bias) {
-                const soft: FloatW = @max(block.mass_scale * block.bias_rate * separation, neg_pushW);
-                velocity_bias = @select(f32, mask_s, separation * inv_hW, soft);
-                mass_scale = @select(f32, mask_s, oneW, block.mass_scale);
-                impulse_scale = @select(f32, mask_s, zeroW, block.impulse_scale);
-            } else {
-                velocity_bias = @select(f32, mask_s, separation * inv_hW, zeroW);
-                mass_scale = oneW;
-                impulse_scale = zeroW;
-            }
-
-            const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
-            const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
-            const normal_speed: FloatW = dotW(vrx, vry, nx, ny);
-
-            var impulse: FloatW =
-                -block.normal_mass2 * (mass_scale * normal_speed + velocity_bias) -
-                impulse_scale * block.normal_impulse2;
-            const new_impulse: FloatW = @max(block.normal_impulse2 + impulse, zeroW);
-            impulse = new_impulse - block.normal_impulse2;
-            block.normal_impulse2 = new_impulse;
-            block.total_normal_impulse2 += impulse;
-            total2 = new_impulse;
-
-            const px: FloatW = nx * impulse;
-            const py: FloatW = ny * impulse;
-            a.vx -= block.inv_mass_a * px;
-            a.vy -= block.inv_mass_a * py;
-            a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
-            b.vx += block.inv_mass_b * px;
-            b.vy += block.inv_mass_b * py;
-            b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
-        }
-
-        if (use_bias == false) {
-            // Friction, point 1.
-            {
-                const rax: FloatW = block.anchor_a1.x;
-                const ray: FloatW = block.anchor_a1.y;
-                const rbx: FloatW = block.anchor_b1.x;
-                const rby: FloatW = block.anchor_b1.y;
-                const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
-                const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
-                const vt: FloatW = dotW(vrx, vry, tx, ty) - block.tangent_speed;
-                var impulse: FloatW = block.tangent_mass1 * (-vt);
-                const max_friction: FloatW = block.friction * block.normal_impulse1;
-                const clamped: FloatW = @min(block.tangent_impulse1 + impulse, max_friction);
-                const new_impulse: FloatW = @max(clamped, -max_friction);
-                impulse = new_impulse - block.tangent_impulse1;
-                block.tangent_impulse1 = new_impulse;
-                const px: FloatW = tx * impulse;
-                const py: FloatW = ty * impulse;
-                a.vx -= block.inv_mass_a * px;
-                a.vy -= block.inv_mass_a * py;
-                a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
-                b.vx += block.inv_mass_b * px;
-                b.vy += block.inv_mass_b * py;
-                b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
-            }
-            // Friction, point 2.
-            {
-                const rax: FloatW = block.anchor_a2.x;
-                const ray: FloatW = block.anchor_a2.y;
-                const rbx: FloatW = block.anchor_b2.x;
-                const rby: FloatW = block.anchor_b2.y;
-                const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
-                const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
-                const vt: FloatW = dotW(vrx, vry, tx, ty) - block.tangent_speed;
-                var impulse: FloatW = block.tangent_mass2 * (-vt);
-                const max_friction: FloatW = block.friction * block.normal_impulse2;
-                const clamped: FloatW = @min(block.tangent_impulse2 + impulse, max_friction);
-                const new_impulse: FloatW = @max(clamped, -max_friction);
-                impulse = new_impulse - block.tangent_impulse2;
-                block.tangent_impulse2 = new_impulse;
-                const px: FloatW = tx * impulse;
-                const py: FloatW = ty * impulse;
-                a.vx -= block.inv_mass_a * px;
-                a.vy -= block.inv_mass_a * py;
-                a.w -= block.inv_inertia_a * crossW(rax, ray, px, py);
-                b.vx += block.inv_mass_b * px;
-                b.vy += block.inv_mass_b * py;
-                b.w += block.inv_inertia_b * crossW(rbx, rby, px, py);
-            }
-            // Rolling resistance, capped by the accumulated normal impulse.
-            const total_normal: FloatW = total1 + total2;
-            var delta_lambda: FloatW = -block.rolling_mass * (b.w - a.w);
-            const lambda: FloatW = block.rolling_impulse;
-            const max_lambda: FloatW = block.rolling_resistance * total_normal;
-            // Symmetric cap at +/- max_lambda. `clamp` applies the LOWER bound first where the old
-            // `@max(@min(v, hi), lo)` applied the upper first; the two agree only while lo <= hi, so
-            // this substitution rests on `max_lambda >= 0`. It holds: `rolling_resistance` is a
-            // non-negative material property times a radius, and both accumulated normal impulses
-            // are `@max(..., zeroW)` at the point they are stored.
-            block.rolling_impulse = clamp(lambda + delta_lambda, -max_lambda, max_lambda);
-            delta_lambda = block.rolling_impulse - lambda;
-            a.w -= block.inv_inertia_a * delta_lambda;
-            b.w += block.inv_inertia_b * delta_lambda;
-        }
-
-        scatterBodies(state, motion, block.index_a, a.vx, a.vy, a.w);
-        scatterBodies(state, motion, block.index_b, b.vx, b.vy, b.w);
-    }
-}
-
-/// Apply restitution once after the sub-step loop, four contacts wide. Lanes whose approach
-/// was too slow or that never developed a normal impulse are masked out. box2d:
-/// b2ApplyRestitutionTask
-fn applyRestitutionWide(
-    blocks: []WideConstraint,
-    state: []const BodyState,
-    motion: []Motion,
-    threshold: f32,
-) void {
-    const zeroW: FloatW = splatW(0.0);
-    const neg_thresholdW: FloatW = splatW(-threshold);
-    for (blocks) |*wc| {
-        // Skip blocks with no restitution in any lane (cheap early out preserves the scalar
-        // "restitution == 0 -> continue" behaviour without per-lane harm otherwise).
-        const any_restitution: bool = @reduce(.Or, wc.restitution > zeroW);
-        if (any_restitution == false) {
-            continue;
-        }
-
-        var a: BodyStateW = gatherBodies(motion, state, wc.index_a);
-        var b: BodyStateW = gatherBodies(motion, state, wc.index_b);
-        const nx: FloatW = wc.normal.x;
-        const ny: FloatW = wc.normal.y;
-
-        // Point 1.
-        {
-            const rax: FloatW = wc.anchor_a1.x;
-            const ray: FloatW = wc.anchor_a1.y;
-            const rbx: FloatW = wc.anchor_b1.x;
-            const rby: FloatW = wc.anchor_b1.y;
-            const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
-            const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
-            const vn: FloatW = dotW(vrx, vry, nx, ny);
-            const raw: FloatW = -wc.normal_mass1 * (vn + wc.restitution * wc.rel_vel1);
-            const new_impulse: FloatW = @max(wc.normal_impulse1 + raw, zeroW);
-            var impulse: FloatW = new_impulse - wc.normal_impulse1;
-            // Mask: only where approach was fast enough and a normal impulse exists.
-            const active: MaskW = (wc.rel_vel1 < neg_thresholdW) & (wc.total_normal_impulse1 != zeroW) &
-                (wc.restitution > zeroW);
-            impulse = @select(f32, active, impulse, zeroW);
-            wc.normal_impulse1 = @select(f32, active, new_impulse, wc.normal_impulse1);
-            wc.total_normal_impulse1 += impulse;
-            const px: FloatW = nx * impulse;
-            const py: FloatW = ny * impulse;
-            a.vx -= wc.inv_mass_a * px;
-            a.vy -= wc.inv_mass_a * py;
-            a.w -= wc.inv_inertia_a * crossW(rax, ray, px, py);
-            b.vx += wc.inv_mass_b * px;
-            b.vy += wc.inv_mass_b * py;
-            b.w += wc.inv_inertia_b * crossW(rbx, rby, px, py);
-        }
-        // Point 2.
-        {
-            const rax: FloatW = wc.anchor_a2.x;
-            const ray: FloatW = wc.anchor_a2.y;
-            const rbx: FloatW = wc.anchor_b2.x;
-            const rby: FloatW = wc.anchor_b2.y;
-            const vrx: FloatW = (b.vx - rby * b.w) - (a.vx - ray * a.w);
-            const vry: FloatW = (b.vy + rbx * b.w) - (a.vy + rax * a.w);
-            const vn: FloatW = dotW(vrx, vry, nx, ny);
-            const raw: FloatW = -wc.normal_mass2 * (vn + wc.restitution * wc.rel_vel2);
-            const new_impulse: FloatW = @max(wc.normal_impulse2 + raw, zeroW);
-            var impulse: FloatW = new_impulse - wc.normal_impulse2;
-            const active: MaskW = (wc.rel_vel2 < neg_thresholdW) & (wc.total_normal_impulse2 != zeroW) &
-                (wc.restitution > zeroW);
-            impulse = @select(f32, active, impulse, zeroW);
-            wc.normal_impulse2 = @select(f32, active, new_impulse, wc.normal_impulse2);
-            wc.total_normal_impulse2 += impulse;
-            const px: FloatW = nx * impulse;
-            const py: FloatW = ny * impulse;
-            a.vx -= wc.inv_mass_a * px;
-            a.vy -= wc.inv_mass_a * py;
-            a.w -= wc.inv_inertia_a * crossW(rax, ray, px, py);
-            b.vx += wc.inv_mass_b * px;
-            b.vy += wc.inv_mass_b * py;
-            b.w += wc.inv_inertia_b * crossW(rbx, rby, px, py);
-        }
-
-        scatterBodies(state, motion, wc.index_a, a.vx, a.vy, a.w);
-        scatterBodies(state, motion, wc.index_b, b.vx, b.vy, b.w);
-    }
-}
-
-/// Write the wide blocks' solved impulses back into the scalar constraints so that
-/// storeImpulses can persist them on the manifolds for next-step warm starting.
-fn unpackWideImpulses(blocks: []const WideConstraint, constraints: []ContactConstraint) void {
-    for (blocks) |*wc| {
-        inline for (0..simd_width) |l| {
-            const src: u32 = wc.source[l];
-            if (src != null_index) {
-                var con: *ContactConstraint = &constraints[src];
-                con.points[0].normal_impulse = wc.normal_impulse1[l];
-                con.points[0].tangent_impulse = wc.tangent_impulse1[l];
-                con.points[0].total_normal_impulse = wc.total_normal_impulse1[l];
-                if (con.count == 2) {
-                    con.points[1].normal_impulse = wc.normal_impulse2[l];
-                    con.points[1].tangent_impulse = wc.tangent_impulse2[l];
-                    con.points[1].total_normal_impulse = wc.total_normal_impulse2[l];
-                }
-                con.rolling_impulse = wc.rolling_impulse[l];
-            }
-        }
-    }
-}
-
 test "pulley joint conserves rope length and transfers load" {
-    var world: World = try World.init(std.testing.allocator, 64);
-    defer world.deinit(std.testing.allocator);
+    var world: World = try .init(testing_allocator, 64);
+    defer world.deinit(testing_allocator);
     world.settings.gravity = .{ 0, -10 };
 
     // Two boxes hang below two fixed ground anchors; B is much heavier than A.
@@ -14242,7 +14300,7 @@ test "pulley joint conserves rope length and transfers load" {
     const segLen = struct {
         fn f(w: *const World, h: BodyHandle, g: Vec2) f32 {
             const p: Vec2 = getPosition(w, h);
-            return length2(.{ p[0] - g[0], p[1] - g[1] });
+            return length2(p - g);
         }
     }.f;
     const c0: f32 = segLen(&world, a, ga) + ratio * segLen(&world, b, gb);
@@ -14272,8 +14330,8 @@ test "pulley joint conserves rope length and transfers load" {
 }
 
 test "setShapeGeometry swaps geometry, refreshing mass and broad-phase proxy" {
-    var world: World = try World.init(std.testing.allocator, 64);
-    defer world.deinit(std.testing.allocator);
+    var world: World = try .init(testing_allocator, 64);
+    defer world.deinit(testing_allocator);
     world.settings.gravity = .{ 0, -10 };
 
     const ground: BodyHandle = try createBody(&world, .{ .motion_type = .static, .position = .{ 0, 0 } });
@@ -14313,8 +14371,8 @@ test "custom filter callback vetoes collision between opted-in shapes" {
             return false; // veto every pair this is consulted for
         }
     };
-    var world: World = try World.init(std.testing.allocator, 64);
-    defer world.deinit(std.testing.allocator);
+    var world: World = try .init(testing_allocator, 64);
+    defer world.deinit(testing_allocator);
     world.settings.gravity = .{ 0, -10 };
     setCustomFilterCallback(&world, Veto.reject, null);
 
@@ -14365,8 +14423,8 @@ test "pre-solve one-way platform passes a rising body and catches a falling one"
             return sign * n[1] > 0.95;
         }
     };
-    var world: World = try World.init(std.testing.allocator, 64);
-    defer world.deinit(std.testing.allocator);
+    var world: World = try .init(testing_allocator, 64);
+    defer world.deinit(testing_allocator);
     world.settings.gravity = .{ 0, -10 };
     setPreSolveCallback(&world, OneWay.presolve, &world);
 
@@ -14405,8 +14463,8 @@ test "pre-solve one-way platform passes a rising body and catches a falling one"
 }
 
 test "deferred mass defers the mass solve to applyMassFromShapes" {
-    var world: World = try World.init(std.testing.allocator, 64);
-    defer world.deinit(std.testing.allocator);
+    var world: World = try .init(testing_allocator, 64);
+    defer world.deinit(testing_allocator);
 
     const centers = [_]Vec2{ .{ -1, 0 }, .{ 1, 0 }, .{ 0, -1 }, .{ 0, 1 } };
 
@@ -14437,8 +14495,8 @@ test "deferred mass defers the mass solve to applyMassFromShapes" {
 }
 
 test "getContactData reports a live touching contact's manifold" {
-    var world: World = try World.init(std.testing.allocator, 64);
-    defer world.deinit(std.testing.allocator);
+    var world: World = try .init(testing_allocator, 64);
+    defer world.deinit(testing_allocator);
     world.settings.gravity = .{ 0, -10 };
 
     const ground: BodyHandle = try createBody(&world, .{ .motion_type = .static, .position = .{ 0, 0 } });
@@ -14481,9 +14539,9 @@ test "PairSet matches a reference set under heavy random churn" {
     const gpa: Allocator = std.heap.page_allocator;
     var set: PairSet = .{};
     defer set.deinit(gpa);
-    var ref: std.AutoHashMapUnmanaged(u64, void) = .empty;
+    var ref: AutoHashMapUnmanaged(u64, void) = .empty;
     defer ref.deinit(gpa);
-    var live: std.ArrayListUnmanaged(u64) = .empty;
+    var live: ArrayListUnmanaged(u64) = .empty;
     defer live.deinit(gpa);
 
     var rng: u64 = 0xC0FFEE123;
@@ -14518,7 +14576,7 @@ test "PairSet matches a reference set under heavy random churn" {
         }
     }
     try expect(set.count == @as(u32, @intCast(ref.count())));
-    var it: std.AutoHashMapUnmanaged(u64, void).KeyIterator = ref.keyIterator();
+    var it: AutoHashMapUnmanaged(u64, void).KeyIterator = ref.keyIterator();
     while (it.next()) |k| {
         try expect(set.contains(k.*));
     }
@@ -14526,7 +14584,7 @@ test "PairSet matches a reference set under heavy random churn" {
 
 test "settled bodies fall asleep (covers the island sleep-eligible path)" {
     const gpa: Allocator = std.heap.page_allocator;
-    var world: World = try World.init(gpa, 64);
+    var world: World = try .init(gpa, 64);
     defer world.deinit(gpa);
     world.settings.gravity = .{ 0, -10 };
 

@@ -73,6 +73,52 @@ fn lerpf(a: f32, b: f32, t: f32) f32 {
     return a + (b - a) * t;
 }
 
+fn drawHand(
+    gl: *z.WgpuGl,
+    center: Vec2,
+    deg: f32,
+    len: f32,
+    thick: f32,
+) void {
+    const r: f32 = deg * rad_per_deg;
+    const tip: Vec2 = .{ center[0] + cosRad(r) * len, center[1] + sinRad(r) * len };
+    gl.line(center, tip, .{ .color = hands_col, .thickness = thick });
+}
+
+fn drawClocks(f: *z.Frame, s: *State, w: f32, h: f32) void {
+    // native content box is ~[4..796] x [95..305]; fit + centre it
+    const content_w: f32 = 800.0;
+    const content_h: f32 = 210.0;
+    const k: f32 = clamp(@min(w * 0.94 / content_w, h * 0.6 / content_h), 0.05, 2.0);
+    const offx: f32 = w * 0.5 - 400.0 * k;
+    const offy: f32 = h * 0.5 - 200.0 * k;
+
+    const face: f32 = face_size * k;
+    const thick: f32 = @max(face * 0.16, 1.5);
+
+    var x_off: f32 = 4.0;
+    for (0..6) |digit| {
+        for (0..6) |row| {
+            for (0..4) |col| {
+                const nx: f32 = x_off + float(col) * (face_size + face_spacing) + face_size * 0.5;
+                const ny: f32 = 100.0 + float(row) * (face_size + face_spacing) + face_size * 0.5;
+                const center: Vec2 = .{ offx + nx * k, offy + ny * k };
+                f.gl.circle(center, face * 0.5, .{ .color = ring_col, .outline = 1 });
+                const cell: Vec2 = s.current[digit][row * 4 + col];
+                drawHand(f.gl, center, cell[0], face * 0.5 + 4.0 * k, thick);
+                drawHand(f.gl, center, cell[1], face * 0.5 + 2.0 * k, thick);
+            }
+        }
+        x_off += (face_size + face_spacing) * 4.0;
+        if (digit % 2 == 1) {
+            const cx: f32 = offx + (x_off + 4.0) * k;
+            f.gl.circle(.{ cx, offy + 160.0 * k }, 7.0 * k, .{ .color = hands_col, .segments = 16 });
+            f.gl.circle(.{ cx, offy + 225.0 * k }, 7.0 * k, .{ .color = hands_col, .segments = 16 });
+            x_off += section_spacing;
+        }
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
@@ -134,52 +180,6 @@ fn update(f: *z.Frame, s: *State) void {
     const line: []const u8 = bufPrint(&buf, "{d}-hour mode - tap to switch", .{s.hour_mode}) catch "";
     common.caption(f.gl, s.font, line);
     z.endDrawing(f.gl);
-}
-
-fn drawHand(
-    gl: *z.WgpuGl,
-    center: Vec2,
-    deg: f32,
-    len: f32,
-    thick: f32,
-) void {
-    const r: f32 = deg * rad_per_deg;
-    const tip: Vec2 = .{ center[0] + cosRad(r) * len, center[1] + sinRad(r) * len };
-    gl.line(center, tip, .{ .color = hands_col, .thickness = thick });
-}
-
-fn drawClocks(f: *z.Frame, s: *State, w: f32, h: f32) void {
-    // native content box is ~[4..796] x [95..305]; fit + centre it
-    const content_w: f32 = 800.0;
-    const content_h: f32 = 210.0;
-    const k: f32 = clamp(@min(w * 0.94 / content_w, h * 0.6 / content_h), 0.05, 2.0);
-    const offx: f32 = w * 0.5 - 400.0 * k;
-    const offy: f32 = h * 0.5 - 200.0 * k;
-
-    const face: f32 = face_size * k;
-    const thick: f32 = @max(face * 0.16, 1.5);
-
-    var x_off: f32 = 4.0;
-    for (0..6) |digit| {
-        for (0..6) |row| {
-            for (0..4) |col| {
-                const nx: f32 = x_off + float(col) * (face_size + face_spacing) + face_size * 0.5;
-                const ny: f32 = 100.0 + float(row) * (face_size + face_spacing) + face_size * 0.5;
-                const center: Vec2 = .{ offx + nx * k, offy + ny * k };
-                f.gl.circle(center, face * 0.5, .{ .color = ring_col, .outline = 1 });
-                const cell: Vec2 = s.current[digit][row * 4 + col];
-                drawHand(f.gl, center, cell[0], face * 0.5 + 4.0 * k, thick);
-                drawHand(f.gl, center, cell[1], face * 0.5 + 2.0 * k, thick);
-            }
-        }
-        x_off += (face_size + face_spacing) * 4.0;
-        if (digit % 2 == 1) {
-            const cx: f32 = offx + (x_off + 4.0) * k;
-            f.gl.circle(.{ cx, offy + 160.0 * k }, 7.0 * k, .{ .color = hands_col, .segments = 16 });
-            f.gl.circle(.{ cx, offy + 225.0 * k }, 7.0 * k, .{ .color = hands_col, .segments = 16 });
-            x_off += section_spacing;
-        }
-    }
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

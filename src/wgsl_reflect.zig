@@ -11,6 +11,15 @@
 //! per-shader build-time checker links it and is compiled once per shader.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const indexOf = std.mem.indexOf;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const splitScalar = std.mem.splitScalar;
+const trim = std.mem.trim;
+const parseInt = std.fmt.parseInt;
+const ArrayList = std.ArrayList;
+const indexOfPos = std.mem.indexOfPos;
+const startsWith = std.mem.startsWith;
 
 // Strings in a `WgslBinding` are owned (duped into the caller's allocator);
 // free the whole result with `freeWgslBindings`.
@@ -44,7 +53,7 @@ fn isIdentChar(c: u8) bool {
 /// Read the unsigned integer inside the first `attr(...)` occurrence, e.g.
 /// `parenU32(chunk, "@group")` on `@group(2)` returns 2.
 fn parenU32(chunk: []const u8, attr: []const u8) ?u32 {
-    const at: usize = std.mem.indexOf(u8, chunk, attr) orelse return null;
+    const at: usize = indexOf(u8, chunk, attr) orelse return null;
     var i: usize = at + attr.len;
     while (i < chunk.len and (chunk[i] == ' ' or chunk[i] == '\t' or chunk[i] == '(')) : (i += 1) {}
     const start: usize = i;
@@ -52,13 +61,13 @@ fn parenU32(chunk: []const u8, attr: []const u8) ?u32 {
     if (i == start) {
         return null;
     }
-    return std.fmt.parseInt(u32, chunk[start..i], 10) catch null;
+    return parseInt(u32, chunk[start..i], 10) catch null;
 }
 
 /// Find `word` as a standalone token (identifier boundaries on both sides).
 fn indexOfWord(haystack: []const u8, word: []const u8) ?usize {
     var from: usize = 0;
-    while (std.mem.indexOfPos(u8, haystack, from, word)) |at| {
+    while (indexOfPos(u8, haystack, from, word)) |at| {
         const before_ok: bool = at == 0 or !isIdentChar(haystack[at - 1]);
         const after: usize = at + word.len;
         const after_ok: bool = after >= haystack.len or !isIdentChar(haystack[after]);
@@ -94,13 +103,13 @@ fn stripComments(dst: []u8, wgsl: []const u8) usize {
 
 /// Reflect every `@group(N) @binding(M) var ...` declaration out of WGSL.
 /// Caller owns the result; free with `freeWgslBindings`.
-pub fn reflectWgslBindings(gpa: std.mem.Allocator, wgsl: []const u8) ![]WgslBinding {
+pub fn reflectWgslBindings(gpa: Allocator, wgsl: []const u8) ![]WgslBinding {
     const clean: []u8 = try gpa.alloc(u8, wgsl.len);
     defer gpa.free(clean);
     const clean_len: usize = stripComments(clean, wgsl);
     const src: []const u8 = clean[0..clean_len];
 
-    var out: std.ArrayList(WgslBinding) = .empty;
+    var out: ArrayList(WgslBinding) = .empty;
     errdefer {
         for (out.items) |b| {
             gpa.free(b.name);
@@ -109,9 +118,9 @@ pub fn reflectWgslBindings(gpa: std.mem.Allocator, wgsl: []const u8) ![]WgslBind
         out.deinit(gpa);
     }
 
-    var stmts = std.mem.splitScalar(u8, src, ';');
+    var stmts = splitScalar(u8, src, ';');
     while (stmts.next()) |chunk| {
-        if (std.mem.indexOf(u8, chunk, "@group") == null) {
+        if (indexOf(u8, chunk, "@group") == null) {
             continue;
         }
         const var_at: usize = indexOfWord(chunk, "var") orelse continue;
@@ -122,27 +131,27 @@ pub fn reflectWgslBindings(gpa: std.mem.Allocator, wgsl: []const u8) ![]WgslBind
         var addr: []const u8 = "";
         while (p < chunk.len and (chunk[p] == ' ' or chunk[p] == '\t')) : (p += 1) {}
         if (p < chunk.len and chunk[p] == '<') {
-            const close: usize = std.mem.indexOfScalarPos(u8, chunk, p, '>') orelse continue;
-            addr = std.mem.trim(u8, chunk[p + 1 .. close], " \t\r\n");
+            const close: usize = indexOfScalarPos(u8, chunk, p, '>') orelse continue;
+            addr = trim(u8, chunk[p + 1 .. close], " \t\r\n");
             p = close + 1;
         }
-        const colon: usize = std.mem.indexOfScalarPos(u8, chunk, p, ':') orelse continue;
-        const name: []const u8 = std.mem.trim(u8, chunk[p..colon], " \t\r\n");
-        const type_str: []const u8 = std.mem.trim(u8, chunk[colon + 1 ..], " \t\r\n");
+        const colon: usize = indexOfScalarPos(u8, chunk, p, ':') orelse continue;
+        const name: []const u8 = trim(u8, chunk[p..colon], " \t\r\n");
+        const type_str: []const u8 = trim(u8, chunk[colon + 1 ..], " \t\r\n");
 
         var kind: WgslBinding.Kind = .unknown;
         var detail: []const u8 = type_str;
-        if (std.mem.startsWith(u8, addr, "uniform")) {
+        if (startsWith(u8, addr, "uniform")) {
             kind = .uniform;
             detail = type_str;
-        } else if (std.mem.startsWith(u8, addr, "storage")) {
+        } else if (startsWith(u8, addr, "storage")) {
             kind = .storage;
             detail = addr;
-        } else if (std.mem.startsWith(u8, type_str, "sampler")) {
+        } else if (startsWith(u8, type_str, "sampler")) {
             kind = .sampler;
-        } else if (std.mem.startsWith(u8, type_str, "texture_storage")) {
+        } else if (startsWith(u8, type_str, "texture_storage")) {
             kind = .storage_texture;
-        } else if (std.mem.startsWith(u8, type_str, "texture")) {
+        } else if (startsWith(u8, type_str, "texture")) {
             kind = .texture;
         }
 
@@ -157,7 +166,7 @@ pub fn reflectWgslBindings(gpa: std.mem.Allocator, wgsl: []const u8) ![]WgslBind
     return out.toOwnedSlice(gpa);
 }
 
-pub fn freeWgslBindings(gpa: std.mem.Allocator, bindings: []const WgslBinding) void {
+pub fn freeWgslBindings(gpa: Allocator, bindings: []const WgslBinding) void {
     for (bindings) |b| {
         gpa.free(b.name);
         gpa.free(b.detail);

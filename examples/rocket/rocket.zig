@@ -121,7 +121,7 @@ fn weights() mpc.Weights {
 }
 
 fn makeVehicle(gpa: Allocator, planned: bool) !Vehicle {
-    const plan: mpc.RocketPlan = try mpc.RocketPlan.init(gpa, horizon_knots);
+    const plan: mpc.RocketPlan = try .init(gpa, horizon_knots);
     @memset(plan.ctrl, 0);
     @memset(plan.reference, 0);
     return .{
@@ -138,6 +138,32 @@ fn makeVehicle(gpa: Allocator, planned: bool) !Vehicle {
         .trail = @splat(vec(0, 0, 0)),
         .trail_count = 0,
     };
+}
+
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+
+fn resetAll(s: *State) void {
+    inline for (.{ &s.pd, &s.planner }) |v| {
+        v.state = @splat(0);
+        v.state[mpc.rocket_x_offset] = s.start_x;
+        v.state[mpc.rocket_y_offset] = s.start_alt;
+        v.state[mpc.rocket_vy_offset] = s.start_vy;
+        v.state[mpc.rocket_vx_offset] = -0.3 * s.start_x / 3.0;
+        v.thrust = weight;
+        v.gimbal = 0;
+        v.down = false;
+        v.good = false;
+        v.trail_count = 0;
+        // * AND THE PLAN, NOT ONLY THE VEHICLE. `solveRocket` warm-starts from `plan.ctrl`;
+        // leaving the last descent's commands there means the first tick of the next one
+        // applies them. That exact oversight explained both "it explodes" and "reset does not
+        // reset" in the humanoid.
+        @memset(v.plan.ctrl, 0);
+        for (0..v.plan.horizon) |k| {
+            v.plan.ctrl[k * mpc.rocket_control_dim + mpc.rocket_thrust_offset] = weight;
+        }
+    }
+    s.accumulator = 0;
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
@@ -164,30 +190,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
     s.planner.plan.deinit();
     s.pd.plan.deinit();
-}
-
-fn resetAll(s: *State) void {
-    inline for (.{ &s.pd, &s.planner }) |v| {
-        v.state = @splat(0);
-        v.state[mpc.rocket_x_offset] = s.start_x;
-        v.state[mpc.rocket_y_offset] = s.start_alt;
-        v.state[mpc.rocket_vy_offset] = s.start_vy;
-        v.state[mpc.rocket_vx_offset] = -0.3 * s.start_x / 3.0;
-        v.thrust = weight;
-        v.gimbal = 0;
-        v.down = false;
-        v.good = false;
-        v.trail_count = 0;
-        // * AND THE PLAN, NOT ONLY THE VEHICLE. `solveRocket` warm-starts from `plan.ctrl`;
-        // leaving the last descent's commands there means the first tick of the next one
-        // applies them. That exact oversight explained both "it explodes" and "reset does not
-        // reset" in the humanoid.
-        @memset(v.plan.ctrl, 0);
-        for (0..v.plan.horizon) |k| {
-            v.plan.ctrl[k * mpc.rocket_control_dim + mpc.rocket_thrust_offset] = weight;
-        }
-    }
-    s.accumulator = 0;
 }
 
 fn advance(v: *Vehicle) void {
@@ -264,69 +266,35 @@ fn advance(v: *Vehicle) void {
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    if (s.running) {
-        s.accumulator += @min(f.time.delta_time, 0.2);
-        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            advance(&s.pd);
-            advance(&s.planner);
-        }
-    }
-
-    z.clearViewport(f, background);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 40.0, .max_distance = 400.0 });
-    z.beginMode3D(gl, cam);
-
-    // Ground, and the pad the vehicles are aiming at.
-    s.transform[0] = mulMat(translation(0, -1.5, 0), scaling(400, 3, 120));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_colour);
-    s.transform[0] = mulMat(translation(0, 0.3, 0), scaling(8, 0.6, 40));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, pad_colour);
-
-    drawVehicle(s, gl, &s.pd, -26.0);
-    drawVehicle(s, gl, &s.planner, 26.0);
-    z.endMode3D(gl);
-}
-
-fn drawVehicle(s: *State, gl: *z.WgpuGl, v: *const Vehicle, depth: f32) void {
-    const at: Vec = vec(v.state[mpc.rocket_x_offset], v.state[mpc.rocket_y_offset], depth);
-    const tilt: f32 = v.state[mpc.rocket_tilt_offset];
-    // * +tilt LEANS TOWARD +x, and the render's Z rotation turns +y toward -x - hence the
-    // negation. Getting this backwards draws a vehicle leaning away from where it is going.
-    const lean: Mat = rotationZ(-tilt);
-
-    s.transform[0] = mulMat(mulMat(translation(at[0], at[1], at[2]), lean), scaling(3.0, 12.0, 3.0));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, if (v.down)
-        (if (v.good) landed_colour else crashed_colour)
-    else
-        hull_colour);
-
-    // * THE FLAME LENGTH IS THE THROTTLE, AND IT NEVER GOES OUT. That is the whole constraint,
-    // drawn: the minimum is 40% of weight, so there is always a flame, and a vehicle that needs
-    // less deceleration has to lean instead.
-    if (!v.down) {
-        const throttle: f32 = v.thrust / limits.max_thrust;
-        const body_down: Vec = vec(@sin(tilt), -@cos(tilt), 0);
-        const nozzle: Vec = at + body_down * splat(6.0);
-        const jet: f32 = tilt + v.gimbal;
-        const exhaust: Vec = nozzle + vec(@sin(jet), -@cos(jet), 0) * splat(6.0 + 26.0 * throttle);
-        z.drawLine3D(gl, nozzle, exhaust, if (throttle > 0.7) flame_high else flame_low);
-    }
-
-    // * GUARDED, BECAUSE `1..0` IS AN INTEGER UNDERFLOW, NOT AN EMPTY RANGE. On the first frame
-    // the trail is empty and `for (1..0)` traps in debug wasm - which is how this surfaced: it
-    // ran fine in release on the host and died instantly in the smoke run.
-    if (v.trail_count < 2) {
+fn report(u: ui.Ui, label: []const u8, v: *const Vehicle) void {
+    if (v.down) {
+        u.text("{s} DOWN  vy {d:>6.2}  vx {d:>6.2}  tilt {d:>6.3}", .{
+            label, v.touchdown_vy, v.touchdown_vx, v.touchdown_tilt,
+        });
+        u.text("     {s}", .{if (v.good) "*** LANDED ***" else "crashed"});
         return;
     }
-    for (1..v.trail_count) |i| {
-        z.drawLine3D(gl, v.trail[i - 1] + vec(0, 0, depth), v.trail[i] + vec(0, 0, depth), trail_colour);
-    }
+    u.text("{s} alt {d:>6.1}  vy {d:>6.2}  x {d:>6.1}", .{
+        label,
+        v.state[mpc.rocket_y_offset],
+        v.state[mpc.rocket_vy_offset],
+        v.state[mpc.rocket_x_offset],
+    });
+    // * THROTTLE IS THE MEASUREMENT THAT MATTERS RIGHT NOW. If the planner is not saturating
+    // high in the last seconds, it does not think it needs to flare - a reference problem, not
+    // a weights problem.
+    const throttle: f32 = 100.0 * v.thrust / weight;
+    u.text("     throttle {d:>5.0}%%{s}  gimbal {d:>6.3}  tilt {d:>6.3}", .{
+        throttle,
+        if (v.thrust >= 0.999 * limits.max_thrust)
+            " MAX"
+        else if (v.thrust <= 1.001 * limits.min_thrust)
+            " MIN"
+        else
+            "    ",
+        v.gimbal,
+        v.state[mpc.rocket_tilt_offset],
+    });
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -369,38 +337,70 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-fn report(u: ui.Ui, label: []const u8, v: *const Vehicle) void {
-    if (v.down) {
-        u.text("{s} DOWN  vy {d:>6.2}  vx {d:>6.2}  tilt {d:>6.3}", .{
-            label, v.touchdown_vy, v.touchdown_vx, v.touchdown_tilt,
-        });
-        u.text("     {s}", .{if (v.good) "*** LANDED ***" else "crashed"});
+fn drawVehicle(s: *State, gl: *z.WgpuGl, v: *const Vehicle, depth: f32) void {
+    const at: Vec = vec(v.state[mpc.rocket_x_offset], v.state[mpc.rocket_y_offset], depth);
+    const tilt: f32 = v.state[mpc.rocket_tilt_offset];
+    // * +tilt LEANS TOWARD +x, and the render's Z rotation turns +y toward -x - hence the
+    // negation. Getting this backwards draws a vehicle leaning away from where it is going.
+    const lean: Mat = rotationZ(-tilt);
+
+    s.transform[0] = mulMat(mulMat(translation(at[0], at[1], at[2]), lean), scaling(3.0, 12.0, 3.0));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, if (v.down)
+        (if (v.good) landed_colour else crashed_colour)
+    else
+        hull_colour);
+
+    // * THE FLAME LENGTH IS THE THROTTLE, AND IT NEVER GOES OUT. That is the whole constraint,
+    // drawn: the minimum is 40% of weight, so there is always a flame, and a vehicle that needs
+    // less deceleration has to lean instead.
+    if (!v.down) {
+        const throttle: f32 = v.thrust / limits.max_thrust;
+        const body_down: Vec = vec(@sin(tilt), -@cos(tilt), 0);
+        const nozzle: Vec = at + body_down * splat(6.0);
+        const jet: f32 = tilt + v.gimbal;
+        const exhaust: Vec = nozzle + vec(@sin(jet), -@cos(jet), 0) * splat(6.0 + 26.0 * throttle);
+        z.drawLine3D(gl, nozzle, exhaust, if (throttle > 0.7) flame_high else flame_low);
+    }
+
+    // * GUARDED, BECAUSE `1..0` IS AN INTEGER UNDERFLOW, NOT AN EMPTY RANGE. On the first frame
+    // the trail is empty and `for (1..0)` traps in debug wasm - which is how this surfaced: it
+    // ran fine in release on the host and died instantly in the smoke run.
+    if (v.trail_count < 2) {
         return;
     }
-    u.text("{s} alt {d:>6.1}  vy {d:>6.2}  x {d:>6.1}", .{
-        label,
-        v.state[mpc.rocket_y_offset],
-        v.state[mpc.rocket_vy_offset],
-        v.state[mpc.rocket_x_offset],
-    });
-    // * THROTTLE IS THE MEASUREMENT THAT MATTERS RIGHT NOW. If the planner is not saturating
-    // high in the last seconds, it does not think it needs to flare - a reference problem, not
-    // a weights problem.
-    const throttle: f32 = 100.0 * v.thrust / weight;
-    u.text("     throttle {d:>5.0}%%{s}  gimbal {d:>6.3}  tilt {d:>6.3}", .{
-        throttle,
-        if (v.thrust >= 0.999 * limits.max_thrust)
-            " MAX"
-        else if (v.thrust <= 1.001 * limits.min_thrust)
-            " MIN"
-        else
-            "    ",
-        v.gimbal,
-        v.state[mpc.rocket_tilt_offset],
-    });
+    for (1..v.trail_count) |i| {
+        z.drawLine3D(gl, v.trail[i - 1] + vec(0, 0, depth), v.trail[i] + vec(0, 0, depth), trail_colour);
+    }
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    if (s.running) {
+        s.accumulator += @min(f.time.delta_time, 0.2);
+        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
+            advance(&s.pd);
+            advance(&s.planner);
+        }
+    }
+
+    z.clearViewport(f, background);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 40.0, .max_distance = 400.0 });
+    z.beginMode3D(gl, cam);
+
+    // Ground, and the pad the vehicles are aiming at.
+    s.transform[0] = mulMat(translation(0, -1.5, 0), scaling(400, 3, 120));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_colour);
+    s.transform[0] = mulMat(translation(0, 0.3, 0), scaling(8, 0.6, 40));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, pad_colour);
+
+    drawVehicle(s, gl, &s.pd, -26.0);
+    drawVehicle(s, gl, &s.planner, 26.0);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

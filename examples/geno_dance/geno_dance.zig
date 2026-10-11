@@ -24,6 +24,8 @@
 //! a single matrix function; getting them wrong is no longer something an example can do.
 
 const std = @import("std");
+const sliceAsBytes = std.mem.sliceAsBytes;
+const eql = std.mem.eql;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -32,6 +34,8 @@ const common = @import("example_common");
 pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
+const zm = @import("zm");
+
 const mulMat = zm.mulMat;
 const translationV = zm.translationV;
 const matFromQuat = zm.matFromQuat;
@@ -41,7 +45,6 @@ const acosRad = zm.acosRad;
 const clamp = zm.clamp;
 const pi = zm.pi;
 const z = @import("zimr");
-const zm = @import("zm");
 const assertf = zm.assertf;
 const ui = z.ui_real;
 const mjcf = z.mjcf;
@@ -53,6 +56,7 @@ const Quat = zm.Quat;
 const Color = zm.Color;
 const float = zm.float;
 const vec = zm.vec;
+const CameraProjection = zm.CameraProjection;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// Character one: mesh, skin weights, and the rig its clusters were bound to. Its own take is
@@ -116,172 +120,6 @@ const robot_hip_height_m: f32 = 0.830;
 // sides are measured from the same correspondence, in the same loop. **A constant that has to be
 // kept in step with a model is a constant that will drift** - this one deleted itself by making
 // the question local.
-
-/// The scale taking this capture's units to the robot's metres - from the LIBRARY.
-///
-/// -- *** THE LAST FOUR BUGS ALL LIVED IN THIS CONVERSION --
-///
-/// The scale, the anchor, the units and the anatomy mismatch were every one of them here, in the
-/// example, where no test could reach them. **`robot.captureScale` now owns it**, with its three
-/// properties - pose-invariant, unit-cancelling, anatomy-matched - asserted in the harness rather
-/// than argued for in a comment.
-fn captureScale(s: *const State, source: *const Character) f32 {
-    return z.robot.captureScale(&s.robot.model, .{
-        .positions = source.positions[0..source.boneCount()],
-        .rotations = source.rotations[0..source.boneCount()],
-        .parents = source.target_parents[0..source.boneCount()],
-        .human_of_body = s.human_of_body,
-    });
-}
-
-/// The floor is a large CUBE sunk so only its top face shows. `drawCubeTexture` takes a single
-/// uniform size, so a thin slab is not available - and a sunken cube is better anyway: the
-/// shadow pass in section 12a-2 wants a receiver with real thickness, not a zero-height plane.
-const ground_extent: f32 = 8.0;
-const ground_light: Color = .{ .r = 205, .g = 205, .b = 205, .a = 255 };
-const ground_dark: Color = .{ .r = 170, .g = 170, .b = 170, .a = 255 };
-
-/// The sun's direction, from yaw and pitch.
-///
-/// * EXPOSED AS SLIDERS SO THE NORMALS CAN BE AUDITED. A fixed light hides normal errors: a
-/// facet with a wrong normal just looks like a slightly odd shade and nothing contradicts it.
-/// SWEEPING the light makes the error obvious - correct normals shade smoothly and
-/// continuously as the light moves, while a bad patch pops, stays flat, or lights in the wrong
-/// direction. It is the cheapest normal debugger there is, and unlike a normals-as-colour view
-/// it needs no new shader.
-///
-/// Pitch is measured DOWN from the horizon, so 0 grazes the ground and 90 is directly overhead.
-fn lightDirFrom(yaw_deg: f32, pitch_deg: f32) Vec {
-    const yaw: f32 = yaw_deg * (pi / 180.0);
-    const pitch: f32 = pitch_deg * (pi / 180.0);
-    const cp: f32 = @cos(pitch);
-    return vec(-@sin(yaw) * cp, -@sin(pitch), -@cos(yaw) * cp);
-}
-/// How far back along the light the camera sits, and how much it covers. Big enough to hold
-/// both characters and the ground they stand on.
-const light_distance: f32 = 6.0;
-/// Half-width of the light's orthographic box, in world units.
-///
-/// * SIZED TO THE CASTERS, AND THE BOX FOLLOWS THEM. Tightening this to 1.6 spent the map's
-/// resolution well but clipped the dance: `dance1` travels, so a box centred on the origin
-/// loses the character the moment it steps away - visible as a shadow that simply stops.
-///
-/// `lightTarget` re-centres the box on the characters' midpoint every frame, which is the
-/// standard fix for a directional map and cheaper than widening: following keeps the texel
-/// density, widening throws it away.
-const light_extent: f32 = 2.6;
-const light_near: f32 = 0.1;
-const light_far: f32 = 30.0;
-
-const shadow_map_size: u32 = 1024;
-/// G-buffer resolution. Square and fixed - see `initGbuffer`.
-const gbuffer_size: u32 = 1024;
-
-// -- Host mirrors of the two `lit_shadow` uniform blocks --
-//
-// These MUST match `lit_shadow_vs_io.Ubo` / `lit_shadow_fs_io.Ubo` field for field: the layout
-// is the wire contract between this file and the generated WGSL, and a mismatch shows up as
-// garbage transforms rather than a compile error.
-
-/// `lit_shadow_vs_io.Ubo` - group 0.
-const LitVsUbo = struct {
-    mvp: [4]Vec,
-    light_vp: [4]Vec,
-    normal_matrix: [4]Vec,
-};
-
-/// `lit_shadow_fs_io.Ubo` - group 2. `params` is {bias_slope, bias_min, 0, 0}; the defaults
-/// in the shader's schema are tuned for an f16 depth map.
-const LitFsUbo = struct {
-    light_dir: Vec,
-    base_color: Vec,
-    params: Vec,
-};
-
-/// `ssao_fs_io.Ubo` - group 2 of the AO pass.
-const SsaoUbo = struct {
-    /// Camera view matrix: occlusion is measured in VIEW space so `radius` means a fixed
-    /// distance from the camera rather than something that drifts as the scene moves.
-    view: [4]Vec,
-    /// {radius, bias, intensity, unused}
-    params: Vec,
-    /// {turns, inv_width, inv_height, unused}
-    spiral: Vec,
-};
-
-/// `ssao_blur_fs_io.Ubo` - one pipeline, two passes, the axis switched by uniform.
-const SsaoBlurUbo = struct {
-    /// {texel_x, texel_y, axis_x, axis_y}
-    step: Vec,
-    /// {position_falloff, normal_power, 0, 0}
-    weights: Vec,
-};
-
-const ssao_blur_ubo_bytes: u64 = z.shader.wireSizeOf(SsaoBlurUbo);
-const ssao_blur_fs_wgsl = @embedFile("ssao_blur_fs.wgsl");
-const ssao_ubo_bytes: u64 = z.shader.wireSizeOf(SsaoUbo);
-const ssao_fs_wgsl = @embedFile("ssao_fs.wgsl");
-/// * The AO pass reuses the DEFERRED SHADING vertex stage - same fullscreen quad, same UV
-/// flip. `ssao_common_io` says so; shipping a second copy would be a second thing to keep in
-/// step for no gain.
-const fullscreen_vs_wgsl = @embedFile("deferred_shading_vs.wgsl");
-
-/// The fullscreen triangle pair, in NDC.
-const fullscreen_verts = [_][2]f32{
-    .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 },
-    .{ -1, -1 }, .{ 1, 1 },  .{ -1, 1 },
-};
-
-/// `gbuffer_vs_io.Ubo` - the geometry prepass, group 0.
-const GbufVsUbo = struct {
-    mvp: [4]Vec,
-    model: [4]Vec,
-    normal_matrix: [4]Vec,
-};
-
-/// `gbuffer_fs_io.Ubo` - group 2. Only the albedo matters to SSAO, which reads position and
-/// normal, but the shader writes all three attachments regardless.
-const GbufFsUbo = struct {
-    albedo_spec: Vec,
-};
-
-const gbuf_vs_bytes: u64 = z.shader.wireSizeOf(GbufVsUbo);
-const gbuf_fs_bytes: u64 = z.shader.wireSizeOf(GbufFsUbo);
-const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
-const gbuffer_fs_wgsl = @embedFile("gbuffer_fs.wgsl");
-
-/// `depth_vs_io.Ubo` - the light pass writes NDC depth to the red channel.
-const DepthUbo = struct {
-    mvp: [4]Vec,
-    /// {cam_near, cam_far, viz_near, viz_far} - only the first two matter in shadow mode.
-    params: Vec,
-    /// 0 = raw `ndc_z*0.5+0.5`, which is exactly what `lit_shadow_fs` compares against.
-    mode: i32,
-    pad0: i32 = 0,
-    pad1: i32 = 0,
-    pad2: i32 = 0,
-};
-
-const depth_ubo_bytes: u64 = z.shader.wireSizeOf(DepthUbo);
-const depth_vs_wgsl = @embedFile("depth_vs.wgsl");
-const depth_fs_wgsl = @embedFile("depth_fs.wgsl");
-const lit_vs_bytes: u64 = z.shader.wireSizeOf(LitVsUbo);
-const lit_fs_bytes: u64 = z.shader.wireSizeOf(LitFsUbo);
-const lit_vs_wgsl = @embedFile("lit_shadow_vs.wgsl");
-const lit_fs_wgsl = @embedFile("lit_shadow_fs.wgsl");
-
-/// The ground as the shadow pipeline sees it: position then normal, 24-byte stride - the same
-/// layout `Cube3D`'s `MeshVertex` uses, so the characters can join this pass unchanged later.
-const GroundVertex = extern struct {
-    pos: [3]f32,
-    normal: [3]f32,
-};
-
-/// GenoView tints the character raylib's ORANGE against the grey floor, as linear rgb for the
-/// shader's `base_color` (255,161,0 scaled to 0..1).
-const character_albedo: Vec = .{ 1.0, 0.63, 0.0, 1.0 };
-/// The floor's albedo - flat until section 12e brings the checker back through the G-buffer.
-const ground_albedo: Vec = .{ 0.72, 0.72, 0.74, 1.0 };
 
 /// One skinned figure: its model, whatever clip drives it, and the per-frame scratch.
 ///
@@ -766,6 +604,172 @@ const State = struct {
     }
 };
 
+/// The scale taking this capture's units to the robot's metres - from the LIBRARY.
+///
+/// -- *** THE LAST FOUR BUGS ALL LIVED IN THIS CONVERSION --
+///
+/// The scale, the anchor, the units and the anatomy mismatch were every one of them here, in the
+/// example, where no test could reach them. **`robot.captureScale` now owns it**, with its three
+/// properties - pose-invariant, unit-cancelling, anatomy-matched - asserted in the harness rather
+/// than argued for in a comment.
+fn captureScale(s: *const State, source: *const Character) f32 {
+    return z.robot.captureScale(&s.robot.model, .{
+        .positions = source.positions[0..source.boneCount()],
+        .rotations = source.rotations[0..source.boneCount()],
+        .parents = source.target_parents[0..source.boneCount()],
+        .human_of_body = s.human_of_body,
+    });
+}
+
+/// The floor is a large CUBE sunk so only its top face shows. `drawCubeTexture` takes a single
+/// uniform size, so a thin slab is not available - and a sunken cube is better anyway: the
+/// shadow pass in section 12a-2 wants a receiver with real thickness, not a zero-height plane.
+const ground_extent: f32 = 8.0;
+const ground_light: Color = .{ .r = 205, .g = 205, .b = 205, .a = 255 };
+const ground_dark: Color = .{ .r = 170, .g = 170, .b = 170, .a = 255 };
+
+/// The sun's direction, from yaw and pitch.
+///
+/// * EXPOSED AS SLIDERS SO THE NORMALS CAN BE AUDITED. A fixed light hides normal errors: a
+/// facet with a wrong normal just looks like a slightly odd shade and nothing contradicts it.
+/// SWEEPING the light makes the error obvious - correct normals shade smoothly and
+/// continuously as the light moves, while a bad patch pops, stays flat, or lights in the wrong
+/// direction. It is the cheapest normal debugger there is, and unlike a normals-as-colour view
+/// it needs no new shader.
+///
+/// Pitch is measured DOWN from the horizon, so 0 grazes the ground and 90 is directly overhead.
+fn lightDirFrom(yaw_deg: f32, pitch_deg: f32) Vec {
+    const yaw: f32 = yaw_deg * (pi / 180.0);
+    const pitch: f32 = pitch_deg * (pi / 180.0);
+    const cp: f32 = @cos(pitch);
+    return vec(-@sin(yaw) * cp, -@sin(pitch), -@cos(yaw) * cp);
+}
+/// How far back along the light the camera sits, and how much it covers. Big enough to hold
+/// both characters and the ground they stand on.
+const light_distance: f32 = 6.0;
+/// Half-width of the light's orthographic box, in world units.
+///
+/// * SIZED TO THE CASTERS, AND THE BOX FOLLOWS THEM. Tightening this to 1.6 spent the map's
+/// resolution well but clipped the dance: `dance1` travels, so a box centred on the origin
+/// loses the character the moment it steps away - visible as a shadow that simply stops.
+///
+/// `lightTarget` re-centres the box on the characters' midpoint every frame, which is the
+/// standard fix for a directional map and cheaper than widening: following keeps the texel
+/// density, widening throws it away.
+const light_extent: f32 = 2.6;
+const light_near: f32 = 0.1;
+const light_far: f32 = 30.0;
+
+const shadow_map_size: u32 = 1024;
+/// G-buffer resolution. Square and fixed - see `initGbuffer`.
+const gbuffer_size: u32 = 1024;
+
+// -- Host mirrors of the two `lit_shadow` uniform blocks --
+//
+// These MUST match `lit_shadow_vs_io.Ubo` / `lit_shadow_fs_io.Ubo` field for field: the layout
+// is the wire contract between this file and the generated WGSL, and a mismatch shows up as
+// garbage transforms rather than a compile error.
+
+/// `lit_shadow_vs_io.Ubo` - group 0.
+const LitVsUbo = struct {
+    mvp: [4]Vec,
+    light_vp: [4]Vec,
+    normal_matrix: [4]Vec,
+};
+
+/// `lit_shadow_fs_io.Ubo` - group 2. `params` is {bias_slope, bias_min, 0, 0}; the defaults
+/// in the shader's schema are tuned for an f16 depth map.
+const LitFsUbo = struct {
+    light_dir: Vec,
+    base_color: Vec,
+    params: Vec,
+};
+
+/// `ssao_fs_io.Ubo` - group 2 of the AO pass.
+const SsaoUbo = struct {
+    /// Camera view matrix: occlusion is measured in VIEW space so `radius` means a fixed
+    /// distance from the camera rather than something that drifts as the scene moves.
+    view: [4]Vec,
+    /// {radius, bias, intensity, unused}
+    params: Vec,
+    /// {turns, inv_width, inv_height, unused}
+    spiral: Vec,
+};
+
+/// `ssao_blur_fs_io.Ubo` - one pipeline, two passes, the axis switched by uniform.
+const SsaoBlurUbo = struct {
+    /// {texel_x, texel_y, axis_x, axis_y}
+    step: Vec,
+    /// {position_falloff, normal_power, 0, 0}
+    weights: Vec,
+};
+
+const ssao_blur_ubo_bytes: u64 = z.shader.wireSizeOf(SsaoBlurUbo);
+const ssao_blur_fs_wgsl = @embedFile("ssao_blur_fs.wgsl");
+const ssao_ubo_bytes: u64 = z.shader.wireSizeOf(SsaoUbo);
+const ssao_fs_wgsl = @embedFile("ssao_fs.wgsl");
+/// * The AO pass reuses the DEFERRED SHADING vertex stage - same fullscreen quad, same UV
+/// flip. `ssao_common_io` says so; shipping a second copy would be a second thing to keep in
+/// step for no gain.
+const fullscreen_vs_wgsl = @embedFile("deferred_shading_vs.wgsl");
+
+/// The fullscreen triangle pair, in NDC.
+const fullscreen_verts = [_][2]f32{
+    .{ -1, -1 }, .{ 1, -1 }, .{ 1, 1 },
+    .{ -1, -1 }, .{ 1, 1 },  .{ -1, 1 },
+};
+
+/// `gbuffer_vs_io.Ubo` - the geometry prepass, group 0.
+const GbufVsUbo = struct {
+    mvp: [4]Vec,
+    model: [4]Vec,
+    normal_matrix: [4]Vec,
+};
+
+/// `gbuffer_fs_io.Ubo` - group 2. Only the albedo matters to SSAO, which reads position and
+/// normal, but the shader writes all three attachments regardless.
+const GbufFsUbo = struct {
+    albedo_spec: Vec,
+};
+
+const gbuf_vs_bytes: u64 = z.shader.wireSizeOf(GbufVsUbo);
+const gbuf_fs_bytes: u64 = z.shader.wireSizeOf(GbufFsUbo);
+const gbuffer_vs_wgsl = @embedFile("gbuffer_vs.wgsl");
+const gbuffer_fs_wgsl = @embedFile("gbuffer_fs.wgsl");
+
+/// `depth_vs_io.Ubo` - the light pass writes NDC depth to the red channel.
+const DepthUbo = struct {
+    mvp: [4]Vec,
+    /// {cam_near, cam_far, viz_near, viz_far} - only the first two matter in shadow mode.
+    params: Vec,
+    /// 0 = raw `ndc_z*0.5+0.5`, which is exactly what `lit_shadow_fs` compares against.
+    mode: i32,
+    pad0: i32 = 0,
+    pad1: i32 = 0,
+    pad2: i32 = 0,
+};
+
+const depth_ubo_bytes: u64 = z.shader.wireSizeOf(DepthUbo);
+const depth_vs_wgsl = @embedFile("depth_vs.wgsl");
+const depth_fs_wgsl = @embedFile("depth_fs.wgsl");
+const lit_vs_bytes: u64 = z.shader.wireSizeOf(LitVsUbo);
+const lit_fs_bytes: u64 = z.shader.wireSizeOf(LitFsUbo);
+const lit_vs_wgsl = @embedFile("lit_shadow_vs.wgsl");
+const lit_fs_wgsl = @embedFile("lit_shadow_fs.wgsl");
+
+/// The ground as the shadow pipeline sees it: position then normal, 24-byte stride - the same
+/// layout `Cube3D`'s `MeshVertex` uses, so the characters can join this pass unchanged later.
+const GroundVertex = extern struct {
+    pos: [3]f32,
+    normal: [3]f32,
+};
+
+/// GenoView tints the character raylib's ORANGE against the grey floor, as linear rgb for the
+/// shader's `base_color` (255,161,0 scaled to 0..1).
+const character_albedo: Vec = .{ 1.0, 0.63, 0.0, 1.0 };
+/// The floor's albedo - flat until section 12e brings the checker back through the G-buffer.
+const ground_albedo: Vec = .{ 0.72, 0.72, 0.74, 1.0 };
+
 /// A joint's world matrix from a sampled pose: rotate, then translate.
 ///
 /// * `mulMat(a, b)` APPLIES **b FIRST, THEN a** in zm - the opposite of reading it
@@ -791,11 +795,143 @@ fn skeletonsMatch(a: d3.BvhSkeletalClip, b: d3.BvhSkeletalClip) bool {
         return false;
     }
     for (0..a.boneCount()) |j| {
-        if (!std.mem.eql(u8, a.boneName(j), b.boneName(j))) {
+        if (!eql(u8, a.boneName(j), b.boneName(j))) {
             return false;
         }
     }
     return true;
+}
+
+/// Euler channels to a quaternion, in the order the BVH header declares them.
+///
+/// * BVH applies rotation channels IN THE ORDER LISTED, which for these files is ZYX. Assuming
+/// XYZ bends every joint about the wrong axis first.
+fn quatFromBvhChannels(channels: []const z.codecs.bvh.Channel, values: []const f32) Quat {
+    var rotation: Quat = zm.quat_identity;
+    for (channels, 0..) |channel, index| {
+        const angle_radians: f32 = radFromDeg(values[index]);
+        const axis: ?Vec = switch (channel) {
+            .x_rotation => vec(1, 0, 0),
+            .y_rotation => vec(0, 1, 0),
+            .z_rotation => vec(0, 0, 1),
+            else => null,
+        };
+        if (axis) |rotation_axis| {
+            rotation = zm.qmul(rotation, zm.quatFromAxisAngle(rotation_axis, angle_radians));
+        }
+    }
+    return rotation;
+}
+
+/// Read a T-pose BVH and produce this skeleton's reference orientations from it.
+///
+/// -- * WHY THE POSE HAS TO BE FORWARD-KINEMATIC'D --
+///
+/// A BVH stores LOCAL rotations per joint. The reference a retarget needs is each joint's WORLD
+/// orientation, so the hierarchy has to be walked and rotations accumulated - the same
+/// accumulation the retarget itself does, applied once at load.
+///
+/// * Joints are matched BY NAME rather than by index. The T-pose file and the FBX describe the
+/// same skeleton, but nothing guarantees the two loaders emit them in the same order, and a
+/// silent index mismatch would rotate the wrong joints.
+fn referenceOrientationsFromTPoseBvh(
+    gpa: Allocator,
+    tpose_bytes: []const u8,
+    target_clip: d3.BvhSkeletalClip,
+    out_reference_orientations: []Quat,
+    /// * World POSITIONS from the same T-pose, matched by name. The twist offsets need bone
+    /// DIRECTIONS, and taking them from the character's `bindPose` instead uses **Geno's
+    /// A-POSE** - the mistake this arc has now made in four separate places.
+    out_reference_positions: ?[]Vec,
+) !void {
+    var tpose: z.codecs.bvh.Data = try z.codecs.bvh.parse(gpa, tpose_bytes, null);
+    defer tpose.deinit();
+
+    const pose_joint_count: usize = tpose.joints.len;
+    const target_joint_count: usize = target_clip.boneCount();
+
+    // Decode frame 0's rotation channels into local rotations.
+    const pose_local_rotations: []Quat = try gpa.alloc(Quat, pose_joint_count);
+    defer gpa.free(pose_local_rotations);
+    const first_frame: []const f32 = tpose.motion[0..tpose.channel_count];
+    var channel_cursor: usize = 0;
+    for (tpose.joints, 0..) |joint, index| {
+        const joint_values: []const f32 = first_frame[channel_cursor..][0..joint.channels.len];
+        channel_cursor += joint.channels.len;
+        pose_local_rotations[index] = quatFromBvhChannels(joint.channels, joint_values);
+    }
+
+    // Accumulate into world positions too, when asked: the same walk, one extra term.
+    const pose_world_positions: []Vec = try gpa.alloc(Vec, pose_joint_count);
+    defer gpa.free(pose_world_positions);
+
+    // Accumulate into world orientations.
+    const pose_global_rotations: []Quat = try gpa.alloc(Quat, pose_joint_count);
+    defer gpa.free(pose_global_rotations);
+    for (tpose.joints, 0..) |joint, index| {
+        const offset: Vec = vec(joint.offset[0], joint.offset[1], joint.offset[2]);
+        if (joint.parent < 0) {
+            pose_global_rotations[index] = pose_local_rotations[index];
+            pose_world_positions[index] = offset;
+        } else {
+            const parent: usize = @intCast(joint.parent);
+            pose_global_rotations[index] =
+                zm.qmul(pose_global_rotations[parent], pose_local_rotations[index]);
+            // * ROTATED by the parent's world orientation. Accumulating raw offsets - which is
+            // what the `bindPose` path did - is only correct when every rest rotation is
+            // identity, and Geno's A-pose bind is emphatically not.
+            pose_world_positions[index] =
+                pose_world_positions[parent] + zm.rotate(pose_global_rotations[parent], offset);
+        }
+    }
+
+    // Match by name, so a joint the T-pose file lacks keeps identity rather than borrowing
+    // whichever joint happens to share its index.
+    const pose_names: [][]const u8 = try gpa.alloc([]const u8, pose_joint_count);
+    defer gpa.free(pose_names);
+    for (tpose.joints, 0..) |joint, index| {
+        pose_names[index] = joint.name;
+    }
+    const target_names: [][]const u8 = try gpa.alloc([]const u8, target_joint_count);
+    defer gpa.free(target_names);
+    for (0..target_joint_count) |joint| {
+        target_names[joint] = target_clip.boneName(joint);
+    }
+    const pose_of_target: []i32 =
+        try z.codecs.bvh.mapJointsByName(gpa, pose_names, target_names, .{});
+    defer gpa.free(pose_of_target);
+
+    if (out_reference_positions) |out_positions| {
+        for (0..target_joint_count) |target_joint| {
+            const matched: i32 = pose_of_target[target_joint];
+            out_positions[target_joint] = if (matched < 0)
+                vec(0, 0, 0)
+            else
+                pose_world_positions[@intCast(matched)];
+        }
+    }
+
+    for (0..target_joint_count) |target_joint| {
+        const matched_pose_joint: i32 = pose_of_target[target_joint];
+        out_reference_orientations[target_joint] = if (matched_pose_joint == z.codecs.bvh.no_source)
+            zm.quat_identity
+        else
+            pose_global_rotations[@intCast(matched_pose_joint)];
+    }
+}
+
+/// The root's height above the floor at rest - the scale reference for root travel.
+///
+/// * HIP HEIGHT, NOT TOTAL HEIGHT. What has to match between two characters is how far the
+/// root moves relative to LEG LENGTH: two figures of equal standing height but different legs
+/// take different strides. See `codecs.bvh.scaleRootPosition`.
+fn rootHeightAtRest(clip: d3.BvhSkeletalClip) f32 {
+    const rest_pose: [*]z.types.Transform = @ptrCast(@alignCast(clip.skeleton.bindPose orelse return 1.0));
+    const root_translation: Vec = rest_pose[0].translation;
+    const height: f32 = @abs(root_translation[1]);
+    // A skeleton whose root sits at the origin tells us nothing; fall back to a sane figure
+    // rather than dividing by zero later.
+    return if (height > 0.01) height else 1.0;
 }
 
 /// Build a character from FBX bytes, optionally driven by an external clip.
@@ -1060,7 +1196,7 @@ fn initGbuffer(gpa: Allocator, f: *z.Frame, s: *State) !void {
             .{ .format = .float32x3, .offset = 12, .shader_location = 1 },
         },
     };
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none, // no blend - a G-buffer stores data, not colour to mix
         .less,
@@ -1163,7 +1299,7 @@ fn initSsao(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.fullscreen_vbo = z.wgpu.createBufferInit(
         device,
         f.gpu.queue,
-        std.mem.sliceAsBytes(fullscreen_verts[0..]),
+        sliceAsBytes(fullscreen_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "gd_fullscreen_vbo",
     );
@@ -1179,7 +1315,7 @@ fn initSsao(gpa: Allocator, f: *z.Frame, s: *State) !void {
             .{ .format = .float32x2, .offset = 0, .shader_location = 0 },
         },
     };
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less, // quad at z=0 against cleared depth 1.0 - always passes
@@ -1286,7 +1422,7 @@ fn initSsaoBlur(gpa: Allocator, f: *z.Frame, s: *State) !void {
             .{ .format = .float32x2, .offset = 0, .shader_location = 0 },
         },
     };
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -1419,14 +1555,14 @@ fn initGround(
     s.ground_vbo = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(verts),
+        sliceAsBytes(verts),
         .{ .vertex = true, .copy_dst = true },
         "gd_ground_vbo",
     );
     s.ground_ibo = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(plane.indices[0..icount]),
+        sliceAsBytes(plane.indices[0..icount]),
         .{ .index = true, .copy_dst = true },
         "gd_ground_ibo",
     );
@@ -1490,7 +1626,7 @@ fn initGround(
     // * The state combo must match the SCREEN pass's attachments exactly - format, depth
     // format and sample count. A mismatch is rejected at pipeline creation, which is the good
     // case; the bad case is a silently incompatible pass.
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less,
@@ -1539,7 +1675,7 @@ fn initGround(
             .{ .format = .float32x3, .offset = 0, .shader_location = 0 },
         },
     };
-    const depth_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const depth_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -1594,6 +1730,103 @@ fn initGround(
     }
 }
 
+/// Load `humanoid.xml` and prepare everything the retarget needs from the robot side.
+fn initRobot(gpa: Allocator, s: *State) !void {
+    // -- *** `humanoid_flex2.xml` - the Geno-matched model --
+    //
+    // *** On top of flex 1: BALL joints where the robot was limited (elbow, knee, ankle) and a
+    // TOE BONE, which Geno has and the robot did not. **Geno's animation is ROTATIONS on a fixed
+    // skeleton, so matching it exactly needs 3 rotational DOF per joint and matching bone
+    // lengths - not 6.** Translation would let the robot express more than the capture itself
+    // can, and would let bones detach.
+    //
+    // ** The toe matters because the whole foot was ONE rigid segment: it could not flatten its
+    // sole while pointing its toe, which is what a foot does at every push-off. Measured: sole
+    // tilt 13-51 deg -> 5-21, forearm 4.7 -> 3.7.
+    //
+    // Every difference from stock is a measurement: arms shortened 20% (bones were 1.24-1.29x
+    // the capture's, now 0.99-1.03), ONE shoulder axis added per arm (21 -> 23 DOF), shoulder
+    // span narrowed (the torso was wider than Geno's and skewed to compensate), feet pitched
+    // 24.6 degrees (Geno's ankle-to-toe is that far below horizontal; the sole was flat), and
+    // the joint ranges widened where the solve was pinned.
+    //
+    // *** Measured against flex 1: forearm 11.2 -> 4.7 deg, torso axis 9.0 -> 6.8, worst
+    // single-frame pop **59 -> 14** (from 155 with the original six-mechanism pipeline).
+    // ** Either model, chosen at runtime. **The generalisation test - a Geno-shaped robot versus
+    // a stock one, on a Mixamo capture - should be one click, not a rebuild**, because a test
+    // that requires a rebuild is a test nobody runs.
+    s.robot_doc = try z.codecs.xml.parse(gpa, if (s.robot_use_stock)
+        @embedFile("humanoid.xml")
+    else
+        @embedFile("humanoid_flex2.xml"), null);
+    s.robot_spec = try mjcf.readRobot(gpa, &s.robot_doc);
+    s.robot = try z.robot_mjcf.build(gpa, &s.robot_spec, .{});
+    s.robot_data = try z.robot.Data.init(gpa, &s.robot.model);
+
+    const body_count: usize = s.robot.model.nbody;
+    s.robot_reference = try gpa.alloc(Quat, body_count);
+    s.human_of_body = try gpa.alloc(i32, body_count);
+    s.robot_parents = try gpa.alloc(i32, body_count);
+    s.robot_rest_alignment = try gpa.alloc(Quat, body_count);
+    s.robot_local = try gpa.alloc(Quat, body_count);
+    s.robot_global = try gpa.alloc(Quat, body_count);
+    s.robot_positions_y_up = try gpa.alloc(Vec, body_count);
+    // Sized to the largest skeleton that can drive the robot, not to the robot.
+    s.source_delta_z_up = try gpa.alloc(Quat, 128);
+    s.robot_human_reference = try gpa.alloc(Quat, 128);
+    s.robot_axis_map = try gpa.alloc(Quat, body_count);
+    s.robot_desired_global = try gpa.alloc(Quat, body_count);
+    s.robot_identity_map = try gpa.alloc(i32, body_count);
+    s.robot_identity_alignment = try gpa.alloc(Quat, body_count);
+    for (0..body_count) |body| {
+        s.robot_identity_map[body] = @intCast(body);
+        s.robot_identity_alignment[body] = zm.quat_identity;
+    }
+    s.robot_position_weights = try gpa.alloc(f32, body_count);
+    s.robot_rotation_weights = try gpa.alloc(f32, body_count);
+    s.robot_rest_world = try gpa.alloc(Vec, 128);
+    s.robot_rest_rotations = try gpa.alloc(Quat, 128);
+    s.robot_rest_xpos = try gpa.alloc(Vec, body_count);
+    s.robot_tpose_qpos = try gpa.alloc(f32, s.robot.model.nq);
+    s.robot_rest_xrot = try gpa.alloc(Quat, body_count);
+    s.robot_rest_body_pos = try gpa.alloc(Vec, body_count);
+    s.robot_rest_flexion = try gpa.alloc(f32, body_count);
+    @memset(s.robot_rest_flexion, 0);
+    s.robot_samples = try gpa.alloc(z.robot.PointSample, 256);
+    s.robot_previous_qpos = try gpa.alloc(f32, s.robot.model.nq);
+    s.robot_twist = try gpa.alloc(Quat, body_count);
+    s.robot_parent_twist = try gpa.alloc(Quat, body_count);
+    s.robot_limb_correction = try gpa.alloc(Quat, body_count);
+    for (s.robot_limb_correction) |*correction| {
+        correction.* = zm.quat_identity;
+    }
+    // *** ONE TASK PER SAMPLE, NOT PER BODY. The point cloud puts up to four samples on a body,
+    // so a body-sized task array silently truncated 43 samples to 17 - **two thirds of the robot
+    // had no targets and simply stayed at rest.** `@min(count, tasks.len)` made it a quiet clamp
+    // rather than a crash.
+    s.robot_tasks = try gpa.alloc(z.robot.IkTask, 256);
+    s.robot_ik_scratch = try gpa.alloc(f32, z.robot.ikScratchSize(s.robot.model.nv));
+    @memset(s.robot_position_weights, 0);
+
+    // -- *** BONE DIRECTIONS, NOT BODY FRAMES --
+    //
+    // `referenceOrientationsFromRest` reads `body_xrot` at `qpos0` - the body FRAME. For
+    // `humanoid.xml` that is IDENTITY FOR EVERY BODY, because the file declares no rotation
+    // anywhere; its bone directions live in the POSITION OFFSETS (`lower_arm_left` sits at
+    // `.18 .18 -.18`). Aligning that identity against a real human T-pose rotation turned every
+    // robot bone, which is what the device showed.
+    //
+    // * Both sides now answer the SAME QUESTION - which way does this bone point at rest -
+    // through the same shortest-arc-from-+Y construction. See claude.md: two references must
+    // match in KIND, not just in pose.
+    z.robot.referenceOrientationsFromBoneDirections(&s.robot.model, s.robot_reference);
+
+    for (0..body_count) |body| {
+        s.robot_parents[body] = if (body == 0) -1 else @intCast(s.robot.model.body_parent[body]);
+        s.robot_rest_alignment[body] = zm.quat_identity;
+    }
+}
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
 
@@ -1602,7 +1835,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const checker: z.Image = try z.genImageChecked(gpa, 64, 64, 8, 8, ground_light, ground_dark);
     defer z.unloadImage(gpa, checker);
     const ground: z.WgpuTexture = z.loadTextureFromImage(f.gl, checker);
-    const light_view: z.RenderTexture = z.RenderTexture.create(f.gpu.device, .{
+    const light_view: z.RenderTexture = .create(f.gpu.device, .{
         .width = shadow_map_size,
         .height = shadow_map_size,
         .format = .rgba16_float,
@@ -1873,6 +2106,73 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
 }
 
+/// Pose a character from ANOTHER character's clip.
+///
+/// -- * THREE STEPS, EACH ALREADY VERIFIED ON ITS OWN --
+///
+///   1. Sample the SOURCE clip and accumulate its GLOBAL rotations.
+///   2. `retargetRotations` turns those into local rotations on the TARGET's hierarchy. It
+///      works in global space, so a joint the target lacks is absorbed automatically.
+///   3. `bvhForwardKinematicsFromRotations` walks the TARGET's OWN rest offsets, so the motion
+///      lands on the target's proportions rather than the source's.
+///
+/// ** STEP 3 MUST NOT USE `bvhForwardKinematics`. That one reads the frame's stored
+/// TRANSLATIONS, which encode the SOURCE's bone lengths - using it here would give the target
+/// the source's skeleton and quietly defeat the retarget.
+fn poseCharacterRetargeted(
+    character: *Character,
+    source: *const Character,
+    frame: usize,
+) void {
+    const source_joint_count: usize = source.boneCount();
+    const target_joint_count: usize = character.boneCount();
+
+    // Step 1 - the source's pose in world space. Scratch is sized to the largest skeleton in
+    // the scene, so a source with more joints than the target still fits.
+    d3.bvhForwardKinematics(
+        source.clip,
+        frame,
+        character.source_positions[0..source_joint_count],
+        character.source_global_rotations[0..source_joint_count],
+    );
+
+    // Step 2 - the source's orientations, expressed on the target's hierarchy.
+    z.codecs.bvh.retargetRotations(
+        character.target_parents[0..target_joint_count],
+        character.source_of_target[0..target_joint_count],
+        character.source_global_rotations[0..source_joint_count],
+        character.rest_alignment[0..target_joint_count],
+        character.retargeted_local_rotations[0..target_joint_count],
+        character.retargeted_global_rotations[0..target_joint_count],
+    );
+
+    // The root travels as far as the source's root did, scaled for the size difference.
+    const source_root_position: Vec = character.source_positions[0];
+    const scaled_root_position: Vec = z.codecs.bvh.scaleRootPosition(
+        source_root_position,
+        source.hip_height,
+        character.hip_height,
+    );
+
+    // Step 3 - the target's own bones, driven by the retargeted rotations.
+    d3.bvhForwardKinematicsFromRotations(
+        character.model.clip,
+        scaled_root_position,
+        character.retargeted_local_rotations[0..target_joint_count],
+        character.positions,
+        character.rotations,
+    );
+
+    // Skin matrices from the posed skeleton, exactly as the native path does.
+    for (0..target_joint_count) |joint| {
+        const joint_world: Mat = mulMat(
+            translationV(character.positions[joint]),
+            matFromQuat(character.rotations[joint]),
+        );
+        character.skin[joint] = mulMat(joint_world, character.model.inverse_bind[joint]);
+    }
+}
+
 /// Pose one character at `time` and deform every mesh it owns.
 ///
 /// The matrix work lives in `draw3d` - see `poseSkinMatrices`, which documents the two zm
@@ -1924,357 +2224,44 @@ fn poseCharacter(
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    var longest: f32 = 0;
-    for (&s.characters) |*c| {
-        longest = @max(longest, c.duration());
+/// Rebuild `source_of_target` for whatever clip currently drives this character.
+fn refreshRetargetMap(
+    gpa: Allocator,
+    character: *Character,
+    source: *const Character,
+    align_rest_poses: bool,
+) !void {
+    const target_joint_count: usize = character.boneCount();
+    const source_joint_count: usize = source.boneCount();
+
+    const target_names: [][]const u8 = try gpa.alloc([]const u8, target_joint_count);
+    defer gpa.free(target_names);
+    for (0..target_joint_count) |joint| {
+        target_names[joint] = character.model.clip.boneName(joint);
+    }
+    const source_names: [][]const u8 = try gpa.alloc([]const u8, source_joint_count);
+    defer gpa.free(source_names);
+    for (0..source_joint_count) |joint| {
+        source_names[joint] = source.clip.boneName(joint);
     }
 
-    if (s.playing and longest > 0) {
-        s.play_time += f.time.delta_time;
-        if (s.play_time >= longest) {
-            s.play_time = 0;
-        }
-    }
+    const map: []i32 = try z.codecs.bvh.mapJointsByName(gpa, source_names, target_names, .{});
+    defer gpa.free(map);
+    @memcpy(character.source_of_target, map);
+    character.mapped_joint_count = z.codecs.bvh.mappedCount(map);
 
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-
-    // Pose and upload every character ONCE, before any pass draws them.
-    // Rebuild the name maps only when a selection changed - mapping is a string compare per
-    // joint pair and has no business running every frame.
-    if (s.retarget_dirty) {
-        s.retarget_dirty = false;
-        for (0..s.characters.len) |character_index| {
-            const source_index: usize = s.characters[character_index].source_character;
-            if (source_index == character_index) {
-                s.characters[character_index].mapped_joint_count = 0;
-                continue;
-            }
-            // * A FAILED MAP MUST NOT LOOK LIKE A FAILED RETARGET. The only way this errors
-            // is allocation, and swallowing it would leave a stale map driving the character -
-            // indistinguishable on screen from a solver bug. Report it and fall back to the
-            // character's own clip, which is visibly correct rather than subtly wrong.
-            refreshRetargetMap(
-                s.gpa,
-                &s.characters[character_index],
-                &s.characters[source_index],
-                s.align_rest,
-            ) catch {
-                setStatus(s, "retarget map failed (out of memory)", .{});
-                s.characters[character_index].source_character = character_index;
-                s.characters[character_index].mapped_joint_count = 0;
-            };
-        }
-    }
-
-    if (s.robot_dirty) {
-        s.robot_dirty = false;
-        // -- *** INVALIDATE THE SAMPLE CACHE WHEN THE SOURCE CHANGES --
-        //
-        // `buildPointSamples` runs only when `robot_sample_count == 0`, and each sample stores a
-        // JOINT INDEX into the source skeleton. **Switching from Geno to the Mixamo drop kick
-        // would have kept samples pointing at Geno's indices** - a different skeleton with a
-        // different joint order, so every target would read the wrong joint.
-        //
-        // ** It would not crash: the indices are in range for both. **It would just retarget to
-        // the wrong bones**, which is the quietest failure mode this project has, and the fifth
-        // time a cache has outlived the thing it was built from.
-        s.robot_sample_count = 0;
-        s.robot_has_previous = false;
-        refreshRobotMap(s) catch {
-            setStatus(s, "robot map failed (out of memory)", .{});
-            s.show_robot = false;
-        };
-    }
-
-    // * Poses are computed against whichever character's clip drives each one, so the source
-    // is looked up here rather than assumed to be self.
-    for (0..s.characters.len) |character_index| {
-        const source_index: usize = s.characters[character_index].source_character;
-        const source: *const Character = &s.characters[source_index];
-        const clip_duration: f32 = source.duration();
-        const time_in_clip: f32 = if (clip_duration > 0)
-            @mod(s.play_time, clip_duration)
-        else
-            0;
-        poseCharacter(
-            &s.characters[character_index],
-            source,
-            source_index == character_index,
-            gl,
-            time_in_clip,
+    // * The rest correction is a property of the PAIR, so it is rebuilt alongside the map.
+    if (align_rest_poses) {
+        z.codecs.bvh.restAlignmentOffsets(
+            character.source_of_target[0..target_joint_count],
+            source.rest_orientations[0..source_joint_count],
+            character.rest_orientations[0..target_joint_count],
+            character.rest_alignment[0..target_joint_count],
         );
-    }
-
-    if (s.show_robot) {
-        const robot_source: *const Character = &s.characters[s.robot_source];
-        const robot_frames: usize = @intCast(@max(robot_source.clip.animation.keyframeCount, 0));
-        if (robot_frames > 0) {
-            const clip_duration: f32 = robot_source.duration();
-            const time_in_clip: f32 = if (clip_duration > 0)
-                @mod(s.play_time, clip_duration)
-            else
-                0;
-            var frame: usize = @trunc(@max(time_in_clip / robot_source.clip.frame_time, 0));
-            if (frame >= robot_frames) {
-                frame = frame % robot_frames;
-            }
-            poseRobot(s, frame);
+    } else {
+        for (character.rest_alignment[0..target_joint_count]) |*correction| {
+            correction.* = zm.quat_identity;
         }
-    }
-
-    // ONE light camera, used by BOTH the light pass and the ground's shadow lookup. Deriving
-    // it twice is how a shadow ends up projected from a slightly different place than it was
-    // rendered from.
-    const light_dir: Vec = lightDirFrom(s.light_yaw, s.light_pitch);
-    const focus: Vec = lightTarget(s);
-    const light_cam: Camera3D = .{
-        .position = focus - light_dir * @as(Vec, @splat(light_distance)),
-        .target = focus,
-        .up = vec(0, 1, 0),
-        .fovy_deg = light_extent * 2.0,
-        .projection = @backingInt(zm.CameraProjection.orthographic),
-    };
-    const light_cam_vp: Mat = mulMat(
-        light_cam.projMatrix(1.0, light_near, light_far),
-        light_cam.viewMatrix(),
-    );
-
-    // -- * PASS 1: THE SCENE FROM THE LIGHT --
-    //
-    // Step one of the shadow map, and deliberately ONLY step one: this renders the ordinary
-    // * ALWAYS RUNS NOW - the ground samples this every frame, so it is no longer gated on
-    // the debug toggle. The toggle only controls whether the result is also SHOWN.
-    // -- ** EVERY OFFSCREEN PASS RUNS BEFORE `clearViewport` OPENS THE SCREEN PASS --
-    //
-    // `beginTextureModeRaw` / `beginTextureModeMrtRaw` check `drawing_active`: if the screen
-    // pass is already open they FLUSH THE 2D BATCH, end the pass, render offscreen, then
-    // reopen. That flush is the bug - pending UI vertices get drawn under the OFFSCREEN
-    // pass's projection (a 1024-square ortho, not the window's), so the panel lands at the
-    // wrong place, and then draws again correctly when the batch is flushed for real. Two
-    // panels, side by side, exactly as seen.
-    //
-    // * The camera update is hoisted above the passes for this: it only needs `u`, and it was
-    // the sole reason the G-buffer pass had drifted below `clearViewport`. The comment there
-    // claimed "before the screen pass opens" while the code did the opposite - a comment
-    // asserting an ordering the code does not enforce is worse than none.
-    const cam: Camera3D = s.cam.update(f, u.wantCaptureMouse(), .{
-        .min_distance = 0.6,
-        .max_distance = 14.0,
-    });
-    const view_aspect: f32 = blk: {
-        const gh: f32 = f.window.heightf();
-        break :blk if (gh > 0) f.window.widthf() / gh else 1.0;
-    };
-    const cam_vp: Mat = mulMat(cam.projMatrix(view_aspect, 0.01, 1000.0), cam.viewMatrix());
-
-    drawLightDepth(s, f, light_cam_vp);
-    drawGbuffer(s, f, cam_vp);
-    // * AO CONSUMES THE G-BUFFER, so it must come after - and before the screen opens.
-    drawSsao(s, f, cam.viewMatrix());
-    if (s.blur_ao) {
-        // Horizontal into the scratch, vertical back into `ssao_rt` - so the composite and the
-        // debug inset both keep reading one texture regardless of whether blurring is on.
-        drawSsaoBlurPass(s, f, 0);
-        drawSsaoBlurPass(s, f, 1);
-    }
-
-    z.clearViewport(f, .{ .r = 18, .g = 20, .b = 26, .a = 255 });
-
-    // * THE 3D BLOCK ALWAYS OPENS, even when it draws nothing. `beginMode3D` is what puts the
-    // pass into the depth-tested 3D state the custom pipelines below rely on; making it
-    // conditional would mean the shadowed geometry renders differently depending on whether a
-    // debug gizmo happens to be enabled. `drawScene` returns immediately when there is no
-    // skeleton to draw, so the cost of always opening it is a state change, not geometry.
-    z.beginMode3D(gl, cam);
-    drawScene(s, gl);
-    z.endMode3D(gl);
-
-    // -- * THE LIT PASS: ground and characters, ONE pipeline, both receiving --
-    {
-        if (s.show_ground) {
-            drawShadowedGround(s, f, cam_vp, light_cam_vp, light_dir);
-        }
-        if (s.show_mesh) {
-            drawCharactersLit(s, f, cam_vp, light_cam_vp, light_dir);
-        }
-        // * Hand the pass back once, after ALL foreign-pipeline work - not per draw.
-        gl.renderer().bindForPass(gl.pass);
-    }
-
-    // -- * COMPOSITE: MULTIPLY THE AO OVER THE LIT IMAGE --
-    //
-    // * NO NEW SHADER. AO is a 0..1 factor and the composite is `lit *= ao`, which is exactly
-    // what a MULTIPLY-blended fullscreen quad does. The engine's 2D pipeline already carries a
-    // `.multiply` variant, so this is one textured draw between the lit geometry and the UI.
-    //
-    // GenoView instead feeds AO into its lighting shader, separating `ssaoData.r` (ambient)
-    // from `.g` (sun). That is better - it lets AO darken only the SKY term while leaving
-    // direct sunlight alone - and it is what section 12e will do once a lighting pass exists. A flat
-    // multiply darkens everything including lit surfaces, which reads slightly heavy.
-    //
-    // * ORDER: after the 3D, BEFORE the UI. The UI is not part of the scene and must not be
-    // multiplied by an occlusion factor computed from scene geometry.
-    if (s.show_ao) {
-        const cw: f32 = f.window.widthf();
-        const ch: f32 = f.window.heightf();
-        z.beginBlendMode(gl, .multiply);
-        gl.texture(
-            .{ .x = 0, .y = 0, .width = cw, .height = ch },
-            s.ssao_rt.asTexture(),
-            .{},
-        );
-        z.endBlendMode(gl);
-    }
-
-    if (s.show_light_view) {
-        // The light's view, bottom-right. section 12a-4 replaces its contents with linear depth.
-        //
-        // * SIZED AND PLACED FROM THE LIVE WINDOW, NOT THE CONFIGURED `screen_w`. The window
-        // constant is what the app ASKS for; on a phone the canvas is whatever fits, so
-        // anchoring to 1000 put this inset off the right edge and it simply never appeared.
-        // `f.window.widthf()` is the actual size - `examples/render_texture` uses it for the
-        // same reason.
-        const view_w: f32 = f.window.widthf();
-        const view_h: f32 = f.window.heightf();
-        const size: f32 = @min(view_w, view_h) * 0.28;
-        const shown: z.WgpuTexture = switch (s.debug_view) {
-            1 => s.gbuf_pos.asTexture(),
-            2 => s.gbuf_normal.asTexture(),
-            3 => s.gbuf_albedo.asTexture(),
-            4 => s.ssao_rt.asTexture(),
-            else => s.light_view.asTexture(),
-        };
-        f.gl.texture(
-            .{
-                .x = view_w - size - 12.0,
-                .y = view_h - size - 12.0,
-                .width = size,
-                .height = size,
-            },
-            shown,
-            .{},
-        );
-    }
-
-    drawPanel(s, u, longest);
-}
-
-/// Everything that casts or receives - drawn identically from the camera and from the light,
-/// because a shadow map that renders a DIFFERENT scene than the one it shades is the classic
-/// way to get shadows that do not line up.
-/// Where the light box should be centred: the midpoint of the characters' hips, lifted to
-/// chest height so the box covers a jump as well as a step.
-///
-/// * Uses the ROOT joint rather than a bounding box - the root is one already-computed vector
-/// per character, and a directional box only needs to be roughly right to keep the subject
-/// inside it.
-fn lightTarget(s: *State) Vec {
-    var sum: Vec = vec(0, 0, 0);
-    for (&s.characters) |*c| {
-        sum += c.positions[0] + c.offset;
-    }
-    var mid: Vec = sum / @as(Vec, @splat(float(s.characters.len)));
-    mid[1] = 0.9;
-    return mid;
-}
-
-/// Load `humanoid.xml` and prepare everything the retarget needs from the robot side.
-fn initRobot(gpa: Allocator, s: *State) !void {
-    // -- *** `humanoid_flex2.xml` - the Geno-matched model --
-    //
-    // *** On top of flex 1: BALL joints where the robot was limited (elbow, knee, ankle) and a
-    // TOE BONE, which Geno has and the robot did not. **Geno's animation is ROTATIONS on a fixed
-    // skeleton, so matching it exactly needs 3 rotational DOF per joint and matching bone
-    // lengths - not 6.** Translation would let the robot express more than the capture itself
-    // can, and would let bones detach.
-    //
-    // ** The toe matters because the whole foot was ONE rigid segment: it could not flatten its
-    // sole while pointing its toe, which is what a foot does at every push-off. Measured: sole
-    // tilt 13-51 deg -> 5-21, forearm 4.7 -> 3.7.
-    //
-    // Every difference from stock is a measurement: arms shortened 20% (bones were 1.24-1.29x
-    // the capture's, now 0.99-1.03), ONE shoulder axis added per arm (21 -> 23 DOF), shoulder
-    // span narrowed (the torso was wider than Geno's and skewed to compensate), feet pitched
-    // 24.6 degrees (Geno's ankle-to-toe is that far below horizontal; the sole was flat), and
-    // the joint ranges widened where the solve was pinned.
-    //
-    // *** Measured against flex 1: forearm 11.2 -> 4.7 deg, torso axis 9.0 -> 6.8, worst
-    // single-frame pop **59 -> 14** (from 155 with the original six-mechanism pipeline).
-    // ** Either model, chosen at runtime. **The generalisation test - a Geno-shaped robot versus
-    // a stock one, on a Mixamo capture - should be one click, not a rebuild**, because a test
-    // that requires a rebuild is a test nobody runs.
-    s.robot_doc = try z.codecs.xml.parse(gpa, if (s.robot_use_stock)
-        @embedFile("humanoid.xml")
-    else
-        @embedFile("humanoid_flex2.xml"), null);
-    s.robot_spec = try mjcf.readRobot(gpa, &s.robot_doc);
-    s.robot = try z.robot_mjcf.build(gpa, &s.robot_spec, .{});
-    s.robot_data = try z.robot.Data.init(gpa, &s.robot.model);
-
-    const body_count: usize = s.robot.model.nbody;
-    s.robot_reference = try gpa.alloc(Quat, body_count);
-    s.human_of_body = try gpa.alloc(i32, body_count);
-    s.robot_parents = try gpa.alloc(i32, body_count);
-    s.robot_rest_alignment = try gpa.alloc(Quat, body_count);
-    s.robot_local = try gpa.alloc(Quat, body_count);
-    s.robot_global = try gpa.alloc(Quat, body_count);
-    s.robot_positions_y_up = try gpa.alloc(Vec, body_count);
-    // Sized to the largest skeleton that can drive the robot, not to the robot.
-    s.source_delta_z_up = try gpa.alloc(Quat, 128);
-    s.robot_human_reference = try gpa.alloc(Quat, 128);
-    s.robot_axis_map = try gpa.alloc(Quat, body_count);
-    s.robot_desired_global = try gpa.alloc(Quat, body_count);
-    s.robot_identity_map = try gpa.alloc(i32, body_count);
-    s.robot_identity_alignment = try gpa.alloc(Quat, body_count);
-    for (0..body_count) |body| {
-        s.robot_identity_map[body] = @intCast(body);
-        s.robot_identity_alignment[body] = zm.quat_identity;
-    }
-    s.robot_position_weights = try gpa.alloc(f32, body_count);
-    s.robot_rotation_weights = try gpa.alloc(f32, body_count);
-    s.robot_rest_world = try gpa.alloc(Vec, 128);
-    s.robot_rest_rotations = try gpa.alloc(Quat, 128);
-    s.robot_rest_xpos = try gpa.alloc(Vec, body_count);
-    s.robot_tpose_qpos = try gpa.alloc(f32, s.robot.model.nq);
-    s.robot_rest_xrot = try gpa.alloc(Quat, body_count);
-    s.robot_rest_body_pos = try gpa.alloc(Vec, body_count);
-    s.robot_rest_flexion = try gpa.alloc(f32, body_count);
-    @memset(s.robot_rest_flexion, 0);
-    s.robot_samples = try gpa.alloc(z.robot.PointSample, 256);
-    s.robot_previous_qpos = try gpa.alloc(f32, s.robot.model.nq);
-    s.robot_twist = try gpa.alloc(Quat, body_count);
-    s.robot_parent_twist = try gpa.alloc(Quat, body_count);
-    s.robot_limb_correction = try gpa.alloc(Quat, body_count);
-    for (s.robot_limb_correction) |*correction| {
-        correction.* = zm.quat_identity;
-    }
-    // *** ONE TASK PER SAMPLE, NOT PER BODY. The point cloud puts up to four samples on a body,
-    // so a body-sized task array silently truncated 43 samples to 17 - **two thirds of the robot
-    // had no targets and simply stayed at rest.** `@min(count, tasks.len)` made it a quiet clamp
-    // rather than a crash.
-    s.robot_tasks = try gpa.alloc(z.robot.IkTask, 256);
-    s.robot_ik_scratch = try gpa.alloc(f32, z.robot.ikScratchSize(s.robot.model.nv));
-    @memset(s.robot_position_weights, 0);
-
-    // -- *** BONE DIRECTIONS, NOT BODY FRAMES --
-    //
-    // `referenceOrientationsFromRest` reads `body_xrot` at `qpos0` - the body FRAME. For
-    // `humanoid.xml` that is IDENTITY FOR EVERY BODY, because the file declares no rotation
-    // anywhere; its bone directions live in the POSITION OFFSETS (`lower_arm_left` sits at
-    // `.18 .18 -.18`). Aligning that identity against a real human T-pose rotation turned every
-    // robot bone, which is what the device showed.
-    //
-    // * Both sides now answer the SAME QUESTION - which way does this bone point at rest -
-    // through the same shortest-arc-from-+Y construction. See claude.md: two references must
-    // match in KIND, not just in pose.
-    z.robot.referenceOrientationsFromBoneDirections(&s.robot.model, s.robot_reference);
-
-    for (0..body_count) |body| {
-        s.robot_parents[body] = if (body == 0) -1 else @intCast(s.robot.model.body_parent[body]);
-        s.robot_rest_alignment[body] = zm.quat_identity;
     }
 }
 
@@ -2304,6 +2291,60 @@ fn characterBoneDirections(
     );
 }
 
+/// The shortest rotation taking `from` onto `to`, both unit vectors.
+///
+/// * Shortest because twist about the resulting axis is unobservable in a direction - picking
+/// the twist-free rotation is the honest default rather than an arbitrary choice.
+fn shortestArcBetween(from: Vec, to: Vec) Quat {
+    const alignment: f32 = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+    if (alignment > 0.99999) {
+        return zm.quat_identity;
+    }
+    if (alignment < -0.99999) {
+        // Exactly opposed: no unique axis, so any perpendicular will do.
+        const helper: Vec = if (@abs(from[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
+        const axis: Vec = normalize3(vec(
+            from[1] * helper[2] - from[2] * helper[1],
+            from[2] * helper[0] - from[0] * helper[2],
+            from[0] * helper[1] - from[1] * helper[0],
+        ));
+        return zm.quatFromAxisAngle(axis, 3.14159265);
+    }
+    const axis: Vec = normalize3(vec(
+        from[1] * to[2] - from[2] * to[1],
+        from[2] * to[0] - from[0] * to[2],
+        from[0] * to[1] - from[1] * to[0],
+    ));
+    return zm.quatFromAxisAngle(axis, acosRad(clamp(alignment, -1.0, 1.0)));
+}
+
+/// Pose the robot into the character's T-pose, so both references depict the SAME pose.
+///
+/// * Thin wrapper over the SHARED solver - the example and the harness call one implementation.
+fn solveRobotTPose(
+    s: *State,
+    rest_robot_frame: []const Vec,
+    human_parents: []const i32,
+) void {
+    var pelvis_body: usize = 0;
+    for (s.robot.names, 0..) |n, i| {
+        if (eql(u8, n, "pelvis")) {
+            pelvis_body = i;
+        }
+    }
+    z.robot.solveRestPoseFromSource(
+        &s.robot.model,
+        &s.robot_data,
+        s.human_of_body,
+        rest_robot_frame,
+        human_parents,
+        pelvis_body,
+        s.robot_tasks,
+        s.robot_ik_scratch,
+        s.robot_tpose_qpos,
+    );
+}
+
 /// The chains the twist offsets are computed along, parent to child.
 ///
 /// ** Each body appears in EXACTLY ONE chain. The torso previously headed all three upper-body
@@ -2318,6 +2359,52 @@ const robot_twist_chains = [_][]const []const u8{
     &.{ "pelvis", "thigh_right", "shin_right", "foot_right" },
     &.{ "pelvis", "thigh_left", "shin_left", "foot_left" },
 };
+
+fn findBody(s: *const State, wanted: []const u8) ?usize {
+    for (s.robot.names, 0..) |name, index| {
+        if (eql(u8, name, wanted)) {
+            return index;
+        }
+    }
+    return null;
+}
+
+/// The shoulder-to-shoulder axis on both skeletons, at rest - a HORIZONTAL reference the
+/// vertical spine bone cannot provide.
+fn shoulderAxes(s: *State, rest_world: []const Vec) ?struct { robot: Vec, human: Vec } {
+    var rl: ?usize = null;
+    var rr: ?usize = null;
+    for (s.robot.names, 0..) |n, i| {
+        if (eql(u8, n, "upper_arm_left")) {
+            rl = i;
+        }
+        if (eql(u8, n, "upper_arm_right")) {
+            rr = i;
+        }
+    }
+    const left: usize = rl orelse return null;
+    const right: usize = rr orelse return null;
+    const hl: i32 = s.human_of_body[left];
+    const hr: i32 = s.human_of_body[right];
+    if (hl < 0 or hr < 0) {
+        return null;
+    }
+
+    const robot_axis: Vec = s.robot_data.body_xpos[left] - s.robot_data.body_xpos[right];
+    // * Already in the robot's frame - converted once by the caller.
+    const human_y_up: Vec = rest_world[@intCast(hl)] - rest_world[@intCast(hr)];
+    const robot_len: f32 = @sqrt(robot_axis[0] * robot_axis[0] +
+        robot_axis[1] * robot_axis[1] + robot_axis[2] * robot_axis[2]);
+    const human_len: f32 = @sqrt(human_y_up[0] * human_y_up[0] +
+        human_y_up[1] * human_y_up[1] + human_y_up[2] * human_y_up[2]);
+    if (robot_len < 1.0e-6 or human_len < 1.0e-6) {
+        return null;
+    }
+    return .{
+        .robot = robot_axis / @as(Vec, @splat(robot_len)),
+        .human = human_y_up / @as(Vec, @splat(human_len)),
+    };
+}
 
 /// Build the robot's twist offsets, via the SHARED library implementation.
 ///
@@ -2482,15 +2569,6 @@ fn refreshRobotTwists(
     }
 }
 
-fn findBody(s: *const State, wanted: []const u8) ?usize {
-    for (s.robot.names, 0..) |name, index| {
-        if (std.mem.eql(u8, name, wanted)) {
-            return index;
-        }
-    }
-    return null;
-}
-
 /// Rebuild the robot's joint map and rest alignment for whichever character now drives it.
 fn refreshRobotMap(s: *State) !void {
     const source: *const Character = &s.characters[s.robot_source];
@@ -2587,13 +2665,176 @@ fn refreshRobotMap(s: *State) !void {
     @memset(s.robot_rotation_weights, 0);
     for (z.robot.lafan_to_humanoid) |row| {
         for (s.robot.names, 0..) |name, body| {
-            if (std.mem.eql(u8, name, row.robot_body)) {
+            if (eql(u8, name, row.robot_body)) {
                 s.robot_position_weights[body] = row.position_weight;
                 s.robot_rotation_weights[body] = row.rotation_weight;
                 break;
             }
         }
     }
+}
+
+/// Fill `s.robot_samples` by asking the library, then record what the solve will use.
+fn refreshPointSamples(s: *State, source: *const Character) void {
+    const joints: usize = source.boneCount();
+    s.robot_sample_count = z.robot.buildPointSamples(&s.robot.model, .{
+        .human_of_body = s.human_of_body,
+        .human_parents = source.target_parents[0..joints],
+        .rest_positions = s.robot_rest_world[0..joints],
+        .rest_rotations = s.robot_rest_rotations[0..joints],
+        .robot_rest_rotations = s.robot_rest_xrot[0..s.robot.model.nbody],
+        .body_names = s.robot.names,
+        // * The rest POSITIONS as well as the rotations: `buildPointSamples` checks each leaf's
+        // correspondence against the rest pose and needs both halves of it.
+        .rest_positions_robot = s.robot_rest_body_pos[0..s.robot.model.nbody],
+    }, s.robot_samples);
+
+    // * Counted here so the UI reports what the SOLVE uses, not what the table resolved: a body
+    // can be mapped and still receive no samples.
+    var mapped: usize = 0;
+    for (1..s.robot.model.nbody) |b| {
+        if (s.human_of_body[b] >= 0) {
+            mapped += 1;
+        }
+    }
+    s.robot_mapped_count = mapped;
+}
+
+fn boneLength(v: Vec) f32 {
+    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+/// Build the retargeted skeleton: the capture's DIRECTIONS at the robot's OWN bone lengths,
+/// placed by best fit rather than by an anchor.
+///
+/// -- ** THE SHAPE FIRST, THE PLACEMENT SECOND --
+///
+/// Anchoring the walk on one body makes that body a single point of failure: the robot's ROOT is
+/// its torso, whose origin is not where the capture's chest joint sits, and the whole figure
+/// inherited that error. **Translating so the MEAN of the mapped joints matches means every body
+/// votes and there is no privileged one to be wrong about.**
+fn buildRetargetedSkeleton(
+    s: *State,
+    positions_robot: []const Vec,
+    out: []Vec,
+) void {
+    const model: *const z.robot.Model = &s.robot.model;
+    // * Checked, not clamped: a robot with more bodies than `out` holds used to lose its last
+    // bodies' targets without a word.
+    assertf(model.nbody <= out.len, @src(), "retargeted skeleton: {d} bodies, room for {d}", .{
+        model.nbody,
+        out.len,
+    });
+    const limit: usize = model.nbody;
+    out[0] = .{ 0, 0, 0, 0 };
+    for (1..limit) |b| {
+        const parent: u32 = model.body_parent[b];
+        const own_length: f32 = boneLength(model.body_pos[b]);
+        const hb: i32 = s.human_of_body[b];
+        if (parent == 0) {
+            out[b] = if (hb >= 0 and @as(usize, @intCast(hb)) < positions_robot.len)
+                positions_robot[@intCast(hb)]
+            else
+                .{ 0, 0, 0, 0 };
+            continue;
+        }
+        const hp: i32 = s.human_of_body[parent];
+        if (hb < 0 or hp < 0 or own_length < 1.0e-6) {
+            out[b] = out[parent] + model.body_pos[b];
+            continue;
+        }
+        const bone: Vec = positions_robot[@intCast(hb)] - positions_robot[@intCast(hp)];
+        if (boneLength(bone) < 1.0e-6) {
+            out[b] = out[parent] + model.body_pos[b];
+            continue;
+        }
+        out[b] = out[parent] + normalize3(bone) * @as(Vec, @splat(own_length));
+    }
+
+    var offset: Vec = .{ 0, 0, 0, 0 };
+    var counted: f32 = 0;
+    for (1..limit) |b| {
+        const hb: i32 = s.human_of_body[b];
+        if (hb < 0 or @as(usize, @intCast(hb)) >= positions_robot.len) {
+            continue;
+        }
+        offset += positions_robot[@intCast(hb)] - out[b];
+        counted += 1;
+    }
+    if (counted > 0) {
+        const shift: Vec = offset / @as(Vec, @splat(counted));
+        for (1..limit) |b| {
+            out[b] += shift;
+        }
+    }
+}
+
+/// Where the robot's ROOT body should sit - the position of the capture joint it maps to.
+///
+/// * Not the capture's root. `humanoid.xml`'s root is the TORSO and maps to `Spine3`; the
+/// capture's root is `Hips`, a spine lower.
+fn rootBodyWorldPosition(s: *const State, positions: []const Vec) ?Vec {
+    // ** FROM 1, NOT 0. Body 0 is the WORLD and its parent is also 0, so a scan from zero
+    // matches it first, finds no mapped joint, and returns null - the translation is then never
+    // written and the robot stands at the origin for the whole take. **A sentinel that also
+    // satisfies the predicate is not a sentinel**, which is the second time body/joint 0 has
+    // done this here.
+    for (1..s.robot.model.nbody) |body| {
+        if (s.robot.model.body_parent[body] != 0) {
+            continue;
+        }
+        const human_joint: i32 = s.human_of_body[body];
+        if (human_joint < 0 or @as(usize, @intCast(human_joint)) >= positions.len) {
+            return null;
+        }
+        return positions[@intCast(human_joint)];
+    }
+    return null;
+}
+
+/// One point on a robot body, and where the capture says it should be.
+///
+/// -- *** THE WHOLE RETARGET IS "MATCH THESE POINTS" --
+///
+/// One point per body gives POSITION, two give DIRECTION, three give TWIST. The six mechanisms
+/// this example used to run - direction pairs, twist offsets, per-body IK, chain IK, hinge
+/// flexion, ankle aim - are each a special case, and at least eight of this project's bugs lived
+/// in the seams between them.
+// -- *** THE RETARGET LIVES IN `src/robot.zig` NOW --
+//
+// `PointSample`, `buildPointSamples` and `solvePointCloud` were defined HERE, and the harness
+// had its own copy of the same construction. **Seven times an example and a test have
+// re-implemented one stage and drifted** - the twist builder, the rest solve, the task set, the
+// rest-flexion fix, the pose loop, the sample cache, and a posture weight of 0.02 against 0.15.
+// Each was closed on its own; none removed the condition.
+//
+// *** **Moving the algorithm into the library removes it.** What remains here is what genuinely
+// belongs to the example: turning a `Character` into the arrays the library wants.
+
+/// The visual fit: mean and worst world distance from a mapped body to its capture joint.
+///
+/// ** **The only metric here that can see a translation.** Nine angle metrics could not see the
+/// whole figure standing 10 cm out of place; the worst is reported alongside the mean because
+/// the worst bone is the one that draws the eye and a mean hides it.
+fn recordRobotFit(s: *State, positions_robot: []const Vec) void {
+    var sum: f32 = 0;
+    var count: f32 = 0;
+    s.robot_visual_worst = 0;
+    s.robot_visual_worst_name = "";
+    for (1..s.robot.model.nbody) |b| {
+        const hb: i32 = s.human_of_body[b];
+        if (hb < 0 or @as(usize, @intCast(hb)) >= positions_robot.len) {
+            continue;
+        }
+        const d: f32 = boneLength(s.robot_data.body_xpos[b] - positions_robot[@intCast(hb)]);
+        sum += d;
+        count += 1;
+        if (d > s.robot_visual_worst) {
+            s.robot_visual_worst = d;
+            s.robot_visual_worst_name = s.robot.names[b];
+        }
+    }
+    s.robot_visual_mean = sum / @max(count, 1);
 }
 
 /// Drive the robot from one frame of its source character's clip.
@@ -2815,68 +3056,262 @@ fn poseRobot(s: *State, frame: usize) void {
     }
 }
 
-/// The shoulder-to-shoulder axis on both skeletons, at rest - a HORIZONTAL reference the
-/// vertical spine bone cannot provide.
-fn shoulderAxes(s: *State, rest_world: []const Vec) ?struct { robot: Vec, human: Vec } {
-    var rl: ?usize = null;
-    var rr: ?usize = null;
-    for (s.robot.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_left")) {
-            rl = i;
-        }
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
-            rr = i;
-        }
+/// Everything that casts or receives - drawn identically from the camera and from the light,
+/// because a shadow map that renders a DIFFERENT scene than the one it shades is the classic
+/// way to get shadows that do not line up.
+/// Where the light box should be centred: the midpoint of the characters' hips, lifted to
+/// chest height so the box covers a jump as well as a step.
+///
+/// * Uses the ROOT joint rather than a bounding box - the root is one already-computed vector
+/// per character, and a directional box only needs to be roughly right to keep the subject
+/// inside it.
+fn lightTarget(s: *State) Vec {
+    var sum: Vec = vec(0, 0, 0);
+    for (&s.characters) |*c| {
+        sum += c.positions[0] + c.offset;
     }
-    const left: usize = rl orelse return null;
-    const right: usize = rr orelse return null;
-    const hl: i32 = s.human_of_body[left];
-    const hr: i32 = s.human_of_body[right];
-    if (hl < 0 or hr < 0) {
-        return null;
-    }
-
-    const robot_axis: Vec = s.robot_data.body_xpos[left] - s.robot_data.body_xpos[right];
-    // * Already in the robot's frame - converted once by the caller.
-    const human_y_up: Vec = rest_world[@intCast(hl)] - rest_world[@intCast(hr)];
-    const robot_len: f32 = @sqrt(robot_axis[0] * robot_axis[0] +
-        robot_axis[1] * robot_axis[1] + robot_axis[2] * robot_axis[2]);
-    const human_len: f32 = @sqrt(human_y_up[0] * human_y_up[0] +
-        human_y_up[1] * human_y_up[1] + human_y_up[2] * human_y_up[2]);
-    if (robot_len < 1.0e-6 or human_len < 1.0e-6) {
-        return null;
-    }
-    return .{
-        .robot = robot_axis / @as(Vec, @splat(robot_len)),
-        .human = human_y_up / @as(Vec, @splat(human_len)),
-    };
+    var mid: Vec = sum / @as(Vec, @splat(float(s.characters.len)));
+    mid[1] = 0.9;
+    return mid;
 }
 
-/// Pose the robot into the character's T-pose, so both references depict the SAME pose.
+/// One character's world placement.
+fn placementOf(c: *const Character) Mat {
+    return translationV(c.offset);
+}
+
+/// The full scene as the camera sees it: receivers, casters, and the optional bone gizmos.
+/// Render the casters' DEPTH from the light, into the shadow map.
 ///
-/// * Thin wrapper over the SHARED solver - the example and the harness call one implementation.
-fn solveRobotTPose(
-    s: *State,
-    rest_robot_frame: []const Vec,
-    human_parents: []const i32,
-) void {
-    var pelvis_body: usize = 0;
-    for (s.robot.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "pelvis")) {
-            pelvis_body = i;
+/// * `beginTextureModeRaw`, NOT `beginTextureMode`. The plain version binds the engine's 2D
+/// (rgba8) pipeline into the pass; this target is the depth pipeline's format, and mixing them
+/// is an attachment mismatch. The raw pair opens the offscreen pass and batches nothing.
+///
+/// * CLEARED TO WHITE = "nothing here, infinitely far". Clearing to black would mean every
+/// untouched texel reads as depth 0 - nearer than anything - and would shadow the entire
+/// frustum. That inversion is exactly what the earlier white-on-black MASK produced.
+fn drawLightDepth(s: *State, f: *z.Frame, light_vp: Mat) void {
+    const gl: *z.WgpuGl = f.gl;
+    z.beginTextureModeRaw(gl, s.light_view, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
+    const ps: *z.PassState = gl.pass;
+    ps.queue = f.gpu.queue;
+    const Backend: type = z.WgpuBackend;
+    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.depth_pipeline });
+
+    for (&s.characters, 0..) |*c, ci| {
+        const model: Mat = placementOf(c);
+        const ubo: DepthUbo = .{
+            .mvp = mulMat(light_vp, model),
+            .params = .{ light_near, light_far, 0, 1 },
+            // 0 = raw NDC depth, the form `lit_shadow_fs` compares against.
+            .mode = 0,
+        };
+        const bytes: [z.shader.wireSizeOf(DepthUbo)]u8 = z.shader.wireOf(DepthUbo, &ubo);
+        z.wgpu.queueWriteBuffer(f.gpu.queue, s.depth_ubos[ci], 0, &bytes);
+        Backend.setBindGroup(ps, 0, s.depth_bgs[ci]);
+
+        for (0..@intCast(c.model.model.meshCount)) |m| {
+            // * THE SAME VBOs THE CAMERA PASS DRAWS. `meshGpuBuffers` exists for exactly this:
+            // one upload per frame, read by both passes.
+            const gpu_buf: z.MeshGpu = z.meshGpuBuffers(gl, c.model.model.meshes[m]) orelse continue;
+            z.render_pass.setVertexBuffer(ps.pass, .{
+                .slot = 0,
+                .buffer = gpu_buf.vbo,
+                .offset = 0,
+                .size = 0,
+            });
+            z.render_pass.setIndexBuffer(ps.pass, .{
+                .buffer = gpu_buf.ibo,
+                .format = .uint16,
+                .offset = 0,
+                .size = 0,
+            });
+            z.render_pass.drawIndexed(ps.pass, .{
+                .index_count = gpu_buf.index_count,
+                .instance_count = 1,
+                .first_index = 0,
+                .base_vertex = 0,
+                .first_instance = 0,
+            });
         }
     }
-    z.robot.solveRestPoseFromSource(
-        &s.robot.model,
-        &s.robot_data,
-        s.human_of_body,
-        rest_robot_frame,
-        human_parents,
-        pelvis_body,
-        s.robot_tasks,
-        s.robot_ik_scratch,
-        s.robot_tpose_qpos,
-    );
+    z.endTextureModeRaw(gl);
+}
+
+/// Upload one drawable's G-buffer uniforms.
+fn writeGbufUbos(
+    s: *State,
+    f: *z.Frame,
+    slot: usize,
+    cam_vp: Mat,
+    model: Mat,
+    albedo: Vec,
+) void {
+    const vs: GbufVsUbo = .{
+        .mvp = mulMat(cam_vp, model),
+        .model = model,
+        // Uniform scale plus translation, so the inverse transpose is the model matrix itself.
+        .normal_matrix = model,
+    };
+    const fs: GbufFsUbo = .{ .albedo_spec = albedo };
+    const vb: [z.shader.wireSizeOf(GbufVsUbo)]u8 = z.shader.wireOf(GbufVsUbo, &vs);
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.gbuf_vs_ubos[slot], 0, &vb);
+    const fb: [z.shader.wireSizeOf(GbufFsUbo)]u8 = z.shader.wireOf(GbufFsUbo, &fs);
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.gbuf_fs_ubos[slot], 0, &fb);
+}
+
+/// Bind one mesh's buffers and issue its indexed draw - the tail every custom pass repeats.
+fn drawIndexedBuffers(ps: *z.PassState, buf: z.MeshGpu) void {
+    z.render_pass.setVertexBuffer(ps.pass, .{
+        .slot = 0,
+        .buffer = buf.vbo,
+        .offset = 0,
+        .size = 0,
+    });
+    z.render_pass.setIndexBuffer(ps.pass, .{
+        .buffer = buf.ibo,
+        .format = .uint16,
+        .offset = 0,
+        .size = 0,
+    });
+    z.render_pass.drawIndexed(ps.pass, .{
+        .index_count = buf.index_count,
+        .instance_count = 1,
+        .first_index = 0,
+        .base_vertex = 0,
+        .first_instance = 0,
+    });
+}
+
+/// Fill the G-buffer: world position, world normal and albedo, in ONE geometry walk.
+///
+/// * THE INPUT SSAO NEEDS. `ssao_fs` reads positions and normals from here; without this pass
+/// there is nothing for it to occlude against. Everything drawn must appear - a caster missing
+/// from the G-buffer casts no ambient occlusion, exactly as a caster missing from the shadow
+/// map casts no shadow.
+fn drawGbuffer(s: *State, f: *z.Frame, cam_vp: Mat) void {
+    const gl: *z.WgpuGl = f.gl;
+    const rts = [_]z.RenderTexture{ s.gbuf_pos, s.gbuf_normal, s.gbuf_albedo };
+    // * CLEARED TO ZERO ALPHA. `ssao_fs` reads alpha as its COVERAGE flag: a pixel the
+    // geometry never touched has a meaningless position, and treating it as a real surface
+    // would let the background occlude the scene.
+    z.beginTextureModeMrtRaw(gl, &rts, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    const ps: *z.PassState = gl.pass;
+    const Backend: type = z.WgpuBackend;
+    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.gbuf_pipeline });
+
+    // Slot 0/1 are the characters; slot 2 is the ground.
+    for (&s.characters, 0..) |*c, ci| {
+        const model: Mat = placementOf(c);
+        writeGbufUbos(s, f, ci, cam_vp, model, character_albedo);
+        Backend.setBindGroup(ps, 0, s.gbuf_g0[ci]);
+        Backend.setBindGroup(ps, 2, s.gbuf_g2[ci]);
+        for (0..@intCast(c.model.model.meshCount)) |m| {
+            const buf: z.MeshGpu = z.meshGpuBuffers(gl, c.model.model.meshes[m]) orelse continue;
+            drawIndexedBuffers(ps, buf);
+        }
+    }
+
+    writeGbufUbos(s, f, 2, cam_vp, zm.identity(), ground_albedo);
+    Backend.setBindGroup(ps, 0, s.gbuf_g0[2]);
+    Backend.setBindGroup(ps, 2, s.gbuf_g2[2]);
+    drawIndexedBuffers(ps, .{
+        .vbo = s.ground_vbo,
+        .ibo = s.ground_ibo,
+        .index_count = s.ground_index_count,
+    });
+
+    z.endTextureModeRaw(gl);
+}
+
+/// A short capsule between two points, skipped when they coincide.
+fn drawBoneSegment(
+    gl: *z.WgpuGl,
+    from: Vec,
+    to: Vec,
+    color: Color,
+    radius: f32,
+) void {
+    const bone: Vec = to - from;
+    const length_squared: f32 = bone[0] * bone[0] + bone[1] * bone[1] + bone[2] * bone[2];
+    if (length_squared < 1.0e-9) {
+        return;
+    }
+    z.drawCapsule(gl, from, to, radius, 6, 4, color);
+}
+
+/// Three short lines along a joint's own axes: red X, green Y, blue Z.
+fn drawJointFrame(gl: *z.WgpuGl, at: Vec, rotation: Quat, size: f32) void {
+    const axes = [3]Vec{ vec(size, 0, 0), vec(0, size, 0), vec(0, 0, size) };
+    const colors = [3]Color{
+        .{ .r = 255, .g = 70, .b = 70, .a = 255 },
+        .{ .r = 70, .g = 255, .b = 70, .a = 255 },
+        .{ .r = 90, .g = 140, .b = 255, .a = 255 },
+    };
+    inline for (axes, colors) |axis, color| {
+        z.drawLine3D(gl, at, at + zm.rotate(rotation, axis), color);
+    }
+}
+
+/// Draw a robot's actual GEOMS at the poses in `xpos`/`xrot`.
+///
+/// -- *** THE GEOMS ARE THE ROBOT'S REAL SHAPE --
+///
+/// Capsules drawn between body ORIGINS are a proxy: they show the kinematic tree, not the
+/// figure. **The foot is the clearest case - `foot_left` is a leaf body at the ankle with no
+/// child, so the tree view drew nothing there and it read as "no feet"**, when the foot exists
+/// perfectly well as a geom.
+///
+/// * Each geom sits at `geom_pos`/`geom_rot` in its body's LOCAL frame, so its world placement
+/// is the body's transform composed with that.
+fn drawRobotGeoms(
+    s: *State,
+    gl: *z.WgpuGl,
+    xpos: []const Vec,
+    xrot: []const Quat,
+    shift: Vec,
+    color: Color,
+) void {
+    for (0..s.robot.model.geom_shape.len) |geom| {
+        const body: u32 = s.robot.model.geom_body[geom];
+        if (body >= xpos.len) {
+            continue;
+        }
+        const body_position: Vec = xpos[body];
+        const body_rotation: Quat = xrot[body];
+        const local_position: Vec = s.robot.model.geom_pos[geom];
+        const world_z_up: Vec = body_position + zm.rotate(body_rotation, local_position);
+        const world_rotation: Quat = zm.qmul(body_rotation, s.robot.model.geom_rot[geom]);
+
+        // * Z-up to Y-up for display, the same conversion the rest of the view uses.
+        const at: Vec = vec(world_z_up[0], world_z_up[2], -world_z_up[1]) + shift;
+
+        switch (s.robot.model.geom_shape[geom]) {
+            .sphere => |sphere| {
+                z.drawSphere(gl, at, .{ .radius = sphere.radius, .rings = 6, .slices = 8, .color = color });
+            },
+            // * Separate arms:  and  are distinct payload types even though
+            // their fields match, so one capture cannot serve both.
+            .capsule => |segment| {
+                const axis_z_up: Vec =
+                    zm.rotate(world_rotation, vec(0, segment.half_height, 0));
+                const axis: Vec = vec(axis_z_up[0], axis_z_up[2], -axis_z_up[1]);
+                z.drawCapsule(gl, at - axis, at + axis, segment.radius, 8, 4, color);
+            },
+            .cylinder => |segment| {
+                // * zimr's capsule runs along LOCAL Y, not MuJoCo's Z - noted in `GeomShape`
+                // and easy to get backwards, which would draw every limb across the body.
+                const axis_z_up: Vec =
+                    zm.rotate(world_rotation, vec(0, segment.half_height, 0));
+                const axis: Vec = vec(axis_z_up[0], axis_z_up[2], -axis_z_up[1]);
+                z.drawCapsule(gl, at - axis, at + axis, segment.radius, 8, 4, color);
+            },
+            else => {
+                // Boxes and meshes: a sphere at the centre is enough to show it is there.
+                z.drawSphere(gl, at, .{ .radius = 0.03, .rings = 4, .slices = 6, .color = color });
+            },
+        }
+    }
 }
 
 /// Draw both rest poses side by side, or superimposed, with their joint frames.
@@ -2965,93 +3400,27 @@ fn drawTposeComparison(s: *State, gl: *z.WgpuGl) void {
     }
 }
 
-/// Draw a robot's actual GEOMS at the poses in `xpos`/`xrot`.
+/// Draw a body's local frame as three coloured axes: X red, Y green, Z blue.
 ///
-/// -- *** THE GEOMS ARE THE ROBOT'S REAL SHAPE --
+/// -- *** THE CONVENTION IS THE POINT --
 ///
-/// Capsules drawn between body ORIGINS are a proxy: they show the kinematic tree, not the
-/// figure. **The foot is the clearest case - `foot_left` is a leaf body at the ankle with no
-/// child, so the tree view drew nothing there and it read as "no feet"**, when the foot exists
-/// perfectly well as a geom.
+/// Half this project's hardest bugs were frames disagreeing invisibly: a foot pitched the wrong
+/// way, a head target 1.5 m into the ground, a scale anchored on the wrong bone, a capture whose
+/// rest orientations differ from the robot's by a constant 90 degrees. **Every one was a
+/// quantity nobody could see.** Three axes per body make orientation a thing you look at rather
+/// than infer from a residual.
 ///
-/// * Each geom sits at `geom_pos`/`geom_rot` in its body's LOCAL frame, so its world placement
-/// is the body's transform composed with that.
-fn drawRobotGeoms(
-    s: *State,
-    gl: *z.WgpuGl,
-    xpos: []const Vec,
-    xrot: []const Quat,
-    shift: Vec,
-    color: Color,
-) void {
-    for (0..s.robot.model.geom_shape.len) |geom| {
-        const body: u32 = s.robot.model.geom_body[geom];
-        if (body >= xpos.len) {
-            continue;
-        }
-        const body_position: Vec = xpos[body];
-        const body_rotation: Quat = xrot[body];
-        const local_position: Vec = s.robot.model.geom_pos[geom];
-        const world_z_up: Vec = body_position + zm.rotate(body_rotation, local_position);
-        const world_rotation: Quat = zm.qmul(body_rotation, s.robot.model.geom_rot[geom]);
-
-        // * Z-up to Y-up for display, the same conversion the rest of the view uses.
-        const at: Vec = vec(world_z_up[0], world_z_up[2], -world_z_up[1]) + shift;
-
-        switch (s.robot.model.geom_shape[geom]) {
-            .sphere => |sphere| {
-                z.drawSphere(gl, at, .{ .radius = sphere.radius, .rings = 6, .slices = 8, .color = color });
-            },
-            // * Separate arms:  and  are distinct payload types even though
-            // their fields match, so one capture cannot serve both.
-            .capsule => |segment| {
-                const axis_z_up: Vec =
-                    zm.rotate(world_rotation, vec(0, segment.half_height, 0));
-                const axis: Vec = vec(axis_z_up[0], axis_z_up[2], -axis_z_up[1]);
-                z.drawCapsule(gl, at - axis, at + axis, segment.radius, 8, 4, color);
-            },
-            .cylinder => |segment| {
-                // * zimr's capsule runs along LOCAL Y, not MuJoCo's Z - noted in `GeomShape`
-                // and easy to get backwards, which would draw every limb across the body.
-                const axis_z_up: Vec =
-                    zm.rotate(world_rotation, vec(0, segment.half_height, 0));
-                const axis: Vec = vec(axis_z_up[0], axis_z_up[2], -axis_z_up[1]);
-                z.drawCapsule(gl, at - axis, at + axis, segment.radius, 8, 4, color);
-            },
-            else => {
-                // Boxes and meshes: a sphere at the centre is enough to show it is there.
-                z.drawSphere(gl, at, .{ .radius = 0.03, .rings = 4, .slices = 6, .color = color });
-            },
-        }
-    }
-}
-
-/// A short capsule between two points, skipped when they coincide.
-fn drawBoneSegment(
-    gl: *z.WgpuGl,
-    from: Vec,
-    to: Vec,
-    color: Color,
-    radius: f32,
-) void {
-    const bone: Vec = to - from;
-    const length_squared: f32 = bone[0] * bone[0] + bone[1] * bone[1] + bone[2] * bone[2];
-    if (length_squared < 1.0e-9) {
-        return;
-    }
-    z.drawCapsule(gl, from, to, radius, 6, 4, color);
-}
-
-/// Three short lines along a joint's own axes: red X, green Y, blue Z.
-fn drawJointFrame(gl: *z.WgpuGl, at: Vec, rotation: Quat, size: f32) void {
-    const axes = [3]Vec{ vec(size, 0, 0), vec(0, size, 0), vec(0, 0, size) };
-    const colors = [3]Color{
-        .{ .r = 255, .g = 70, .b = 70, .a = 255 },
-        .{ .r = 70, .g = 255, .b = 70, .a = 255 },
-        .{ .r = 90, .g = 140, .b = 255, .a = 255 },
+/// * Red/green/blue for X/Y/Z is the near-universal convention; keeping it means the picture
+/// needs no legend.
+fn drawTransformAxes(gl: *z.WgpuGl, origin: Vec, rotation: Quat, length: f32) void {
+    const axes = [_]struct { dir: Vec, color: Color }{
+        .{ .dir = vec(1, 0, 0), .color = .{ .r = 235, .g = 70, .b = 70, .a = 255 } },
+        .{ .dir = vec(0, 1, 0), .color = .{ .r = 80, .g = 220, .b = 90, .a = 255 } },
+        .{ .dir = vec(0, 0, 1), .color = .{ .r = 80, .g = 140, .b = 255, .a = 255 } },
     };
-    inline for (axes, colors) |axis, color| {
-        z.drawLine3D(gl, at, at + zm.rotate(rotation, axis), color);
+    for (axes) |axis| {
+        const tip: Vec = origin + zm.rotate(rotation, axis.dir * @as(Vec, @splat(length)));
+        z.drawLine3D(gl, origin, tip, axis.color);
     }
 }
 
@@ -3108,600 +3477,6 @@ fn drawRobotCapsules(s: *State, gl: *z.WgpuGl, color: Color, radius: f32) void {
             continue;
         }
         z.drawCapsule(gl, parent_position, position, radius, 8, 4, color);
-    }
-}
-
-/// Read a T-pose BVH and produce this skeleton's reference orientations from it.
-///
-/// -- * WHY THE POSE HAS TO BE FORWARD-KINEMATIC'D --
-///
-/// A BVH stores LOCAL rotations per joint. The reference a retarget needs is each joint's WORLD
-/// orientation, so the hierarchy has to be walked and rotations accumulated - the same
-/// accumulation the retarget itself does, applied once at load.
-///
-/// * Joints are matched BY NAME rather than by index. The T-pose file and the FBX describe the
-/// same skeleton, but nothing guarantees the two loaders emit them in the same order, and a
-/// silent index mismatch would rotate the wrong joints.
-fn referenceOrientationsFromTPoseBvh(
-    gpa: Allocator,
-    tpose_bytes: []const u8,
-    target_clip: d3.BvhSkeletalClip,
-    out_reference_orientations: []Quat,
-    /// * World POSITIONS from the same T-pose, matched by name. The twist offsets need bone
-    /// DIRECTIONS, and taking them from the character's `bindPose` instead uses **Geno's
-    /// A-POSE** - the mistake this arc has now made in four separate places.
-    out_reference_positions: ?[]Vec,
-) !void {
-    var tpose: z.codecs.bvh.Data = try z.codecs.bvh.parse(gpa, tpose_bytes, null);
-    defer tpose.deinit();
-
-    const pose_joint_count: usize = tpose.joints.len;
-    const target_joint_count: usize = target_clip.boneCount();
-
-    // Decode frame 0's rotation channels into local rotations.
-    const pose_local_rotations: []Quat = try gpa.alloc(Quat, pose_joint_count);
-    defer gpa.free(pose_local_rotations);
-    const first_frame: []const f32 = tpose.motion[0..tpose.channel_count];
-    var channel_cursor: usize = 0;
-    for (tpose.joints, 0..) |joint, index| {
-        const joint_values: []const f32 = first_frame[channel_cursor..][0..joint.channels.len];
-        channel_cursor += joint.channels.len;
-        pose_local_rotations[index] = quatFromBvhChannels(joint.channels, joint_values);
-    }
-
-    // Accumulate into world positions too, when asked: the same walk, one extra term.
-    const pose_world_positions: []Vec = try gpa.alloc(Vec, pose_joint_count);
-    defer gpa.free(pose_world_positions);
-
-    // Accumulate into world orientations.
-    const pose_global_rotations: []Quat = try gpa.alloc(Quat, pose_joint_count);
-    defer gpa.free(pose_global_rotations);
-    for (tpose.joints, 0..) |joint, index| {
-        const offset: Vec = vec(joint.offset[0], joint.offset[1], joint.offset[2]);
-        if (joint.parent < 0) {
-            pose_global_rotations[index] = pose_local_rotations[index];
-            pose_world_positions[index] = offset;
-        } else {
-            const parent: usize = @intCast(joint.parent);
-            pose_global_rotations[index] =
-                zm.qmul(pose_global_rotations[parent], pose_local_rotations[index]);
-            // * ROTATED by the parent's world orientation. Accumulating raw offsets - which is
-            // what the `bindPose` path did - is only correct when every rest rotation is
-            // identity, and Geno's A-pose bind is emphatically not.
-            pose_world_positions[index] =
-                pose_world_positions[parent] + zm.rotate(pose_global_rotations[parent], offset);
-        }
-    }
-
-    // Match by name, so a joint the T-pose file lacks keeps identity rather than borrowing
-    // whichever joint happens to share its index.
-    const pose_names: [][]const u8 = try gpa.alloc([]const u8, pose_joint_count);
-    defer gpa.free(pose_names);
-    for (tpose.joints, 0..) |joint, index| {
-        pose_names[index] = joint.name;
-    }
-    const target_names: [][]const u8 = try gpa.alloc([]const u8, target_joint_count);
-    defer gpa.free(target_names);
-    for (0..target_joint_count) |joint| {
-        target_names[joint] = target_clip.boneName(joint);
-    }
-    const pose_of_target: []i32 =
-        try z.codecs.bvh.mapJointsByName(gpa, pose_names, target_names, .{});
-    defer gpa.free(pose_of_target);
-
-    if (out_reference_positions) |out_positions| {
-        for (0..target_joint_count) |target_joint| {
-            const matched: i32 = pose_of_target[target_joint];
-            out_positions[target_joint] = if (matched < 0)
-                vec(0, 0, 0)
-            else
-                pose_world_positions[@intCast(matched)];
-        }
-    }
-
-    for (0..target_joint_count) |target_joint| {
-        const matched_pose_joint: i32 = pose_of_target[target_joint];
-        out_reference_orientations[target_joint] = if (matched_pose_joint == z.codecs.bvh.no_source)
-            zm.quat_identity
-        else
-            pose_global_rotations[@intCast(matched_pose_joint)];
-    }
-}
-
-/// Euler channels to a quaternion, in the order the BVH header declares them.
-///
-/// * BVH applies rotation channels IN THE ORDER LISTED, which for these files is ZYX. Assuming
-/// XYZ bends every joint about the wrong axis first.
-fn quatFromBvhChannels(channels: []const z.codecs.bvh.Channel, values: []const f32) Quat {
-    var rotation: Quat = zm.quat_identity;
-    for (channels, 0..) |channel, index| {
-        const angle_radians: f32 = radFromDeg(values[index]);
-        const axis: ?Vec = switch (channel) {
-            .x_rotation => vec(1, 0, 0),
-            .y_rotation => vec(0, 1, 0),
-            .z_rotation => vec(0, 0, 1),
-            else => null,
-        };
-        if (axis) |rotation_axis| {
-            rotation = zm.qmul(rotation, zm.quatFromAxisAngle(rotation_axis, angle_radians));
-        }
-    }
-    return rotation;
-}
-
-// -- ** `solveArmChain` and `ArmNames` DELETED --
-//
-// A masked, joint-limited two-target solve per limb, run after the pose loop. It was the best of
-// the six mechanisms and it is still a special case of the point cloud: two of its targets are
-// two of the samples, and its mask is unnecessary once nothing runs afterwards to be protected
-// from. **~90 lines, and the seam it lived in is gone with it.**
-
-fn boneLength(v: Vec) f32 {
-    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-}
-
-/// The shortest rotation taking `from` onto `to`, both unit vectors.
-///
-/// * Shortest because twist about the resulting axis is unobservable in a direction - picking
-/// the twist-free rotation is the honest default rather than an arbitrary choice.
-fn shortestArcBetween(from: Vec, to: Vec) Quat {
-    const alignment: f32 = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
-    if (alignment > 0.99999) {
-        return zm.quat_identity;
-    }
-    if (alignment < -0.99999) {
-        // Exactly opposed: no unique axis, so any perpendicular will do.
-        const helper: Vec = if (@abs(from[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
-        const axis: Vec = normalize3(vec(
-            from[1] * helper[2] - from[2] * helper[1],
-            from[2] * helper[0] - from[0] * helper[2],
-            from[0] * helper[1] - from[1] * helper[0],
-        ));
-        return zm.quatFromAxisAngle(axis, 3.14159265);
-    }
-    const axis: Vec = normalize3(vec(
-        from[1] * to[2] - from[2] * to[1],
-        from[2] * to[0] - from[0] * to[2],
-        from[0] * to[1] - from[1] * to[0],
-    ));
-    return zm.quatFromAxisAngle(axis, acosRad(clamp(alignment, -1.0, 1.0)));
-}
-
-/// The root's height above the floor at rest - the scale reference for root travel.
-///
-/// * HIP HEIGHT, NOT TOTAL HEIGHT. What has to match between two characters is how far the
-/// root moves relative to LEG LENGTH: two figures of equal standing height but different legs
-/// take different strides. See `codecs.bvh.scaleRootPosition`.
-fn rootHeightAtRest(clip: d3.BvhSkeletalClip) f32 {
-    const rest_pose: [*]z.types.Transform = @ptrCast(@alignCast(clip.skeleton.bindPose orelse return 1.0));
-    const root_translation: Vec = rest_pose[0].translation;
-    const height: f32 = @abs(root_translation[1]);
-    // A skeleton whose root sits at the origin tells us nothing; fall back to a sane figure
-    // rather than dividing by zero later.
-    return if (height > 0.01) height else 1.0;
-}
-
-/// Rebuild `source_of_target` for whatever clip currently drives this character.
-fn refreshRetargetMap(
-    gpa: Allocator,
-    character: *Character,
-    source: *const Character,
-    align_rest_poses: bool,
-) !void {
-    const target_joint_count: usize = character.boneCount();
-    const source_joint_count: usize = source.boneCount();
-
-    const target_names: [][]const u8 = try gpa.alloc([]const u8, target_joint_count);
-    defer gpa.free(target_names);
-    for (0..target_joint_count) |joint| {
-        target_names[joint] = character.model.clip.boneName(joint);
-    }
-    const source_names: [][]const u8 = try gpa.alloc([]const u8, source_joint_count);
-    defer gpa.free(source_names);
-    for (0..source_joint_count) |joint| {
-        source_names[joint] = source.clip.boneName(joint);
-    }
-
-    const map: []i32 = try z.codecs.bvh.mapJointsByName(gpa, source_names, target_names, .{});
-    defer gpa.free(map);
-    @memcpy(character.source_of_target, map);
-    character.mapped_joint_count = z.codecs.bvh.mappedCount(map);
-
-    // * The rest correction is a property of the PAIR, so it is rebuilt alongside the map.
-    if (align_rest_poses) {
-        z.codecs.bvh.restAlignmentOffsets(
-            character.source_of_target[0..target_joint_count],
-            source.rest_orientations[0..source_joint_count],
-            character.rest_orientations[0..target_joint_count],
-            character.rest_alignment[0..target_joint_count],
-        );
-    } else {
-        for (character.rest_alignment[0..target_joint_count]) |*correction| {
-            correction.* = zm.quat_identity;
-        }
-    }
-}
-
-/// Pose a character from ANOTHER character's clip.
-///
-/// -- * THREE STEPS, EACH ALREADY VERIFIED ON ITS OWN --
-///
-///   1. Sample the SOURCE clip and accumulate its GLOBAL rotations.
-///   2. `retargetRotations` turns those into local rotations on the TARGET's hierarchy. It
-///      works in global space, so a joint the target lacks is absorbed automatically.
-///   3. `bvhForwardKinematicsFromRotations` walks the TARGET's OWN rest offsets, so the motion
-///      lands on the target's proportions rather than the source's.
-///
-/// ** STEP 3 MUST NOT USE `bvhForwardKinematics`. That one reads the frame's stored
-/// TRANSLATIONS, which encode the SOURCE's bone lengths - using it here would give the target
-/// the source's skeleton and quietly defeat the retarget.
-fn poseCharacterRetargeted(
-    character: *Character,
-    source: *const Character,
-    frame: usize,
-) void {
-    const source_joint_count: usize = source.boneCount();
-    const target_joint_count: usize = character.boneCount();
-
-    // Step 1 - the source's pose in world space. Scratch is sized to the largest skeleton in
-    // the scene, so a source with more joints than the target still fits.
-    d3.bvhForwardKinematics(
-        source.clip,
-        frame,
-        character.source_positions[0..source_joint_count],
-        character.source_global_rotations[0..source_joint_count],
-    );
-
-    // Step 2 - the source's orientations, expressed on the target's hierarchy.
-    z.codecs.bvh.retargetRotations(
-        character.target_parents[0..target_joint_count],
-        character.source_of_target[0..target_joint_count],
-        character.source_global_rotations[0..source_joint_count],
-        character.rest_alignment[0..target_joint_count],
-        character.retargeted_local_rotations[0..target_joint_count],
-        character.retargeted_global_rotations[0..target_joint_count],
-    );
-
-    // The root travels as far as the source's root did, scaled for the size difference.
-    const source_root_position: Vec = character.source_positions[0];
-    const scaled_root_position: Vec = z.codecs.bvh.scaleRootPosition(
-        source_root_position,
-        source.hip_height,
-        character.hip_height,
-    );
-
-    // Step 3 - the target's own bones, driven by the retargeted rotations.
-    d3.bvhForwardKinematicsFromRotations(
-        character.model.clip,
-        scaled_root_position,
-        character.retargeted_local_rotations[0..target_joint_count],
-        character.positions,
-        character.rotations,
-    );
-
-    // Skin matrices from the posed skeleton, exactly as the native path does.
-    for (0..target_joint_count) |joint| {
-        const joint_world: Mat = mulMat(
-            translationV(character.positions[joint]),
-            matFromQuat(character.rotations[joint]),
-        );
-        character.skin[joint] = mulMat(joint_world, character.model.inverse_bind[joint]);
-    }
-}
-
-/// One character's world placement.
-fn placementOf(c: *const Character) Mat {
-    return translationV(c.offset);
-}
-
-/// Draw every character through the `lit_shadow` pipeline - which is what makes them RECEIVE
-/// shadows, including their own.
-///
-/// * SELF-SHADOWING IS NOT A SEPARATE FEATURE. The depth map already contains the characters
-/// (they are the casters), and `lit_shadow_fs` shadows any fragment whose light-space depth is
-/// greater than the map's. Drawing the characters with the receiving shader is the whole of
-/// it: an arm now darkens the chest behind it because the arm is nearer the light.
-///
-/// The cost is that they leave the engine's batch entirely - no more `drawMeshInstanced`, so
-/// `uploadMeshGpu` at init is what puts their vertices on the GPU.
-fn drawCharactersLit(
-    s: *State,
-    f: *z.Frame,
-    cam_vp: Mat,
-    light_vp: Mat,
-    light_dir: Vec,
-) void {
-    const gl: *z.WgpuGl = f.gl;
-    const ps: *z.PassState = gl.pass;
-    const Backend: type = z.WgpuBackend;
-    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.ground_pipeline });
-    Backend.setBindGroup(ps, 1, s.ground_g1);
-
-    for (&s.characters, 0..) |*c, ci| {
-        const model: Mat = placementOf(c);
-        const vs: LitVsUbo = .{
-            .mvp = mulMat(cam_vp, model),
-            .light_vp = mulMat(light_vp, model),
-            // Uniform scale plus translation: the rotation block is identity, so the inverse
-            // transpose is too. A non-uniform scale would need the real thing.
-            .normal_matrix = zm.identity(),
-        };
-        const fs: LitFsUbo = .{
-            .light_dir = -normalize3(light_dir),
-            .base_color = character_albedo,
-            .params = .{ s.shadow_bias_slope, s.shadow_bias_min, 0, 0 },
-        };
-        const vb: [z.shader.wireSizeOf(LitVsUbo)]u8 = z.shader.wireOf(LitVsUbo, &vs);
-        z.wgpu.queueWriteBuffer(f.gpu.queue, s.char_vs_ubos[ci], 0, &vb);
-        const fb: [z.shader.wireSizeOf(LitFsUbo)]u8 = z.shader.wireOf(LitFsUbo, &fs);
-        z.wgpu.queueWriteBuffer(f.gpu.queue, s.char_fs_ubos[ci], 0, &fb);
-        Backend.setBindGroup(ps, 0, s.char_g0[ci]);
-        Backend.setBindGroup(ps, 2, s.char_g2[ci]);
-
-        for (0..@intCast(c.model.model.meshCount)) |m| {
-            const buf: z.MeshGpu = z.meshGpuBuffers(gl, c.model.model.meshes[m]) orelse continue;
-            drawIndexedBuffers(ps, buf);
-        }
-    }
-}
-
-/// Bind one mesh's buffers and issue its indexed draw - the tail every custom pass repeats.
-fn drawIndexedBuffers(ps: *z.PassState, buf: z.MeshGpu) void {
-    z.render_pass.setVertexBuffer(ps.pass, .{
-        .slot = 0,
-        .buffer = buf.vbo,
-        .offset = 0,
-        .size = 0,
-    });
-    z.render_pass.setIndexBuffer(ps.pass, .{
-        .buffer = buf.ibo,
-        .format = .uint16,
-        .offset = 0,
-        .size = 0,
-    });
-    z.render_pass.drawIndexed(ps.pass, .{
-        .index_count = buf.index_count,
-        .instance_count = 1,
-        .first_index = 0,
-        .base_vertex = 0,
-        .first_instance = 0,
-    });
-}
-
-/// The full scene as the camera sees it: receivers, casters, and the optional bone gizmos.
-/// Render the casters' DEPTH from the light, into the shadow map.
-///
-/// * `beginTextureModeRaw`, NOT `beginTextureMode`. The plain version binds the engine's 2D
-/// (rgba8) pipeline into the pass; this target is the depth pipeline's format, and mixing them
-/// is an attachment mismatch. The raw pair opens the offscreen pass and batches nothing.
-///
-/// * CLEARED TO WHITE = "nothing here, infinitely far". Clearing to black would mean every
-/// untouched texel reads as depth 0 - nearer than anything - and would shadow the entire
-/// frustum. That inversion is exactly what the earlier white-on-black MASK produced.
-fn drawLightDepth(s: *State, f: *z.Frame, light_vp: Mat) void {
-    const gl: *z.WgpuGl = f.gl;
-    z.beginTextureModeRaw(gl, s.light_view, .{ .r = 255, .g = 255, .b = 255, .a = 255 });
-    const ps: *z.PassState = gl.pass;
-    ps.queue = f.gpu.queue;
-    const Backend: type = z.WgpuBackend;
-    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.depth_pipeline });
-
-    for (&s.characters, 0..) |*c, ci| {
-        const model: Mat = placementOf(c);
-        const ubo: DepthUbo = .{
-            .mvp = mulMat(light_vp, model),
-            .params = .{ light_near, light_far, 0, 1 },
-            // 0 = raw NDC depth, the form `lit_shadow_fs` compares against.
-            .mode = 0,
-        };
-        const bytes: [z.shader.wireSizeOf(DepthUbo)]u8 = z.shader.wireOf(DepthUbo, &ubo);
-        z.wgpu.queueWriteBuffer(f.gpu.queue, s.depth_ubos[ci], 0, &bytes);
-        Backend.setBindGroup(ps, 0, s.depth_bgs[ci]);
-
-        for (0..@intCast(c.model.model.meshCount)) |m| {
-            // * THE SAME VBOs THE CAMERA PASS DRAWS. `meshGpuBuffers` exists for exactly this:
-            // one upload per frame, read by both passes.
-            const gpu_buf: z.MeshGpu = z.meshGpuBuffers(gl, c.model.model.meshes[m]) orelse continue;
-            z.render_pass.setVertexBuffer(ps.pass, .{
-                .slot = 0,
-                .buffer = gpu_buf.vbo,
-                .offset = 0,
-                .size = 0,
-            });
-            z.render_pass.setIndexBuffer(ps.pass, .{
-                .buffer = gpu_buf.ibo,
-                .format = .uint16,
-                .offset = 0,
-                .size = 0,
-            });
-            z.render_pass.drawIndexed(ps.pass, .{
-                .index_count = gpu_buf.index_count,
-                .instance_count = 1,
-                .first_index = 0,
-                .base_vertex = 0,
-                .first_instance = 0,
-            });
-        }
-    }
-    z.endTextureModeRaw(gl);
-}
-
-/// Fill the G-buffer: world position, world normal and albedo, in ONE geometry walk.
-///
-/// * THE INPUT SSAO NEEDS. `ssao_fs` reads positions and normals from here; without this pass
-/// there is nothing for it to occlude against. Everything drawn must appear - a caster missing
-/// from the G-buffer casts no ambient occlusion, exactly as a caster missing from the shadow
-/// map casts no shadow.
-fn drawGbuffer(s: *State, f: *z.Frame, cam_vp: Mat) void {
-    const gl: *z.WgpuGl = f.gl;
-    const rts = [_]z.RenderTexture{ s.gbuf_pos, s.gbuf_normal, s.gbuf_albedo };
-    // * CLEARED TO ZERO ALPHA. `ssao_fs` reads alpha as its COVERAGE flag: a pixel the
-    // geometry never touched has a meaningless position, and treating it as a real surface
-    // would let the background occlude the scene.
-    z.beginTextureModeMrtRaw(gl, &rts, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
-    const ps: *z.PassState = gl.pass;
-    const Backend: type = z.WgpuBackend;
-    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.gbuf_pipeline });
-
-    // Slot 0/1 are the characters; slot 2 is the ground.
-    for (&s.characters, 0..) |*c, ci| {
-        const model: Mat = placementOf(c);
-        writeGbufUbos(s, f, ci, cam_vp, model, character_albedo);
-        Backend.setBindGroup(ps, 0, s.gbuf_g0[ci]);
-        Backend.setBindGroup(ps, 2, s.gbuf_g2[ci]);
-        for (0..@intCast(c.model.model.meshCount)) |m| {
-            const buf: z.MeshGpu = z.meshGpuBuffers(gl, c.model.model.meshes[m]) orelse continue;
-            drawIndexedBuffers(ps, buf);
-        }
-    }
-
-    writeGbufUbos(s, f, 2, cam_vp, zm.identity(), ground_albedo);
-    Backend.setBindGroup(ps, 0, s.gbuf_g0[2]);
-    Backend.setBindGroup(ps, 2, s.gbuf_g2[2]);
-    drawIndexedBuffers(ps, .{
-        .vbo = s.ground_vbo,
-        .ibo = s.ground_ibo,
-        .index_count = s.ground_index_count,
-    });
-
-    z.endTextureModeRaw(gl);
-}
-
-/// Upload one drawable's G-buffer uniforms.
-fn writeGbufUbos(
-    s: *State,
-    f: *z.Frame,
-    slot: usize,
-    cam_vp: Mat,
-    model: Mat,
-    albedo: Vec,
-) void {
-    const vs: GbufVsUbo = .{
-        .mvp = mulMat(cam_vp, model),
-        .model = model,
-        // Uniform scale plus translation, so the inverse transpose is the model matrix itself.
-        .normal_matrix = model,
-    };
-    const fs: GbufFsUbo = .{ .albedo_spec = albedo };
-    const vb: [z.shader.wireSizeOf(GbufVsUbo)]u8 = z.shader.wireOf(GbufVsUbo, &vs);
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.gbuf_vs_ubos[slot], 0, &vb);
-    const fb: [z.shader.wireSizeOf(GbufFsUbo)]u8 = z.shader.wireOf(GbufFsUbo, &fs);
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.gbuf_fs_ubos[slot], 0, &fb);
-}
-
-/// Draw the ground through the `lit_shadow` pipeline, sampling the light pass.
-///
-/// * THIS BINDS A FOREIGN PIPELINE INTO THE SCREEN PASS, so the 2D pipeline must be restored
-/// afterwards or the UI draws with the wrong one - the same hazard `renderer_2d.bindForPass`
-/// exists to fix, and the one that produced a black canvas during the wgpu bringup.
-fn drawShadowedGround(
-    s: *State,
-    f: *z.Frame,
-    cam_vp: Mat,
-    light_vp: Mat,
-    light_dir: Vec,
-) void {
-    const gl: *z.WgpuGl = f.gl;
-    const ps: *z.PassState = gl.pass;
-
-    // The plane sits at the origin with an identity model matrix, so mvp is just the camera's
-    // view-projection and the normal matrix is the identity.
-    const vs: LitVsUbo = .{
-        .mvp = cam_vp,
-        .light_vp = light_vp,
-        .normal_matrix = zm.identity(),
-    };
-    const fs: LitFsUbo = .{
-        // `light_dir` is the direction TO the light, for the Lambert dot.
-        .light_dir = -normalize3(light_dir),
-        .base_color = ground_albedo,
-        .params = .{ s.shadow_bias_slope, s.shadow_bias_min, 0, 0 },
-    };
-    const vs_bytes: [z.shader.wireSizeOf(LitVsUbo)]u8 = z.shader.wireOf(LitVsUbo, &vs);
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.ground_vs_ubo, 0, &vs_bytes);
-    const fs_bytes: [z.shader.wireSizeOf(LitFsUbo)]u8 = z.shader.wireOf(LitFsUbo, &fs);
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.ground_fs_ubo, 0, &fs_bytes);
-
-    const Backend: type = z.WgpuBackend;
-    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.ground_pipeline });
-    Backend.setBindGroup(ps, 0, s.ground_g0);
-    Backend.setBindGroup(ps, 1, s.ground_g1);
-    Backend.setBindGroup(ps, 2, s.ground_g2);
-    drawIndexedBuffers(ps, .{
-        .vbo = s.ground_vbo,
-        .ibo = s.ground_ibo,
-        .index_count = s.ground_index_count,
-    });
-}
-
-/// Draw a body's local frame as three coloured axes: X red, Y green, Z blue.
-///
-/// -- *** THE CONVENTION IS THE POINT --
-///
-/// Half this project's hardest bugs were frames disagreeing invisibly: a foot pitched the wrong
-/// way, a head target 1.5 m into the ground, a scale anchored on the wrong bone, a capture whose
-/// rest orientations differ from the robot's by a constant 90 degrees. **Every one was a
-/// quantity nobody could see.** Three axes per body make orientation a thing you look at rather
-/// than infer from a residual.
-///
-/// * Red/green/blue for X/Y/Z is the near-universal convention; keeping it means the picture
-/// needs no legend.
-fn drawTransformAxes(gl: *z.WgpuGl, origin: Vec, rotation: Quat, length: f32) void {
-    const axes = [_]struct { dir: Vec, color: Color }{
-        .{ .dir = vec(1, 0, 0), .color = .{ .r = 235, .g = 70, .b = 70, .a = 255 } },
-        .{ .dir = vec(0, 1, 0), .color = .{ .r = 80, .g = 220, .b = 90, .a = 255 } },
-        .{ .dir = vec(0, 0, 1), .color = .{ .r = 80, .g = 140, .b = 255, .a = 255 } },
-    };
-    for (axes) |axis| {
-        const tip: Vec = origin + zm.rotate(rotation, axis.dir * @as(Vec, @splat(length)));
-        z.drawLine3D(gl, origin, tip, axis.color);
-    }
-}
-
-fn drawScene(s: *State, gl: *z.WgpuGl) void {
-    // -- *** DRAW AND POSE MUST AGREE ABOUT WHETHER THE ROBOT EXISTS --
-    //
-    // `poseRobot` is gated on `show_robot`; this draw was not. **So with `show_robot` false the
-    // robot was never posed and still drawn** - every body at its zeroed position, which piles
-    // the geoms into a ball at the origin and looks exactly like a solver that has collapsed.
-    //
-    // *** The comment that used to sit here explained why drawing is not gated on
-    // `show_skeleton` - a different flag, and correct. **It was read as covering `show_robot`
-    // too**, which it never did, and that gap survived a dozen turns because a ball at the
-    // origin is a plausible-looking failure of something else entirely.
-    //
-    // * Now: no pose, no draw.
-    if (!s.show_robot) {
-        return;
-    }
-
-    // * The ROBOT draws whether or not the SKELETON view is on: it has no mesh, so capsules are
-    // all it has. Returning early on `show_skeleton` would hide it entirely.
-    drawRobot(s, gl);
-
-    if (!s.show_skeleton) {
-        return;
-    }
-    const bone_colors = [_]Color{
-        .{ .r = 120, .g = 200, .b = 255, .a = 255 },
-        .{ .r = 255, .g = 180, .b = 110, .a = 255 },
-    };
-    // * Axes for every character joint, in the same world the capsules are drawn in.
-    if (s.show_transforms) {
-        for (&s.characters) |*c| {
-            for (0..c.boneCount()) |joint| {
-                drawTransformAxes(
-                    gl,
-                    c.positions[joint] + c.offset,
-                    c.rotations[joint],
-                    s.axis_length,
-                );
-            }
-        }
-    }
-
-    for (&s.characters, 0..) |*c, ci| {
-        drawSkeletonCapsules(c, gl, bone_colors[ci % bone_colors.len], s.capsule_radius);
     }
 }
 
@@ -3775,53 +3550,145 @@ fn drawSkeletonCapsules(c: *Character, gl: *z.WgpuGl, color: Color, radius: f32)
     }
 }
 
-/// The control panel, split into TABS.
-///
-/// * It had grown to 651 px of content in a 250 px window - the UI lint said so on device, and
-/// every slider needed scrolling to reach. Four tabs put each concern on one screen and let the
-/// window sit small again, which matters on a phone where the panel competes with the scene for
-/// the same pixels.
-fn drawPanel(s: *State, u: ui.Ui, longest: f32) void {
-    if (u.window("geno + mocap", .{
-        .initial_pos = .{ 12, 12 },
-        .initial_size = .{ 340, 268 },
-    })) |w| {
-        defer w.close();
+fn drawScene(s: *State, gl: *z.WgpuGl) void {
+    // -- *** DRAW AND POSE MUST AGREE ABOUT WHETHER THE ROBOT EXISTS --
+    //
+    // `poseRobot` is gated on `show_robot`; this draw was not. **So with `show_robot` false the
+    // robot was never posed and still drawn** - every body at its zeroed position, which piles
+    // the geoms into a ball at the origin and looks exactly like a solver that has collapsed.
+    //
+    // *** The comment that used to sit here explained why drawing is not gated on
+    // `show_skeleton` - a different flag, and correct. **It was read as covering `show_robot`
+    // too**, which it never did, and that gap survived a dozen turns because a ball at the
+    // origin is a plausible-looking failure of something else entirely.
+    //
+    // * Now: no pose, no draw.
+    if (!s.show_robot) {
+        return;
+    }
 
-        // Playback lives ABOVE the tabs: it is the one control wanted from every tab.
-        _ = u.checkbox("play", &s.playing);
-        u.sameLine(.{});
-        _ = u.checkbox("mesh", &s.show_mesh);
-        u.sameLine(.{});
-        _ = u.checkbox("skeleton", &s.show_skeleton);
-        u.sameLine(.{});
-        // * Next to the skeleton toggle because it is the same kind of thing: a view of the
-        // structure rather than the surface.
-        _ = u.checkbox("transforms", &s.show_transforms);
-        if (s.show_transforms) {
-            _ = u.slider("axis length", &s.axis_length, .{ .min = 0.01, .max = 0.4, .fmt = "{d:.2}m" });
+    // * The ROBOT draws whether or not the SKELETON view is on: it has no mesh, so capsules are
+    // all it has. Returning early on `show_skeleton` would hide it entirely.
+    drawRobot(s, gl);
+
+    if (!s.show_skeleton) {
+        return;
+    }
+    const bone_colors = [_]Color{
+        .{ .r = 120, .g = 200, .b = 255, .a = 255 },
+        .{ .r = 255, .g = 180, .b = 110, .a = 255 },
+    };
+    // * Axes for every character joint, in the same world the capsules are drawn in.
+    if (s.show_transforms) {
+        for (&s.characters) |*c| {
+            for (0..c.boneCount()) |joint| {
+                drawTransformAxes(
+                    gl,
+                    c.positions[joint] + c.offset,
+                    c.rotations[joint],
+                    s.axis_length,
+                );
+            }
         }
-        _ = u.slider("time", &s.play_time, .{ .min = 0, .max = longest, .fmt = "{d:.2}s" });
+    }
 
-        if (u.beginTabBar("panel", .{})) {
-            defer u.endTabBar();
+    for (&s.characters, 0..) |*c, ci| {
+        drawSkeletonCapsules(c, gl, bone_colors[ci % bone_colors.len], s.capsule_radius);
+    }
+}
 
-            if (u.beginTabItem("Motion", null, .{})) {
-                tabMotion(s, u);
-                u.endTabItem();
-            }
-            if (u.beginTabItem("Light", null, .{})) {
-                tabLight(s, u);
-                u.endTabItem();
-            }
-            if (u.beginTabItem("AO", null, .{})) {
-                tabAmbientOcclusion(s, u);
-                u.endTabItem();
-            }
-            if (u.beginTabItem("Debug", null, .{})) {
-                tabDebug(s, u);
-                u.endTabItem();
-            }
+/// Draw the ground through the `lit_shadow` pipeline, sampling the light pass.
+///
+/// * THIS BINDS A FOREIGN PIPELINE INTO THE SCREEN PASS, so the 2D pipeline must be restored
+/// afterwards or the UI draws with the wrong one - the same hazard `renderer_2d.bindForPass`
+/// exists to fix, and the one that produced a black canvas during the wgpu bringup.
+fn drawShadowedGround(
+    s: *State,
+    f: *z.Frame,
+    cam_vp: Mat,
+    light_vp: Mat,
+    light_dir: Vec,
+) void {
+    const gl: *z.WgpuGl = f.gl;
+    const ps: *z.PassState = gl.pass;
+
+    // The plane sits at the origin with an identity model matrix, so mvp is just the camera's
+    // view-projection and the normal matrix is the identity.
+    const vs: LitVsUbo = .{
+        .mvp = cam_vp,
+        .light_vp = light_vp,
+        .normal_matrix = zm.identity(),
+    };
+    const fs: LitFsUbo = .{
+        // `light_dir` is the direction TO the light, for the Lambert dot.
+        .light_dir = -normalize3(light_dir),
+        .base_color = ground_albedo,
+        .params = .{ s.shadow_bias_slope, s.shadow_bias_min, 0, 0 },
+    };
+    const vs_bytes: [z.shader.wireSizeOf(LitVsUbo)]u8 = z.shader.wireOf(LitVsUbo, &vs);
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.ground_vs_ubo, 0, &vs_bytes);
+    const fs_bytes: [z.shader.wireSizeOf(LitFsUbo)]u8 = z.shader.wireOf(LitFsUbo, &fs);
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.ground_fs_ubo, 0, &fs_bytes);
+
+    const Backend: type = z.WgpuBackend;
+    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.ground_pipeline });
+    Backend.setBindGroup(ps, 0, s.ground_g0);
+    Backend.setBindGroup(ps, 1, s.ground_g1);
+    Backend.setBindGroup(ps, 2, s.ground_g2);
+    drawIndexedBuffers(ps, .{
+        .vbo = s.ground_vbo,
+        .ibo = s.ground_ibo,
+        .index_count = s.ground_index_count,
+    });
+}
+
+/// Draw every character through the `lit_shadow` pipeline - which is what makes them RECEIVE
+/// shadows, including their own.
+///
+/// * SELF-SHADOWING IS NOT A SEPARATE FEATURE. The depth map already contains the characters
+/// (they are the casters), and `lit_shadow_fs` shadows any fragment whose light-space depth is
+/// greater than the map's. Drawing the characters with the receiving shader is the whole of
+/// it: an arm now darkens the chest behind it because the arm is nearer the light.
+///
+/// The cost is that they leave the engine's batch entirely - no more `drawMeshInstanced`, so
+/// `uploadMeshGpu` at init is what puts their vertices on the GPU.
+fn drawCharactersLit(
+    s: *State,
+    f: *z.Frame,
+    cam_vp: Mat,
+    light_vp: Mat,
+    light_dir: Vec,
+) void {
+    const gl: *z.WgpuGl = f.gl;
+    const ps: *z.PassState = gl.pass;
+    const Backend: type = z.WgpuBackend;
+    Backend.setPipeline(ps, z.shader.RenderPipeline(void, void){ .gpu_handle = s.ground_pipeline });
+    Backend.setBindGroup(ps, 1, s.ground_g1);
+
+    for (&s.characters, 0..) |*c, ci| {
+        const model: Mat = placementOf(c);
+        const vs: LitVsUbo = .{
+            .mvp = mulMat(cam_vp, model),
+            .light_vp = mulMat(light_vp, model),
+            // Uniform scale plus translation: the rotation block is identity, so the inverse
+            // transpose is too. A non-uniform scale would need the real thing.
+            .normal_matrix = zm.identity(),
+        };
+        const fs: LitFsUbo = .{
+            .light_dir = -normalize3(light_dir),
+            .base_color = character_albedo,
+            .params = .{ s.shadow_bias_slope, s.shadow_bias_min, 0, 0 },
+        };
+        const vb: [z.shader.wireSizeOf(LitVsUbo)]u8 = z.shader.wireOf(LitVsUbo, &vs);
+        z.wgpu.queueWriteBuffer(f.gpu.queue, s.char_vs_ubos[ci], 0, &vb);
+        const fb: [z.shader.wireSizeOf(LitFsUbo)]u8 = z.shader.wireOf(LitFsUbo, &fs);
+        z.wgpu.queueWriteBuffer(f.gpu.queue, s.char_fs_ubos[ci], 0, &fb);
+        Backend.setBindGroup(ps, 0, s.char_g0[ci]);
+        Backend.setBindGroup(ps, 2, s.char_g2[ci]);
+
+        for (0..@intCast(c.model.model.meshCount)) |m| {
+            const buf: z.MeshGpu = z.meshGpuBuffers(gl, c.model.model.meshes[m]) orelse continue;
+            drawIndexedBuffers(ps, buf);
         }
     }
 }
@@ -4099,6 +3966,302 @@ fn tabDebug(s: *State, u: ui.Ui) void {
     }
 }
 
+/// The control panel, split into TABS.
+///
+/// * It had grown to 651 px of content in a 250 px window - the UI lint said so on device, and
+/// every slider needed scrolling to reach. Four tabs put each concern on one screen and let the
+/// window sit small again, which matters on a phone where the panel competes with the scene for
+/// the same pixels.
+fn drawPanel(s: *State, u: ui.Ui, longest: f32) void {
+    if (u.window("geno + mocap", .{
+        .initial_pos = .{ 12, 12 },
+        .initial_size = .{ 340, 268 },
+    })) |w| {
+        defer w.close();
+
+        // Playback lives ABOVE the tabs: it is the one control wanted from every tab.
+        _ = u.checkbox("play", &s.playing);
+        u.sameLine(.{});
+        _ = u.checkbox("mesh", &s.show_mesh);
+        u.sameLine(.{});
+        _ = u.checkbox("skeleton", &s.show_skeleton);
+        u.sameLine(.{});
+        // * Next to the skeleton toggle because it is the same kind of thing: a view of the
+        // structure rather than the surface.
+        _ = u.checkbox("transforms", &s.show_transforms);
+        if (s.show_transforms) {
+            _ = u.slider("axis length", &s.axis_length, .{ .min = 0.01, .max = 0.4, .fmt = "{d:.2}m" });
+        }
+        _ = u.slider("time", &s.play_time, .{ .min = 0, .max = longest, .fmt = "{d:.2}s" });
+
+        if (u.beginTabBar("panel", .{})) {
+            defer u.endTabBar();
+
+            if (u.beginTabItem("Motion", null, .{})) {
+                tabMotion(s, u);
+                u.endTabItem();
+            }
+            if (u.beginTabItem("Light", null, .{})) {
+                tabLight(s, u);
+                u.endTabItem();
+            }
+            if (u.beginTabItem("AO", null, .{})) {
+                tabAmbientOcclusion(s, u);
+                u.endTabItem();
+            }
+            if (u.beginTabItem("Debug", null, .{})) {
+                tabDebug(s, u);
+                u.endTabItem();
+            }
+        }
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    var longest: f32 = 0;
+    for (&s.characters) |*c| {
+        longest = @max(longest, c.duration());
+    }
+
+    if (s.playing and longest > 0) {
+        s.play_time += f.time.delta_time;
+        if (s.play_time >= longest) {
+            s.play_time = 0;
+        }
+    }
+
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+
+    // Pose and upload every character ONCE, before any pass draws them.
+    // Rebuild the name maps only when a selection changed - mapping is a string compare per
+    // joint pair and has no business running every frame.
+    if (s.retarget_dirty) {
+        s.retarget_dirty = false;
+        for (0..s.characters.len) |character_index| {
+            const source_index: usize = s.characters[character_index].source_character;
+            if (source_index == character_index) {
+                s.characters[character_index].mapped_joint_count = 0;
+                continue;
+            }
+            // * A FAILED MAP MUST NOT LOOK LIKE A FAILED RETARGET. The only way this errors
+            // is allocation, and swallowing it would leave a stale map driving the character -
+            // indistinguishable on screen from a solver bug. Report it and fall back to the
+            // character's own clip, which is visibly correct rather than subtly wrong.
+            refreshRetargetMap(
+                s.gpa,
+                &s.characters[character_index],
+                &s.characters[source_index],
+                s.align_rest,
+            ) catch {
+                setStatus(s, "retarget map failed (out of memory)", .{});
+                s.characters[character_index].source_character = character_index;
+                s.characters[character_index].mapped_joint_count = 0;
+            };
+        }
+    }
+
+    if (s.robot_dirty) {
+        s.robot_dirty = false;
+        // -- *** INVALIDATE THE SAMPLE CACHE WHEN THE SOURCE CHANGES --
+        //
+        // `buildPointSamples` runs only when `robot_sample_count == 0`, and each sample stores a
+        // JOINT INDEX into the source skeleton. **Switching from Geno to the Mixamo drop kick
+        // would have kept samples pointing at Geno's indices** - a different skeleton with a
+        // different joint order, so every target would read the wrong joint.
+        //
+        // ** It would not crash: the indices are in range for both. **It would just retarget to
+        // the wrong bones**, which is the quietest failure mode this project has, and the fifth
+        // time a cache has outlived the thing it was built from.
+        s.robot_sample_count = 0;
+        s.robot_has_previous = false;
+        refreshRobotMap(s) catch {
+            setStatus(s, "robot map failed (out of memory)", .{});
+            s.show_robot = false;
+        };
+    }
+
+    // * Poses are computed against whichever character's clip drives each one, so the source
+    // is looked up here rather than assumed to be self.
+    for (0..s.characters.len) |character_index| {
+        const source_index: usize = s.characters[character_index].source_character;
+        const source: *const Character = &s.characters[source_index];
+        const clip_duration: f32 = source.duration();
+        const time_in_clip: f32 = if (clip_duration > 0)
+            @mod(s.play_time, clip_duration)
+        else
+            0;
+        poseCharacter(
+            &s.characters[character_index],
+            source,
+            source_index == character_index,
+            gl,
+            time_in_clip,
+        );
+    }
+
+    if (s.show_robot) {
+        const robot_source: *const Character = &s.characters[s.robot_source];
+        const robot_frames: usize = @intCast(@max(robot_source.clip.animation.keyframeCount, 0));
+        if (robot_frames > 0) {
+            const clip_duration: f32 = robot_source.duration();
+            const time_in_clip: f32 = if (clip_duration > 0)
+                @mod(s.play_time, clip_duration)
+            else
+                0;
+            var frame: usize = @trunc(@max(time_in_clip / robot_source.clip.frame_time, 0));
+            if (frame >= robot_frames) {
+                frame = frame % robot_frames;
+            }
+            poseRobot(s, frame);
+        }
+    }
+
+    // ONE light camera, used by BOTH the light pass and the ground's shadow lookup. Deriving
+    // it twice is how a shadow ends up projected from a slightly different place than it was
+    // rendered from.
+    const light_dir: Vec = lightDirFrom(s.light_yaw, s.light_pitch);
+    const focus: Vec = lightTarget(s);
+    const light_cam: Camera3D = .{
+        .position = focus - light_dir * @as(Vec, @splat(light_distance)),
+        .target = focus,
+        .up = vec(0, 1, 0),
+        .fovy_deg = light_extent * 2.0,
+        .projection = @backingInt(CameraProjection.orthographic),
+    };
+    const light_cam_vp: Mat = mulMat(
+        light_cam.projMatrix(1.0, light_near, light_far),
+        light_cam.viewMatrix(),
+    );
+
+    // -- * PASS 1: THE SCENE FROM THE LIGHT --
+    //
+    // Step one of the shadow map, and deliberately ONLY step one: this renders the ordinary
+    // * ALWAYS RUNS NOW - the ground samples this every frame, so it is no longer gated on
+    // the debug toggle. The toggle only controls whether the result is also SHOWN.
+    // -- ** EVERY OFFSCREEN PASS RUNS BEFORE `clearViewport` OPENS THE SCREEN PASS --
+    //
+    // `beginTextureModeRaw` / `beginTextureModeMrtRaw` check `drawing_active`: if the screen
+    // pass is already open they FLUSH THE 2D BATCH, end the pass, render offscreen, then
+    // reopen. That flush is the bug - pending UI vertices get drawn under the OFFSCREEN
+    // pass's projection (a 1024-square ortho, not the window's), so the panel lands at the
+    // wrong place, and then draws again correctly when the batch is flushed for real. Two
+    // panels, side by side, exactly as seen.
+    //
+    // * The camera update is hoisted above the passes for this: it only needs `u`, and it was
+    // the sole reason the G-buffer pass had drifted below `clearViewport`. The comment there
+    // claimed "before the screen pass opens" while the code did the opposite - a comment
+    // asserting an ordering the code does not enforce is worse than none.
+    const cam: Camera3D = s.cam.update(f, u.wantCaptureMouse(), .{
+        .min_distance = 0.6,
+        .max_distance = 14.0,
+    });
+    const view_aspect: f32 = blk: {
+        const gh: f32 = f.window.heightf();
+        break :blk if (gh > 0) f.window.widthf() / gh else 1.0;
+    };
+    const cam_vp: Mat = mulMat(cam.projMatrix(view_aspect, 0.01, 1000.0), cam.viewMatrix());
+
+    drawLightDepth(s, f, light_cam_vp);
+    drawGbuffer(s, f, cam_vp);
+    // * AO CONSUMES THE G-BUFFER, so it must come after - and before the screen opens.
+    drawSsao(s, f, cam.viewMatrix());
+    if (s.blur_ao) {
+        // Horizontal into the scratch, vertical back into `ssao_rt` - so the composite and the
+        // debug inset both keep reading one texture regardless of whether blurring is on.
+        drawSsaoBlurPass(s, f, 0);
+        drawSsaoBlurPass(s, f, 1);
+    }
+
+    z.clearViewport(f, .{ .r = 18, .g = 20, .b = 26, .a = 255 });
+
+    // * THE 3D BLOCK ALWAYS OPENS, even when it draws nothing. `beginMode3D` is what puts the
+    // pass into the depth-tested 3D state the custom pipelines below rely on; making it
+    // conditional would mean the shadowed geometry renders differently depending on whether a
+    // debug gizmo happens to be enabled. `drawScene` returns immediately when there is no
+    // skeleton to draw, so the cost of always opening it is a state change, not geometry.
+    z.beginMode3D(gl, cam);
+    drawScene(s, gl);
+    z.endMode3D(gl);
+
+    // -- * THE LIT PASS: ground and characters, ONE pipeline, both receiving --
+    {
+        if (s.show_ground) {
+            drawShadowedGround(s, f, cam_vp, light_cam_vp, light_dir);
+        }
+        if (s.show_mesh) {
+            drawCharactersLit(s, f, cam_vp, light_cam_vp, light_dir);
+        }
+        // * Hand the pass back once, after ALL foreign-pipeline work - not per draw.
+        gl.renderer().bindForPass(gl.pass);
+    }
+
+    // -- * COMPOSITE: MULTIPLY THE AO OVER THE LIT IMAGE --
+    //
+    // * NO NEW SHADER. AO is a 0..1 factor and the composite is `lit *= ao`, which is exactly
+    // what a MULTIPLY-blended fullscreen quad does. The engine's 2D pipeline already carries a
+    // `.multiply` variant, so this is one textured draw between the lit geometry and the UI.
+    //
+    // GenoView instead feeds AO into its lighting shader, separating `ssaoData.r` (ambient)
+    // from `.g` (sun). That is better - it lets AO darken only the SKY term while leaving
+    // direct sunlight alone - and it is what section 12e will do once a lighting pass exists. A flat
+    // multiply darkens everything including lit surfaces, which reads slightly heavy.
+    //
+    // * ORDER: after the 3D, BEFORE the UI. The UI is not part of the scene and must not be
+    // multiplied by an occlusion factor computed from scene geometry.
+    if (s.show_ao) {
+        const cw: f32 = f.window.widthf();
+        const ch: f32 = f.window.heightf();
+        z.beginBlendMode(gl, .multiply);
+        gl.texture(
+            .{ .x = 0, .y = 0, .width = cw, .height = ch },
+            s.ssao_rt.asTexture(),
+            .{},
+        );
+        z.endBlendMode(gl);
+    }
+
+    if (s.show_light_view) {
+        // The light's view, bottom-right. section 12a-4 replaces its contents with linear depth.
+        //
+        // * SIZED AND PLACED FROM THE LIVE WINDOW, NOT THE CONFIGURED `screen_w`. The window
+        // constant is what the app ASKS for; on a phone the canvas is whatever fits, so
+        // anchoring to 1000 put this inset off the right edge and it simply never appeared.
+        // `f.window.widthf()` is the actual size - `examples/render_texture` uses it for the
+        // same reason.
+        const view_w: f32 = f.window.widthf();
+        const view_h: f32 = f.window.heightf();
+        const size: f32 = @min(view_w, view_h) * 0.28;
+        const shown: z.WgpuTexture = switch (s.debug_view) {
+            1 => s.gbuf_pos.asTexture(),
+            2 => s.gbuf_normal.asTexture(),
+            3 => s.gbuf_albedo.asTexture(),
+            4 => s.ssao_rt.asTexture(),
+            else => s.light_view.asTexture(),
+        };
+        f.gl.texture(
+            .{
+                .x = view_w - size - 12.0,
+                .y = view_h - size - 12.0,
+                .width = size,
+                .height = size,
+            },
+            shown,
+            .{},
+        );
+    }
+
+    drawPanel(s, u, longest);
+}
+
+// -- ** `solveArmChain` and `ArmNames` DELETED --
+//
+// A masked, joint-limited two-target solve per limb, run after the pose loop. It was the best of
+// the six mechanisms and it is still a special case of the point cloud: two of its targets are
+// two of the samples, and its mask is unnecessary once nothing runs afterwards to be protected
+// from. **~90 lines, and the seam it lived in is gone with it.**
+
 pub const app: z.AppSpec(State) = .{
     .config = .{
         .window = .{
@@ -4114,168 +4277,9 @@ pub const app: z.AppSpec(State) = .{
     .memory = .managed,
 };
 
-/// Where the robot's ROOT body should sit - the position of the capture joint it maps to.
-///
-/// * Not the capture's root. `humanoid.xml`'s root is the TORSO and maps to `Spine3`; the
-/// capture's root is `Hips`, a spine lower.
-fn rootBodyWorldPosition(s: *const State, positions: []const Vec) ?Vec {
-    // ** FROM 1, NOT 0. Body 0 is the WORLD and its parent is also 0, so a scan from zero
-    // matches it first, finds no mapped joint, and returns null - the translation is then never
-    // written and the robot stands at the origin for the whole take. **A sentinel that also
-    // satisfies the predicate is not a sentinel**, which is the second time body/joint 0 has
-    // done this here.
-    for (1..s.robot.model.nbody) |body| {
-        if (s.robot.model.body_parent[body] != 0) {
-            continue;
-        }
-        const human_joint: i32 = s.human_of_body[body];
-        if (human_joint < 0 or @as(usize, @intCast(human_joint)) >= positions.len) {
-            return null;
-        }
-        return positions[@intCast(human_joint)];
-    }
-    return null;
-}
-
 // -- ** `buildCorePairs` DELETED --
 //
 // Two directions determined the torso EXACTLY and the pelvis within 11 degrees - the best result
 // this project had before the point cloud, and the first time the core of the body tracked at
 // all. **It is a special case of three sample points**, which is what a body with two children
 // gets for free. The construction was right; it just did not need to be its own mechanism.
-
-/// One point on a robot body, and where the capture says it should be.
-///
-/// -- *** THE WHOLE RETARGET IS "MATCH THESE POINTS" --
-///
-/// One point per body gives POSITION, two give DIRECTION, three give TWIST. The six mechanisms
-/// this example used to run - direction pairs, twist offsets, per-body IK, chain IK, hinge
-/// flexion, ankle aim - are each a special case, and at least eight of this project's bugs lived
-/// in the seams between them.
-// -- *** THE RETARGET LIVES IN `src/robot.zig` NOW --
-//
-// `PointSample`, `buildPointSamples` and `solvePointCloud` were defined HERE, and the harness
-// had its own copy of the same construction. **Seven times an example and a test have
-// re-implemented one stage and drifted** - the twist builder, the rest solve, the task set, the
-// rest-flexion fix, the pose loop, the sample cache, and a posture weight of 0.02 against 0.15.
-// Each was closed on its own; none removed the condition.
-//
-// *** **Moving the algorithm into the library removes it.** What remains here is what genuinely
-// belongs to the example: turning a `Character` into the arrays the library wants.
-
-/// The visual fit: mean and worst world distance from a mapped body to its capture joint.
-///
-/// ** **The only metric here that can see a translation.** Nine angle metrics could not see the
-/// whole figure standing 10 cm out of place; the worst is reported alongside the mean because
-/// the worst bone is the one that draws the eye and a mean hides it.
-fn recordRobotFit(s: *State, positions_robot: []const Vec) void {
-    var sum: f32 = 0;
-    var count: f32 = 0;
-    s.robot_visual_worst = 0;
-    s.robot_visual_worst_name = "";
-    for (1..s.robot.model.nbody) |b| {
-        const hb: i32 = s.human_of_body[b];
-        if (hb < 0 or @as(usize, @intCast(hb)) >= positions_robot.len) {
-            continue;
-        }
-        const d: f32 = boneLength(s.robot_data.body_xpos[b] - positions_robot[@intCast(hb)]);
-        sum += d;
-        count += 1;
-        if (d > s.robot_visual_worst) {
-            s.robot_visual_worst = d;
-            s.robot_visual_worst_name = s.robot.names[b];
-        }
-    }
-    s.robot_visual_mean = sum / @max(count, 1);
-}
-
-/// Fill `s.robot_samples` by asking the library, then record what the solve will use.
-fn refreshPointSamples(s: *State, source: *const Character) void {
-    const joints: usize = source.boneCount();
-    s.robot_sample_count = z.robot.buildPointSamples(&s.robot.model, .{
-        .human_of_body = s.human_of_body,
-        .human_parents = source.target_parents[0..joints],
-        .rest_positions = s.robot_rest_world[0..joints],
-        .rest_rotations = s.robot_rest_rotations[0..joints],
-        .robot_rest_rotations = s.robot_rest_xrot[0..s.robot.model.nbody],
-        .body_names = s.robot.names,
-        // * The rest POSITIONS as well as the rotations: `buildPointSamples` checks each leaf's
-        // correspondence against the rest pose and needs both halves of it.
-        .rest_positions_robot = s.robot_rest_body_pos[0..s.robot.model.nbody],
-    }, s.robot_samples);
-
-    // * Counted here so the UI reports what the SOLVE uses, not what the table resolved: a body
-    // can be mapped and still receive no samples.
-    var mapped: usize = 0;
-    for (1..s.robot.model.nbody) |b| {
-        if (s.human_of_body[b] >= 0) {
-            mapped += 1;
-        }
-    }
-    s.robot_mapped_count = mapped;
-}
-
-/// Build the retargeted skeleton: the capture's DIRECTIONS at the robot's OWN bone lengths,
-/// placed by best fit rather than by an anchor.
-///
-/// -- ** THE SHAPE FIRST, THE PLACEMENT SECOND --
-///
-/// Anchoring the walk on one body makes that body a single point of failure: the robot's ROOT is
-/// its torso, whose origin is not where the capture's chest joint sits, and the whole figure
-/// inherited that error. **Translating so the MEAN of the mapped joints matches means every body
-/// votes and there is no privileged one to be wrong about.**
-fn buildRetargetedSkeleton(
-    s: *State,
-    positions_robot: []const Vec,
-    out: []Vec,
-) void {
-    const model: *const z.robot.Model = &s.robot.model;
-    // * Checked, not clamped: a robot with more bodies than `out` holds used to lose its last
-    // bodies' targets without a word.
-    assertf(model.nbody <= out.len, @src(), "retargeted skeleton: {d} bodies, room for {d}", .{
-        model.nbody,
-        out.len,
-    });
-    const limit: usize = model.nbody;
-    out[0] = .{ 0, 0, 0, 0 };
-    for (1..limit) |b| {
-        const parent: u32 = model.body_parent[b];
-        const own_length: f32 = boneLength(model.body_pos[b]);
-        const hb: i32 = s.human_of_body[b];
-        if (parent == 0) {
-            out[b] = if (hb >= 0 and @as(usize, @intCast(hb)) < positions_robot.len)
-                positions_robot[@intCast(hb)]
-            else
-                .{ 0, 0, 0, 0 };
-            continue;
-        }
-        const hp: i32 = s.human_of_body[parent];
-        if (hb < 0 or hp < 0 or own_length < 1.0e-6) {
-            out[b] = out[parent] + model.body_pos[b];
-            continue;
-        }
-        const bone: Vec = positions_robot[@intCast(hb)] - positions_robot[@intCast(hp)];
-        if (boneLength(bone) < 1.0e-6) {
-            out[b] = out[parent] + model.body_pos[b];
-            continue;
-        }
-        out[b] = out[parent] + normalize3(bone) * @as(Vec, @splat(own_length));
-    }
-
-    var offset: Vec = .{ 0, 0, 0, 0 };
-    var counted: f32 = 0;
-    for (1..limit) |b| {
-        const hb: i32 = s.human_of_body[b];
-        if (hb < 0 or @as(usize, @intCast(hb)) >= positions_robot.len) {
-            continue;
-        }
-        offset += positions_robot[@intCast(hb)] - out[b];
-        counted += 1;
-    }
-    if (counted > 0) {
-        const shift: Vec = offset / @as(Vec, @splat(counted));
-        for (1..limit) |b| {
-            out[b] += shift;
-        }
-    }
-}

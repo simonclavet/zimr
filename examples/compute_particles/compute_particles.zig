@@ -7,6 +7,8 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -42,7 +44,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn spawn(
     pipe: *z.Compute(particle_step),
     scratch: []Vec2,
-    rng: std.Random,
+    rng: Random,
 ) void {
     var i: u32 = 0;
     while (i < particle_count) : (i += 1) {
@@ -60,7 +62,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     // CPU-backend self-check: a particle at rest must fall after one step.
-    var cpu: z.Compute(particle_step) = z.Compute(particle_step).initCpu();
+    var cpu: z.Compute(particle_step) = .initCpu();
     cpu.element_count = 1;
     cpu.params = .{ .count = 1, .dt = 0.1, .gravity = 10.0, .damping = 0.5 };
     const one_pos = [_]Vec2{.{ 0.5, 0.5 }};
@@ -73,7 +75,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // GPU backend: a single pipe whose `.backend` we flip live. initGpu also wires the
     // CPU path (the kernel's module globals always exist), so one pipe runs both.
-    var pipe: z.Compute(particle_step) = try z.Compute(particle_step).initGpu(
+    var pipe: z.Compute(particle_step) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
@@ -84,10 +86,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     const transfer_pos: []Vec2 = try gpa.alloc(Vec2, particle_count);
     const transfer_vel: []Vec2 = try gpa.alloc(Vec2, particle_count);
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x5eed);
+    var prng: Random.DefaultPrng = .init(0x5eed);
     spawn(&pipe, transfer_pos, prng.random()); // reuse transfer_pos as spawn scratch
 
-    const dp: z.DrawPoints = try z.DrawPoints.init(
+    const dp: z.DrawPoints = try .init(
         f.gpu,
         gpa,
         f.gpu.device,
@@ -130,7 +132,7 @@ fn update(f: *z.Frame, s: *State) void {
     // (The GPU path skips this: the kernel already wrote that buffer in place.)
     if (s.pipe.backend == .cpu) {
         if (s.pipe.readLatest(.pos)) |pos| {
-            s.dp.uploadPositions(std.mem.sliceAsBytes(pos[0..particle_count]));
+            s.dp.uploadPositions(sliceAsBytes(pos[0..particle_count]));
         }
     }
 

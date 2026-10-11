@@ -24,6 +24,9 @@ const allocPrint = std.fmt.allocPrint;
 const startsWith = std.mem.startsWith;
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 const logger_mod = @import("../runtime.zig").effects.logger;
 
 // TestSubApp - a representative sub-app shape that owns allocations
@@ -59,8 +62,8 @@ const TestSubApp = struct {
 
 // Single kill/restart cycle
 test "multiapp: single init -> tick -> deinit cycle is balanced" {
-    const ta: Allocator = std.testing.allocator;
-    var app: TestSubApp = try TestSubApp.init(ta, "single-cycle");
+    const ta: Allocator = testing_allocator;
+    var app: TestSubApp = try .init(ta, "single-cycle");
     defer app.deinit();
 
     var i: u32 = 0;
@@ -72,10 +75,10 @@ test "multiapp: single init -> tick -> deinit cycle is balanced" {
 }
 
 test "multiapp: 10 sequential kill/restart cycles leak nothing" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var cycle: usize = 0;
     while (cycle < 10) : (cycle += 1) {
-        var app: TestSubApp = try TestSubApp.init(ta, "cyclic");
+        var app: TestSubApp = try .init(ta, "cyclic");
         var i: u32 = 0;
         while (i < 25) : (i += 1) {
             try app.tick();
@@ -133,8 +136,8 @@ const ChildSlots = struct {
 };
 
 test "multiapp: 4-slot parent - spawn, tick, kill all" {
-    const ta: Allocator = std.testing.allocator;
-    var slots: ChildSlots = ChildSlots.init();
+    const ta: Allocator = testing_allocator;
+    var slots: ChildSlots = .init();
     defer slots.killAll();
 
     try slots.spawn(ta, 0, "pulse");
@@ -149,8 +152,8 @@ test "multiapp: 4-slot parent - spawn, tick, kill all" {
 }
 
 test "multiapp: kill one child mid-run, leave others alive" {
-    const ta: Allocator = std.testing.allocator;
-    var slots: ChildSlots = ChildSlots.init();
+    const ta: Allocator = testing_allocator;
+    var slots: ChildSlots = .init();
     defer slots.killAll();
 
     try slots.spawn(ta, 0, "pulse");
@@ -175,8 +178,8 @@ test "multiapp: kill one child mid-run, leave others alive" {
 }
 
 test "multiapp: kill + restart + kill again leaks nothing" {
-    const ta: Allocator = std.testing.allocator;
-    var slots: ChildSlots = ChildSlots.init();
+    const ta: Allocator = testing_allocator;
+    var slots: ChildSlots = .init();
     defer slots.killAll();
 
     try slots.spawn(ta, 0, "first-life");
@@ -206,8 +209,8 @@ test "multiapp: kill + restart + kill again leaks nothing" {
 // Random kill/restart pattern - the rough kind of churn a long-running
 // multi-app demo might hit
 test "multiapp: random kill/restart over 200 frames leaks nothing" {
-    const ta: Allocator = std.testing.allocator;
-    var slots: ChildSlots = ChildSlots.init();
+    const ta: Allocator = testing_allocator;
+    var slots: ChildSlots = .init();
     defer slots.killAll();
 
     // Spawn all 4 to start.
@@ -216,8 +219,8 @@ test "multiapp: random kill/restart over 200 frames leaks nothing" {
     try slots.spawn(ta, 2, "c");
     try slots.spawn(ta, 3, "d");
 
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xCAFE_BABE);
-    const r: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0xCAFE_BABE);
+    const r: Random = prng.random();
 
     var f: u32 = 0;
     while (f < 200) : (f += 1) {
@@ -242,14 +245,14 @@ test "multiapp: random kill/restart over 200 frames leaks nothing" {
 // everything in one shot.  No need to track individual allocations.
 
 const ArenaSubApp = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     /// Number of pieces of work the child has done.  Each tick
     /// allocates a small buffer.
     work_count: u32 = 0,
 
     pub fn init(parent_gpa: Allocator) ArenaSubApp {
         return .{
-            .arena = std.heap.ArenaAllocator.init(parent_gpa),
+            .arena = ArenaAllocator.init(parent_gpa),
         };
     }
 
@@ -268,8 +271,8 @@ const ArenaSubApp = struct {
 };
 
 test "multiapp: per-child arena pattern - 50 ticks then deinit" {
-    const ta: Allocator = std.testing.allocator;
-    var app: ArenaSubApp = ArenaSubApp.init(ta);
+    const ta: Allocator = testing_allocator;
+    var app: ArenaSubApp = .init(ta);
     defer app.deinit();
 
     var i: u32 = 0;
@@ -280,10 +283,10 @@ test "multiapp: per-child arena pattern - 50 ticks then deinit" {
 }
 
 test "multiapp: per-child arena - 20 kill/restart cycles" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var cycle: usize = 0;
     while (cycle < 20) : (cycle += 1) {
-        var app: ArenaSubApp = ArenaSubApp.init(ta);
+        var app: ArenaSubApp = .init(ta);
         var i: u32 = 0;
         while (i < 10) : (i += 1) {
             try app.tick();
@@ -334,14 +337,14 @@ const LoggingSubApp = struct {
 };
 
 test "multiapp: child with stored Logger.Prefixed - kill/restart x 10" {
-    const ta: Allocator = std.testing.allocator;
-    var cap: logger_mod.Capture = logger_mod.Capture.init(ta);
+    const ta: Allocator = testing_allocator;
+    var cap: logger_mod.Capture = .init(ta);
     defer cap.deinit();
     const parent_log: logger_mod.Logger = cap.logger();
 
     var cycle: usize = 0;
     while (cycle < 10) : (cycle += 1) {
-        var app: LoggingSubApp = try LoggingSubApp.init(ta, parent_log, "logger-child");
+        var app: LoggingSubApp = try .init(ta, parent_log, "logger-child");
         const log: logger_mod.Logger = app.prefixed.logger();
         log.info("hi from cycle {d}", .{cycle});
         app.deinit();

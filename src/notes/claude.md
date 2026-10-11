@@ -165,10 +165,9 @@ resumes a plan that is already approved, never one still under review.
 
 # ★ "C" MEANS CONTINUE
 
-A message that is just `C` (or `c`) means: **carry on with the current plan, no questions.**
-Pick up the next unfinished stage of whatever plan is ACTIVE in "Current plan" below, build it,
-verify it, ship a snapshot. No need to re-confirm what to work on. **If nothing is ACTIVE, ask
-which plan to resume** — do not pick one.
+A message that is just `C` (or `c`) is shorthand for **continue what you are doing now, no questions**: the
+next step of the work in hand - build it, verify it, ship a snapshot. It does not switch plans: another plan, active
+or paused, resumes only when Simon names it.
 
 # ★ WHEN THE DISK GUARD FIRES, CLEAR THE WHOLE CACHE
 
@@ -414,6 +413,15 @@ Prior arc (`src/notes/mocap_plan.md`, §11-12): BVH/FBX loading, skinning, and t
     zig build test -Dslow-tests                      also the long simulations and learning curves
     zig build zn-<stem> -Dtest-report                also print the robot tests' measurement tables,
                                                      and run the MEASUREMENT tests, which skip otherwise
+    zig build test -Dtest-timing                     each fast-tier test process lists its tests of 1 s or more
+    zig build test -Dtest-shards=1                   the robot family in one process (default: one per CPU)
+
+★★★ **THE ROBOT FAMILY'S BINARY RUNS AS `-Dtest-shards` PROCESSES (Oct 11).** The robot family is one
+binary of ~760 tests and Zig runs a binary's tests one after another, so `zig build test` used to
+sit on one core for the whole family after everything else had finished. `src/test_runner.zig`
+(std's runner plus `--shard=K/N` and `--timing`) lets one compiled binary run as N processes, each
+taking every Nth test. A slow MEASUREMENT under `-Dslow-tests` also needs `-Dtest-report` now: it
+asserts nothing and, without the report, printed nothing either - P1 LONG alone was 148 s of that.
 
 ★★★ **`test` IS A SUPERSET OF `test-fast` (Sep 26).** One command runs every test that is quick,
 each binary once and in parallel. `src/tests.zig` no longer runs the robot family - it skips
@@ -470,7 +478,23 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
 
 **ACTIVE**
 
-- `rl_track_plan.md` - **THE CURRENT PLAN (v4, Sep 27 evening); `C` resumes it.** SuperTrack on the 10-second
+Work in hand (Oct 11): `platforms_plan.md`, step C5, sound. Every other plan here, active or paused, resumes only
+when Simon names it.
+
+- `platforms_plan.md` - **THE CURRENT PLAN (since Oct 7).** The backends and sound plan: zimr on every
+  platform from the same app code - the web and Windows first, then Linux, macOS, Android and iOS - with the API every
+  platform implements decided in `platform_api.md`. Phase C, Windows complete, is under way, and its step C5 is
+  sound: the mixer's two sides, outputs that pull, and the browser's audio worklet. Where C5 stands and its next
+  steps are in the plan's "C5 from here"; the order of the work after C5 is its section 9. The backends tutorial
+  (`src/notes/tutorials/backends-tutorial.html`) is written alongside it.
+
+- `vulkan_port_plan_v2.md` - **The Vulkan port's journal (Oct 5-7); its road ahead moved to `platforms_plan.md` on
+  Oct 7.** zimr on Windows through Vulkan,
+  running the Zig compiler's own SPIR-V: the stages S0-S8, each written and cross-compiled for Windows in the
+  sandbox, GPU runs on Simon's laptop. Its status line and journal say what is done and what is next.
+
+- `rl_track_plan.md` - **The RL plan. PAUSED since Oct 5 (Simon: a break from RL and mocap); resumes when Simon
+  names it. It was the current plan before the platforms plan (v4, Sep 27 evening).** SuperTrack on the 10-second
   dance, fundamentals first, then the first night. Sections: standing rules (turn discipline; build/test traps -
   `check` does not compile pages, insert declarations above doc comments; engineering rules - known answers, one
   definition per concept, graph-vs-rows parity, the recipe as one value), the goal stated so it can fail, the
@@ -520,7 +544,7 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
   ledger records the transpiler as verbatim, and zimr's copy is the newer one (11 603 vs 11 561
   lines) and carries the 1980 storage-block fix that znum's kernels will need.
 
-**ACTIVE (second, alongside zimrnum — `C` resumes zimrnum unless you name this one)**
+**ACTIVE (second, alongside zimrnum - resumes when Simon names it)**
 
 - `docs_style_plan.md` — uniformize every published page to white on black, one shared `<style>`
   injected at build time by `tools/docfmt.zig`, Zig's own tokenizer doing all highlighting,
@@ -551,8 +575,55 @@ steps in this file. Name a new plan here when work on it begins; finished plans 
 - `raylib_port.md` — one example per turn, each leak-free under `.managed`.
 - `webgpu_control.md`, `physics_demo.md`, `plot3d.md`.
 
-**PLANNED** — `vulkan_backend.md`: native platforms behind a comptime backend seam. Investigation
-complete, implementation deferred; web stays first-class.
+**SUPERSEDED** — `vulkan_backend.md`: the earlier native plan; `vulkan_port_plan_v2.md` replaces it (its
+section 13 compares the two).
+
+## ★★★ BUILD THROUGH `zbuild` (Sep 28)
+
+`zig build zbuild` once installs `tools/zig-out/bin/zbuild`; then `tools/zig-out/bin/zbuild <step> [args]` IS
+`zig build <step> [args]` - same arguments, output passed through whole - except that a failing build ENDS with
+only its roots: compile errors, lint findings (`path:line:col: [rule]`), and every step that failed on its own
+with the command it ran. So `... | tail -30` is the answer, not a grep. Both streams come through pipes, so a
+finding on stdout cannot be overwritten the way `> log 2>&1` does it. Its first run caught a 132-column line in
+`build.zig` that had just been written. `--log=<file>` distills a log captured earlier.
+
+It streams: the build's output comes through as it is printed, whole lines, and every finding - a compile error
+(`path:line:col: error:`) or a lint finding (`path:line:col: [rule]`) - is announced the moment the build prints it,
+on a line of its own beginning `zbuild: found:`. **By default it stops the build at its first finding**, with
+everything the build started - zig build leads a process group of its own - and reports: a lint finding in the
+first seconds does not wait for minutes of unrelated compiling. It stops once the report holding that finding is
+whole - the output quiet for a quarter of a second, or two seconds gone - because a lint run prints its findings,
+and a compile step its errors, in pieces milliseconds apart (each rule's explanation comes before its first
+finding): stopping at the first piece lost two of five findings of one lint run before it waited. Stopping is safe: the linter writes the files it
+fixes whole or not at all (`writeFileWhole`: an unnamed file beside the target, moved over it in one step), and the
+compiler's cache moves each result into place the same way. A finding of a rule still work in progress prints as
+`[rule, work in progress]`; zbuild announces it as `zbuild: work in progress:`, and it neither stops the build nor
+fails it. No enabled rule is in progress today: in zimr a lint finding is a compile error.
+
+`zbuild --complete <step> [args]` (first argument only) runs the build to its end instead. Use it for:
+
+- the gate, or any run whose job is to report everything;
+- a change touching many files - a rename, a contract change - where every error at once saves a rebuild per error
+  (one compile step's errors arrive together, but the other steps' are lost when the first stops the build);
+- a check of several targets at once - web, Windows, headless - when the question is which of them break;
+- outputs wanted despite a finding elsewhere - an executable to send while an unrelated file has a lint finding.
+
+Test failures never stop a build: a failing test is a failed step, not a `path: error:` line, so a test run always
+completes. A long build in the background, watched:
+
+    (setsid nohup sh -c 'cd /home/claude/zimr; export PATH=...; tools/zig-out/bin/zbuild <steps> \
+        > /tmp/b.log 2>&1; echo "rc $?" > /tmp/b.done' < /dev/null > /dev/null 2>&1 &)
+    grep "^zbuild: found:" /tmp/b.log     # while it runs: findings, as soon as there are any
+    tail -30 /tmp/b.log                   # when /tmp/b.done exists: the roots
+
+**Never send a build's standard output to `/dev/null`.** zimrlint prints its findings on standard output, which the
+build passes straight through; the build's own failure report, on standard error, only names the failed command. A
+build run as `zig build ... > /dev/null 2> log` keeps the report and throws away the findings - which is how a whole
+session read "failed command: zimrlint" and re-ran the linter by hand to see why.
+
+**A build rewrites sources.** With autofix on (the default), every build applies the linter's fixes and `zig fmt`
+before checking - `std.mem.eql` becomes the file's `eql` alias, a long signature is split. Read a file again after a
+build before editing it by exact text: the text matched before the build may no longer be there.
 
 ## Disk and the zig cache
 
@@ -606,6 +677,20 @@ changed code - as it stands in the tree after `zig fmt`, not as it was first typ
 piece does and WHY it is shaped that way. Tool calls do not count: a Python patcher or a `str_replace`
 buried in the transcript is not "shown". Print the final regions (`sed -n`) before writing the reply;
 doing so caught two stale doc references in the same turn this rule was written.
+
+★★★ **ON THE WINDOWS MACHINE: A DIFF, AND A ZED BUTTON FOR EACH KEY LOCATION (Simon, Oct 11).** Every code change
+appears in the reply as a fenced `diff` block - the exact hunks, with the file and line above each, taken from the
+edits made, not from `git diff` (the working tree carries unrelated uncommitted work). After the diffs, for each
+location Simon should look at, one fenced `bash` block holding one command:
+
+    zed C:/dev/zimr/src/native_input.zig:1140
+
+The desktop app puts a Run button on shell blocks, and Zed's CLI opens the file at that line in the running window.
+An absolute path with forward slashes works in PowerShell and bash, from any directory. Only the few key locations,
+not every file mentioned. Plain links cannot do this: the app does not hand a `zed://` link to Windows, and
+`zed://file/C:/...` fails inside Zed anyway (os error 123 - the path arrives as `/C:/...`).
+
+★ **ON THE PHONE: THE DIFF, NO ZED BLOCKS** - there is no editor to open there.
 
 ★★ **INSERT A DECLARATION ABOVE THE NEXT ONE'S DOC COMMENT, NEVER BETWEEN THEM (Sep 27, three times in one
 session).** Anchoring a new `pub const X` on the line `pub const Y = struct {` puts X between Y's `///` block and Y:
@@ -805,7 +890,7 @@ writing engine code on a Linux box:
 written in Zig, carry the code to the browser: `spv2wgsl` (Zig → SPIR-V → WGSL for
 shaders and compute kernels) and `c2js` (Zig → C → JavaScript for the browser
 host, `src/bridge.zig`). The architecture lives in the `//!` doc atop
-`src/zimr.zig`; the public API surface is `CHEATSHEET.md` (codegen). Reference C
+`src/zimr.zig`; the public API surface is the generated cheatsheet page (`zig build cheatsheet` -> `zig-out/web/cheatsheet.html`). Reference C
 is at `/tmp/raylib-master/` and `/tmp/imgui-master/` (the imgui DOCKING branch —
 zimr mirrors docking, not master).
 
@@ -909,10 +994,13 @@ minutes. Total under 4 minutes when nothing is wrong:
     zig fmt --check src examples build.zig tools/zimrlint.zig   # 1s   tier 2
     <c2js name sweep, below>                             # 4s   tier 3, static
     zig build c2js-canary -Dautofix=false -j1            # 32s  tier 3, dynamic
-    zig build hello-world-standalone -Dmode=release -Dautofix=false -j1   # 82s
-    zig build launcher-standalone   -Dmode=release -Dautofix=false -j1   # 90s
+    zig build hello-world -Dplatform=web -Dmode=release -Dautofix=false -j1   # 82s
+    zig build launcher    -Dplatform=web -Dmode=release -Dautofix=false -j1   # 90s
 
-`hello-world-standalone` is the cheap failure probe: it pulls the ENTIRE tool chain (spv2wgsl,
+(Every app has one step since Oct 2026, built for `-Dplatform`; a web build makes the served page and the
+single-file page together. The step names in the measurements below are the old `-standalone` ones.)
+
+`hello-world` for the web is the cheap failure probe: it pulls the ENTIRE tool chain (spv2wgsl,
 gen_externs, c2js, per-shader transpiles, the engine wasm) for a fraction of the launcher's
 link. If it is green the launcher almost certainly is too. Do NOT pre-warm anything else.
 
@@ -1150,7 +1238,9 @@ Converted to Zig:
 
 `measure` is INSTALLED to `tools/zig-out/bin` rather than run through a step, because this
 Zig's `Build` has no `b.args` - a step cannot forward trailing `--` arguments, and the tool is
-useless without them. `.zenv.sh` already puts that directory on PATH.
+useless without them.
+★ **STALE (Sep 27, 2307): a step CAN forward them - `run.addPassthruArgs()` is this Zig's `b.args`**
+(`zig build bvh-trim -- <args>` works through it). Installing is still fine; it is no longer forced. `.zenv.sh` already puts that directory on PATH.
 
 Two things the Zig version does BETTER than the shell it replaced: peak RSS comes from
 `request_resource_usage_statistics` / `getMaxRss()` instead of polling `/proc` every 250 ms
@@ -2227,6 +2317,11 @@ costs those frames per row.
 
 ## ★★★ STANDALONE PAGES OVER 2 MB DO NOT OPEN IN THE CLAUDE ANDROID VIEWER
 
+★★★ **SUPERSEDED Sep 27 2026: a 3.7 MB `geno_train.html` OPENED AND RAN in the Claude Android viewer** (Simon's
+screenshot, the viewer's own title bar - not Chrome's URL bar this time). The cap below was real on Sep 4 and is gone
+or raised now. Do not tell Simon a page needs Chrome for its size alone; if a big page fails in the viewer again,
+re-bracket it with the padding method below before believing either version of this section.
+
 Measured Sep 4 2026 by padding ONE page (`hello_world`) with an inert HTML comment, so nothing
 but size could differ:
 
@@ -2853,6 +2948,32 @@ the corpus now counts and skips those instead of calling them transpiler failure
 emitted WGSL's `@group` lines (or trust the two guards above, which is what they are for), and let the
 device have the final word.
 
+### 0.17.0 (release, Oct 11, on Windows) — THE CANARY HAD NO GLOBAL
+
+★★★ **A GLOBAL IS NOW READ AND WRITTEN AS `(*(&name))`, WITH NO TYPE AT THE ACCESS.** The C backend used to
+write `(*((uint32_t *)&name))`, and that cast is where c2js took the slot's type. Without it `parseLValueBase`
+could not resolve a scalar global, so the read fell back to the bare name - which lowers to the slot's ADDRESS -
+and the store was dropped. No marker, no error. It reached the browser as `Cannot read properties of undefined
+(reading 'now')`: `jsNowMs` caches `performance` in a module-level `var`, the cache was never written, and every
+read was handle 108328, an empty slot. Fix: `global_scalars` records each scalar global's type from its
+declaration (`prescanScalarGlobals`), and `parseLValueBase` resolves a global's name to its slot through it.
+
+★★ **`c2js-canary` PASSED THROUGH IT, BECAUSE THE CANARY HAD NO MODULE-LEVEL `var`.** The cheap check after a
+bump only covers the shapes it contains. Its answer now goes through a global (`round_trip`), so a dropped store
+or an address read fails it. `c2js-diff` would have caught it - its cases keep `var sink` globals - but it is the
+slow check, run after the cheap one is green. **When a bump changes how the C backend spells an access, ask
+whether the canary contains that access at all.** Grep both C files for the new spelling, and a count of zero on
+the canary side is the gap. Make the pattern exact: bare `(*(&` matched 459 times in `bridge.c`, nearly all field
+accesses; the global form - a bare name inside - matched 3, all `perf_obj_handle`:
+
+    grep -oE '\(\*\(&[A-Za-z_][A-Za-z0-9_]*\)\)' bridge.c | sort | uniq -c
+
+★ **Tier 1 this bump: `std.zon.parse` takes an options struct and allocates from an arena.** `fromSliceAlloc` is
+`fromSlice` (`fromSlice` became `fromSliceNoAlloc`), `.gpa` / `.arena` / `.source` / `.diagnostics` are fields, the
+result and the diagnostics live in the arena (no `parse.free`, no `Diagnostics.deinit`), `Diagnostics` is declared
+`= undefined` (its `errors` field has no default), and `.diagnostics` can no longer be null. Diagnostics print
+through `diagnostics.fmt(path)`, not `{f}` on the value.
+
 ## ★★★ A SELF-REFERENTIAL `State` MUST BE BUILT IN THE GLOBAL, NEVER COPIED INTO IT
 
 `examples/wgpu_bringup` built `var s: State = .{...}` on the stack and ended init with
@@ -3250,6 +3371,11 @@ translationV(-p))` — over inverting a matrix by hand. It needs no assumption a
 column holds the translation, which was the assumption that produced the wrong answer twice.
 
 ## Known sandbox quirks
+- **`> file 2>&1` CAN LOSE STDOUT.** std's `File.Writer` writes a regular file POSITIONALLY, so with both streams
+  on one file a later stderr write (a leak report at exit) lands at offset 0 over what stdout wrote. Two runs then
+  "agree" on the leak lines alone (Sep 28: decl_deps looked like it printed nothing). `zig build`'s own output does
+  it too: a failing `check` log once showed no lint finding because stderr had overwritten it. CAPTURE THROUGH A
+  PIPE, where every write is sequential: `zig build <step> 2>&1 | cat > /tmp/b.log` - or keep the streams apart.
 - **`/bin/sh` does not brace-expand**: `rm src/{a,b}.zig` is a silent no-op. Use a
   loop or `xargs`.
 - **`zig build test` runs at the default stack** (no more `ulimit -s unlimited`):
@@ -3459,8 +3585,17 @@ if (comptime assert.allow_assert) { /* costly check */ assertf(ok, @src(), "..."
   slots; the cleanup loop then freed it twice. Silent heap corruption on EVERY shader
   transpile under ReleaseFast; ReleaseSafe's allocator caught it on the first build. The
   `--entry=` compaction (`pos[w] = pos[r]`) had the same defect.
-- **The build tools are ReleaseSafe on purpose.** They cost ~14-20% run time vs ReleaseFast
-  (~0.7s/build total) and they catch exactly the class of bug above. Worth it.
+- **A TOOL'S OPTIMISE MODE FOLLOWS ITS RUN TIME (Sep 28, measured).** Heavy or run-many-times tools (zimrlint,
+  spv2wgsl, c2js, docfmt, example_source x314, lafan_db, the robot benches) are optimised - ReleaseSafe catches the
+  class of bug above at ~14-20% over ReleaseFast. Everything that runs for a moment is **Debug**: the same safety
+  checks, and it compiles in 1-2 s / ~140 MB instead of 22-53 s / ~400 MB. 18 tools went 10 min -> 27 s cold.
+  `zig build tools` only COMPILES tools: a mode switch is proven by RUNNING the tool. Doing so found `dag_png`
+  OOM-killed at ~3.85 GB in either mode - not the switch: its layout had spread to 15,000 px, and a fixed 4x
+  supersample costs 64 bytes per final pixel. Fixed Sep 28 (capped gaps, a supersampling budget).
+  ★ **THAT COST IS NOT A CONSTANT: the SuperTrack bench (zimrnum autodiff + physics) pays 1.7x** (Sep 27: 3.2 vs 1.9
+  iterations/s, rows bitwise identical). And a ReleaseFast binary with `assert_log` on does not STOP on a failed
+  assert - it logs one line and runs on, so a refused setting produced a clean-looking run. Anything that takes
+  settings from outside validates them itself, before it builds.
 
 ## Big-system docs live IN CODE, not in plans
 Architecture for a major subsystem belongs in a `//!` module doc on that
@@ -4256,3 +4391,6 @@ correct there ⇒ DPR-related, wrong ⇒ mode-related; then log
 - **A turn must never wait on a long test.** Anything over ~60 s runs detached (setsid nohup, log to /tmp) and is polled with sleeps under ~120 s per call. A turn that died waiting (Sep 25, D5 step 3, 162 s) lost its whole reply though the test passed.
 - **A test filter that matches nothing compiles NO test bodies** (`--test-filter` skips analysing non-matching tests), so `-Dtest-filter=NO_SUCH` checks only non-test code. To compile-check a test, filter on ITS name (Sep 26: a missing field passed such a "check").
 - **Long turns stall** (twice on Sep 26, the reply lost though the work went on). Keep a turn to a few runs; record and end before it grows.
+- **Long REPLIES die too** (Sep 27, three times: the work finished, the reply never reached Simon's phone - each one
+  pasted 300+ lines of code). The code rule stands, so the fix is upstream: plan each turn so its new code fits one
+  reply (~150 lines). When a reply is lost, the next turn checks the tree against the snapshot and re-shows the code.

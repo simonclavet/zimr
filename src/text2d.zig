@@ -13,7 +13,14 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const expectError = std.testing.expectError;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const zeroes = std.mem.zeroes;
+const splitScalar = std.mem.splitScalar;
+const parseInt = std.fmt.parseInt;
+const parseFloat = std.fmt.parseFloat;
 const builtin = @import("builtin");
+const host = @import("host.zig");
 const zm = @import("zm");
 const float = zm.float;
 const clamp = zm.clamp;
@@ -32,6 +39,7 @@ fn cpuAtlasTextureId() u32 {
 
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
+const requireGl = types.requireGl;
 const allocator_mod = @import("runtime.zig").allocator;
 const truetype = @import("codecs.zig").truetype;
 const rectpack = @import("codecs.zig").rectpack;
@@ -81,13 +89,11 @@ var warned_text_no_font: bool = false;
 // web/gl which only compile under wasm.  Gate the import: on host
 // targets, route to a host-side stub the test binary defines.
 
-// `getFontDefault` is the wasm-gated public accessor for the default
-// font.  The actual data + upload logic live at the bottom of this
-// file (under "Default bitmap font" - was previously font_default.zig).
-// On host builds the GPU upload path doesn't exist, so we return a
-// zero-init Font and skip the upload entirely - drawing on host is a
-// no-op anyway since the rlgl_gpu calls are stubbed out.
-const is_wasm = builtin.target.cpu.arch.isWasm();
+// `getFontDefault` is the public accessor for the default font. The actual data + upload logic live at the bottom
+// of this file (under "Default bitmap font" - was previously font_default.zig). Fonts upload wherever GPU calls
+// reach a device - the browser's WebGPU or the native Vulkan host (`host.has_gpu`). Host tests have no GPU: there
+// `getFontDefault` returns a zero-init Font and the upload is skipped, and drawing is a no-op anyway.
+const has_gpu: bool = host.has_gpu;
 pub const glyph_count: i32 = 224;
 
 /// Per-glyph pixel widths.  raylib indexes from codepoint 32 (' ') through
@@ -161,10 +167,10 @@ pub const FontCache = struct {
 /// (test bodies, the headless image-text path) already tolerate
 /// that.
 pub fn getFontDefault(state: *const FontCache) Font {
-    if (comptime is_wasm) {
+    if (comptime has_gpu) {
         return state.font;
     }
-    return std.mem.zeroes(Font);
+    return zeroes(Font);
 }
 
 /// Errors returned by `loadFontFromTtfData`.
@@ -189,6 +195,13 @@ pub const LoadFontError = error{
     /// internal error names through the public surface.
     TtfParseFailed,
 } || Allocator.Error;
+
+// ===========================================================================
+// Text -> Image rasterization (moved from image_mod.zig, structure-plan S0):
+// these are the image<->text cycle's image-side fns - they need FontCache,
+// so they live with the fonts.  `image` is the CPU image library.
+// ===========================================================================
+const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
 
 fn unloadImage(
     gpa: Allocator,
@@ -232,6 +245,9 @@ const GlyphMeta = struct {
     /// Pen advance in pixels (scaled).
     advance: i32,
 };
+
+/// Format constant: PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 (matches enums.zig).
+const pixelformat_rgba8: i32 = 7;
 
 /// Rasterize `codepoints` into a packed atlas at `font_size` pixel
 /// height.  Returns the atlas image + parallel glyph-metric and
@@ -392,7 +408,7 @@ pub fn bakeFontAtlas(
         // (`imageDrawTextWithFont`) can sample it after the shared atlas image is
         // freed. Each is a standalone allocation; `unloadFontData` frees every
         // glyph.image via `unloadImage`, so this adds no new teardown surface.
-        var glyph_image: z.Image = std.mem.zeroes(z.Image);
+        var glyph_image: z.Image = zeroes(z.Image);
         if (r.w > 0 and r.h > 0) {
             const gw: usize = @intCast(r.w);
             const gh: usize = @intCast(r.h);
@@ -594,7 +610,7 @@ pub fn loadFontFromTtfBytes(
     if (state.loaded) {
         return;
     }
-    if (comptime !is_wasm) {
+    if (comptime !has_gpu) {
         return;
     }
     const font: Font = try loadFontFromTtfData(
@@ -626,6 +642,47 @@ pub fn unloadFontData(
 fn unloadTexture(texture: Texture) void {
     // GL-retirement P5d: no GPU-side unload - the renderer owns residency.
     _ = texture;
+}
+
+/// A font's outlines plus the metrics layout needs, kept alive so its glyphs can
+/// be rasterized on demand. Owned by the `Font` (`Font.face`, read it with
+/// `fontFace`); freed by `unloadFontOwned` / `unloadFont`.
+pub const FontFace = struct {
+    /// Keys this face's glyphs in the shared atlas. A counter, never an address:
+    /// an unloaded face's glyphs stay cached until the atlas starts over, and a
+    /// new face allocated at the same address must not find them.
+    id: u32,
+    /// The TTF, copied - `truetype.Font` borrows its bytes, and a caller may free
+    /// theirs as soon as `loadFont` returns.
+    ttf_bytes: []u8,
+    tt: truetype.Font,
+    /// Per glyph SLOT (index into `Font.glyphs`): the TTF glyph and its advance
+    /// in font units. By slot, not codepoint, so a codepoint the font was not
+    /// loaded with falls back to '?' exactly as it does on the baked path.
+    glyph_ids: []truetype.GlyphIndex,
+    advance_units: []i16,
+    /// Ascent, and ascent - descent (what `scaleForPixelHeight` divides by, so
+    /// sizes here mean what they mean for the baked atlas), in font units.
+    ascent_units: f32,
+    height_units: f32,
+
+    /// Font units -> pixels, for text `size` pixels tall.
+    pub fn pixelsPerUnit(face: *const FontFace, size: f32) f32 {
+        return size / face.height_units;
+    }
+};
+
+/// The face behind `font`, or null for a baked-only font.
+pub fn fontFace(font: Font) ?*FontFace {
+    const face_ptr: *anyopaque = font.face orelse return null;
+    return @ptrCast(@alignCast(face_ptr));
+}
+
+pub fn destroyFontFace(gpa: Allocator, face: *FontFace) void {
+    gpa.free(face.advance_units);
+    gpa.free(face.glyph_ids);
+    gpa.free(face.ttf_bytes);
+    gpa.destroy(face);
 }
 
 /// Free GPU + CPU memory for a Font.  No-op if the font is the
@@ -692,7 +749,7 @@ pub fn unloadFontCache(gpa: Allocator, state: *FontCache) void {
     if (!state.loaded) {
         return;
     }
-    if (comptime !is_wasm) {
+    if (comptime !has_gpu) {
         return;
     }
     const font: Font = state.font;
@@ -842,9 +899,6 @@ pub const default_font_data: [512]u32 = .{
 
 pub const chars_divisor: i32 = 1;
 
-/// Format constant: PIXELFORMAT_UNCOMPRESSED_R8G8B8A8 (matches enums.zig).
-const pixelformat_rgba8: i32 = 7;
-
 /// Force-load the default font.  Idempotent - the `state.loaded` guard
 /// prevents double-init.  Called automatically by `getFontDefault` (above)
 /// and also exposed so the runtime can prime the GPU upload during
@@ -903,7 +957,7 @@ fn loadFontRaylibBitmapImpl(
     _ = atlas_size;
     const tex_id: u32 = cpuAtlasTextureId();
     if (tex_id == 0) {
-        core_module.traceLog(tracelog, core_module.LOG_ERROR, "FONT: Default font texture upload failed", .{});
+        core_module.traceLog(tracelog, .err, "FONT: Default font texture upload failed", .{});
         return;
     }
 
@@ -985,7 +1039,7 @@ fn loadFontRaylibBitmapImpl(
     state.font.glyphs = @ptrCast(&bufs.glyphs_buf);
 
     state.loaded = true;
-    core_module.traceLog(tracelog, core_module.LOG_INFO, "FONT: Default font loaded ({d} glyphs)", .{glyph_count});
+    core_module.traceLog(tracelog, .info, "FONT: Default font loaded ({d} glyphs)", .{glyph_count});
 }
 
 /// **Legacy alternative:** load the original raylib 8x10
@@ -999,9 +1053,9 @@ fn loadFontRaylibBitmapImpl(
 /// templates from the wasm binary (the TTF path doesn't need
 /// them and didn't use them).
 /// Mutates: `state.*` (atlas, glyphs, font, `loaded` flag).
-/// On non-wasm host builds this is a no-op.
+/// Without a GPU (host tests) this is a no-op.
 pub fn loadFontRaylibBitmap(gpa: Allocator, state: *FontCache) !void {
-    if (comptime is_wasm) {
+    if (comptime has_gpu) {
         var default_sink: core_module.TraceLogState = .{};
         try loadFontRaylibBitmapImpl(gpa, state, &default_sink);
     }
@@ -1036,7 +1090,7 @@ pub fn unloadFontRaylibBitmapImpl(gpa: Allocator, state: *FontCache) void {
 /// `state.buffers` allocation (the 114 KB block holding the
 /// atlas + glyphs scratch).
 pub fn unloadFontRaylibBitmap(gpa: Allocator, state: *FontCache) void {
-    if (comptime is_wasm) {
+    if (comptime has_gpu) {
         unloadFontRaylibBitmapImpl(gpa, state);
     }
 }
@@ -1127,7 +1181,7 @@ pub fn prevCodepoint(s: []const u8, end_offset: usize) DecodedCodepoint {
 /// Count codepoints in a UTF-8 slice.  Uses the DFA-based iterator
 /// for correctness on malformed input.
 pub fn countCodepoints(s: []const u8) usize {
-    var iter: code_point.Iterator = code_point.Iterator.init(s);
+    var iter: code_point.Iterator = .init(s);
     var count: usize = 0;
     while (iter.next()) |_| {
         count += 1;
@@ -1348,7 +1402,7 @@ pub fn split(
     s: []const u8,
     delimiter: u8,
 ) std.mem.SplitIterator(u8, .scalar) {
-    return std.mem.splitScalar(u8, s, delimiter);
+    return splitScalar(u8, s, delimiter);
 }
 
 /// Allocating split - returns a slice of slices that all reference into
@@ -1361,7 +1415,7 @@ pub fn splitAlloc(
 ) Allocator.Error![][]const u8 {
     var parts: ArrayList([]const u8) = .empty;
     defer parts.deinit(allocator);
-    var iter = std.mem.splitScalar(u8, s, delimiter);
+    var iter = splitScalar(u8, s, delimiter);
     while (iter.next()) |part| {
         try parts.append(allocator, part);
     }
@@ -1381,7 +1435,7 @@ pub fn join(
 /// Find the first occurrence of `needle` in `haystack`. Returns null if
 /// not found. Wraps `std.mem.indexOf`.
 pub fn findIndex(haystack: []const u8, needle: []const u8) ?usize {
-    return std.mem.indexOf(u8, haystack, needle);
+    return indexOf(u8, haystack, needle);
 }
 
 /// Wraps `std.mem.eql`. Exists for symmetry with raylib's TextIsEqual.
@@ -1393,13 +1447,13 @@ pub fn isEqual(a: []const u8, b: []const u8) bool {
 /// Parse a base-10 signed integer. Returns ParseIntError on malformed
 /// input. Unlike raylib's TextToInteger, does not silently return 0.
 pub fn toInteger(s: []const u8) std.fmt.ParseIntError!i32 {
-    return std.fmt.parseInt(i32, s, 10);
+    return parseInt(i32, s, 10);
 }
 
 /// Parse a float. Wraps `std.fmt.parseFloat`; full IEEE-754 + scientific
 /// notation handling unlike raylib's basic decimal parser.
 pub fn toFloat(s: []const u8) std.fmt.ParseFloatError!f32 {
-    return std.fmt.parseFloat(f32, s);
+    return parseFloat(f32, s);
 }
 
 // Font / glyph queries (no alloc)
@@ -1453,34 +1507,6 @@ pub fn getGlyphAtlasRec(font: Font, codepoint: u21) Rectangle {
 // fonts without a face (bitmap, sprite, SDF, `loadFontBaked`) keep drawing from
 // the baked atlas.
 
-/// A font's outlines plus the metrics layout needs, kept alive so its glyphs can
-/// be rasterized on demand. Owned by the `Font` (`Font.face`, read it with
-/// `fontFace`); freed by `unloadFontOwned` / `unloadFont`.
-pub const FontFace = struct {
-    /// Keys this face's glyphs in the shared atlas. A counter, never an address:
-    /// an unloaded face's glyphs stay cached until the atlas starts over, and a
-    /// new face allocated at the same address must not find them.
-    id: u32,
-    /// The TTF, copied - `truetype.Font` borrows its bytes, and a caller may free
-    /// theirs as soon as `loadFont` returns.
-    ttf_bytes: []u8,
-    tt: truetype.Font,
-    /// Per glyph SLOT (index into `Font.glyphs`): the TTF glyph and its advance
-    /// in font units. By slot, not codepoint, so a codepoint the font was not
-    /// loaded with falls back to '?' exactly as it does on the baked path.
-    glyph_ids: []truetype.GlyphIndex,
-    advance_units: []i16,
-    /// Ascent, and ascent - descent (what `scaleForPixelHeight` divides by, so
-    /// sizes here mean what they mean for the baked atlas), in font units.
-    ascent_units: f32,
-    height_units: f32,
-
-    /// Font units -> pixels, for text `size` pixels tall.
-    pub fn pixelsPerUnit(face: *const FontFace, size: f32) f32 {
-        return size / face.height_units;
-    }
-};
-
 // lint:off module-var: the face-id counter must outlive every face (see FontFace.id)
 var next_font_face_id: u32 = 1;
 
@@ -1516,19 +1542,6 @@ pub fn createFontFace(
     };
     next_font_face_id += 1;
     return face;
-}
-
-pub fn destroyFontFace(gpa: Allocator, face: *FontFace) void {
-    gpa.free(face.advance_units);
-    gpa.free(face.glyph_ids);
-    gpa.free(face.ttf_bytes);
-    gpa.destroy(face);
-}
-
-/// The face behind `font`, or null for a baked-only font.
-pub fn fontFace(font: Font) ?*FontFace {
-    const face_ptr: *anyopaque = font.face orelse return null;
-    return @ptrCast(@alignCast(face_ptr));
 }
 
 /// Largest size a glyph is rasterized at, in device px; bigger text is drawn
@@ -1641,6 +1654,69 @@ fn rasterizesGlyphs(comptime GlPtr: type) bool {
         .pointer => |ptr| @typeInfo(ptr.child) == .@"struct" and @hasDecl(ptr.child, "glyphDeviceMapping"),
         else => false,
     };
+}
+
+/// Draw a single codepoint from the font's BAKED atlas, scaled to `font_size`.
+fn drawBakedCodepoint(
+    gl: anytype,
+    font: Font,
+    codepoint: u21,
+    position: Vec2,
+    font_size: f32,
+    tint: Color,
+) void {
+    const idx: usize = getGlyphIndex(font, codepoint);
+    const scale: f32 = font_size / float(font.baseSize);
+    const pad: f32 = float(font.glyphPadding);
+    const dst: Rectangle = .{
+        .x = position[0] + float(font.glyphs[idx].offsetX) * scale - pad * scale,
+        .y = position[1] + float(font.glyphs[idx].offsetY) * scale - pad * scale,
+        .width = (font.recs[idx].width + 2.0 * pad) * scale,
+        .height = (font.recs[idx].height + 2.0 * pad) * scale,
+    };
+    const src: Rectangle = .{
+        .x = font.recs[idx].x - pad,
+        .y = font.recs[idx].y - pad,
+        .width = font.recs[idx].width + 2.0 * pad,
+        .height = font.recs[idx].height + 2.0 * pad,
+    };
+    const origin: Vec2 = .{ 0, 0 };
+    // The image path was not converted, so this crossing is radians. Zero either way, but the
+    // name has to say which side it is on.
+    const rotation_rad: f32 = 0.0;
+    image_mod.drawTexturePro(gl, font.texture, src, dst, origin, rotation_rad, tint);
+}
+
+/// One textured quad from an atlas page: the same vertex order and attributes
+/// as `drawTexturePro`, bound through the page's own material.
+fn emitGlyphQuad(
+    gl: anytype,
+    entry: glyph_atlas.Entry,
+    dst: Rectangle,
+    tint: Color,
+) void {
+    const glyph_has_ink: bool = entry.width > 0 and entry.height > 0;
+    if (!glyph_has_ink) {
+        return;
+    }
+    gl.bindGlyphPage(entry.page);
+    const page_texels: f32 = float(glyph_atlas.page_size);
+    const u_left: f32 = float(entry.x) / page_texels;
+    const u_right: f32 = float(entry.x + entry.width) / page_texels;
+    const v_top: f32 = float(entry.y) / page_texels;
+    const v_bottom: f32 = float(entry.y + entry.height) / page_texels;
+    gl.begin(.quads);
+    gl.color4ub(tint.r, tint.g, tint.b, tint.a);
+    gl.normal3f(0, 0, 1);
+    gl.texCoord2f(u_left, v_top);
+    gl.vertex2f(dst.x, dst.y);
+    gl.texCoord2f(u_left, v_bottom);
+    gl.vertex2f(dst.x, dst.y + dst.height);
+    gl.texCoord2f(u_right, v_bottom);
+    gl.vertex2f(dst.x + dst.width, dst.y + dst.height);
+    gl.texCoord2f(u_right, v_top);
+    gl.vertex2f(dst.x + dst.width, dst.y);
+    gl.end();
 }
 
 /// One string's worth of glyph drawing. Decides ONCE whether glyphs come from
@@ -1790,38 +1866,6 @@ const GlyphRun = struct {
     }
 };
 
-/// One textured quad from an atlas page: the same vertex order and attributes
-/// as `drawTexturePro`, bound through the page's own material.
-fn emitGlyphQuad(
-    gl: anytype,
-    entry: glyph_atlas.Entry,
-    dst: Rectangle,
-    tint: Color,
-) void {
-    const glyph_has_ink: bool = entry.width > 0 and entry.height > 0;
-    if (!glyph_has_ink) {
-        return;
-    }
-    gl.bindGlyphPage(entry.page);
-    const page_texels: f32 = float(glyph_atlas.page_size);
-    const u_left: f32 = float(entry.x) / page_texels;
-    const u_right: f32 = float(entry.x + entry.width) / page_texels;
-    const v_top: f32 = float(entry.y) / page_texels;
-    const v_bottom: f32 = float(entry.y + entry.height) / page_texels;
-    gl.begin(.quads);
-    gl.color4ub(tint.r, tint.g, tint.b, tint.a);
-    gl.normal3f(0, 0, 1);
-    gl.texCoord2f(u_left, v_top);
-    gl.vertex2f(dst.x, dst.y);
-    gl.texCoord2f(u_left, v_bottom);
-    gl.vertex2f(dst.x, dst.y + dst.height);
-    gl.texCoord2f(u_right, v_bottom);
-    gl.vertex2f(dst.x + dst.width, dst.y + dst.height);
-    gl.texCoord2f(u_right, v_top);
-    gl.vertex2f(dst.x + dst.width, dst.y);
-    gl.end();
-}
-
 // Drawing (no alloc, side-effect)
 /// Draw a single codepoint at `position` - rasterized at its drawn size when the
 /// font has a face and the backend supports it, else from the baked atlas.
@@ -1835,39 +1879,9 @@ pub fn drawCodepoint(
     font_size: f32,
     tint: Color,
 ) void {
-    const run: GlyphRun = GlyphRun.init(gl, font, font_size, tint);
+    requireGl(gl);
+    const run: GlyphRun = .init(gl, font, font_size, tint);
     run.drawGlyph(gl, codepoint, getGlyphIndex(font, codepoint), position);
-}
-
-/// Draw a single codepoint from the font's BAKED atlas, scaled to `font_size`.
-fn drawBakedCodepoint(
-    gl: anytype,
-    font: Font,
-    codepoint: u21,
-    position: Vec2,
-    font_size: f32,
-    tint: Color,
-) void {
-    const idx: usize = getGlyphIndex(font, codepoint);
-    const scale: f32 = font_size / float(font.baseSize);
-    const pad: f32 = float(font.glyphPadding);
-    const dst: Rectangle = .{
-        .x = position[0] + float(font.glyphs[idx].offsetX) * scale - pad * scale,
-        .y = position[1] + float(font.glyphs[idx].offsetY) * scale - pad * scale,
-        .width = (font.recs[idx].width + 2.0 * pad) * scale,
-        .height = (font.recs[idx].height + 2.0 * pad) * scale,
-    };
-    const src: Rectangle = .{
-        .x = font.recs[idx].x - pad,
-        .y = font.recs[idx].y - pad,
-        .width = font.recs[idx].width + 2.0 * pad,
-        .height = font.recs[idx].height + 2.0 * pad,
-    };
-    const origin: Vec2 = .{ 0, 0 };
-    // The image path was not converted, so this crossing is radians. Zero either way, but the
-    // name has to say which side it is on.
-    const rotation_rad: f32 = 0.0;
-    image_mod.drawTexturePro(gl, font.texture, src, dst, origin, rotation_rad, tint);
 }
 
 /// Draw a UTF-8 string at `position` with explicit font, size,
@@ -1890,7 +1904,8 @@ pub fn drawWithFont(
     spacing: f32,
     tint: Color,
 ) void {
-    const run: GlyphRun = GlyphRun.init(gl, font, font_size, tint);
+    requireGl(gl);
+    const run: GlyphRun = .init(gl, font, font_size, tint);
     var off_y: f32 = 0;
     var off_x: f32 = 0;
     var i: usize = 0;
@@ -1929,6 +1944,7 @@ pub fn draw(
     font_size: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     const font: Font = getFontDefault(font_cache);
     if (font.texture.id == 0) {
         // Footgun-detector: the silent return
@@ -2000,6 +2016,7 @@ pub fn drawPro(
     spacing: f32,
     tint: Color,
 ) void {
+    requireGl(gl);
     rlPushMatrix(gl);
     rlTranslatef(gl, position[0], position[1], 0);
     gl.rotate(rotation_turns, 0, 0, 1);
@@ -2027,7 +2044,8 @@ pub fn drawCodepoints(
     spacing: f32,
     tint: Color,
 ) void {
-    const run: GlyphRun = GlyphRun.init(gl, font, font_size, tint);
+    requireGl(gl);
+    const run: GlyphRun = .init(gl, font, font_size, tint);
     var off_y: f32 = 0;
     var off_x: f32 = 0;
     for (codepoints) |cp| {
@@ -2530,6 +2548,7 @@ pub fn drawFPS(
     pos_x: i32,
     pos_y: i32,
 ) void {
+    requireGl(gl);
     const fps_value: i32 = core_module.getFPS(fps);
     const color: Color = if (fps_value >= 30) lime else if (fps_value >= 15) orange else red;
     var buf: [16]u8 = undefined;
@@ -2555,6 +2574,7 @@ pub fn drawTextCodepoint(
     fontSize: f32,
     tint: Color,
 ) void {
+    requireGl(gl);
     drawCodepoint(gl, font, @intCast(codepoint), position, fontSize, tint);
 }
 
@@ -2591,8 +2611,9 @@ pub fn drawTextCodepoints(
     spacing: f32,
     tint: Color,
 ) void {
+    requireGl(gl);
     // Inline the loop so we don't have to allocate a u21 buffer.
-    const run: GlyphRun = GlyphRun.init(gl, font, fontSize, tint);
+    const run: GlyphRun = .init(gl, font, fontSize, tint);
     var off_y: f32 = 0;
     var off_x: f32 = 0;
     for (codepoints) |cp_raw| {
@@ -2901,20 +2922,20 @@ test "encode/decode round-trip" {
 // ===========================================================================
 
 test "upper: 'hello' -> 'HELLO'" {
-    const out: []u8 = try upper(std.testing.allocator, "hello");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try upper(testing_allocator, "hello");
+    defer testing_allocator.free(out);
     try expectEqualStrings("HELLO", out);
 }
 
 test "upper: leaves digits / punctuation alone" {
-    const out: []u8 = try upper(std.testing.allocator, "abc 123!");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try upper(testing_allocator, "abc 123!");
+    defer testing_allocator.free(out);
     try expectEqualStrings("ABC 123!", out);
 }
 
 test "lower: 'HELLO' -> 'hello'" {
-    const out: []u8 = try lower(std.testing.allocator, "HELLO");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try lower(testing_allocator, "HELLO");
+    defer testing_allocator.free(out);
     try expectEqualStrings("hello", out);
 }
 
@@ -2923,20 +2944,20 @@ test "lower: 'HELLO' -> 'hello'" {
 // ===========================================================================
 
 test "pascal: 'hello_world' -> 'HelloWorld' (splits on underscore)" {
-    const out: []u8 = try pascal(std.testing.allocator, "hello_world");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try pascal(testing_allocator, "hello_world");
+    defer testing_allocator.free(out);
     try expectEqualStrings("HelloWorld", out);
 }
 
 test "snake: 'helloWorld' -> 'hello_world'" {
-    const out: []u8 = try snake(std.testing.allocator, "helloWorld");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try snake(testing_allocator, "helloWorld");
+    defer testing_allocator.free(out);
     try expectEqualStrings("hello_world", out);
 }
 
 test "camel: 'hello_world' -> 'helloWorld' (splits on underscore)" {
-    const out: []u8 = try camel(std.testing.allocator, "hello_world");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try camel(testing_allocator, "hello_world");
+    defer testing_allocator.free(out);
     try expectEqualStrings("helloWorld", out);
 }
 
@@ -2945,44 +2966,44 @@ test "camel: 'hello_world' -> 'helloWorld' (splits on underscore)" {
 // ===========================================================================
 
 test "substring: extract middle segment" {
-    const out: []u8 = try substring(std.testing.allocator, "Hello, World!", 7, 5);
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try substring(testing_allocator, "Hello, World!", 7, 5);
+    defer testing_allocator.free(out);
     try expectEqualStrings("World", out);
 }
 
 test "removeSpaces: strips ASCII spaces" {
-    const out: []u8 = try removeSpaces(std.testing.allocator, "  hi   there  ");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try removeSpaces(testing_allocator, "  hi   there  ");
+    defer testing_allocator.free(out);
     try expectEqualStrings("hithere", out);
 }
 
 test "replace: simple case" {
-    const out: []u8 = try replace(std.testing.allocator, "foo bar foo", "foo", "BAR");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try replace(testing_allocator, "foo bar foo", "foo", "BAR");
+    defer testing_allocator.free(out);
     try expectEqualStrings("BAR bar BAR", out);
 }
 
 test "replace: replacement is shorter than search" {
-    const out: []u8 = try replace(std.testing.allocator, "abcabc", "abc", "x");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try replace(testing_allocator, "abcabc", "abc", "x");
+    defer testing_allocator.free(out);
     try expectEqualStrings("xx", out);
 }
 
 test "replace: empty needle leaves text unchanged" {
-    const out: []u8 = try replace(std.testing.allocator, "hi", "", "x");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try replace(testing_allocator, "hi", "", "x");
+    defer testing_allocator.free(out);
     try expectEqualStrings("hi", out);
 }
 
 test "insert: position 0 prepends" {
-    const out: []u8 = try insert(std.testing.allocator, "world", "hello ", 0);
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try insert(testing_allocator, "world", "hello ", 0);
+    defer testing_allocator.free(out);
     try expectEqualStrings("hello world", out);
 }
 
 test "insert: middle position" {
-    const out: []u8 = try insert(std.testing.allocator, "abef", "cd", 2);
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try insert(testing_allocator, "abef", "cd", 2);
+    defer testing_allocator.free(out);
     try expectEqualStrings("abcdef", out);
 }
 
@@ -2991,8 +3012,8 @@ test "insert: middle position" {
 // ===========================================================================
 
 test "splitAlloc: comma-separated" {
-    const parts: [][]const u8 = try splitAlloc(std.testing.allocator, "a,b,c", ',');
-    defer std.testing.allocator.free(parts);
+    const parts: [][]const u8 = try splitAlloc(testing_allocator, "a,b,c", ',');
+    defer testing_allocator.free(parts);
     try expect(parts.len == 3);
     try expectEqualStrings("a", parts[0]);
     try expectEqualStrings("b", parts[1]);
@@ -3001,8 +3022,8 @@ test "splitAlloc: comma-separated" {
 
 test "join: simple slash separator" {
     const parts = [_][]const u8{ "usr", "local", "bin" };
-    const out: []u8 = try join(std.testing.allocator, &parts, "/");
-    defer std.testing.allocator.free(out);
+    const out: []u8 = try join(testing_allocator, &parts, "/");
+    defer testing_allocator.free(out);
     try expectEqualStrings("usr/local/bin", out);
 }
 
@@ -3038,14 +3059,14 @@ test "toFloat: decimal / negative" {
 // `gpa.free(slice)`.  Tests run on host directly since we use the
 // standard testing allocator instead of libc.malloc.
 test "loadCodepoints: empty string returns empty slice" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const cps: []i32 = try loadCodepoints(ta, "");
     defer ta.free(cps);
     try expect(cps.len == 0);
 }
 
 test "loadCodepoints: ASCII roundtrip via loadUTF8" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const cps: []i32 = try loadCodepoints(ta, "Hello");
     defer ta.free(cps);
     try expect(cps.len == 5);
@@ -3062,7 +3083,7 @@ test "loadCodepoints: ASCII roundtrip via loadUTF8" {
 }
 
 test "loadUTF8: empty codepoint slice returns empty sentinel slice" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const cps = [_]i32{};
     const utf8: [:0]u8 = try loadUTF8(ta, &cps);
     defer ta.free(utf8);
@@ -3071,7 +3092,7 @@ test "loadUTF8: empty codepoint slice returns empty sentinel slice" {
 }
 
 test "loadUTF8: invalid codepoint becomes U+FFFD replacement" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // 0x110000 is above the Unicode max; surrogate range 0xD800-0xDFFF
     // is also invalid.  Both should encode as U+FFFD (EF BF BD).
     const cps = [_]i32{ 0x110000, 0xD800 };
@@ -3083,7 +3104,7 @@ test "loadUTF8: invalid codepoint becomes U+FFFD replacement" {
 }
 
 test "loadCodepoints: 3-codepoint multi-byte UTF-8 roundtrip" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // U+00E9 is 2 bytes in UTF-8, U+4E2D is 3 bytes, U+1F600 is 4 bytes.
     const input: []const u8 = "é中😀";
     const cps: []i32 = try loadCodepoints(ta, input);
@@ -3202,7 +3223,7 @@ test "countCodepoints: mixed-width string" {
 // Real visual / metric correctness gets verified in Turn 14 when
 // examples/text_layout.zig is updated to load a TTF.
 test "bakeFontAtlas: empty codepoints returns NoCodepoints" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // We need a Font instance to pass - but we don't actually call
     // any Font methods in this error path, so a zeroed one is fine.
     // (Reaching for codepointGlyphIndex would crash; this test
@@ -3274,14 +3295,14 @@ test "unloadFontData: empty slice is a silent no-op" {
     // No-op even on an arbitrary allocator - must not panic, must not
     // try to free anything.
     const empty: []types.GlyphInfo = &.{};
-    unloadFontData(std.testing.allocator, empty);
+    unloadFontData(testing_allocator, empty);
 }
 
 test "unloadFontData: frees the slice without leaks" {
     // Allocate via the same path raylib's `loadFontData` will use once
     // it lands.  Two glyphs, both with null image data so we can free
     // without engaging the GPU stack.
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const glyphs: []types.GlyphInfo = try ta.alloc(types.GlyphInfo, 2);
     glyphs[0] = .{
         .value = 65,
@@ -3312,12 +3333,6 @@ test "unloadFont: signature takes allocator + font_cache + font (regression)" {
     _ = sig;
 }
 
-// ===========================================================================
-// Text -> Image rasterization (moved from image_mod.zig, structure-plan S0):
-// these are the image<->text cycle's image-side fns - they need FontCache,
-// so they live with the fonts.  `image` is the CPU image library.
-// ===========================================================================
-const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
 const errors = @import("errors.zig");
 const text2d = @This(); // the file's own container, for self-referring decls
 
@@ -3397,7 +3412,7 @@ pub fn imageText(
 }
 
 test "imageText: empty string returns 1x1 transparent" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const default_line_spacing: i32 = 2;
     var fc: FontCache = .{};
     const out: Image = try imageText(
@@ -3417,7 +3432,7 @@ test "imageText: empty string returns 1x1 transparent" {
 }
 
 test "imageTextWithFont: empty font (glyphCount = 0) returns 1x1 transparent" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const empty_font: Font = .{};
     const default_line_spacing: i32 = 2;
     const out: Image = try imageTextWithFont(

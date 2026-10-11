@@ -35,7 +35,7 @@ As shipped, this folder builds right after a clone:
 ```sh
 git clone https://github.com/simonclavet/zimr
 cd zimr/template
-zig build serve                    # then open http://127.0.0.1:8081/
+zig build serve -Dplatform=web     # then open http://127.0.0.1:8081/
 ```
 
 Edits there are changes to your zimr checkout, though, so before real work copy
@@ -79,19 +79,28 @@ to use.
 ## Workflow
 
 ```sh
-zig build                          # debug build of every app → zig-out/web/
-zig build -Dmode=release           # ReleaseSmall with zimr's asserts kept (share this one)
-zig build -Dmode=ship              # ReleaseSmall, asserts and profiler stripped
-zig build serve                    # build, then serve zig-out/web/ on http://127.0.0.1:8081/
-zig build myproject1               # build just one app into zig-out/web/myproject1/
-zig build myproject1-standalone    # one self-contained HTML file in zig-out/standalone/
+zig build                          # debug build of every app for this machine's platform (Windows: .exe files)
+zig build -Dplatform=web           # every app for the browser: zig-out/web/ and zig-out/standalone/
+zig build -Dplatform=windows       # every app as a Windows program: zig-out/windows/<name>.exe
+zig build -Dmode=release           # zimr's asserts kept; web ReleaseSmall, native ReleaseSafe (share this one)
+zig build -Dmode=ship              # asserts and profiler stripped; web ReleaseSmall, native ReleaseFast
+zig build serve -Dplatform=web     # build for the web, then serve zig-out/web/ on http://127.0.0.1:8081/
+zig build myproject1               # build just one app, for the platform
+zig build run-myproject1           # build it, then run it: the program, or with -Dplatform=web its page in a browser
+zig build run                      # run-<name> of the first app in build.zig
 zig build test                     # host unit tests (see "Tests" below)
 zig build lint                     # zimr's linter over src/ (rules: `.lint` in build.zig)
 zig build check                    # lint + host tests + every app
+zig build zbuild                   # install zig-out/bin/zbuild (below)
 ```
 
 All of these steps come from `zimr.Project`, which `build.zig` sets up in
 a few lines.
+
+When a build fails, the error that matters is often buried under a tree of
+"transitive failure" lines. `zig-out/bin/zbuild` takes the same arguments as
+`zig build` (`zig-out/bin/zbuild check`), passes its output through, and when
+it fails ends with only what failed. Install it once with `zig build zbuild`.
 
 `zig build` produces a complete site at `zig-out/web/`:
 
@@ -108,16 +117,39 @@ zig-out/web/
     └── myproject2.wasm
 ```
 
-After `zig build serve`, open `http://127.0.0.1:8081/` for the gallery, or
+After `zig build serve -Dplatform=web`, open `http://127.0.0.1:8081/` for the gallery, or
 `http://127.0.0.1:8081/myproject1/` directly. The port is 8081 rather than 8080
 so it can run beside zimr's own gallery; `.port` in `build.zig` changes it.
 
-The dev server does not reload pages for you: rebuild, then refresh. It reads
-files from disk on every request, so it never needs restarting.
+The dev server reads files from disk on every request, so it never needs
+restarting. A plain rebuild does not reload an open page: refresh it, or
+rebuild with `run-<name>` (below), which asks the server to reload it.
 
-The pages under `zig-out/web/` need the server. A `<name>-standalone` file
-inlines the wasm and the runtime, so it opens straight from disk and is the
-one to send to someone.
+### Build and run in one step
+
+```sh
+zig build run-myproject1                    # build it, then run zig-out/windows/myproject1.exe
+zig build run-myproject1 -Dplatform=web     # build it, then open its page in the default browser
+zig build run                               # run-<name> of the first app in build.zig
+```
+
+On the web, `run-<name>` starts the dev server and opens the page in a new
+tab. The server keeps running until Ctrl+C. If a server is already running on
+the port, `run-<name>` reloads the tabs showing that page instead, opens a
+tab only if none does, and then ends. So with a server running in one
+terminal, this in another reloads the page every time you save:
+
+```sh
+zig build serve -Dplatform=web                     # terminal 1: the server, left running
+zig build --watch run-myproject1 -Dplatform=web    # terminal 2: rebuild and reload on every save
+```
+
+If something other than this project's dev server holds the port, the step
+fails and says what holds it.
+
+The pages under `zig-out/web/` need the server. Every web build also writes
+`zig-out/standalone/<name>.html`, which inlines the wasm and the runtime, so it
+opens straight from disk and is the one to send to someone.
 
 Anything an app logs with `std.log` appears in the browser console and in a
 panel along the bottom of the page.
@@ -171,7 +203,8 @@ to install them the first time the folder is opened.
    `build.zig`.
 3. Add a card to `public/index.html` linking to `myname/`.
 4. (Optional) Add a launch configuration to `.vscode/launch.json`.
-5. `zig build serve`, then open `http://127.0.0.1:8081/myname/`.
+5. `zig build run-myname -Dplatform=web` opens `http://127.0.0.1:8081/myname/`
+   (or `zig build run-myname` runs it as a program).
 
 ---
 

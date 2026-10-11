@@ -19,6 +19,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -60,8 +61,8 @@ fn formatCell(
     col: usize,
     buf: []u8,
 ) []const u8 {
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(@as(u64, @intCast(row * 37 + 11)));
-    const r: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(@as(u64, @intCast(row * 37 + 11)));
+    const r: Random = prng.random();
     return switch (col) {
         0 => blk: {
             const a: u8 = 'A' + @as(u8, @intCast(row % 26));

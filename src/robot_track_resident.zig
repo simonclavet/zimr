@@ -27,6 +27,7 @@ const kit_mod = @import("robot_latent_kit.zig");
 const compute_host = @import("compute_host.zig");
 
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const float = zm.float;
 const assertf = zm.assertf;
 
@@ -86,7 +87,7 @@ pub fn Resident(comptime M: type) type {
         /// instead of feeding NaN to the physics.
         mirror_rejected: u64,
         nonfinite_actions: u64,
-        rng: std.Random.DefaultPrng,
+        rng: Random.DefaultPrng,
         /// The policy's weights as the CPU last saw them - what acting uses.
         mirror: []f32,
         /// The normaliser, host-side, for the features acting needs.
@@ -162,8 +163,8 @@ pub fn Resident(comptime M: type) type {
             self.judged_failures = 0;
             self.world_updates = 0;
             self.policy_updates = 0;
-            self.rng = .init(options.seed);
-            self.kit = try .init(
+            self.rng = Random.DefaultPrng.init(options.seed);
+            self.kit = try Kit.init(
                 pipe,
                 feature_count,
                 @intCast(track.targetSize(m)),
@@ -180,7 +181,7 @@ pub fn Resident(comptime M: type) type {
             // The kit's action scale stays 1: the fleet applies the one scale, and the world model
             // learns from the action the fleet records - the raw output plus its noise.
             const slots: u32 = options.world_updates + options.policy_updates;
-            self.data = try .init(gpa, pipe, fleet, self.kit.total, options.rows, slots);
+            self.data = try kit_mod.Resident(M).init(gpa, pipe, fleet, self.kit.total, options.rows, slots);
             errdefer self.data.deinit();
             self.data.uploadTables(fleet);
             self.data.uploadNormalizer(norm);
@@ -237,7 +238,7 @@ pub fn Resident(comptime M: type) type {
             const total: usize = kit.param_count + kit.policy_count;
             const weights: []f32 = try self.gpa.alloc(f32, total);
             defer self.gpa.free(weights);
-            const random: std.Random = self.rng.random();
+            const random: Random = self.rng.random();
             const f: usize = self.z.len;
             const r: usize = kit.references;
             const a: usize = self.raw.len;
@@ -328,7 +329,7 @@ pub fn Resident(comptime M: type) type {
         /// into the judged pair rather than the collected one. They are still recorded: noise-free
         /// on-policy steps are perfectly good data, and the ring must stay in step with the replay.
         pub fn act(self: *Self, steps: u32, noise_scale: f32) void {
-            const random: std.Random = self.rng.random();
+            const random: Random = self.rng.random();
             const actions: usize = self.raw.len;
             for (0..steps) |_| {
                 // Every character chooses its action from the SAME mirror within a step - the weights
@@ -409,7 +410,7 @@ pub fn Resident(comptime M: type) type {
         /// recording may not span rounds either: an upload made while one is open lands before the
         /// WHOLE recording executes, so a later round's appends would overwrite ring slots this
         /// round's gathers are still about to read. Simulate, record this round's dispatches, submit.
-        pub fn round(self: *Self) void {
+        pub fn simulateAndTrain(self: *Self) void {
             self.act(self.options.collect, 1.0);
             self.kit.pipe.beginRecording();
             var slot: u32 = 0;
@@ -431,12 +432,12 @@ pub fn Resident(comptime M: type) type {
         /// windows staged without an update following it, and because the tests compare both learners
         /// on the SAME windows.
         pub fn drawWindows(self: *Self, slot: u32) bool {
-            const random: std.Random = self.rng.random();
+            const random: Random = self.rng.random();
             // Only what the RING holds. The replay knows where episodes begin and end, so it draws the
             // windows - but it may also hold steps from before the learner existed, or more of them
             // than the ring has room for, and a window the ring never received would be assembled out
             // of whatever those slots happen to contain. So: draw, and keep only what the ring carries.
-            const range = self.data.held() orelse return false;
+            const range: kit_mod.Resident(M).HeldSteps = self.data.held() orelse return false;
             for (self.starts) |*start| {
                 var tries: u32 = 0;
                 const window: track.Replay.Window = while (tries < 64) : (tries += 1) {
@@ -484,7 +485,11 @@ pub fn Resident(comptime M: type) type {
             return .{ .context = self, .act = actOnJudgedFleet };
         }
 
-        fn actOnJudgedFleet(context: *anyopaque, fleet: *track.Fleet, actions: []f32) void {
+        fn actOnJudgedFleet(
+            context: *anyopaque,
+            fleet: *track.Fleet,
+            actions: []f32,
+        ) void {
             const self: *Self = @ptrCast(@alignCast(context));
             const per_character: usize = self.raw.len;
             for (0..fleet.options.envs) |env| {

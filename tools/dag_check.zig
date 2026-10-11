@@ -13,8 +13,12 @@
 //! Usage: `dag_check [src_dir]`  (src_dir defaults to "src").
 
 const std = @import("std");
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const sortSlice = std.mem.sort;
 const ig = @import("import_graph.zig");
 
 const Deg = struct { id: u32, deg: usize };
@@ -23,25 +27,31 @@ fn degMore(_: void, a: Deg, b: Deg) bool {
     return a.deg > b.deg;
 }
 
+/// The command line (std's cli, `src/command_line.zig`).
+const DagArgs = struct {
+    @"src-dir": []const u8 = "src",
+};
+
+const dag_cli: cli.Config(DagArgs) = .{
+    .prog = "dag_check",
+    .description = "Levels and cycles of the top-level src/*.zig import graph (by basename).",
+};
+
 pub fn main(init: std.process.Init) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena_state: ArenaAllocator = .init(init.gpa);
     defer arena_state.deinit();
     const gpa: Allocator = arena_state.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    var args_list: ArrayList([]u8) = .empty;
-    var arg_it: std.process.Args.Iterator = try .initAllocator(init.minimal.args, gpa);
-    while (arg_it.next()) |arg| {
-        try args_list.append(gpa, try gpa.dupe(u8, arg));
-    }
-    const src_dir: []const u8 = if (args_list.items.len > 1) args_list.items[1] else "src";
+    const args: DagArgs = cli.args(&init, DagArgs, dag_cli);
+    const src_dir: []const u8 = args.@"src-dir";
 
     const g: ig.Graph = try ig.build(gpa, io, src_dir);
     const n: usize = g.nodeCount();
 
     var out_buf: [8192]u8 = undefined;
-    var ow: std.Io.File.Writer = std.Io.File.stdout().writer(io, &out_buf);
-    const out: *std.Io.Writer = &ow.interface;
+    var ow: Io.File.Writer = Io.File.stdout().writer(io, &out_buf);
+    const out: *Io.Writer = &ow.interface;
 
     // Cycle detection - the gate.  No whitelist.
     const comps: ArrayList(ArrayList(u32)) = try ig.sccs(gpa, g);
@@ -65,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
             for (c.items) |vid| {
                 try members.append(gpa, g.names[vid]);
             }
-            std.mem.sort([]const u8, members.items, {}, ig.lessStr);
+            sortSlice([]const u8, members.items, {}, ig.lessStr);
             try out.print("  CYCLE (size {d}):", .{c.items.len});
             for (members.items) |m| {
                 try out.print(" {s}", .{m});
@@ -82,7 +92,7 @@ pub fn main(init: std.process.Init) !void {
     for (0..n) |i| {
         try degs.append(gpa, .{ .id = @intCast(i), .deg = g.outDegree(i) });
     }
-    std.mem.sort(Deg, degs.items, {}, degMore);
+    sortSlice(Deg, degs.items, {}, degMore);
     try out.print("\nOut-degree (top 8):\n", .{});
     for (degs.items[0..@min(8, degs.items.len)]) |d| {
         try out.print("  {s:<20} {d}\n", .{ g.names[d.id], d.deg });
@@ -100,7 +110,7 @@ pub fn main(init: std.process.Init) !void {
                 try row.append(gpa, g.names[i]);
             }
         }
-        std.mem.sort([]const u8, row.items, {}, ig.lessStr);
+        sortSlice([]const u8, row.items, {}, ig.lessStr);
         try out.print("  L{d} ({d}):", .{ lvl, row.items.len });
         for (row.items) |m| {
             try out.print(" {s}", .{m});

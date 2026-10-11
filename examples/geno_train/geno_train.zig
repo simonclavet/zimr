@@ -131,7 +131,7 @@ const State = struct {
     cube: z.Mesh,
     sphere: z.Mesh,
     cylinder: z.Mesh,
-    transform: [1]zm.Mat,
+    transform: [1]Mat,
 
     doc: codecs.xml.Document,
     robot: mjcf.Robot,
@@ -181,6 +181,11 @@ fn meanTimeToFailure(exposure: u64, failures: u64) ?f32 {
         return null;
     }
     return float(exposure) / float(failures) / 60.0;
+}
+
+fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
+    const written: []u8 = bufPrint(&s.status, fmt, args) catch s.status[0..0];
+    s.status_len = written.len;
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
@@ -286,115 +291,6 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// replaced instantly by a restart somewhere else in the clip.
 const watching_leash: f32 = 1.8;
 
-fn update(f: *z.Frame, s: *State) void {
-    const dt: f32 = f.time.delta_time;
-    if (s.watching) {
-        // Real time, not as fast as the device can go: this is for watching. The policy acts from the
-        // mirror, which nothing else refreshes while training is paused.
-        // One step per sixtieth of a second, which is real time - a few more if a frame ran long,
-        // never so many that watching turns back into training.
-        const wanted: f32 = clamp(dt * 60.0, 1.0, 4.0);
-        s.learner.syncMirror();
-        s.learner.act(int(u32, wanted), 0.0);
-        if (dt > 0 and dt < 1.0) {
-            s.wall_seconds += dt;
-        }
-        drawScene(s, f);
-        return;
-    }
-    const budget: f32 = if (s.train_only) training_budget else shown_budget;
-
-    // A round at a time, more of them while callbacks come in under budget and fewer the moment one
-    // does not. Expressed as a count rather than a clock because a page has no clock it can read
-    // mid-frame - but it is a time budget all the same, and it fills a phone and a desktop alike.
-    if (dt > 0 and dt < budget * 0.9 and s.per_frame < 64) {
-        s.per_frame += 1;
-    } else if (dt > budget * 1.2 and s.per_frame > 1) {
-        s.per_frame -= 1;
-    }
-    if (dt > 0 and dt < 1.0) {
-        s.wall_seconds += dt;
-    }
-    // -- ** NEVER LET GPU WORK OUTRUN THE GPU --
-    //
-    // The count above follows the FRAME time, and the frame time only measures the CPU: a submitted
-    // round costs it next to nothing while the GPU may need longer than a frame to run it. So on a
-    // phone whose GPU cannot keep up, frames stayed fast, the count climbed toward 64 rounds a frame,
-    // and the unrun work piled up in the browser's queue until memory ran out - a phone that slowed to
-    // a crawl and a page that died after minutes. So: at most `max_rounds_in_flight` rounds' worth of
-    // dispatches may be submitted and not yet confirmed (`mirrored` is the GPU's own receipt, through
-    // the readback); past that, this frame submits nothing more, asks for a receipt, and backs off. On
-    // the CPU backend both counts are zero and this never holds anything back.
-    var held_back: bool = false;
-    for (0..s.per_frame) |_| {
-        const before: z.Compute(zn_mlp).Generation = s.pipe.readGeneration();
-        if (before.submitted > before.mirrored + s.dispatches_per_round * max_rounds_in_flight) {
-            held_back = true;
-            break;
-        }
-        s.learner.round();
-        s.rounds += 1;
-        const after: u64 = s.pipe.readGeneration().submitted;
-        if (after > before.submitted) {
-            s.dispatches_per_round = after - before.submitted;
-        }
-    }
-    s.gpu_bound_share += 0.05 * ((if (held_back) @as(f32, 1.0) else 0.0) - s.gpu_bound_share);
-    if (held_back) {
-        s.gpu_bound_frames += 1;
-        s.learner.syncMirror();
-        if (s.per_frame > 1) {
-            s.per_frame -= 1;
-        }
-    }
-    s.training_seconds += float(s.per_frame * learner_options.collect * envs) / 60.0;
-
-    // Steps a second, measured between draws rather than within a frame.
-    const watched: u64 = s.learner.exposure;
-    if (s.wall_seconds - s.last_wall > 0.5) {
-        const elapsed: f32 = s.wall_seconds - s.last_wall;
-        s.steps_per_second = float(watched - s.last_exposure) / elapsed;
-        s.last_exposure = watched;
-        s.last_wall = s.wall_seconds;
-    }
-
-    if (s.train_only) {
-        // Nothing is drawn at all - no scene, no panel, not even a cleared viewport beyond what the
-        // frame owes the swap chain. The toggle is read from the panel, so it comes back through the
-        // one frame we still draw when it is turned off.
-        z.clearViewport(f, bg);
-        _ = drawPanel(s, f);
-        s.ui_host.render(f);
-        return;
-    }
-
-    drawScene(s, f);
-}
-
-/// The panel, the ground, the reference and the character - everything the page draws when it draws.
-fn drawScene(s: *State, f: *z.Frame) void {
-    z.clearViewport(f, bg);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(s, f);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
-    const gl = f.gl;
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 20, 0.5);
-    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
-
-    // Where character 0 should be, and where it actually is.
-    const m: *const rbt.Model = &s.imported.model;
-    const fleet: *track.Fleet = s.learner.fleet;
-    const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
-    @memcpy(s.ghost.pos, s.clip.pose(frame));
-    s.ghost.stage = .stale;
-    rbt.kinematics(m, &s.ghost);
-    drawRobot(s, gl, &s.ghost, ref_col);
-    drawRobot(s, gl, &fleet.data[0], sim_col);
-    z.endMode3D(gl);
-}
-
 /// The panel: what the learner has done, how fast, and the one toggle. Returns whether the pointer
 /// belongs to the interface, so the camera does not also act on it.
 fn drawPanel(s: *State, f: *z.Frame) bool {
@@ -460,11 +356,6 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
     return captured;
 }
 
-fn setStatus(s: *State, comptime fmt: []const u8, args: anytype) void {
-    const written: []u8 = bufPrint(&s.status, fmt, args) catch s.status[0..0];
-    s.status_len = written.len;
-}
-
 fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
     const m: *const rbt.Model = &s.imported.model;
     const to_y_up: Mat = zm.zUpToYUp();
@@ -497,6 +388,115 @@ fn drawRobot(s: *State, gl: *z.WgpuGl, d: *const rbt.Data, tint: Color) void {
             else => {},
         }
     }
+}
+
+/// The panel, the ground, the reference and the character - everything the page draws when it draws.
+fn drawScene(s: *State, f: *z.Frame) void {
+    z.clearViewport(f, bg);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(s, f);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.5, .max_distance = 10.0 });
+    const gl = f.gl;
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 20, 0.5);
+    s.transform[0] = mulMat(mulMat(zm.zUpToYUp(), translation(0, 0, -0.5)), scaling(16, 16, 0.2));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
+
+    // Where character 0 should be, and where it actually is.
+    const m: *const rbt.Model = &s.imported.model;
+    const fleet: *track.Fleet = s.learner.fleet;
+    const frame: usize = @min(@as(usize, fleet.frame[0]), s.clip.frame_count - 1);
+    @memcpy(s.ghost.pos, s.clip.pose(frame));
+    s.ghost.stage = .stale;
+    rbt.kinematics(m, &s.ghost);
+    drawRobot(s, gl, &s.ghost, ref_col);
+    drawRobot(s, gl, &fleet.data[0], sim_col);
+    z.endMode3D(gl);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const dt: f32 = f.time.delta_time;
+    if (s.watching) {
+        // Real time, not as fast as the device can go: this is for watching. The policy acts from the
+        // mirror, which nothing else refreshes while training is paused.
+        // One step per sixtieth of a second, which is real time - a few more if a frame ran long,
+        // never so many that watching turns back into training.
+        const wanted: f32 = clamp(dt * 60.0, 1.0, 4.0);
+        s.learner.syncMirror();
+        s.learner.act(int(u32, wanted), 0.0);
+        if (dt > 0 and dt < 1.0) {
+            s.wall_seconds += dt;
+        }
+        drawScene(s, f);
+        return;
+    }
+    const budget: f32 = if (s.train_only) training_budget else shown_budget;
+
+    // A round at a time, more of them while callbacks come in under budget and fewer the moment one
+    // does not. Expressed as a count rather than a clock because a page has no clock it can read
+    // mid-frame - but it is a time budget all the same, and it fills a phone and a desktop alike.
+    if (dt > 0 and dt < budget * 0.9 and s.per_frame < 64) {
+        s.per_frame += 1;
+    } else if (dt > budget * 1.2 and s.per_frame > 1) {
+        s.per_frame -= 1;
+    }
+    if (dt > 0 and dt < 1.0) {
+        s.wall_seconds += dt;
+    }
+    // -- ** NEVER LET GPU WORK OUTRUN THE GPU --
+    //
+    // The count above follows the FRAME time, and the frame time only measures the CPU: a submitted
+    // round costs it next to nothing while the GPU may need longer than a frame to run it. So on a
+    // phone whose GPU cannot keep up, frames stayed fast, the count climbed toward 64 rounds a frame,
+    // and the unrun work piled up in the browser's queue until memory ran out - a phone that slowed to
+    // a crawl and a page that died after minutes. So: at most `max_rounds_in_flight` rounds' worth of
+    // dispatches may be submitted and not yet confirmed (`mirrored` is the GPU's own receipt, through
+    // the readback); past that, this frame submits nothing more, asks for a receipt, and backs off. On
+    // the CPU backend both counts are zero and this never holds anything back.
+    var held_back: bool = false;
+    for (0..s.per_frame) |_| {
+        const before: z.Compute(zn_mlp).Generation = s.pipe.readGeneration();
+        if (before.submitted > before.mirrored + s.dispatches_per_round * max_rounds_in_flight) {
+            held_back = true;
+            break;
+        }
+        s.learner.simulateAndTrain();
+        s.rounds += 1;
+        const after: u64 = s.pipe.readGeneration().submitted;
+        if (after > before.submitted) {
+            s.dispatches_per_round = after - before.submitted;
+        }
+    }
+    s.gpu_bound_share += 0.05 * ((if (held_back) @as(f32, 1.0) else 0.0) - s.gpu_bound_share);
+    if (held_back) {
+        s.gpu_bound_frames += 1;
+        s.learner.syncMirror();
+        if (s.per_frame > 1) {
+            s.per_frame -= 1;
+        }
+    }
+    s.training_seconds += float(s.per_frame * learner_options.collect * envs) / 60.0;
+
+    // Steps a second, measured between draws rather than within a frame.
+    const watched: u64 = s.learner.exposure;
+    if (s.wall_seconds - s.last_wall > 0.5) {
+        const elapsed: f32 = s.wall_seconds - s.last_wall;
+        s.steps_per_second = float(watched - s.last_exposure) / elapsed;
+        s.last_exposure = watched;
+        s.last_wall = s.wall_seconds;
+    }
+
+    if (s.train_only) {
+        // Nothing is drawn at all - no scene, no panel, not even a cleared viewport beyond what the
+        // frame owes the swap chain. The toggle is read from the panel, so it comes back through the
+        // one frame we still draw when it is turned off.
+        z.clearViewport(f, bg);
+        _ = drawPanel(s, f);
+        s.ui_host.render(f);
+        return;
+    }
+
+    drawScene(s, f);
 }
 
 pub const app: z.AppSpec(State) = .{

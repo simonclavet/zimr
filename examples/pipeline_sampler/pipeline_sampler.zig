@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const common = @import("example_common");
 
@@ -147,7 +148,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     );
 
     const aspect0: [4]f32 = .{ 1, 1, 0, 0 };
-    const ubo: z.wgpu.BufferHandle = z.material.uniformBuffer(f, std.mem.sliceAsBytes(&aspect0), "sampler_ubo");
+    const ubo: z.wgpu.BufferHandle = z.material.uniformBuffer(f, sliceAsBytes(&aspect0), "sampler_ubo");
 
     const bgl: z.wgpu.BindGroupLayoutHandle = try z.material.bindGroupLayout(gpa, f, &.{
         .{ .binding = 0, .visibility = .{ .vertex = true }, .resource = .{ .uniform_buffer = .{} } },
@@ -176,7 +177,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             .usage = .{ .vertex = true, .copy_dst = true },
             .label = "sampler_vbo",
         });
-        z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&verts));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(&verts));
         vbos[i] = vbo;
     }
 
@@ -188,7 +189,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             .{ .format = .float32x2, .offset = 8, .shader_location = 1 },
         },
     };
-    const pipe: z.Pipeline = try z.Pipeline.init(gpa, f, .{
+    const pipe: z.Pipeline = try .init(gpa, f, .{
         .wgsl = render_wgsl,
         .layouts = &.{layout},
         .bind_group_layouts = &.{bgl},
@@ -216,7 +217,7 @@ fn update(f: *z.Frame, s: *State) void {
     const sx: f32 = if (aspect < 1.0) 1.0 else 1.0 / aspect;
     const sy: f32 = if (aspect < 1.0) aspect else 1.0;
     const av: [4]f32 = .{ sx, sy, 0, 0 };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.ubo, 0, std.mem.sliceAsBytes(&av));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.ubo, 0, sliceAsBytes(&av));
 
     const ps: *z.PassState = f.gl.pass;
     for (s.bgs, s.vbos) |bg, vbo| {

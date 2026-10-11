@@ -32,7 +32,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .{ .r = 40, .g = 52, .b = 120, .a = 255 },
         .{ .r = 230, .g = 205, .b = 90, .a = 255 },
     );
-    const sprite: z.Sprite = try z.Sprite.fromImage(gpa, img);
+    const sprite: z.Sprite = try .fromImage(gpa, img);
     z.unloadImage(gpa, img); // Sprite owns its own copy
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
     s.* = .{ .sprite = sprite, .font = font };

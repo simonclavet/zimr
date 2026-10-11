@@ -51,6 +51,7 @@ const expect = std.testing.expect;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const zm = @import("zm");
 
 /// -- LANE BATCHES, NOT GEOMETRIC VECTORS --
@@ -1066,7 +1067,12 @@ pub const Context = struct {
     /// built-in kernel - zero behaviour change until a caller opts in.
     /// `ctx` is `*anyopaque` (the live `*Context`), mirroring
     /// `SwPipelineDispatch` and dodging a struct self-reference.
-    ff_triangle: ?*const fn (ctx: *anyopaque, v0: *const Vertex, v1: *const Vertex, v2: *const Vertex) void = null,
+    ff_triangle: ?*const fn (
+        ctx: *anyopaque,
+        v0: *const Vertex,
+        v1: *const Vertex,
+        v2: *const Vertex,
+    ) void = null,
 
     // ---- Vertex array bindings (legacy GL 1.1 path)
     /// User-provided pointers for `drawArrays` / `drawElements`.
@@ -1407,6 +1413,13 @@ pub const Context = struct {
             .projection => &self.stack_projection[self.stack_projection_counter - 1],
             .texture => &self.stack_texture[self.stack_texture_counter - 1],
         };
+    }
+
+    /// The current modelview transform - what a shape drawn now is transformed by (raylib's
+    /// `rlGetMatrixTransform`), whichever matrix is active for editing: the top of the modelview
+    /// stack. draw2d's outline helper reads its scale to keep a one-pixel line one pixel wide.
+    pub fn getMatrixTransform(self: *const Context) Matrix {
+        return self.stack_modelview[self.stack_modelview_counter - 1];
     }
 
     // ========================================================================
@@ -3861,8 +3874,8 @@ test "era I: Context.init + deinit round-trip with no leaks" {
     // Uses std.testing.allocator, which asserts no leaks at exit.  If
     // init allocates and deinit doesn't free (or frees the wrong thing),
     // this test fails.
-    var ctx = try Context.init(std.testing.allocator, 64, 48);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 64, 48);
+    defer ctx.deinit(testing_allocator);
 
     // Spot-check the framebuffer was allocated correctly.
     try expectEqual(Vec2i{ 64, 48 }, ctx.framebuffer.color.size);
@@ -4130,8 +4143,8 @@ test "era I: EnumSet(Capability) round-trips insert / contains / remove" {
 }
 
 test "era I: Context.user_state and raster_state are independent EnumSets" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     // Both start empty per init defaults.
     try expectEqual(@as(usize, 0), ctx.user_state.count());
@@ -4161,8 +4174,8 @@ test "era I: Context.user_state and raster_state are independent EnumSets" {
 }
 
 test "era I: init produces donor-default state" {
-    var ctx = try Context.init(std.testing.allocator, 100, 80);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 100, 80);
+    defer ctx.deinit(testing_allocator);
 
     // Clear color: transparent black; clear depth: 1.0 (far plane).
     try expectEqual(Color.init(0, 0, 0, 0), ctx.clear_color);
@@ -4203,8 +4216,8 @@ test "era I: init produces donor-default state" {
 }
 
 test "era I: currentMatrix returns the active stack's top" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     // Default mode is modelview - currentMatrix returns slot 0 of
     // the modelview stack.
@@ -4231,12 +4244,12 @@ test "era I: currentMatrix returns the active stack's top" {
 }
 
 test "era I: resize reallocates with no leaks" {
-    var ctx = try Context.init(std.testing.allocator, 64, 64);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 64, 64);
+    defer ctx.deinit(testing_allocator);
     const original_color_ptr: []u8 = ctx.framebuffer.color.pixels;
     _ = original_color_ptr;
 
-    try ctx.resize(std.testing.allocator, 128, 96);
+    try ctx.resize(testing_allocator, 128, 96);
 
     try expectEqual(Vec2i{ 128, 96 }, ctx.framebuffer.color.size);
     try expectEqual(Vec2i{ 127, 95 }, ctx.framebuffer.color.size_minus_one);
@@ -4253,14 +4266,14 @@ test "era I: resize preserves non-framebuffer state" {
     // The donor's swResize only touches the framebuffer + viewport.
     // Anything else - matrix stacks, blend setup, current color
     // should pass through untouched.
-    var ctx = try Context.init(std.testing.allocator, 64, 64);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 64, 64);
+    defer ctx.deinit(testing_allocator);
 
     ctx.primitive.current_color = .{ 0.5, 0.6, 0.7, 0.8 };
     ctx.src_factor = .one;
     ctx.dst_factor = .zero;
 
-    try ctx.resize(std.testing.allocator, 32, 32);
+    try ctx.resize(testing_allocator, 32, 32);
 
     try expectEqual([4]f32{ 0.5, 0.6, 0.7, 0.8 }, ctx.primitive.current_color);
     try expectEqual(BlendFactor.one, ctx.src_factor);
@@ -4272,8 +4285,8 @@ test "era I: resize preserves non-framebuffer state" {
 // `clearColor`, `clearDepth`, `clear`, `colorBufferBytes`.
 
 test "era II: clearColor stores the value (no buffer write yet)" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     const initial: Color = ctx.clear_color;
     ctx.clearColor(Color.init(255, 128, 64, 200));
@@ -4283,16 +4296,16 @@ test "era II: clearColor stores the value (no buffer write yet)" {
 }
 
 test "era II: clearDepth stores the value (no buffer write yet)" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.clearDepth(0.25);
     try expectEqual(@as(f32, 0.25), ctx.clear_depth);
 }
 
 test "era II: clear with .color = true fills the color buffer to clear_color" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     ctx.clearColor(Color.init(10, 20, 30, 40));
     ctx.clear(.{ .color = true });
@@ -4313,8 +4326,8 @@ test "era II: clear with .color = true fills the color buffer to clear_color" {
 }
 
 test "era II: clear with .depth = true fills the depth buffer to clear_depth" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     ctx.clearDepth(0.5);
     ctx.clear(.{ .depth = true });
@@ -4330,8 +4343,8 @@ test "era II: clear with .depth = true fills the depth buffer to clear_depth" {
 }
 
 test "era II: clear with both bits hits both buffers" {
-    var ctx = try Context.init(std.testing.allocator, 2, 2);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 2, 2);
+    defer ctx.deinit(testing_allocator);
 
     ctx.clearColor(Color.init(7, 8, 9, 10));
     ctx.clearDepth(0.75);
@@ -4347,8 +4360,8 @@ test "era II: clear with both bits hits both buffers" {
 }
 
 test "era II: clear with no bits set is a no-op" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     // Pre-poison both buffers with non-zero bytes so any spurious
     // write is detectable.
@@ -4362,8 +4375,8 @@ test "era II: clear with no bits set is a no-op" {
 }
 
 test "era II: clear during begin/end records invalid_operation, no buffer writes" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     @memset(ctx.framebuffer.color.pixels, 0x55);
     ctx.draw_mode = .triangles; // simulate begin
@@ -4373,8 +4386,8 @@ test "era II: clear during begin/end records invalid_operation, no buffer writes
 }
 
 test "era II: colorBufferBytes returns the live color attachment slice" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.clearColor(Color.init(1, 2, 3, 4));
     ctx.clear(.{ .color = true });
@@ -4388,8 +4401,8 @@ test "era II: colorBufferBytes returns the live color attachment slice" {
 }
 
 test "era II: colorBufferBytes falls back to default framebuffer when color_buffer is null" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     // Detach the bound color attachment; the public method should
     // still return the default framebuffer's slice.  This is the
@@ -4408,8 +4421,8 @@ test "era II: colorBufferBytes falls back to default framebuffer when color_buff
 // from `user_state`.
 
 test "era II: enable/disable mutate user_state without touching raster_state" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Both states default to empty.
     try expectEqual(@as(usize, 0), ctx.user_state.count());
@@ -4430,8 +4443,8 @@ test "era II: enable/disable mutate user_state without touching raster_state" {
 }
 
 test "era II: enable is idempotent; disable of unset is a no-op" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.cull_face);
     ctx.enable(.cull_face);
@@ -4443,8 +4456,8 @@ test "era II: enable is idempotent; disable of unset is a no-op" {
 }
 
 test "era II: viewport recomputes vp_size, vp_half, vp_center" {
-    var ctx = try Context.init(std.testing.allocator, 100, 100);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 100, 100);
+    defer ctx.deinit(testing_allocator);
 
     ctx.viewport(10, 20, 80, 60);
     try expectEqual(Vec2i{ 80, 60 }, ctx.vp_size);
@@ -4455,8 +4468,8 @@ test "era II: viewport recomputes vp_size, vp_half, vp_center" {
 }
 
 test "era II: viewport with negative width records invalid_value, no field writes" {
-    var ctx = try Context.init(std.testing.allocator, 100, 100);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 100, 100);
+    defer ctx.deinit(testing_allocator);
 
     const before: Vec2i = ctx.vp_size;
     ctx.viewport(0, 0, -1, 50);
@@ -4465,8 +4478,8 @@ test "era II: viewport with negative width records invalid_value, no field write
 }
 
 test "era II: scissor sets pixel rect AND clip-space projection" {
-    var ctx = try Context.init(std.testing.allocator, 100, 100);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 100, 100);
+    defer ctx.deinit(testing_allocator);
 
     // Default viewport is the full 100x100 framebuffer.
     ctx.scissor(25, 25, 50, 50);
@@ -4485,8 +4498,8 @@ test "era II: scissor sets pixel rect AND clip-space projection" {
 }
 
 test "era II: scissor with negative width records invalid_value" {
-    var ctx = try Context.init(std.testing.allocator, 100, 100);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 100, 100);
+    defer ctx.deinit(testing_allocator);
 
     const before: Vec2i = ctx.sc_min;
     ctx.scissor(0, 0, 50, -10);
@@ -4495,8 +4508,8 @@ test "era II: scissor with negative width records invalid_value" {
 }
 
 test "era II: blendFunc stores src and dst factors" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.blendFunc(.one, .zero);
     try expectEqual(BlendFactor.one, ctx.src_factor);
@@ -4508,8 +4521,8 @@ test "era II: blendFunc stores src and dst factors" {
 }
 
 test "era II: cullFace stores the face direction" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Default after init is `back`.
     try expectEqual(Face.back, ctx.cull_face);
@@ -4518,8 +4531,8 @@ test "era II: cullFace stores the face direction" {
 }
 
 test "era II: polygonMode stores the mode" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     try expectEqual(PolyMode.fill, ctx.poly_mode);
     ctx.polygonMode(.line);
@@ -4529,8 +4542,8 @@ test "era II: polygonMode stores the mode" {
 }
 
 test "era II: pointSize stores floor(size/2) matching donor" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.pointSize(8.0);
     try expectEqual(@as(f32, 4.0), ctx.point_radius);
@@ -4541,8 +4554,8 @@ test "era II: pointSize stores floor(size/2) matching donor" {
 }
 
 test "era II: lineWidth stores round(width) matching donor" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.lineWidth(2.0);
     try expectEqual(@as(f32, 2.0), ctx.line_width);
@@ -4553,8 +4566,8 @@ test "era II: lineWidth stores round(width) matching donor" {
 }
 
 test "era II: cleanRasterState passes through with valid resources" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.depth_test);
     ctx.enable(.scissor_test);
@@ -4571,8 +4584,8 @@ test "era II: cleanRasterState passes through with valid resources" {
 }
 
 test "era II: cleanRasterState strips texture_2d when no texture bound" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.texture_2d);
     try expect(ctx.user_state.contains(.texture_2d));
@@ -4585,8 +4598,8 @@ test "era II: cleanRasterState strips texture_2d when no texture bound" {
 }
 
 test "era II: cleanRasterState keeps texture_2d when a complete color texture is bound" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Synthesize a minimal 4x4 RGBA8 Texture and bind it.  We're not
     // going through `texImage2D` (the texture-pool path, not shipped); we just need
@@ -4612,8 +4625,8 @@ test "era II: cleanRasterState keeps texture_2d when a complete color texture is
 }
 
 test "era II: cleanRasterState strips texture_2d when bound texture is depth-format" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var tex_pixels: [4 * 4 * 4]u8 = @splat(0);
     var tex = Texture{
@@ -4636,8 +4649,8 @@ test "era II: cleanRasterState strips texture_2d when bound texture is depth-for
 }
 
 test "era II: cleanRasterState strips texture_2d when bound texture has empty pixels" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // A texture with no allocated pixel storage - incomplete.  This
     // is the post-`genTextures`-pre-`texImage2D` state: handle exists,
@@ -4662,8 +4675,8 @@ test "era II: cleanRasterState strips texture_2d when bound texture has empty pi
 }
 
 test "era II: cleanRasterState falls back to default framebuffer's depth attachment" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // depth_buffer is null after init (the design wart documented
     // on the field).  cleanRasterState should still see the default
@@ -4685,8 +4698,8 @@ test "era II: cleanRasterState falls back to default framebuffer's depth attachm
 // no rounding error.  Trig-involving rotates use approxEqAbs.
 
 test "era II: matrixMode switches which stack `currentMatrix` points at" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Default mode is `.modelview`.
     try expectEqual(MatrixMode.modelview, ctx.current_matrix_mode);
@@ -4701,8 +4714,8 @@ test "era II: matrixMode switches which stack `currentMatrix` points at" {
 }
 
 test "era II: pushMatrix duplicates the top and advances the counter" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Stamp the modelview top with a recognisable value.
     ctx.currentMatrix().* = translation(1, 2, 3);
@@ -4721,8 +4734,8 @@ test "era II: pushMatrix duplicates the top and advances the counter" {
 }
 
 test "era II: popMatrix decrements counter; pop past size 1 records stack_underflow" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.pushMatrix();
     try expectEqual(@as(u32, 2), ctx.stack_modelview_counter);
@@ -4740,8 +4753,8 @@ test "era II: popMatrix decrements counter; pop past size 1 records stack_underf
 }
 
 test "era II: pushMatrix past max records stack_overflow, doesn't advance counter" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.matrixMode(.projection); // projection stack max is 2 (smaller than modelview)
     try expectEqual(@as(u32, 1), ctx.stack_projection_counter);
@@ -4755,8 +4768,8 @@ test "era II: pushMatrix past max records stack_overflow, doesn't advance counte
 }
 
 test "era II: pushMatrix overflow on modelview stack (depth 8)" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var i: u32 = 1;
     while (i < max_modelview_stack_size) : (i += 1) {
@@ -4770,8 +4783,8 @@ test "era II: pushMatrix overflow on modelview stack (depth 8)" {
 }
 
 test "era II: loadIdentity replaces top with identity AND dirties the MVP" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.currentMatrix().* = translation(5, 6, 7);
     try expect(!ctx.is_dirty_mvp);
@@ -4782,8 +4795,8 @@ test "era II: loadIdentity replaces top with identity AND dirties the MVP" {
 }
 
 test "era II: loadIdentity on texture stack does NOT dirty the MVP" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.matrixMode(.texture);
     try expect(!ctx.is_dirty_mvp);
@@ -4794,8 +4807,8 @@ test "era II: loadIdentity on texture stack does NOT dirty the MVP" {
 }
 
 test "era II: translate on identity yields a translation matrix" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.translate(1.0, 2.0, 3.0);
     const cur: Matrix = ctx.currentMatrix().*;
@@ -4811,8 +4824,8 @@ test "era II: translate on identity yields a translation matrix" {
 }
 
 test "era II: scale on identity yields a scaling matrix" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.scale(2.0, 3.0, 4.0);
     const cur: Matrix = ctx.currentMatrix().*;
@@ -4823,8 +4836,8 @@ test "era II: scale on identity yields a scaling matrix" {
 }
 
 test "era II: rotate by a quarter turn around Z yields a Z rotation" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.rotate(0.25, 0, 0, 1);
     const cur: Matrix = ctx.currentMatrix().*;
@@ -4841,8 +4854,8 @@ test "era II: rotate by a quarter turn around Z yields a Z rotation" {
 }
 
 test "era II: multMatrix sets current to matrixMul(current, m)" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Set a recognisable starting point and a multiplicand, then
     // assert the post-state matches what `matrixMul(before, m)`
@@ -4865,8 +4878,8 @@ test "era II: multMatrix sets current to matrixMul(current, m)" {
 }
 
 test "era II: ortho post-multiplies (current = current * O)" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.matrixMode(.projection);
     ctx.loadIdentity();
@@ -4889,8 +4902,8 @@ test "era II: ortho post-multiplies (current = current * O)" {
 }
 
 test "era II: frustum dirties the MVP" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.matrixMode(.projection);
     try expect(!ctx.is_dirty_mvp);
@@ -4899,8 +4912,8 @@ test "era II: frustum dirties the MVP" {
 }
 
 test "era II: matrix ops on different stacks isolate state" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Translate the modelview, then switch to projection and translate
     // it differently - the modelview should be untouched.
@@ -4918,8 +4931,8 @@ test "era II: matrix ops on different stacks isolate state" {
 }
 
 test "era II: pushMatrix saves; modify; popMatrix restores" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.translate(10, 20, 30);
     const before: Matrix = ctx.currentMatrix().*;
@@ -4934,8 +4947,8 @@ test "era II: pushMatrix saves; modify; popMatrix restores" {
 }
 
 test "era II: texture-stack pop does NOT dirty the MVP" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.matrixMode(.texture);
     ctx.pushMatrix();
@@ -4996,8 +5009,8 @@ test "era II: pixelFormatFromFormatAndType returns null for unsupported combos" 
 }
 
 test "era II: bindTexture(.nil) clears the binding" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var dummy_pixels: [4]u8 = .{ 0, 0, 0, 0 };
     var dummy_tex = Texture{
@@ -5020,12 +5033,12 @@ test "era II: bindTexture(.nil) clears the binding" {
 }
 
 test "era II: bindTexture of valid handle sets bound_texture pointer" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     try expect(ctx.bound_texture != null);
@@ -5033,8 +5046,8 @@ test "era II: bindTexture of valid handle sets bound_texture pointer" {
 }
 
 test "era II: bindTexture of invalid handle records invalid_value" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     const fake: Handle(Texture) = .pack(99, 1); // never allocated
     ctx.bindTexture(fake);
@@ -5043,15 +5056,15 @@ test "era II: bindTexture of invalid handle records invalid_value" {
 }
 
 test "era II: texImage2D with null data zero-fills allocated storage" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, null);
 
     const tex: *Texture = ctx.bound_texture.?;
     try expectEqual(PixelFormat.color_r8g8b8a8, tex.format);
@@ -5068,12 +5081,12 @@ test "era II: texImage2D with null data zero-fills allocated storage" {
 }
 
 test "era II: texImage2D with data copies bytes and detects alpha" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
     // 2x2 RGBA, all opaque except the last pixel (alpha 128).
@@ -5083,7 +5096,7 @@ test "era II: texImage2D with data copies bytes and detects alpha" {
         0, 0, 255, 255, // blue
         128, 128, 128, 128, // half-alpha gray
     };
-    try ctx.texImage2D(std.testing.allocator, 2, 2, .rgba, .unsigned_byte, &src);
+    try ctx.texImage2D(testing_allocator, 2, 2, .rgba, .unsigned_byte, &src);
 
     const tex: *Texture = ctx.bound_texture.?;
     try expectEqualSlices(u8, &src, tex.pixels);
@@ -5092,91 +5105,91 @@ test "era II: texImage2D with data copies bytes and detects alpha" {
 }
 
 test "era II: texImage2D fully opaque RGBA leaves alpha as .none" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
     const src = [_]u8{
         255, 0,   0, 255,
         0,   255, 0, 255,
     };
-    try ctx.texImage2D(std.testing.allocator, 2, 1, .rgba, .unsigned_byte, &src);
+    try ctx.texImage2D(testing_allocator, 2, 1, .rgba, .unsigned_byte, &src);
 
     const tex: *Texture = ctx.bound_texture.?;
     try expectEqual(PixelAlpha.none, tex.alpha);
 }
 
 test "era II: texImage2D with no bound texture is a silent no-op" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     try expect(ctx.bound_texture == null);
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, null);
     try expectEqual(ErrorCode.no_error, ctx.err_code);
 }
 
 test "era II: texImage2D with negative dimensions records invalid_value" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
-    try ctx.texImage2D(std.testing.allocator, -1, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, -1, 4, .rgba, .unsigned_byte, null);
     try expectEqual(ErrorCode.invalid_value, ctx.err_code);
 }
 
 test "era II: texImage2D with too-short data records invalid_value" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
     // 2x2 RGBA wants 16 bytes; we provide 4.
     const short_data = [_]u8{ 1, 2, 3, 4 };
-    try ctx.texImage2D(std.testing.allocator, 2, 2, .rgba, .unsigned_byte, &short_data);
+    try ctx.texImage2D(testing_allocator, 2, 2, .rgba, .unsigned_byte, &short_data);
     try expectEqual(ErrorCode.invalid_value, ctx.err_code);
 }
 
 test "era II: texImage2D reuses storage on same-size resize, reallocates on different size" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, null);
     const ptr_a: [*]u8 = ctx.bound_texture.?.pixels.ptr;
     const len_a: usize = ctx.bound_texture.?.pixels.len;
 
     // Same dimensions + format -> no realloc; pointer should match.
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, null);
     try expectEqual(ptr_a, ctx.bound_texture.?.pixels.ptr);
     try expectEqual(len_a, ctx.bound_texture.?.pixels.len);
 
     // Different dimensions -> realloc (length must change).
-    try ctx.texImage2D(std.testing.allocator, 8, 8, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 8, 8, .rgba, .unsigned_byte, null);
     try expect(ctx.bound_texture.?.pixels.len != len_a);
 }
 
 test "era II: texParameter sets the requested filter / wrap on the bound texture" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
 
     ctx.texParameter(.{ .min_filter = .linear });
@@ -5192,37 +5205,37 @@ test "era II: texParameter sets the requested filter / wrap on the bound texture
 }
 
 test "era II: texParameter without bound texture is a silent no-op" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.texParameter(.{ .min_filter = .linear });
     try expectEqual(ErrorCode.no_error, ctx.err_code);
 }
 
 test "era II: deleteTextures frees per-texture pixel storage" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
     ctx.bindTexture(handles[0]);
 
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, null);
     // The slot has allocated pixel storage now.  deleteTextures
     // should free it.  (If it doesn't, the testing allocator's
     // leak detector at end-of-test will report.)
-    ctx.deleteTextures(std.testing.allocator, &handles);
+    ctx.deleteTextures(testing_allocator, &handles);
 }
 
 test "era II: cleanRasterState keeps texture_2d after texImage2D-completed bound texture" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
     ctx.bindTexture(handles[0]);
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, null);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, null);
 
     ctx.enable(.texture_2d);
     ctx.cleanRasterState();
@@ -5238,8 +5251,8 @@ test "era II: cleanRasterState keeps texture_2d after texImage2D-completed bound
 // vertex counter for the next primitive.
 
 test "era II: begin opens immediate mode; end closes it" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     try expect(!ctx.isImmediateActive());
     ctx.begin(.triangles);
@@ -5251,8 +5264,8 @@ test "era II: begin opens immediate mode; end closes it" {
 }
 
 test "era II: begin while already active records invalid_operation" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.begin(.lines); // nested begin - the spec error
@@ -5262,16 +5275,16 @@ test "era II: begin while already active records invalid_operation" {
 }
 
 test "era II: end without active begin records invalid_operation" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.end();
     try expectEqual(ErrorCode.invalid_operation, ctx.err_code);
 }
 
 test "era II: begin recomputes mat_mvp from dirty bit + clears the bit" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Dirty the modelview by translating, then begin should fold
     // modelview x projection into mat_mvp.
@@ -5291,8 +5304,8 @@ test "era II: begin recomputes mat_mvp from dirty bit + clears the bit" {
 }
 
 test "era II: begin runs cleanRasterState (strips depth_test on null depth)" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Force the depth-attachment-missing path: point `depth_buffer`
     // at a stack-local incomplete texture so `cleanRasterState` /
@@ -5322,8 +5335,8 @@ test "era II: begin runs cleanRasterState (strips depth_test on null depth)" {
 }
 
 test "era II: begin resets vertex_count and has_color_alpha" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Stuff the primitive scratch with leftover state.
     ctx.primitive.vertex_count = 5;
@@ -5335,16 +5348,16 @@ test "era II: begin resets vertex_count and has_color_alpha" {
 }
 
 test "era II: vertex2f outside begin/end records invalid_operation" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.vertex2f(0, 0);
     try expectEqual(ErrorCode.invalid_operation, ctx.err_code);
 }
 
 test "era II: vertex2f under identity MVP stores position unchanged (z=0, w=1)" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Use TRIANGLES so we can submit one vertex and inspect it
     // before the auto-flush at count == 3.
@@ -5360,8 +5373,8 @@ test "era II: vertex2f under identity MVP stores position unchanged (z=0, w=1)" 
 }
 
 test "era II: vertex3f under translation applies MVP" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Translate the modelview by (10, 20, 30); draw a single
     // vertex at origin; expect MVP-transformed position to be the
@@ -5378,8 +5391,8 @@ test "era II: vertex3f under translation applies MVP" {
 }
 
 test "era II: color3f sets current color with alpha=1; no has_color_alpha trip" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.color3f(0.25, 0.5, 0.75);
@@ -5392,8 +5405,8 @@ test "era II: color3f sets current color with alpha=1; no has_color_alpha trip" 
 }
 
 test "era II: color4f with alpha < 1 trips has_color_alpha" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.color4f(1.0, 0.0, 0.0, 0.5);
@@ -5403,8 +5416,8 @@ test "era II: color4f with alpha < 1 trips has_color_alpha" {
 }
 
 test "era II: color4ub normalises bytes to [0,1] floats" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.color4ub(255, 128, 0, 64);
@@ -5417,8 +5430,8 @@ test "era II: color4ub normalises bytes to [0,1] floats" {
 }
 
 test "era II: vertex inherits current color from running state" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.color3f(0.1, 0.2, 0.3);
@@ -5432,8 +5445,8 @@ test "era II: vertex inherits current color from running state" {
 }
 
 test "era II: texCoord2f under identity texture matrix passes through" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.texCoord2f(0.25, 0.75);
     try expectEqual(@as(f32, 0.25), ctx.primitive.current_texcoord[0]);
@@ -5441,8 +5454,8 @@ test "era II: texCoord2f under identity texture matrix passes through" {
 }
 
 test "era II: texCoord2f under translated texture matrix applies translation" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.matrixMode(.texture);
     ctx.translate(0.5, 0.5, 0); // texture matrix translation only uses 2D
@@ -5454,8 +5467,8 @@ test "era II: texCoord2f under translated texture matrix applies translation" {
 }
 
 test "era II: triangles auto-flush at vertex_count == 3" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.vertex2f(0, 0);
@@ -5470,8 +5483,8 @@ test "era II: triangles auto-flush at vertex_count == 3" {
 }
 
 test "era II: lines auto-flush at vertex_count == 2" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.lines);
     ctx.vertex2f(0, 0);
@@ -5481,8 +5494,8 @@ test "era II: lines auto-flush at vertex_count == 2" {
 }
 
 test "era II: multi-primitive begin/end (6 vertices = 2 triangles)" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     ctx.vertex2f(0, 0);
@@ -5498,8 +5511,8 @@ test "era II: multi-primitive begin/end (6 vertices = 2 triangles)" {
 }
 
 test "era II: setColor with alpha=1 doesn't reset has_color_alpha back to false" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // First a transparent color trips the flag; then an opaque one
     // should NOT clear it (the flag is sticky per-primitive - donor
@@ -5538,8 +5551,8 @@ fn pixelAtRgba8(
 }
 
 test "era III: point at clip-space origin lands at framebuffer center" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.points);
     ctx.color4ub(255, 128, 64, 255);
@@ -5561,8 +5574,8 @@ test "era III: point at clip-space origin lands at framebuffer center" {
 }
 
 test "era III: two points at different NDC positions land at different pixels" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.points);
     ctx.color4ub(200, 0, 0, 255);
@@ -5581,8 +5594,8 @@ test "era III: two points at different NDC positions land at different pixels" {
 }
 
 test "era III: point with non-zero radius fills a square" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.pointSize(3.0); // donor: floors `size*0.5` -> radius=1 -> 3x3 square
     ctx.begin(.points);
@@ -5608,8 +5621,8 @@ test "era III: point with non-zero radius fills a square" {
 }
 
 test "era III: point outside clip volume (x > w) is rejected" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Set up a non-identity W via a translation that DOESN'T affect
     // the W output, but the clip-volume check fires only when w != 1.
@@ -5637,8 +5650,8 @@ test "era III: point outside clip volume (x > w) is rejected" {
 }
 
 test "era III: depth-test path passes when depth empty (zero), writes new depth" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Default depth buffer is all-zero (init's `@memset(depth_pixels, 0)`).
     // A point at NDC z = -0.5 maps to vertex.position[2] = -0.5
@@ -5658,8 +5671,8 @@ test "era III: depth-test path passes when depth empty (zero), writes new depth"
 }
 
 test "era III: depth-test path rejects when submitted z > stored z" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.depth_test);
     ctx.begin(.points);
@@ -5679,8 +5692,8 @@ test "era III: depth-test path rejects when submitted z > stored z" {
 }
 
 test "era III: scissor rectangle clips a point's square" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Scissor restricts writes to (8..16, 0..16) - the right half.
     ctx.scissor(8, 0, 8, 16);
@@ -5713,8 +5726,8 @@ test "era III: byteFromUnitFloat saturates correctly" {
 }
 
 test "era III: multiple points in one begin/end pair all land" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Submit 3 points; each should auto-flush at primitive size 1.
     // GL Y-up convention: NDC y=-0.5 -> pixel y=6, NDC y=+0.5 -> pixel y=2.
@@ -5746,8 +5759,8 @@ test "era III: multiple points in one begin/end pair all land" {
 // per begin/end.
 
 test "era III: line from NDC (-0.5, 0) to (+0.5, 0) draws horizontal pixel row" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // NDC -0.5 -> pixel 4 + (-0.5)*4 + 0.5 = 2.5 -> 2
     // NDC +0.5 -> pixel 4 + ( 0.5)*4 + 0.5 = 6.5 -> 6
@@ -5771,8 +5784,8 @@ test "era III: line from NDC (-0.5, 0) to (+0.5, 0) draws horizontal pixel row" 
 }
 
 test "era III: line from (0, -0.5) to (0, +0.5) draws vertical pixel column" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.lines);
     ctx.color4ub(0, 200, 0, 255);
@@ -5794,8 +5807,8 @@ test "era III: line from (0, -0.5) to (0, +0.5) draws vertical pixel column" {
 
 test "era III: diagonal line from (-0.5, -0.5) to (+0.5, +0.5) hits both endpoints" {
     // SKIPPED: see CHANGELOG Turn 120 (raster Y-flip cleanup pending).
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.lines);
     ctx.color4ub(50, 100, 200, 255);
@@ -5818,8 +5831,8 @@ test "era III: diagonal line from (-0.5, -0.5) to (+0.5, +0.5) hits both endpoin
 }
 
 test "era III: line color interpolation paints endpoints with respective colors" {
-    var ctx = try Context.init(std.testing.allocator, 16, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 8);
+    defer ctx.deinit(testing_allocator);
 
     // 16-wide framebuffer so the line spans 12 pixels, plenty of
     // room for color interp visibility.
@@ -5848,8 +5861,8 @@ test "era III: line color interpolation paints endpoints with respective colors"
 }
 
 test "era III: zero-length line draws a single pixel" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.lines);
     ctx.color4ub(150, 150, 150, 255);
@@ -5865,8 +5878,8 @@ test "era III: zero-length line draws a single pixel" {
 }
 
 test "era III: line outside framebuffer is silently dropped" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Both endpoints at NDC X = 3 -> pixel 16, way off-screen.
     ctx.begin(.lines);
@@ -5888,8 +5901,8 @@ test "era III: line outside framebuffer is silently dropped" {
 }
 
 test "era III: multi-line begin/end paints each segment independently" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Two horizontal lines on different rows.  GL Y-up: NDC y=-0.5
     // -> pixel y=6, NDC y=+0.5 -> pixel y=2.
@@ -5910,8 +5923,8 @@ test "era III: multi-line begin/end paints each segment independently" {
 }
 
 test "era III: line depth-test rejects pixels behind existing depth" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.depth_test);
     ctx.begin(.lines);
@@ -5937,8 +5950,8 @@ test "era III: line depth-test rejects pixels behind existing depth" {
 // face culling - those land in subsequent rasterizer passes.
 
 test "era III: triangle covers center pixel and leaves outside untouched" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Big triangle covering most of the framebuffer.  CCW winding.
     ctx.begin(.triangles);
@@ -5960,8 +5973,8 @@ test "era III: triangle covers center pixel and leaves outside untouched" {
 }
 
 test "era III: triangle paints pixels with barycentric color interp" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // RGB-corner triangle: red at left, green at right, blue at top.
     // Center pixel sums to roughly equal weights (1/3, 1/3, 1/3) so
@@ -5986,8 +5999,8 @@ test "era III: triangle paints pixels with barycentric color interp" {
 }
 
 test "era III: degenerate triangle (collinear vertices) paints nothing" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Three collinear points -> zero area.
     ctx.begin(.triangles);
@@ -6008,8 +6021,8 @@ test "era III: degenerate triangle (collinear vertices) paints nothing" {
 }
 
 test "era III: triangle outside framebuffer is silently dropped" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // All three vertices way off-screen at NDC X = 3.
     ctx.begin(.triangles);
@@ -6030,8 +6043,8 @@ test "era III: triangle outside framebuffer is silently dropped" {
 }
 
 test "era III: CW-wound triangle still fills correctly" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Same vertices as the first test but in CW order.  drawTriangle
     // detects the winding from `area_x2`'s sign and uses the
@@ -6048,8 +6061,8 @@ test "era III: CW-wound triangle still fills correctly" {
 }
 
 test "era III: scissor clips triangle bounding box" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Scissor restricts to the right half (x in [8, 16)).
     ctx.enable(.scissor_test);
@@ -6074,8 +6087,8 @@ test "era III: scissor clips triangle bounding box" {
 }
 
 test "era III: multi-triangle begin/end paints each independently" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.triangles);
     // First triangle - top half - red.
@@ -6121,8 +6134,8 @@ test "era III: multi-triangle begin/end paints each independently" {
 // inner loop with depth read/write and texture sampling.
 
 test "era III: triangle depth-test rejects pixels behind existing depth" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.depth_test);
     ctx.begin(.triangles);
@@ -6146,13 +6159,13 @@ test "era III: triangle depth-test rejects pixels behind existing depth" {
 }
 
 test "era III: textured triangle samples bound texture color" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Upload a 4x4 solid-color RGBA8 texture (every texel = blue).
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     var tex_pixels: [4 * 4 * 4]u8 = undefined;
@@ -6163,7 +6176,7 @@ test "era III: textured triangle samples bound texture color" {
         tex_pixels[i + 2] = 255;
         tex_pixels[i + 3] = 255;
     }
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6188,17 +6201,17 @@ test "era III: textured triangle samples bound texture color" {
 }
 
 test "era III: textured triangle modulates vertex color with texture" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     // Solid white texture.
     var tex_pixels: [4 * 4 * 4]u8 = @splat(255);
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6220,12 +6233,12 @@ test "era III: textured triangle modulates vertex color with texture" {
 }
 
 test "era III: textured + depth-test triangle combines both axes" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     // Solid green texture.
@@ -6237,7 +6250,7 @@ test "era III: textured + depth-test triangle combines both axes" {
         tex_pixels[ti + 2] = 0;
         tex_pixels[ti + 3] = 255;
     }
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6272,8 +6285,8 @@ test "era III: textured + depth-test triangle combines both axes" {
 
 // ---- triangle BLEND + cull tests
 test "era III: blend alpha-over composites src over dst" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Pre-fill the framebuffer with red via a first opaque triangle.
     ctx.begin(.triangles);
@@ -6307,8 +6320,8 @@ test "era III: blend alpha-over composites src over dst" {
 }
 
 test "era III: blend with full alpha is identity (matches no-blend output)" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.blend);
     ctx.blendFunc(.src_alpha, .one_minus_src_alpha);
@@ -6328,8 +6341,8 @@ test "era III: blend with full alpha is identity (matches no-blend output)" {
 }
 
 test "era III: cull_back rejects back-facing triangles (NDC-CCW post-Y-flip), keeps front-facing (NDC-CW)" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.cull_face);
     ctx.cullFace(.back);
@@ -6375,12 +6388,12 @@ test "era III: cull_back rejects back-facing triangles (NDC-CCW post-Y-flip), ke
 }
 
 test "era III: blend + textured triangle composites textured src over dst" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     var tex_pixels: [4 * 4 * 4]u8 = undefined;
@@ -6392,7 +6405,7 @@ test "era III: blend + textured triangle composites textured src over dst" {
         tex_pixels[ti + 2] = 255;
         tex_pixels[ti + 3] = 255;
     }
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6434,8 +6447,8 @@ test "era III: blend + textured triangle composites textured src over dst" {
 // cover both routes and the cfg axes that apply to each.
 
 test "era III: axis-aligned quad fills its rectangle" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Submit a screen-axis-aligned quad in canonical TL->TR->BR->BL
     // order.  See the corner-interpolation test below for the NDC
@@ -6460,8 +6473,8 @@ test "era III: axis-aligned quad fills its rectangle" {
 }
 
 test "era III: axis-aligned quad interpolates corner colors linearly" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // The rasterizer's gradient kernel classifies the four
     // submitted vertices as TL/TR/BR/BL by their PIXEL position,
@@ -6500,8 +6513,8 @@ test "era III: axis-aligned quad interpolates corner colors linearly" {
 }
 
 test "era III: rotated quad falls back to fan triangulation" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Rotated 45 deg quad - a diamond shape.  Edges run diagonally,
     // so isAxisAlignedQuad returns false and the dispatcher splits
@@ -6525,12 +6538,12 @@ test "era III: rotated quad falls back to fan triangulation" {
 }
 
 test "era III: textured quad samples bound texture across rectangle" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     var tex_pixels: [4 * 4 * 4]u8 = undefined;
@@ -6541,7 +6554,7 @@ test "era III: textured quad samples bound texture across rectangle" {
         tex_pixels[i + 2] = 50;
         tex_pixels[i + 3] = 255;
     }
-    try ctx.texImage2D(std.testing.allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 4, 4, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6566,8 +6579,8 @@ test "era III: textured quad samples bound texture across rectangle" {
 }
 
 test "era III: blended quad over opaque background composites correctly" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Opaque red background quad.
     ctx.begin(.quads);
@@ -6596,8 +6609,8 @@ test "era III: blended quad over opaque background composites correctly" {
 }
 
 test "era III: depth-tested quad rejects pixels behind closer geometry" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.enable(.depth_test);
 
@@ -6624,8 +6637,8 @@ test "era III: depth-tested quad rejects pixels behind closer geometry" {
 }
 
 test "era III: corner classification handles arbitrary submit order" {
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Submit starting from the BR corner - a rotated submit order
     // vs the canonical TL->TR->BR->BL.  quadKernel's sum/diff
@@ -6663,8 +6676,8 @@ test "era III: SIMD quad fills full row width across multiple lanes" {
     // 16-wide quad covers 12 painted pixels per row -> exactly
     // three SIMD iterations, no tail.  Confirms the SIMD body
     // paints contiguous pixels with no gaps.
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.quads);
     ctx.color4ub(180, 60, 30, 255);
@@ -6687,8 +6700,8 @@ test "era III: SIMD quad scalar tail handles non-multiple-of-4 widths" {
     // one SIMD iteration (4 lanes) plus a 3-pixel scalar tail.
     // 16-wide framebuffer with a quad sized to land at x in
     // [4, 11) gives 7 painted pixels per row.
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     // Tune the NDC range so the projected x range is [4, 11].
     // vp_center.x = 8, vp_half.x = 8.  Pixel = 8 + ndc*8 + 0.5.
@@ -6719,8 +6732,8 @@ test "era III: SIMD quad with sub-4 width runs only the scalar tail" {
     // is false on entry, so it executes zero iterations and the
     // scalar tail handles every pixel.  Tests that this edge
     // case doesn't produce off-by-one or skipped writes.
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.quads);
     ctx.color4ub(255, 100, 200, 255);
@@ -6755,8 +6768,8 @@ test "era III: SIMD quad gradient produces same colors as scalar reference" {
     // (-0.5, -0.5).  Submit so the pixel-space gradient runs
     // black (TL) -> red (TR) horizontally and black (TL) -> green
     // (BL) vertically.
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.quads);
     ctx.color4ub(0, 255, 0, 255); // pixel-BL (NDC -0.5, -0.5): green
@@ -6787,8 +6800,8 @@ test "era III: SIMD quad output is bit-identical to scalar path" {
     // exactly.  Catches float-ordering or precision drift in the
     // SIMD path that wouldn't show up in the bounded-range tests
     // above.
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     ctx.begin(.quads);
     ctx.color4ub(64, 96, 128, 255);
@@ -6841,12 +6854,12 @@ test "era III: perspective-correct UV - W=1 input matches affine result" {
     // Combined with the existing 2D textured triangle tests
     // (which still pass), this confirms the W=1 -> affine
     // collapse holds.
-    var ctx = try Context.init(std.testing.allocator, 16, 16);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 16, 16);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     // 2x2 texture with distinct quadrant colors so we can tell
@@ -6857,7 +6870,7 @@ test "era III: perspective-correct UV - W=1 input matches affine result" {
         0, 0, 255, 255, // (0, 1) blue
         255, 255, 0, 255, // (1, 1) yellow
     };
-    try ctx.texImage2D(std.testing.allocator, 2, 2, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 2, 2, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6891,12 +6904,12 @@ test "era III: perspective-correct UV - non-W=1 vertices interp correctly" {
     // Affine interp would NOT do this - it would interpolate UVs
     // directly in screen space, missing the perspective.  This
     // test catches a regression to affine.
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
-    defer ctx.deleteTextures(std.testing.allocator, &handles);
+    defer ctx.deleteTextures(testing_allocator, &handles);
 
     ctx.bindTexture(handles[0]);
     // Texture: left half red, right half blue.  Lets us measure
@@ -6907,7 +6920,7 @@ test "era III: perspective-correct UV - non-W=1 vertices interp correctly" {
         0, 0, 255, 255, // U=0.5
         0, 0, 255, 255, // U=0.75
     };
-    try ctx.texImage2D(std.testing.allocator, 4, 1, .rgba, .unsigned_byte, &tex_pixels);
+    try ctx.texImage2D(testing_allocator, 4, 1, .rgba, .unsigned_byte, &tex_pixels);
     ctx.texParameter(.{ .min_filter = .nearest });
     ctx.texParameter(.{ .mag_filter = .nearest });
 
@@ -6968,8 +6981,8 @@ test "era III: perspective-correct UV - non-W=1 vertices interp correctly" {
     try expect(found_blue);
 }
 test "era I: genTextures + deleteTextures basic round-trip" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [4]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
@@ -6981,7 +6994,7 @@ test "era I: genTextures + deleteTextures basic round-trip" {
         try expect(ctx.getTexture(h) != null);
     }
 
-    ctx.deleteTextures(std.testing.allocator, &handles);
+    ctx.deleteTextures(testing_allocator, &handles);
     try expectEqual(ErrorCode.no_error, ctx.err_code);
     for (handles) |h| {
         try expect(!h.isValid(&ctx.texture_pool));
@@ -6989,8 +7002,8 @@ test "era I: genTextures + deleteTextures basic round-trip" {
 }
 
 test "era I: genFramebuffers + deleteFramebuffers basic round-trip" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [3]Handle(Framebuffer) = @splat(.nil);
     ctx.genFramebuffers(&handles);
@@ -7009,8 +7022,8 @@ test "era I: genFramebuffers + deleteFramebuffers basic round-trip" {
 }
 
 test "era I: deleteTextures of invalid handle records invalid_value but continues" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var valid_h: [1]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&valid_h);
@@ -7018,7 +7031,7 @@ test "era I: deleteTextures of invalid handle records invalid_value but continue
     // Mix of valid and invalid: nil, out-of-range, valid.
     const out_of_range: Handle(Texture) = .pack(9999, 1);
     const mixed = [_]Handle(Texture){ .nil, out_of_range, valid_h[0] };
-    ctx.deleteTextures(std.testing.allocator, &mixed);
+    ctx.deleteTextures(testing_allocator, &mixed);
 
     try expectEqual(ErrorCode.invalid_value, ctx.err_code);
     // The valid one should still have been freed.
@@ -7026,8 +7039,8 @@ test "era I: deleteTextures of invalid handle records invalid_value but continue
 }
 
 test "era I: deleteTextures clears bound aliases" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var handles: [3]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&handles);
@@ -7042,20 +7055,20 @@ test "era I: deleteTextures clears bound aliases" {
     ctx.depth_buffer = tex2;
 
     // Delete only handle 0 -> only bound_texture cleared.
-    ctx.deleteTextures(std.testing.allocator, handles[0..1]);
+    ctx.deleteTextures(testing_allocator, handles[0..1]);
     try expectEqual(@as(?*Texture, null), ctx.bound_texture);
     try expectEqual(tex1, ctx.color_buffer);
     try expectEqual(tex2, ctx.depth_buffer);
 
     // Delete the rest -> all aliases cleared.
-    ctx.deleteTextures(std.testing.allocator, handles[1..]);
+    ctx.deleteTextures(testing_allocator, handles[1..]);
     try expectEqual(@as(?*Texture, null), ctx.color_buffer);
     try expectEqual(@as(?*Texture, null), ctx.depth_buffer);
 }
 
 test "era I: deleteFramebuffers of bound FB rebinds default" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var fb: [1]Handle(Framebuffer) = @splat(.nil);
     ctx.genFramebuffers(&fb);
@@ -7077,8 +7090,8 @@ test "era I: deleteFramebuffers of bound FB rebinds default" {
 }
 
 test "era I: deleteFramebuffers of unbound FB leaves binding alone" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var fb_pair: [2]Handle(Framebuffer) = @splat(.nil);
     ctx.genFramebuffers(&fb_pair);
@@ -7094,8 +7107,8 @@ test "era I: deleteFramebuffers of unbound FB leaves binding alone" {
 }
 
 test "era I: gen/delete refuse during begin/end (immediate active)" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     // No public `begin` yet, so stage the state directly.
     ctx.draw_mode = .triangles;
@@ -7111,7 +7124,7 @@ test "era I: gen/delete refuse during begin/end (immediate active)" {
     const dummy_fb: Handle(Framebuffer) = .pack(1, 1);
 
     ctx.err_code = .no_error;
-    ctx.deleteTextures(std.testing.allocator, &[_]Handle(Texture){dummy_tex});
+    ctx.deleteTextures(testing_allocator, &[_]Handle(Texture){dummy_tex});
     try expectEqual(ErrorCode.invalid_operation, ctx.err_code);
 
     ctx.err_code = .no_error;
@@ -7126,8 +7139,8 @@ test "era I: gen/delete refuse during begin/end (immediate active)" {
 }
 
 test "era I: genTextures partial-fills on pool exhaustion" {
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     // max_textures slots minus the 0 reservation is the live-handle
     // ceiling.  Drain it.
@@ -7145,7 +7158,7 @@ test "era I: genTextures partial-fills on pool exhaustion" {
     try expect(more[2].isNil());
     try expect(more[3].isNil());
 
-    ctx.deleteTextures(std.testing.allocator, &drain_slots);
+    ctx.deleteTextures(testing_allocator, &drain_slots);
 }
 
 test "era I: pool slots are correctly aligned for their type" {
@@ -7153,12 +7166,12 @@ test "era I: pool slots are correctly aligned for their type" {
     // returns `[]T` with `@alignOf(T)` already.  This test sanity-checks
     // that the addresses we hand out from getTexture / getFramebuffer
     // are correctly aligned.
-    var ctx = try Context.init(std.testing.allocator, 32, 32);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 32, 32);
+    defer ctx.deinit(testing_allocator);
 
     var t_handles: [4]Handle(Texture) = @splat(.nil);
     ctx.genTextures(&t_handles);
-    defer ctx.deleteTextures(std.testing.allocator, &t_handles);
+    defer ctx.deleteTextures(testing_allocator, &t_handles);
     for (t_handles) |h| {
         const tex: *Texture = ctx.getTexture(h).?;
         try expectEqual(@as(usize, 0), @intFromPtr(tex) % @alignOf(Texture));
@@ -7181,8 +7194,8 @@ test "era I: pool slots are correctly aligned for their type" {
 // degenerate inputs (zero-size rect, fully-outside rect).
 
 test "era IV: readPixels - full frame copy round-trips colorBufferBytes" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     // Paint a known clear color so the buffer has identifiable
     // contents.
@@ -7204,8 +7217,8 @@ test "era IV: readPixels - full frame copy round-trips colorBufferBytes" {
 }
 
 test "era IV: readPixels - sub-rectangle is contiguous in dst" {
-    var ctx = try Context.init(std.testing.allocator, 8, 8);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 8, 8);
+    defer ctx.deinit(testing_allocator);
 
     // Distinct colors per pixel so we can identify which row/col
     // was read.  Use a pixel-index gradient: red = x, green = y.
@@ -7248,8 +7261,8 @@ test "era IV: readPixels - sub-rectangle is contiguous in dst" {
 }
 
 test "era IV: readPixels - out-of-bounds rect clips silently" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     ctx.clearColor(.{ .r = 99, .g = 99, .b = 99, .a = 255 });
     ctx.clear(.{ .color = true });
@@ -7279,8 +7292,8 @@ test "era IV: readPixels - out-of-bounds rect clips silently" {
 }
 
 test "era IV: readPixels - rect fully outside framebuffer returns 0" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     var dst: [4 * 4 * 4]u8 = @splat(0xAB);
     const written: usize = ctx.readPixels(100, 100, 4, 4, &dst);
@@ -7291,8 +7304,8 @@ test "era IV: readPixels - rect fully outside framebuffer returns 0" {
 }
 
 test "era IV: readPixels - zero or negative size returns 0" {
-    var ctx = try Context.init(std.testing.allocator, 4, 4);
-    defer ctx.deinit(std.testing.allocator);
+    var ctx = try Context.init(testing_allocator, 4, 4);
+    defer ctx.deinit(testing_allocator);
 
     var dst: [16]u8 = @splat(0xCD);
     try expectEqual(@as(usize, 0), ctx.readPixels(0, 0, 0, 4, &dst));

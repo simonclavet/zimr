@@ -1,4 +1,5 @@
 //! lint:alias web
+//! lint:off arch-check: the browser's own module - its checks let it compile into host tests
 // src/web.zig - browser bindings (DOM, Audio, fetch).
 // Aggregates the four browser-binding modules into a single file with
 // namespaced sub-structs:
@@ -213,6 +214,75 @@ pub const dom = struct {
 
     // ----- Fullscreen / DPI / URL / screenshot
     extern "dom" fn js_get_dpi_scale() f32;
+    extern "dom" fn js_screen_width() f32;
+    extern "dom" fn js_gamepad_state(slot: u32, out: [*]f32) u32;
+    extern "dom" fn js_audio_output_start(sample_rate: u32, channel_count: u32) u32;
+    extern "dom" fn js_audio_output_queue(samples: [*]const f32, sample_count: u32) void;
+    extern "dom" fn js_audio_output_queued_frames() u32;
+    extern "dom" fn js_audio_output_mix_into_queued(samples: [*]const f32, sample_count: u32) void;
+    extern "dom" fn js_audio_output_stop() void;
+    extern "dom" fn js_audio_output_show_diagnostics() void;
+    extern "dom" fn js_audio_output_note_mixer(
+        margin_frames: u32,
+        underrun_count: u32,
+        voice_count: u32,
+    ) void;
+
+    /// The page's sound output, an AudioWorklet (`bridge.zig`, `audio_output_program`): opened at `sample_rate` and
+    /// `channel_count`; returns the rate granted, 0 without an AudioWorklet.
+    pub fn audio_output_start(sample_rate: u32, channel_count: u32) u32 {
+        return js_audio_output_start(sample_rate, channel_count);
+    }
+
+    /// Queues interleaved samples on the sound output.
+    pub fn audio_output_queue(samples: []const f32) void {
+        js_audio_output_queue(samples.ptr, @intCast(samples.len));
+    }
+
+    /// Frames queued on the sound output and not yet played.
+    pub fn audio_output_queued_frames() u32 {
+        return js_audio_output_queued_frames();
+    }
+
+    /// Adds interleaved samples onto the frames queued on the sound output, aligned to the queue's end.
+    pub fn audio_output_mix_into_queued(samples: []const f32) void {
+        js_audio_output_mix_into_queued(samples.ptr, @intCast(samples.len));
+    }
+
+    /// Shows the sound's diagnostics panel at the top of the page.
+    pub fn audio_output_show_diagnostics() void {
+        js_audio_output_show_diagnostics();
+    }
+
+    /// Hands the diagnostics panel the mixer's margin, underrun count and voice count.
+    pub fn audio_output_note_mixer(
+        margin_frames: u32,
+        underrun_count: u32,
+        voice_count: u32,
+    ) void {
+        js_audio_output_note_mixer(margin_frames, underrun_count, voice_count);
+    }
+
+    /// Closes the sound output.
+    pub fn audio_output_stop() void {
+        js_audio_output_stop();
+    }
+
+    /// The gamepad in a slot (`navigator.getGamepads()`): its 17 buttons in the standard gamepad's order, then its 4
+    /// axes, written into `out`; 1 when there is one, 0 when the slot is empty.
+    pub fn gamepad_state(slot: u32, out: *[21]f32) u32 {
+        return js_gamepad_state(slot, out);
+    }
+    extern "dom" fn js_screen_height() f32;
+
+    /// The screen's width and height, in CSS pixels (`screen.width`, `screen.height`): the monitor a page sees.
+    pub fn screen_width() f32 {
+        return js_screen_width();
+    }
+
+    pub fn screen_height() f32 {
+        return js_screen_height();
+    }
     extern "dom" fn js_toggle_fullscreen() void;
     extern "dom" fn js_is_fullscreen() u32;
     extern "dom" fn js_open_url(ptr: [*]const u8, len: usize) void;
@@ -337,6 +407,17 @@ pub const dom = struct {
 
     pub fn get_overlay_input_text(out: []u8) usize {
         return js_get_overlay_input_text(out.ptr, out.len);
+    }
+
+    extern "dom" fn js_set_overlay_input_text(
+        text_ptr: [*]const u8,
+        text_len: usize,
+        caret: usize,
+    ) void;
+    /// Replaces the overlay input's text - after zimr's filters changed what the browser's editor let in - and puts
+    /// its caret at byte `caret` of the text, a character boundary.
+    pub fn setOverlayInputText(text: []const u8, caret: usize) void {
+        js_set_overlay_input_text(text.ptr, text.len, caret);
     }
 
     // ----- Clipboard
@@ -509,6 +590,8 @@ pub const dom = struct {
     extern "dom" fn js_set_cursor_style(style: u32) void;
     extern "dom" fn js_request_pointer_lock() void;
     extern "dom" fn js_exit_pointer_lock() void;
+    extern "dom" fn js_keep_awake(on: u32) void;
+    extern "dom" fn js_request_paste() void;
     extern "dom" fn js_pointer_lock_active() u32;
 
     /// 0 = default cursor, 1 = none (hidden).
@@ -517,6 +600,12 @@ pub const dom = struct {
     }
     pub fn request_pointer_lock() void {
         js_request_pointer_lock();
+    }
+    pub fn keep_awake(on: bool) void {
+        js_keep_awake(@intFromBool(on));
+    }
+    pub fn request_paste() void {
+        js_request_paste();
     }
     pub fn exit_pointer_lock() void {
         js_exit_pointer_lock();
@@ -600,11 +689,11 @@ pub const dom = struct {
 
     extern "dom" fn js_set_overlay_input_char_filters(flags: u32) void;
 
-    pub const CHAR_FILTER_DECIMAL: u32 = 0x01;
-    pub const CHAR_FILTER_HEXADECIMAL: u32 = 0x02;
-    pub const CHAR_FILTER_SCIENTIFIC: u32 = 0x04;
-    pub const CHAR_FILTER_UPPERCASE: u32 = 0x08;
-    pub const CHAR_FILTER_NO_BLANK: u32 = 0x10;
+    pub const char_filter_decimal: u32 = 0x01;
+    pub const char_filter_hexadecimal: u32 = 0x02;
+    pub const char_filter_scientific: u32 = 0x04;
+    pub const char_filter_uppercase: u32 = 0x08;
+    pub const char_filter_no_blank: u32 = 0x10;
 
     /// Push the active char-filter bitmask to the overlay input's
     /// 'input' event listener.  Pass 0 to disable filtering (every
@@ -667,6 +756,16 @@ pub const dom = struct {
     pub fn overlay_textarea_is_visible() bool {
         return js_overlay_textarea_is_visible() != 0;
     }
+    extern "dom" fn js_set_overlay_textarea_text(
+        text_ptr: [*]const u8,
+        text_len: usize,
+        caret: usize,
+    ) void;
+    /// Replaces the overlay text area's text, as `setOverlayInputText` does the input's.
+    pub fn setOverlayTextareaText(text: []const u8, caret: usize) void {
+        js_set_overlay_textarea_text(text.ptr, text.len, caret);
+    }
+
     pub fn get_overlay_textarea_text(out: []u8) usize {
         return js_get_overlay_textarea_text(out.ptr, out.len);
     }
@@ -1711,10 +1810,10 @@ pub const fetch = struct {
     //   1 = ok
     //   2 = NotFound (404 or missing)
     //   3 = NetworkFailed
-    const POLL_PENDING: i32 = 0;
-    const POLL_OK: i32 = 1;
-    const POLL_NOT_FOUND: i32 = 2;
-    const POLL_NETWORK_FAILED: i32 = 3;
+    const poll_pending: i32 = 0;
+    const poll_ok: i32 = 1;
+    const poll_not_found: i32 = 2;
+    const poll_network_failed: i32 = 3;
 
     // ---- Public API
     /// Begin fetching `url`.  Returns a handle to use with `poll`/`release`.
@@ -1740,14 +1839,14 @@ pub const fetch = struct {
         }
         const code: i32 = js_fetch_poll(handle);
         return switch (code) {
-            POLL_PENDING => .pending,
-            POLL_OK => blk: {
+            poll_pending => .pending,
+            poll_ok => blk: {
                 const ptr: [*]const u8 = js_fetch_data_ptr(handle);
                 const len: usize = js_fetch_data_len(handle);
                 break :blk .{ .ok = ptr[0..len] };
             },
-            POLL_NOT_FOUND => .{ .failed = Error.NotFound },
-            POLL_NETWORK_FAILED => .{ .failed = Error.NetworkFailed },
+            poll_not_found => .{ .failed = Error.NotFound },
+            poll_network_failed => .{ .failed = Error.NetworkFailed },
             else => .{ .failed = Error.NetworkFailed },
         };
     }

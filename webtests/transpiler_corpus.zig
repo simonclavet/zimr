@@ -54,6 +54,8 @@ const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
+const splitScalar = std.mem.splitScalar;
+const indexOf = std.mem.indexOf;
 
 fn g() Handle {
     return js_global();
@@ -239,164 +241,6 @@ fn transpileOne(spv_path: []const u8, out_buf: []u8) ?[]const u8 {
     return out_buf[0..out_len];
 }
 
-export fn _start() void {
-    // ---- args ----
-    const argv: Handle = js_call0(host(), "argv", 4);
-    const argc: u32 = @trunc(js_get_num(argv, "length", 6));
-    var root_buf: [512]u8 = undefined;
-    var root_len: u32 = 0;
-    var i: u32 = 0;
-    var abuf: [512]u8 = undefined;
-    while (i < argc) : (i += 1) {
-        const a: []const u8 = jsStrInto(js_get_index(argv, i), &abuf);
-        if (eql(u8, a, "--refresh-fixture")) {
-            st.refresh = true;
-        } else if (!startsWith(u8, a, "--") and root_len == 0) {
-            @memcpy(root_buf[0..a.len], a);
-            root_len = @intCast(a.len);
-        }
-    }
-    const root: []const u8 = if (root_len > 0) root_buf[0..root_len] else ".zig-cache";
-
-    // ---- load transpiler wasm ----
-    const wasm_path: []const u8 = "zig-out/wgpu/spv2wgsl.wasm";
-    const wasm_bytes: Handle = js_call1(host(), "readFile", 8, s(wasm_path));
-    if (isNull(wasm_bytes)) {
-        eprint("\u{2717} failed to load transpiler wasm at zig-out/wgpu/spv2wgsl.wasm");
-        eprint("  Did you run `zig build corpus`?");
-        js_call1v(host(), "exit", 4, n(1));
-        return;
-    }
-    // import spec: just wasi (runner Proxy-stubs every fn success-y)
-    const spec: Handle = js_obj();
-    const namespaces: Handle = js_obj();
-    js_set(namespaces, "wasi_snapshot_preview1", 22, arr());
-    js_set(spec, "namespaces", 10, namespaces);
-    const id_h: Handle = js_call2(host(), "instantiateSut", 14, wasm_bytes, spec);
-    if (js_to_num(id_h) < 0) {
-        eprint("\u{2717} failed to instantiate transpiler wasm");
-        js_call1v(host(), "exit", 4, n(1));
-        return;
-    }
-    st.sut_id = id_h;
-    _ = js_call2(host(), "sutCall", 7, st.sut_id, s("_initialize"));
-    const cap_h: Handle = js_call2(host(), "sutCall", 7, st.sut_id, s("input_buffer_capacity"));
-    const cap: u32 = @trunc(js_to_num(cap_h));
-    const cap_str_h: Handle = js_call0(js_num(@floatFromInt(cap)), "toLocaleString", 14);
-    var capnum: [48]u8 = undefined;
-    const cap_str: []const u8 = jsStrInto(cap_str_h, &capnum);
-    printf("\u{2713} loaded transpiler wasm (capacity {s} bytes)", .{cap_str});
-
-    // ---- find + dedup shader.spv (the real spv2wgsl input) ----
-    var sbuf: [256]u8 = undefined;
-    print(bufPrint(&sbuf, "scanning {s}/ for .spv files...", .{root}) catch "scanning");
-    const listing_h: Handle = js_call2(host(), "listFiles", 9, s(root), s("shader.spv"));
-    var lbuf: [65536]u8 = undefined;
-    const listing: []const u8 = jsStrInto(listing_h, &lbuf);
-
-    var total_files: u32 = 0;
-    // A shader compile that FAILS still leaves its `-femit-bin` output behind as a
-    // zero-byte `shader.spv`. That is not a transpiler input - the compile step that
-    // made it already failed on its own - so it is counted and skipped, never
-    // transpiled and reported as a spv2wgsl failure. (This only became visible once
-    // spv2wgsl started reading the compiler's own output: the old sampler-rewrite
-    // pass in between only ever wrote a file when its input was valid.)
-    var failed_compile_leftovers: u32 = 0;
-    var it = std.mem.splitScalar(u8, listing, '\n');
-    // First pass: dedup by md5 of spv bytes (md5File via host), collect.
-    while (it.next()) |path| {
-        if (path.len == 0) {
-            continue;
-        }
-        total_files += 1;
-        const sz_h: Handle = js_call1(host(), "fileSize", 8, s(path));
-        const sz: u32 = @trunc(js_to_num(sz_h));
-        const is_failed_compile_leftover: bool = sz == 0;
-        if (is_failed_compile_leftover) {
-            failed_compile_leftovers += 1;
-            continue;
-        }
-        if (st.n >= max_shaders) {
-            continue;
-        }
-        var hbuf: [40]u8 = undefined;
-        const md5_h: Handle = js_call1(host(), "md5File", 7, s(path));
-        const md5: []const u8 = jsStrInto(md5_h, &hbuf);
-        if (md5.len == 0) {
-            continue;
-        }
-        // dedup
-        var dup: bool = false;
-        var k: u32 = 0;
-        while (k < st.n) : (k += 1) {
-            if (eql(u8, &st.results[k].md5, md5[0..@min(md5.len, 32)])) {
-                dup = true;
-                break;
-            }
-        }
-        if (dup) {
-            continue;
-        }
-        var r: ShaderResult = .{};
-        @memcpy(r.md5[0..@min(md5.len, 32)], md5[0..@min(md5.len, 32)]);
-        r.size_bytes = sz;
-        const sp: PathRef = storePath(path);
-        r.path_off = sp.off;
-        r.path_len = sp.len;
-        st.results[st.n] = r;
-        st.n += 1;
-    }
-    // size-sort ascending (simple insertion sort; n is small)
-    var a: u32 = 1;
-    while (a < st.n) : (a += 1) {
-        const key: ShaderResult = st.results[a];
-        var b: i64 = @as(i64, a) - 1;
-        while (b >= 0 and st.results[@intCast(b)].size_bytes > key.size_bytes) {
-            st.results[@intCast(b + 1)] = st.results[@intCast(b)];
-            b -= 1;
-        }
-        st.results[@intCast(b + 1)] = key;
-    }
-    var fbuf: [128]u8 = undefined;
-    print(bufPrint(&fbuf, "  found {d} files, {d} unique by md5", .{ total_files, st.n }) catch "  found");
-    if (failed_compile_leftovers > 0) {
-        var lbuf2: [128]u8 = undefined;
-        print(bufPrint(
-            &lbuf2,
-            "  skipped {d} zero-byte shader.spv (left by a failed shader compile, not a transpiler input)",
-            .{failed_compile_leftovers},
-        ) catch "  skipped zero-byte inputs");
-    }
-    print("");
-
-    // ---- transpile each ----
-    var wgsl_buf: [262144]u8 = undefined;
-    i = 0;
-    while (i < st.n) : (i += 1) {
-        // Null means the transpiler panicked or errored on this input - distinct from producing
-        // WGSL that merely still has unresolved references.
-        const out: ?[]const u8 = transpileOne(pathOf(st.results[i]), &wgsl_buf);
-        if (out) |wgsl| {
-            st.results[i].wgsl_lines = countLines(wgsl);
-            md5Hex(wgsl, &st.results[i].wgsl_md5);
-            const scan: Scan = scanWgsl(wgsl);
-            st.results[i].unresolved_total = scan.total;
-            st.results[i].unresolved_distinct = scan.distinct;
-            st.results[i].status = if (scan.total == 0) .ok_clean else .ok_gaps;
-        } else {
-            st.results[i].status = .transpile_error;
-        }
-    }
-
-    report();
-
-    if (st.refresh) {
-        refreshFixture();
-    } else {
-        checkFixture();
-    }
-}
-
 fn countLines(text: []const u8) u32 {
     var lines: u32 = 1;
     for (text) |c| {
@@ -405,6 +249,119 @@ fn countLines(text: []const u8) u32 {
         }
     }
     return lines;
+}
+
+fn statusScore(status: Status) u32 {
+    return switch (status) {
+        .ok_clean => 0,
+        .ok_gaps => 1,
+        else => 2,
+    };
+}
+
+fn sortByStatusThenSize() void {
+    var a: u32 = 1;
+    while (a < st.n) : (a += 1) {
+        const key: ShaderResult = st.results[a];
+        var b: i64 = @as(i64, a) - 1;
+        while (b >= 0) {
+            const cur: ShaderResult = st.results[@intCast(b)];
+            // Insertion sort by status then size: a WORSE status sorts first so failures surface at
+            // the top of the report, and equal statuses fall back to the smaller shader.
+            const swap: bool = statusScore(cur.status) > statusScore(key.status) or
+                (statusScore(cur.status) == statusScore(key.status) and cur.size_bytes > key.size_bytes);
+            if (!swap) {
+                break;
+            }
+            st.results[@intCast(b + 1)] = cur;
+            b -= 1;
+        }
+        st.results[@intCast(b + 1)] = key;
+    }
+}
+
+fn writePadEnd(dst: []u8, text: []const u8, width: usize) usize {
+    @memcpy(dst[0..text.len], text);
+    var w: usize = text.len;
+    while (w < width) : (w += 1) {
+        dst[w] = ' ';
+    }
+    return w;
+}
+
+fn writePadStart(dst: []u8, text: []const u8, width: usize) usize {
+    var w: usize = 0;
+    if (text.len < width) {
+        const pad: usize = width - text.len;
+        while (w < pad) : (w += 1) {
+            dst[w] = ' ';
+        }
+    }
+    @memcpy(dst[w .. w + text.len], text);
+    return w + text.len;
+}
+
+fn stripCachePrefix(p: []const u8) []const u8 {
+    const marker: []const u8 = ".zig-cache/";
+    if (indexOf(u8, p, marker)) |idx| {
+        return p[idx + marker.len ..];
+    }
+    return p;
+}
+
+// One detail row matching the .ts padding exactly:
+//   "  {status:pad7} {size:>7}     {wgslLines:>5}      {unresolved:pad12} {shortPath}"
+fn printDetailRow(r: ShaderResult) void {
+    var b: [320]u8 = undefined;
+    var w: usize = 0;
+    const status: []const u8 = switch (r.status) {
+        .ok_clean => "\u{2713} clean",
+        .ok_gaps => "\u{26a0} gaps ",
+        .transpile_error => "\u{2717} transp",
+        .panicked => "\u{2717} panick",
+    };
+    // "  " + status.padEnd(7) + " "
+    b[w] = ' ';
+    w += 1;
+    b[w] = ' ';
+    w += 1;
+    w += writePadEnd(b[w..], status, 7);
+    b[w] = ' ';
+    w += 1;
+    // size.padStart(7)
+    var num: [16]u8 = undefined;
+    const size_str: []const u8 = bufPrint(&num, "{d}", .{r.size_bytes}) catch "0";
+    w += writePadStart(b[w..], size_str, 7);
+    // "     "
+    @memcpy(b[w .. w + 5], "     ");
+    w += 5;
+    // wgsl-lines: padStart(5) or "    -"
+    if (r.status == .ok_clean or r.status == .ok_gaps) {
+        var lb: [16]u8 = undefined;
+        const ls: []const u8 = bufPrint(&lb, "{d}", .{r.wgsl_lines}) catch "0";
+        w += writePadStart(b[w..], ls, 5);
+    } else {
+        @memcpy(b[w .. w + 5], "    -");
+        w += 5;
+    }
+    // "      "
+    @memcpy(b[w .. w + 6], "      ");
+    w += 6;
+    // unresolved: "{distinct}id/{total}ref" padEnd(12), or "-" padEnd(12)
+    var ub: [32]u8 = undefined;
+    const unres: []const u8 = if (r.status == .ok_clean or r.status == .ok_gaps)
+        bufPrint(&ub, "{d}id/{d}ref", .{ r.unresolved_distinct, r.unresolved_total }) catch "-"
+    else
+        "-";
+    w += writePadEnd(b[w..], unres, 12);
+    b[w] = ' ';
+    w += 1;
+    // shortPath: strip everything up to and including ".zig-cache/"
+    const full: []const u8 = pathOf(r);
+    const short: []const u8 = stripCachePrefix(full);
+    @memcpy(b[w .. w + short.len], short);
+    w += short.len;
+    print(b[0..w]);
 }
 
 fn report() void {
@@ -472,117 +429,6 @@ fn report() void {
             .{distinct_sum},
         );
     }
-}
-
-fn statusScore(status: Status) u32 {
-    return switch (status) {
-        .ok_clean => 0,
-        .ok_gaps => 1,
-        else => 2,
-    };
-}
-
-fn sortByStatusThenSize() void {
-    var a: u32 = 1;
-    while (a < st.n) : (a += 1) {
-        const key: ShaderResult = st.results[a];
-        var b: i64 = @as(i64, a) - 1;
-        while (b >= 0) {
-            const cur: ShaderResult = st.results[@intCast(b)];
-            // Insertion sort by status then size: a WORSE status sorts first so failures surface at
-            // the top of the report, and equal statuses fall back to the smaller shader.
-            const swap: bool = statusScore(cur.status) > statusScore(key.status) or
-                (statusScore(cur.status) == statusScore(key.status) and cur.size_bytes > key.size_bytes);
-            if (!swap) {
-                break;
-            }
-            st.results[@intCast(b + 1)] = cur;
-            b -= 1;
-        }
-        st.results[@intCast(b + 1)] = key;
-    }
-}
-
-// One detail row matching the .ts padding exactly:
-//   "  {status:pad7} {size:>7}     {wgslLines:>5}      {unresolved:pad12} {shortPath}"
-fn printDetailRow(r: ShaderResult) void {
-    var b: [320]u8 = undefined;
-    var w: usize = 0;
-    const status: []const u8 = switch (r.status) {
-        .ok_clean => "\u{2713} clean",
-        .ok_gaps => "\u{26a0} gaps ",
-        .transpile_error => "\u{2717} transp",
-        .panicked => "\u{2717} panick",
-    };
-    // "  " + status.padEnd(7) + " "
-    b[w] = ' ';
-    w += 1;
-    b[w] = ' ';
-    w += 1;
-    w += writePadEnd(b[w..], status, 7);
-    b[w] = ' ';
-    w += 1;
-    // size.padStart(7)
-    var num: [16]u8 = undefined;
-    const size_str: []const u8 = bufPrint(&num, "{d}", .{r.size_bytes}) catch "0";
-    w += writePadStart(b[w..], size_str, 7);
-    // "     "
-    @memcpy(b[w .. w + 5], "     ");
-    w += 5;
-    // wgsl-lines: padStart(5) or "    -"
-    if (r.status == .ok_clean or r.status == .ok_gaps) {
-        var lb: [16]u8 = undefined;
-        const ls: []const u8 = bufPrint(&lb, "{d}", .{r.wgsl_lines}) catch "0";
-        w += writePadStart(b[w..], ls, 5);
-    } else {
-        @memcpy(b[w .. w + 5], "    -");
-        w += 5;
-    }
-    // "      "
-    @memcpy(b[w .. w + 6], "      ");
-    w += 6;
-    // unresolved: "{distinct}id/{total}ref" padEnd(12), or "-" padEnd(12)
-    var ub: [32]u8 = undefined;
-    const unres: []const u8 = if (r.status == .ok_clean or r.status == .ok_gaps)
-        bufPrint(&ub, "{d}id/{d}ref", .{ r.unresolved_distinct, r.unresolved_total }) catch "-"
-    else
-        "-";
-    w += writePadEnd(b[w..], unres, 12);
-    b[w] = ' ';
-    w += 1;
-    // shortPath: strip everything up to and including ".zig-cache/"
-    const full: []const u8 = pathOf(r);
-    const short: []const u8 = stripCachePrefix(full);
-    @memcpy(b[w .. w + short.len], short);
-    w += short.len;
-    print(b[0..w]);
-}
-
-fn writePadEnd(dst: []u8, text: []const u8, width: usize) usize {
-    @memcpy(dst[0..text.len], text);
-    var w: usize = text.len;
-    while (w < width) : (w += 1) {
-        dst[w] = ' ';
-    }
-    return w;
-}
-fn writePadStart(dst: []u8, text: []const u8, width: usize) usize {
-    var w: usize = 0;
-    if (text.len < width) {
-        const pad: usize = width - text.len;
-        while (w < pad) : (w += 1) {
-            dst[w] = ' ';
-        }
-    }
-    @memcpy(dst[w .. w + text.len], text);
-    return w + text.len;
-}
-fn stripCachePrefix(p: []const u8) []const u8 {
-    const marker: []const u8 = ".zig-cache/";
-    if (std.mem.indexOf(u8, p, marker)) |idx| {
-        return p[idx + marker.len ..];
-    }
-    return p;
 }
 
 // Build a fixture-JSON string {version, refreshed_at, expected:{spvMd5:wgslMd5}}
@@ -753,4 +599,162 @@ fn checkFixture() void {
         return;
     }
     print("\u{2713} NO REGRESSIONS");
+}
+
+export fn _start() void {
+    // ---- args ----
+    const argv: Handle = js_call0(host(), "argv", 4);
+    const argc: u32 = @trunc(js_get_num(argv, "length", 6));
+    var root_buf: [512]u8 = undefined;
+    var root_len: u32 = 0;
+    var i: u32 = 0;
+    var abuf: [512]u8 = undefined;
+    while (i < argc) : (i += 1) {
+        const a: []const u8 = jsStrInto(js_get_index(argv, i), &abuf);
+        if (eql(u8, a, "--refresh-fixture")) {
+            st.refresh = true;
+        } else if (!startsWith(u8, a, "--") and root_len == 0) {
+            @memcpy(root_buf[0..a.len], a);
+            root_len = @intCast(a.len);
+        }
+    }
+    const root: []const u8 = if (root_len > 0) root_buf[0..root_len] else ".zig-cache";
+
+    // ---- load transpiler wasm ----
+    const wasm_path: []const u8 = "zig-out/wgpu/spv2wgsl.wasm";
+    const wasm_bytes: Handle = js_call1(host(), "readFile", 8, s(wasm_path));
+    if (isNull(wasm_bytes)) {
+        eprint("\u{2717} failed to load transpiler wasm at zig-out/wgpu/spv2wgsl.wasm");
+        eprint("  Did you run `zig build corpus`?");
+        js_call1v(host(), "exit", 4, n(1));
+        return;
+    }
+    // import spec: just wasi (runner Proxy-stubs every fn success-y)
+    const spec: Handle = js_obj();
+    const namespaces: Handle = js_obj();
+    js_set(namespaces, "wasi_snapshot_preview1", 22, arr());
+    js_set(spec, "namespaces", 10, namespaces);
+    const id_h: Handle = js_call2(host(), "instantiateSut", 14, wasm_bytes, spec);
+    if (js_to_num(id_h) < 0) {
+        eprint("\u{2717} failed to instantiate transpiler wasm");
+        js_call1v(host(), "exit", 4, n(1));
+        return;
+    }
+    st.sut_id = id_h;
+    _ = js_call2(host(), "sutCall", 7, st.sut_id, s("_initialize"));
+    const cap_h: Handle = js_call2(host(), "sutCall", 7, st.sut_id, s("input_buffer_capacity"));
+    const cap: u32 = @trunc(js_to_num(cap_h));
+    const cap_str_h: Handle = js_call0(js_num(@floatFromInt(cap)), "toLocaleString", 14);
+    var capnum: [48]u8 = undefined;
+    const cap_str: []const u8 = jsStrInto(cap_str_h, &capnum);
+    printf("\u{2713} loaded transpiler wasm (capacity {s} bytes)", .{cap_str});
+
+    // ---- find + dedup shader.spv (the real spv2wgsl input) ----
+    var sbuf: [256]u8 = undefined;
+    print(bufPrint(&sbuf, "scanning {s}/ for .spv files...", .{root}) catch "scanning");
+    const listing_h: Handle = js_call2(host(), "listFiles", 9, s(root), s("shader.spv"));
+    var lbuf: [65536]u8 = undefined;
+    const listing: []const u8 = jsStrInto(listing_h, &lbuf);
+
+    var total_files: u32 = 0;
+    // A shader compile that FAILS still leaves its `-femit-bin` output behind as a
+    // zero-byte `shader.spv`. That is not a transpiler input - the compile step that
+    // made it already failed on its own - so it is counted and skipped, never
+    // transpiled and reported as a spv2wgsl failure. (This only became visible once
+    // spv2wgsl started reading the compiler's own output: the old sampler-rewrite
+    // pass in between only ever wrote a file when its input was valid.)
+    var failed_compile_leftovers: u32 = 0;
+    var it = splitScalar(u8, listing, '\n');
+    // First pass: dedup by md5 of spv bytes (md5File via host), collect.
+    while (it.next()) |path| {
+        if (path.len == 0) {
+            continue;
+        }
+        total_files += 1;
+        const sz_h: Handle = js_call1(host(), "fileSize", 8, s(path));
+        const sz: u32 = @trunc(js_to_num(sz_h));
+        const is_failed_compile_leftover: bool = sz == 0;
+        if (is_failed_compile_leftover) {
+            failed_compile_leftovers += 1;
+            continue;
+        }
+        if (st.n >= max_shaders) {
+            continue;
+        }
+        var hbuf: [40]u8 = undefined;
+        const md5_h: Handle = js_call1(host(), "md5File", 7, s(path));
+        const md5: []const u8 = jsStrInto(md5_h, &hbuf);
+        if (md5.len == 0) {
+            continue;
+        }
+        // dedup
+        var dup: bool = false;
+        var k: u32 = 0;
+        while (k < st.n) : (k += 1) {
+            if (eql(u8, &st.results[k].md5, md5[0..@min(md5.len, 32)])) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) {
+            continue;
+        }
+        var r: ShaderResult = .{};
+        @memcpy(r.md5[0..@min(md5.len, 32)], md5[0..@min(md5.len, 32)]);
+        r.size_bytes = sz;
+        const sp: PathRef = storePath(path);
+        r.path_off = sp.off;
+        r.path_len = sp.len;
+        st.results[st.n] = r;
+        st.n += 1;
+    }
+    // size-sort ascending (simple insertion sort; n is small)
+    var a: u32 = 1;
+    while (a < st.n) : (a += 1) {
+        const key: ShaderResult = st.results[a];
+        var b: i64 = @as(i64, a) - 1;
+        while (b >= 0 and st.results[@intCast(b)].size_bytes > key.size_bytes) {
+            st.results[@intCast(b + 1)] = st.results[@intCast(b)];
+            b -= 1;
+        }
+        st.results[@intCast(b + 1)] = key;
+    }
+    var fbuf: [128]u8 = undefined;
+    print(bufPrint(&fbuf, "  found {d} files, {d} unique by md5", .{ total_files, st.n }) catch "  found");
+    if (failed_compile_leftovers > 0) {
+        var lbuf2: [128]u8 = undefined;
+        print(bufPrint(
+            &lbuf2,
+            "  skipped {d} zero-byte shader.spv (left by a failed shader compile, not a transpiler input)",
+            .{failed_compile_leftovers},
+        ) catch "  skipped zero-byte inputs");
+    }
+    print("");
+
+    // ---- transpile each ----
+    var wgsl_buf: [262144]u8 = undefined;
+    i = 0;
+    while (i < st.n) : (i += 1) {
+        // Null means the transpiler panicked or errored on this input - distinct from producing
+        // WGSL that merely still has unresolved references.
+        const out: ?[]const u8 = transpileOne(pathOf(st.results[i]), &wgsl_buf);
+        if (out) |wgsl| {
+            st.results[i].wgsl_lines = countLines(wgsl);
+            md5Hex(wgsl, &st.results[i].wgsl_md5);
+            const scan: Scan = scanWgsl(wgsl);
+            st.results[i].unresolved_total = scan.total;
+            st.results[i].unresolved_distinct = scan.distinct;
+            st.results[i].status = if (scan.total == 0) .ok_clean else .ok_gaps;
+        } else {
+            st.results[i].status = .transpile_error;
+        }
+    }
+
+    report();
+
+    if (st.refresh) {
+        refreshFixture();
+    } else {
+        checkFixture();
+    }
 }

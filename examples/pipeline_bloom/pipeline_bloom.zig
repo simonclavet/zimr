@@ -31,6 +31,7 @@ const zm = @import("zm");
 const Vec = zm.Vec;
 const float = zm.float;
 const clamp = zm.clamp;
+const Color = zm.Color;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -188,12 +189,45 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
+fn chan(v: f32) u8 {
+    const clamped: f32 = clamp(v, 0.0, 1.0);
+    return @trunc(clamped * 255.0);
+}
+
+/// A 0..1 float colour scaled by `k`, as an 8-bit Color (clamped).
+fn colorScaled(c: Vec, k: f32) Color {
+    return .{
+        .r = chan(c[0] * k),
+        .g = chan(c[1] * k),
+        .b = chan(c[2] * k),
+        .a = 255,
+    };
+}
+
+fn cf(v: u8) f32 {
+    return float(v) / 255.0;
+}
+
+fn dim(c: Color, k: f32) Color {
+    return .{
+        .r = chan(cf(c.r) * k),
+        .g = chan(cf(c.g) * k),
+        .b = chan(cf(c.b) * k),
+        .a = c.a,
+    };
+}
+
+fn whiteHot(k: f32) Color {
+    const v: u8 = chan(k);
+    return .{ .r = v, .g = v, .b = v, .a = 255 };
+}
+
 /// Draw the glowing-orb scene into rt_scene. Each orb is a radial gradient
 /// (bright core -> transparent edge) so it reads as a soft light source, with a
 /// small white-hot centre that clears the bright-pass threshold cleanly. The
 /// orbs orbit the centre and pulse in size/brightness.
 fn drawScene(f: *z.Frame, s: *State) void {
-    const bg: zm.Color = .{ .r = 4, .g = 5, .b = 10, .a = 255 };
+    const bg: Color = .{ .r = 4, .g = 5, .b = 10, .a = 255 };
     z.beginTextureMode(f.gl, s.rt_scene, bg);
     const cx: f32 = rt_sizef * 0.5;
     const cy: f32 = rt_sizef * 0.5;
@@ -207,8 +241,8 @@ fn drawScene(f: *z.Frame, s: *State) void {
         const p: f32 = 0.5 + 0.5 * @sin(t * orb.pulse + orb.phase);
         const rad: f32 = orb.radius * (0.72 + 0.28 * p);
         const bright: f32 = 1.15 + 0.35 * p;
-        const inner: zm.Color = colorScaled(orb.color, bright);
-        const edge: zm.Color = .{ .r = inner.r, .g = inner.g, .b = inner.b, .a = 0 };
+        const inner: Color = colorScaled(orb.color, bright);
+        const edge: Color = .{ .r = inner.r, .g = inner.g, .b = inner.b, .a = 0 };
         // Soft coloured halo (large, faded) then the bright core, then a
         // white-hot centre that guarantees a clean threshold hit.
         f.gl.circleGradient(.{ ox, oy }, rad * 3.2, dim(inner, 0.9), edge);
@@ -218,50 +252,8 @@ fn drawScene(f: *z.Frame, s: *State) void {
     z.endTextureMode(f.gl);
 }
 
-/// A 0..1 float colour scaled by `k`, as an 8-bit Color (clamped).
-fn colorScaled(c: Vec, k: f32) zm.Color {
-    return .{
-        .r = chan(c[0] * k),
-        .g = chan(c[1] * k),
-        .b = chan(c[2] * k),
-        .a = 255,
-    };
-}
-
-fn dim(c: zm.Color, k: f32) zm.Color {
-    return .{
-        .r = chan(cf(c.r) * k),
-        .g = chan(cf(c.g) * k),
-        .b = chan(cf(c.b) * k),
-        .a = c.a,
-    };
-}
-
-fn whiteHot(k: f32) zm.Color {
-    const v: u8 = chan(k);
-    return .{ .r = v, .g = v, .b = v, .a = 255 };
-}
-
-fn cf(v: u8) f32 {
-    return float(v) / 255.0;
-}
-
-fn chan(v: f32) u8 {
-    const clamped: f32 = clamp(v, 0.0, 1.0);
-    return @trunc(clamped * 255.0);
-}
-
 fn update(f: *z.Frame, s: *State) void {
-    const black: zm.Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
-
-    // Re-push the per-pass UBOs EVERY frame. Setting them only via `initial_ubo`
-    // left them correct for exactly one frame, then they read as zero (intensity
-    // 0 -> no bloom -> "bright for 1 frame then dark"). Pushing each frame keeps
-    // threshold / intensity / blur direction live.
-    s.bright.pushUbo(f.gpu.queue, .{ .params = .{ bright_thresh, 0, 0, 0 } });
-    s.blur_h.pushUbo(f.gpu.queue, .{ .dir = .{ blur_texel, 0, 0, 0 } });
-    s.blur_v.pushUbo(f.gpu.queue, .{ .dir = .{ 0, blur_texel, 0, 0 } });
-    s.composite.pushUbo(f.gpu.queue, .{ .params = .{ composite_intensity, 0, 0, 0 } });
+    const black: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
 
     // 1) Scene: the glowing orbs -> rt_scene.
     drawScene(f, s);

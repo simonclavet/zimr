@@ -26,6 +26,10 @@ const ws = z.web.ws;
 const rtc = z.web.rtc;
 
 const bufPrint = std.fmt.bufPrint;
+const indexOfScalar = std.mem.indexOfScalar;
+const parseInt = std.fmt.parseInt;
+const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
 
 const default_room = "zimr-rtc-demo";
 const max_log = 14;
@@ -65,7 +69,7 @@ const Split = struct { tok: []const u8, rest: []const u8 };
 
 // Split "tok rest" on the first space. rest is "" when there's no space.
 fn splitFirst(s: []const u8) Split {
-    const sp: usize = std.mem.indexOfScalar(u8, s, ' ') orelse return .{ .tok = s, .rest = "" };
+    const sp: usize = indexOfScalar(u8, s, ' ') orelse return .{ .tok = s, .rest = "" };
     return .{ .tok = s[0..sp], .rest = s[sp + 1 ..] };
 }
 
@@ -131,32 +135,32 @@ fn signalPeer(s: *State, kind: []const u8, data: []const u8) void {
 }
 
 fn handleWsMessage(s: *State, msg: []const u8) void {
-    if (std.mem.startsWith(u8, msg, "WELCOME ")) {
+    if (startsWith(u8, msg, "WELCOME ")) {
         // WELCOME <my_id> [existing ids...]. Existing peers joined first (lower
         // ids), so by convention they offer to us - we create + wait.
         const a: Split = splitFirst(msg[8..]);
-        s.my_id = std.fmt.parseInt(u32, a.tok, 10) catch 0;
+        s.my_id = parseInt(u32, a.tok, 10) catch 0;
         logf(s, "joined as peer {d}", .{s.my_id});
         if (a.rest.len > 0) {
             const b: Split = splitFirst(a.rest);
-            const existing: u32 = std.fmt.parseInt(u32, b.tok, 10) catch 0;
+            const existing: u32 = parseInt(u32, b.tok, 10) catch 0;
             if (existing != 0) {
                 startPeer(s, existing, false); // we answer
             }
         }
-    } else if (std.mem.startsWith(u8, msg, "JOINED ")) {
+    } else if (startsWith(u8, msg, "JOINED ")) {
         // A newcomer (higher id) - we offer.
-        const id: u32 = std.fmt.parseInt(u32, splitFirst(msg[7..]).tok, 10) catch 0;
+        const id: u32 = parseInt(u32, splitFirst(msg[7..]).tok, 10) catch 0;
         if (id != 0) {
             startPeer(s, id, true); // we offer
         }
-    } else if (std.mem.startsWith(u8, msg, "LEFT ")) {
-        const id: u32 = std.fmt.parseInt(u32, splitFirst(msg[5..]).tok, 10) catch 0;
+    } else if (startsWith(u8, msg, "LEFT ")) {
+        const id: u32 = parseInt(u32, splitFirst(msg[5..]).tok, 10) catch 0;
         if (id == s.peer_id) {
             logf(s, "peer {d} left", .{id});
             teardownPeer(s);
         }
-    } else if (std.mem.startsWith(u8, msg, "FROM ")) {
+    } else if (startsWith(u8, msg, "FROM ")) {
         // FROM <from> <kind> <data> - the peer's half of the handshake.
         const a: Split = splitFirst(msg[5..]); // from id
         const b: Split = splitFirst(a.rest); // kind
@@ -165,13 +169,13 @@ fn handleWsMessage(s: *State, msg: []const u8) void {
         if (s.pc == 0) {
             return;
         }
-        if (std.mem.eql(u8, kind, "offer")) {
+        if (eql(u8, kind, "offer")) {
             rtc.setRemote(s.pc, true, data);
             logf(s, "got offer ({d}B), answering", .{data.len});
-        } else if (std.mem.eql(u8, kind, "answer")) {
+        } else if (eql(u8, kind, "answer")) {
             rtc.setRemote(s.pc, false, data);
             logf(s, "got answer ({d}B)", .{data.len});
-        } else if (std.mem.eql(u8, kind, "ice")) {
+        } else if (eql(u8, kind, "ice")) {
             rtc.addIce(s.pc, data);
         }
     }

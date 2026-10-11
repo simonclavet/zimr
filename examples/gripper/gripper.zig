@@ -60,6 +60,7 @@ const translation = zm.translation;
 const scaling = zm.scaling;
 const quatToMat = zm.quatToMat;
 const identity = zm.identity;
+const Quat = zm.Quat;
 
 /// The Go1 runs at 500 Hz in Menagerie, and its contacts want it.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
@@ -104,7 +105,7 @@ const finger_col: Color = .{ .r = 225, .g = 130, .b = 70, .a = 255 };
 const cube_col: Color = .{ .r = 220, .g = 200, .b = 90, .a = 255 };
 const table_col: Color = .{ .r = 70, .g = 66, .b = 72, .a = 255 };
 /// Straight down: the wrist's local +z onto the world's -z.
-const jaws_down: zm.Quat = zm.quatFromAxisAngle(vec(0, 1, 0), pi);
+const jaws_down: Quat = zm.quatFromAxisAngle(vec(0, 1, 0), pi);
 
 const target_col: Color = .{ .r = 250, .g = 240, .b = 120, .a = 255 };
 
@@ -268,59 +269,75 @@ fn solveReach(s: *State) void {
     s.reach_error = result.error_distance;
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
+/// Put the arm and the cube back where they started.
+///
+/// * EVERYTHING THAT REMEMBERS, or the button appears to do nothing: `home` is what the
+/// controller tracks, so restoring `pos` alone lets it drag the arm straight back. Velocities
+/// go too - a reset mid-swing keeps its momentum - and so does the solver's warm start.
+fn resetScene(s: *State) void {
     const m: *const rbt.Model = &s.imported.model;
-
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    // * IK RUNS ONCE PER FRAME, NOT PER SUBSTEP. It answers "where should the joints be",
-    // which changes only when the target moves; inside the fixed-timestep loop it would
-    // recompute the same answer several times over and the cost would multiply.
-    solveReach(s);
-
-    s.accumulator += @min(f.time.delta_time, 0.1);
-    while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
-        rbt.forward(m, &s.data);
-        if (s.physics_on) {
-            // These two can only fail by running out of memory: the frame callback that contains them
-            // returns `void` by the engine's design, so there is nothing to propagate to. Swallowing
-            // leaves the world un-stepped for one frame, which is the least-bad outcome available here -
-            // and is why the rule wants it said out loud rather than written silently.
-            // lint:off catch-suppression: OOM only, void callback - see above
-            s.bridge.sync(&s.world, m, &s.data) catch {};
-            // lint:off catch-suppression: OOM only, void callback - see above
-            zp.step(&s.world, timestep) catch {};
-            s.bridge.harvest(&s.data);
-        } else {
-            s.data.clearContacts();
-        }
-        // * GAINS IN FREQUENCY UNITS: `kp` is omega^2 and `kv` is 2 zeta omega. This arm's links differ by
-        // three orders of magnitude in inertia - 0.13 at the shoulder, 0.00041 at the wrist -
-        // and a single torque-unit gain cannot serve both. Measured at kp = 600 unscaled, the
-        // wrist DIVERGED to the velocity clamp while its position sat still, which reads as a
-        // stuck joint rather than a broken controller.
-        (ctl.PoseHold{
-            .target = s.home,
-            .kp = 2500,
-            .kv = 100,
-            .max_torque = 300,
-            .scale_by_inertia = true,
-        }).apply(m, &s.data, s.actuated);
-        // The gripper is commanded directly; the coupling moves the other finger.
-        s.home[s.left_finger_q] = -s.grip;
-        rbt.step(m, &s.data);
-    }
+    _ = rmj.applyKeyframe(m, &s.data, s.robot.keyframes[0]);
+    const cube_joint: u32 = m.jnt_qpos_adr[m.body_jnt_adr[s.cube_body]];
+    s.data.pos[cube_joint + 0] = table_center[0];
+    s.data.pos[cube_joint + 1] = 0;
+    s.data.pos[cube_joint + 2] = table_center[2] + table_half[2] + cube_half;
+    s.data.pos[cube_joint + 3] = 0;
+    s.data.pos[cube_joint + 4] = 0;
+    s.data.pos[cube_joint + 5] = 0;
+    s.data.pos[cube_joint + 6] = 1;
+    @memset(s.data.vel, 0);
+    @memset(s.data.acc, 0);
+    s.data.clearContacts();
+    s.data.forgetWarmStart();
+    s.data.stage = .stale;
     rbt.forward(m, &s.data);
+    @memcpy(s.home, s.data.pos);
+    s.grip = 0;
+    s.accumulator = 0;
+    s.target = s.data.body_xpos[s.wrist] + zm.rotate(s.data.body_xrot[s.wrist], grasp_offset);
+}
 
-    z.clearViewport(f, bg);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 0.5, .max_distance = 4.0 });
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 16, 0.25);
-    drawScene(s, gl);
-    z.endMode3D(gl);
+fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
+    const captured: bool = u.wantCaptureMouse();
+    // Sized to the viewport rather than to pixels - see `ui.Ui.scaleToViewport`.
+    const narrow: bool = ui.Ui.isNarrow(viewport_w);
+    const panel_w: f32 = if (narrow) viewport_w - 16 else @min(400.0, viewport_w * 0.32);
+    _ = u.scaleToViewport(panel_w, if (narrow) 30.0 else 22.0);
+    u.setNextWindowPos(.{ 8, 8 }, .{});
+    // Height capped to the viewport: auto-size lets the window run off a short screen.
+    u.setNextWindowSize(.{ panel_w, @min(470.0, viewport_h * 0.7) }, .{});
+    if (u.window("4-DOF arm with a geared gripper", .{})) |window| {
+        defer window.close();
+        u.text("IK target (metres)", .{});
+        _ = u.slider("x", &s.target[0], .{ .min = 0.10, .max = 0.60, .fmt = "{d:.3}" });
+        _ = u.slider("y", &s.target[1], .{ .min = -0.40, .max = 0.40, .fmt = "{d:.3}" });
+        _ = u.slider("z", &s.target[2], .{ .min = 0.20, .max = 0.75, .fmt = "{d:.3}" });
+        u.text("   reach err {d:.4} m", .{s.reach_error});
+        // * TURN THIS OFF AND WATCH THE WRIST WANDER. Position targets say nothing about
+        // attitude, so the jaws end up wherever the nullspace leaves them - which is exactly
+        // why an orientation target had to exist.
+        _ = u.checkbox("aim the jaws down", &s.aim_down);
+        u.separator();
+
+        // ** ONE SLIDER, TWO FINGERS. The right one is not set here - an
+        // `<equality type="joint" polycoef="0 -1">` ties it to the left, and the SOLVER moves
+        // it. That is what a parallel gripper physically is, and modelling it as two joints a
+        // controller keeps in sync is how a gripper ends up gripping crooked.
+        u.text("gripper (one motor, coupled)", .{});
+        _ = u.slider("close", &s.grip, .{ .min = -0.010, .max = 0.020, .fmt = "{d:.3}" });
+        u.text("   left {d:>6.3}  right {d:>6.3}", .{
+            s.data.pos[s.left_finger_q],
+            s.data.pos[s.left_finger_q + 1],
+        });
+        u.separator();
+
+        _ = u.checkbox("physics", &s.physics_on);
+        if (u.button("reset", .{})) {
+            resetScene(s);
+        }
+        u.text("contacts {d}", .{s.data.contact_count});
+    }
+    return captured;
 }
 
 fn drawScene(s: *State, gl: *z.WgpuGl) void {
@@ -336,7 +353,7 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
 
     for (0..m.ngeom) |g| {
         const body: u32 = m.geom_body[g];
-        const body_rot: zm.Quat = s.data.body_xrot[body];
+        const body_rot: Quat = s.data.body_xrot[body];
         const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
         const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
         const place: Mat = mulMat(
@@ -391,75 +408,59 @@ fn drawScene(s: *State, gl: *z.WgpuGl) void {
     z.drawMeshInstanced(gl, &s.sphere, &s.transform, target_col);
 }
 
-fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
-    const captured: bool = u.wantCaptureMouse();
-    // Sized to the viewport rather than to pixels - see `ui.Ui.scaleToViewport`.
-    const narrow: bool = ui.Ui.isNarrow(viewport_w);
-    const panel_w: f32 = if (narrow) viewport_w - 16 else @min(400.0, viewport_w * 0.32);
-    _ = u.scaleToViewport(panel_w, if (narrow) 30.0 else 22.0);
-    u.setNextWindowPos(.{ 8, 8 }, .{});
-    // Height capped to the viewport: auto-size lets the window run off a short screen.
-    u.setNextWindowSize(.{ panel_w, @min(470.0, viewport_h * 0.7) }, .{});
-    if (u.window("4-DOF arm with a geared gripper", .{})) |window| {
-        defer window.close();
-        u.text("IK target (metres)", .{});
-        _ = u.slider("x", &s.target[0], .{ .min = 0.10, .max = 0.60, .fmt = "{d:.3}" });
-        _ = u.slider("y", &s.target[1], .{ .min = -0.40, .max = 0.40, .fmt = "{d:.3}" });
-        _ = u.slider("z", &s.target[2], .{ .min = 0.20, .max = 0.75, .fmt = "{d:.3}" });
-        u.text("   reach err {d:.4} m", .{s.reach_error});
-        // * TURN THIS OFF AND WATCH THE WRIST WANDER. Position targets say nothing about
-        // attitude, so the jaws end up wherever the nullspace leaves them - which is exactly
-        // why an orientation target had to exist.
-        _ = u.checkbox("aim the jaws down", &s.aim_down);
-        u.separator();
-
-        // ** ONE SLIDER, TWO FINGERS. The right one is not set here - an
-        // `<equality type="joint" polycoef="0 -1">` ties it to the left, and the SOLVER moves
-        // it. That is what a parallel gripper physically is, and modelling it as two joints a
-        // controller keeps in sync is how a gripper ends up gripping crooked.
-        u.text("gripper (one motor, coupled)", .{});
-        _ = u.slider("close", &s.grip, .{ .min = -0.010, .max = 0.020, .fmt = "{d:.3}" });
-        u.text("   left {d:>6.3}  right {d:>6.3}", .{
-            s.data.pos[s.left_finger_q],
-            s.data.pos[s.left_finger_q + 1],
-        });
-        u.separator();
-
-        _ = u.checkbox("physics", &s.physics_on);
-        if (u.button("reset", .{})) {
-            resetScene(s);
-        }
-        u.text("contacts {d}", .{s.data.contact_count});
-    }
-    return captured;
-}
-
-/// Put the arm and the cube back where they started.
-///
-/// * EVERYTHING THAT REMEMBERS, or the button appears to do nothing: `home` is what the
-/// controller tracks, so restoring `pos` alone lets it drag the arm straight back. Velocities
-/// go too - a reset mid-swing keeps its momentum - and so does the solver's warm start.
-fn resetScene(s: *State) void {
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
     const m: *const rbt.Model = &s.imported.model;
-    _ = rmj.applyKeyframe(m, &s.data, s.robot.keyframes[0]);
-    const cube_joint: u32 = m.jnt_qpos_adr[m.body_jnt_adr[s.cube_body]];
-    s.data.pos[cube_joint + 0] = table_center[0];
-    s.data.pos[cube_joint + 1] = 0;
-    s.data.pos[cube_joint + 2] = table_center[2] + table_half[2] + cube_half;
-    s.data.pos[cube_joint + 3] = 0;
-    s.data.pos[cube_joint + 4] = 0;
-    s.data.pos[cube_joint + 5] = 0;
-    s.data.pos[cube_joint + 6] = 1;
-    @memset(s.data.vel, 0);
-    @memset(s.data.acc, 0);
-    s.data.clearContacts();
-    s.data.forgetWarmStart();
-    s.data.stage = .stale;
+
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    // * IK RUNS ONCE PER FRAME, NOT PER SUBSTEP. It answers "where should the joints be",
+    // which changes only when the target moves; inside the fixed-timestep loop it would
+    // recompute the same answer several times over and the cost would multiply.
+    solveReach(s);
+
+    s.accumulator += @min(f.time.delta_time, 0.1);
+    while (s.accumulator >= timestep) : (s.accumulator -= timestep) {
+        rbt.forward(m, &s.data);
+        if (s.physics_on) {
+            // These two can only fail by running out of memory: the frame callback that contains them
+            // returns `void` by the engine's design, so there is nothing to propagate to. Swallowing
+            // leaves the world un-stepped for one frame, which is the least-bad outcome available here -
+            // and is why the rule wants it said out loud rather than written silently.
+            // lint:off catch-suppression: OOM only, void callback - see above
+            s.bridge.sync(&s.world, m, &s.data) catch {};
+            // lint:off catch-suppression: OOM only, void callback - see above
+            zp.step(&s.world, timestep) catch {};
+            s.bridge.harvest(&s.data);
+        } else {
+            s.data.clearContacts();
+        }
+        // * GAINS IN FREQUENCY UNITS: `kp` is omega^2 and `kv` is 2 zeta omega. This arm's links differ by
+        // three orders of magnitude in inertia - 0.13 at the shoulder, 0.00041 at the wrist -
+        // and a single torque-unit gain cannot serve both. Measured at kp = 600 unscaled, the
+        // wrist DIVERGED to the velocity clamp while its position sat still, which reads as a
+        // stuck joint rather than a broken controller.
+        (ctl.PoseHold{
+            .target = s.home,
+            .kp = 2500,
+            .kv = 100,
+            .max_torque = 300,
+            .scale_by_inertia = true,
+        }).apply(m, &s.data, s.actuated);
+        // The gripper is commanded directly; the coupling moves the other finger.
+        s.home[s.left_finger_q] = -s.grip;
+        rbt.step(m, &s.data);
+    }
     rbt.forward(m, &s.data);
-    @memcpy(s.home, s.data.pos);
-    s.grip = 0;
-    s.accumulator = 0;
-    s.target = s.data.body_xpos[s.wrist] + zm.rotate(s.data.body_xrot[s.wrist], grasp_offset);
+
+    z.clearViewport(f, bg);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 0.5, .max_distance = 4.0 });
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 16, 0.25);
+    drawScene(s, gl);
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

@@ -141,15 +141,36 @@
 //!   * Control flow: EVERY loop/branch/ternary is lowered by the backend to
 //!     goto + labels; we re-flatten and trampoline it (above).
 //!   * Memory shapes (see next section): globals via cast-pointer deref
-//!     `(*((T*)&name))`; fixed arrays wrapped as `struct arr_<N>_<elem>_<id>
+//!     `(*((T*)&name))`, or since Zig 0.17 the untyped `(*(&name))` (typed from the
+//!     declaration, `global_scalars`); fixed arrays wrapped as `struct arr_<N>_<elem>_<id>
 //!     { T array[N]; }`; struct fields via pointer-into-struct `&p->field` /
 //!     `&local.field` then `*`. Nested/optional/union payload stores arrive as
 //!     `*(&LVALUE)` (e.g. `*(&(&opt->payload)->v) = x`); a small recursive lvalue
 //!     resolver (`parseLValueAddr`) walks the cast/`&`/`.`/`->`/`[]` chain to one
 //!     address + element type, so the read/store hits the correct heap view.
-//!     Static global initializers are honoured, including out-of-order designated
-//!     ones (`{ .is_null = true, .payload = {...} }`), so a `?T = null` / `bool`
-//!     global keeps its initial value; `bool` is a one-byte (byte-addressed) type.
+//!     Static global initializers are written into the data image exactly,
+//!     including out-of-order designated ones (`{ .is_null = true, .payload =
+//!     {...} }`), so a `?T = null` / `bool` global keeps its initial value; `bool`
+//!     is a one-byte (byte-addressed) type. Each element is a constant in a small
+//!     grammar (`evaluateConstant`): signs, parentheses, casts - an integer cast
+//!     keeps the bits its type holds, so an undefined pointer written as
+//!     `((T const *)0xaaaaaaaaul)` keeps its 0xaa fill - integers with suffixes,
+//!     integer macros whose argument is itself a constant (`INT32_C(-1)`),
+//!     character constants, NULL, true, false, type-limit macros, and floats by
+//!     their bits (`zig_make_f32`, the special-float makers). A byte array is
+//!     written as a string literal up to 4 095 bytes - a long one split into
+//!     adjacent literals, which are joined as C joins them, after decoding each
+//!     (`mergeAdjacentStringLiterals`) - and from 4 096 bytes as a list of
+//!     character constants, one hex escape per byte. A pointer element names a
+//!     whole global, whose offset it gets, or an address-taken function, whose
+//!     `__FTABLE` index it gets - so a vtable in a constant calls what one built
+//!     at run time would (`applyRelocations`).
+//!
+//!     Nothing in the data image is a guess. An initializer element, a field, a
+//!     struct layout or an address the converter does not model is a FATAL
+//!     diagnostic naming its C line (`noteUnmodeledAt`, `noteUnreadableConstant`),
+//!     and the run fails: a constant read wrongly would be silently wrong in every
+//!     page built from it.
 //!   * extern functions with no library name (`extern fn js_get(...)`) become
 //!     bare `js_get(...)` call sites; a non-`zig_*` callee is emitted verbatim,
 //!     so it only needs to EXIST at runtime - which the kernel and the program's
@@ -494,6 +515,10 @@
 //! masks to it, so a packed u9 living in a u32 is a different value.
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const parseFloat = std.fmt.parseFloat;
+const cli = @import("cli");
 /// The jobs ABI, from the ONE file every side of the system reads. c2js checks that a kernel
 /// wasm actually exports a kernel, and it must ask about the same name `jobs.zig` exports.
 const jobs_abi = @import("jobs_abi");
@@ -513,8 +538,11 @@ const trim = std.mem.trim;
 const alignForward = std.mem.alignForward;
 const allocPrint = std.fmt.allocPrint;
 const parseInt = std.fmt.parseInt;
-const File = std.Io.File;
-const Dir = std.Io.Dir;
+const expectEqualSlices = std.testing.expectEqualSlices;
+const expectEqualStrings = std.testing.expectEqualStrings;
+const testing_allocator = std.testing.allocator;
+const File = Io.File;
+const Dir = Io.Dir;
 /// NaN is the only value unequal to itself - no std.math needed, and the
 /// transpiler stays dependency-free on the engine's math vocabulary.
 fn isNan(x: anytype) bool {
@@ -538,89 +566,134 @@ fn hexVal(c: u8) u16 {
     return 0;
 }
 
-/// Decode a C string literal body (without quotes) into raw bytes, handling the
-/// escapes Zig's C backend emits: \n \t \r \\ \" \' \0 and octal \NNN.
-fn decodeCString(gpa: Allocator, s: []const u8) ![]u8 {
-    var out: ArrayList(u8) = .empty;
-    var i: usize = 0;
-    while (i < s.len) {
-        if (s[i] != '\\') {
-            try out.append(gpa, s[i]);
-            i += 1;
-            continue;
-        }
-        i += 1; // backslash
-        if (i >= s.len) {
+/// Decodes one character of a C literal's body at `body[index.*]`, advancing `index` past it: a plain byte, or an
+/// escape - a simple one (`\n \t \r \a \b \f \v`, and `\\ \" \' \?`, which stand for the character after the
+/// backslash), an octal escape of one to three digits (`\0`, `\101`), or a hex escape of any length (`\x41`, `\xa`).
+/// A byte keeps an escape's last eight bits. Zig's C backend writes the bytes of a string literal with the simple and
+/// octal escapes (`"\000\a"`), and every byte of a long array as a hex escape in a character constant (`'\x76'`).
+fn decodeCEscapedChar(body: []const u8, index: *usize) u8 {
+    const first_byte: u8 = body[index.*];
+    index.* += 1;
+    const is_escape: bool = first_byte == '\\' and index.* < body.len;
+    if (!is_escape) {
+        return first_byte;
+    }
+    const escape_letter: u8 = body[index.*];
+    index.* += 1;
+    switch (escape_letter) {
+        'n' => return '\n',
+        't' => return '\t',
+        'r' => return '\r',
+        'a' => return 0x07,
+        'b' => return 0x08,
+        'f' => return 0x0c,
+        'v' => return 0x0b,
+        '0'...'7' => {
+            // The letter was the first octal digit; up to two more follow.
+            var octal_value: u16 = escape_letter - '0';
+            var digit_count: usize = 1;
+            while (digit_count < 3 and index.* < body.len) : (digit_count += 1) {
+                const digit: u8 = body[index.*];
+                if (digit < '0' or digit > '7') {
+                    break;
+                }
+                octal_value = octal_value * 8 + (digit - '0');
+                index.* += 1;
+            }
+            const octal_byte: u8 = @intCast(octal_value & 0xff);
+            return octal_byte;
+        },
+        'x' => {
+            // Every hex digit belongs to the escape; only the last two decide the byte, so the value is kept to
+            // eight bits as it grows rather than overflowing on a long escape.
+            var hex_value: u16 = 0;
+            while (index.* < body.len and std.ascii.isHex(body[index.*])) {
+                hex_value = (hex_value * 16 + hexVal(body[index.*])) & 0xff;
+                index.* += 1;
+            }
+            const hex_byte: u8 = @intCast(hex_value);
+            return hex_byte;
+        },
+        else => return escape_letter,
+    }
+}
+
+/// Decodes a C string literal's body - its text without the quotes (`literalBody`) - into the bytes it stands for.
+fn decodeCString(gpa: Allocator, body: []const u8) ![]u8 {
+    var decoded_bytes: ArrayList(u8) = .empty;
+    var index: usize = 0;
+    while (index < body.len) {
+        try decoded_bytes.append(gpa, decodeCEscapedChar(body, &index));
+    }
+    return decoded_bytes.toOwnedSlice(gpa);
+}
+
+/// The byte a C character constant stands for - `'v'`, `'\x76'` and `'\166'` all stand for 0x76 - given its body
+/// (`literalBody`); null for a body holding no character, or more than one: a multi-character constant like `'ab'`,
+/// whose value C leaves to each compiler.
+fn characterConstantByte(body: []const u8) ?u8 {
+    if (body.len == 0) {
+        return null;
+    }
+    var index: usize = 0;
+    const byte: u8 = decodeCEscapedChar(body, &index);
+    const is_one_character: bool = index == body.len;
+    return if (is_one_character) byte else null;
+}
+
+/// A character constant's value, as C gives it: an `int` holding the character as a `char`. The bridge is compiled
+/// for wasm32, where `char` is signed, so a byte from 0x80 up is negative: `'\xaa'` is -86, not 170. Stored into a
+/// byte - the array elements Zig's C backend writes this way - either value keeps the same eight bits; read in an
+/// expression, the sign is C's.
+fn characterConstantValue(byte: u8) i32 {
+    const signed_char: i8 = @bitCast(byte);
+    return signed_char;
+}
+
+/// An integer literal's digits without the suffixes C allows after them (`u`, `l`, `ul`, `ull`, any case):
+/// `0xaaaaaaaaul` gives `0xaaaaaaaa`. None of the suffix letters is a hex digit, so no digit is taken off.
+fn withoutIntegerSuffix(text: []const u8) []const u8 {
+    var digits_end: usize = text.len;
+    while (digits_end > 0) {
+        const last: u8 = text[digits_end - 1];
+        const is_suffix_letter: bool = last == 'u' or last == 'U' or last == 'l' or last == 'L';
+        if (!is_suffix_letter) {
             break;
         }
-        const c: u8 = s[i];
-        switch (c) {
-            'n' => {
-                try out.append(gpa, '\n');
-                i += 1;
-            },
-            't' => {
-                try out.append(gpa, '\t');
-                i += 1;
-            },
-            'r' => {
-                try out.append(gpa, '\r');
-                i += 1;
-            },
-            '\\' => {
-                try out.append(gpa, '\\');
-                i += 1;
-            },
-            '"' => {
-                try out.append(gpa, '"');
-                i += 1;
-            },
-            '\'' => {
-                try out.append(gpa, '\'');
-                i += 1;
-            },
-            'a' => {
-                try out.append(gpa, 0x07);
-                i += 1;
-            },
-            'b' => {
-                try out.append(gpa, 0x08);
-                i += 1;
-            },
-            'f' => {
-                try out.append(gpa, 0x0c);
-                i += 1;
-            },
-            'v' => {
-                try out.append(gpa, 0x0b);
-                i += 1;
-            },
-            '0'...'7' => {
-                // octal escape, up to 3 digits
-                var val: u16 = 0;
-                var k: usize = 0;
-                while (k < 3 and i < s.len and s[i] >= '0' and s[i] <= '7') : (k += 1) {
-                    val = val * 8 + (s[i] - '0');
-                    i += 1;
-                }
-                try out.append(gpa, @intCast(val & 0xff));
-            },
-            'x' => {
-                i += 1;
-                var val: u16 = 0;
-                while (i < s.len and std.ascii.isHex(s[i])) {
-                    val = val * 16 + hexVal(s[i]);
-                    i += 1;
-                }
-                try out.append(gpa, @intCast(val & 0xff));
-            },
-            else => {
-                try out.append(gpa, c);
-                i += 1;
-            },
-        }
+        digits_end -= 1;
     }
-    return out.toOwnedSlice(gpa);
+    return text[0..digits_end];
+}
+
+/// A string literal's or character constant's text without its quotes: the lexer keeps them (`TokenKind`). A literal
+/// left open at the end of the source has no closing quote to take off.
+fn literalBody(text: []const u8) []const u8 {
+    if (text.len == 0) {
+        return text;
+    }
+    const opening_quote: u8 = text[0];
+    const after_opening: []const u8 = text[1..];
+    const has_closing_quote: bool = after_opening.len > 0 and after_opening[after_opening.len - 1] == opening_quote;
+    return if (has_closing_quote) after_opening[0 .. after_opening.len - 1] else after_opening;
+}
+
+/// One unsigned LEB128, advancing `i`.
+fn readLeb(bytes: []const u8, i: *usize) ?u32 {
+    var result: u32 = 0;
+    var shift: u5 = 0;
+    while (i.* < bytes.len) {
+        const byte: u8 = bytes[i.*];
+        i.* += 1;
+        result |= @as(u32, byte & 0x7f) << shift;
+        if (byte & 0x80 == 0) {
+            return result;
+        }
+        if (shift >= 28) {
+            return null;
+        }
+        shift += 7;
+    }
+    return null;
 }
 
 // Plain base64. Used to fold the program's initialized-data image (all the
@@ -633,7 +706,7 @@ fn decodeCString(gpa: Allocator, s: []const u8) ![]u8 {
 ///
 /// A minimal section walk - we only need section 2 (imports) and only its first entry.
 fn firstWasmImport(gpa: Allocator, bytes: []const u8) !?[]const u8 {
-    if (bytes.len < 8 or !std.mem.eql(u8, bytes[0..4], "\x00asm")) {
+    if (bytes.len < 8 or !eql(u8, bytes[0..4], "\x00asm")) {
         return null; // not a wasm we understand; leave it alone
     }
     var i: usize = 8;
@@ -667,7 +740,7 @@ fn firstWasmImport(gpa: Allocator, bytes: []const u8) !?[]const u8 {
 /// nothing (there is nothing in it TO import), so the purity check alone would wave it
 /// through and the failure would surface as a runtime NoSuchKernel inside a worker.
 fn wasmExports(bytes: []const u8, want: []const u8) bool {
-    if (bytes.len < 8 or !std.mem.eql(u8, bytes[0..4], "\x00asm")) {
+    if (bytes.len < 8 or !eql(u8, bytes[0..4], "\x00asm")) {
         return false;
     }
     var i: usize = 8;
@@ -689,7 +762,7 @@ fn wasmExports(bytes: []const u8, want: []const u8) bool {
                 }
                 const name: []const u8 = bytes[i .. i + name_len];
                 i += name_len;
-                if (std.mem.eql(u8, name, want)) {
+                if (eql(u8, name, want)) {
                     return true;
                 }
                 i += 1; // kind
@@ -700,25 +773,6 @@ fn wasmExports(bytes: []const u8, want: []const u8) bool {
         i = section_end;
     }
     return false;
-}
-
-/// One unsigned LEB128, advancing `i`.
-fn readLeb(bytes: []const u8, i: *usize) ?u32 {
-    var result: u32 = 0;
-    var shift: u5 = 0;
-    while (i.* < bytes.len) {
-        const byte: u8 = bytes[i.*];
-        i.* += 1;
-        result |= @as(u32, byte & 0x7f) << shift;
-        if (byte & 0x80 == 0) {
-            return result;
-        }
-        if (shift >= 28) {
-            return null;
-        }
-        shift += 7;
-    }
-    return null;
 }
 
 fn base64Encode(gpa: Allocator, bytes: []const u8) ![]u8 {
@@ -924,13 +978,72 @@ fn minify(gpa: Allocator, src: []const u8) ![]u8 {
 // Tokenizer
 // ----------------------------------------------------------------------------
 
-const TokenKind = enum { ident, number, punct, str, eof };
+/// A token's kind. `str` is a string literal and `char` a character constant. The text of both keeps its quotes
+/// (`"}"`, `'\x7d'`), so that no literal's text can equal a punctuator's: every comparison of a token's text with
+/// punctuation (`atText`, `eql(..., "}")`) then means that punctuator alone. `literalBody` takes the quotes off.
+const TokenKind = enum { ident, number, punct, str, char, eof };
 
 const Token = struct {
     kind: TokenKind,
     text: []const u8,
     line: u32 = 0, // 1-based line in the (preprocessed) C source
 };
+
+/// A C string literal, quotes included, standing for `bytes`: printable ASCII as itself, `"` and `\` escaped, and
+/// every other byte as a three-digit octal escape (`\000`, `\377`) - an octal escape takes at most three digits, so
+/// no character after it can extend it.
+fn encodeCString(gpa: Allocator, bytes: []const u8) ![]const u8 {
+    var text: ArrayList(u8) = .empty;
+    try text.append(gpa, '"');
+    for (bytes) |byte| {
+        const needs_backslash: bool = byte == '"' or byte == '\\';
+        const is_printable: bool = byte >= 0x20 and byte < 0x7f;
+        if (needs_backslash) {
+            try text.appendSlice(gpa, &.{ '\\', byte });
+        } else if (is_printable) {
+            try text.append(gpa, byte);
+        } else {
+            const octal_digits: [3]u8 = .{ '0' + (byte >> 6), '0' + ((byte >> 3) & 7), '0' + (byte & 7) };
+            try text.append(gpa, '\\');
+            try text.appendSlice(gpa, &octal_digits);
+        }
+    }
+    try text.append(gpa, '"');
+    return text.toOwnedSlice(gpa);
+}
+
+/// Joins each run of adjacent string literals into one, as C does before anything else reads them: `"ab" "cd"` is
+/// the literal `"abcd"`. Zig's C backend writes a long string as such a run, since a C compiler may refuse a very long
+/// single literal. The pieces are decoded first and their bytes joined; joining their texts instead would be wrong,
+/// because an escape ends at its literal's end - `"\x1" "2"` is two bytes, `"\x12"` one. The joined bytes are written
+/// back as one literal (`encodeCString`), so every reader of a string token sees the whole string.
+fn mergeAdjacentStringLiterals(gpa: Allocator, tokens: *ArrayList(Token)) !void {
+    const items: []Token = tokens.items;
+    var read_index: usize = 0;
+    var write_index: usize = 0;
+    while (read_index < items.len) {
+        const token: Token = items[read_index];
+        const starts_run: bool = token.kind == .str and read_index + 1 < items.len and
+            items[read_index + 1].kind == .str;
+        if (!starts_run) {
+            items[write_index] = token;
+            write_index += 1;
+            read_index += 1;
+            continue;
+        }
+        var joined_bytes: ArrayList(u8) = .empty;
+        defer joined_bytes.deinit(gpa);
+        while (read_index < items.len and items[read_index].kind == .str) : (read_index += 1) {
+            const piece_bytes: []u8 = try decodeCString(gpa, literalBody(items[read_index].text));
+            defer gpa.free(piece_bytes);
+            try joined_bytes.appendSlice(gpa, piece_bytes);
+        }
+        const joined_text: []const u8 = try encodeCString(gpa, joined_bytes.items);
+        items[write_index] = .{ .kind = .str, .text = joined_text, .line = token.line };
+        write_index += 1;
+    }
+    tokens.shrinkRetainingCapacity(write_index);
+}
 
 /// One source-map entry: generated JS line -> originating C line (1-based).
 const LineMap = struct { gen: u32, src: u32 };
@@ -1022,22 +1135,22 @@ const Lexer = struct {
             }
             return .{ .kind = .ident, .text = self.src[start..self.i] };
         }
-        // string / char literal (text excludes the surrounding quotes; escapes kept raw)
+        // A string literal or a character constant, its text kept whole - quotes and raw escapes - so that it can never
+        // be mistaken for a punctuator (`TokenKind`); a backslash escapes the character after it, a quote included.
         if (c == '"' or c == '\'') {
             const quote: u8 = c;
             self.i += 1;
-            const body_start: usize = self.i;
             while (self.i < self.src.len and self.src[self.i] != quote) {
                 if (self.src[self.i] == '\\' and self.i + 1 < self.src.len) {
                     self.i += 1;
                 }
                 self.i += 1;
             }
-            const body: []const u8 = self.src[body_start..self.i];
             if (self.i < self.src.len) {
                 self.i += 1;
             } // closing quote
-            return .{ .kind = .str, .text = body };
+            const literal_kind: TokenKind = if (quote == '"') .str else .char;
+            return .{ .kind = literal_kind, .text = self.src[start..self.i] };
         }
         if (isDigit(c) or
             (c == '.' and self.i + 1 < self.src.len and isDigit(self.src[self.i + 1])))
@@ -1176,7 +1289,10 @@ const StructLayout = struct { size: u32, fields: []const Field, align_: u32 = 4 
 /// A deferred pointer relocation: write the heap offset of global `target` (a
 /// 4-byte pointer in our model) into the data image at byte address `addr`,
 /// once all globals have offsets. `width` is the slot size (4 for a pointer).
-const Reloc = struct { addr: u32, target: []const u8, width: u8 };
+/// A pointer in the data image waiting for its target's address: written at `addr`, `width` bytes, once every global
+/// has its offset and every address-taken function its table index (`applyRelocations`). `token_index` is the
+/// element's first token, for a report.
+const Reloc = struct { addr: u32, target: []const u8, width: u8, token_index: usize };
 
 const ArrayInfo = struct { count: u32, elem_size: u32, elem: Elem };
 
@@ -1260,7 +1376,7 @@ fn outerWrapIs(e: []const u8, suffix: []const u8) bool {
 /// Tolerates surrounding spaces/parens; returns null for anything non-numeric, so the
 /// monomorphic resolver only fires when the name pointer reduced to a constant offset.
 fn parseDecimalLit(s: []const u8) ?usize {
-    const t = std.mem.trim(u8, s, " ()");
+    const t = trim(u8, s, " ()");
     if (t.len == 0) {
         return null;
     }
@@ -1326,6 +1442,37 @@ fn looksLikeArrayWrapper(tag: []const u8) bool {
     return startsWith(u8, tag, "arr_") and tag.len > "arr_".len and isDigit(tag["arr_".len]);
 }
 
+// elem* - the bridge from a C element/field type (Elem) to how it's physically
+// touched in the emitted JS. elemShift = log2 of the byte stride, elemSize =
+// that stride in bytes, elemView = the typed-array view to index through
+// (__HEAPU8 / __HEAP16 / __HEAPF64 / ...), and fieldElem just lifts a struct
+// Field into the Elem those three expect. Codegen leans on these constantly to
+// turn `*p` / `s.field` into the right `__MEM` view and index.
+fn elemShift(e: Elem) u3 {
+    return switch (e.bits) {
+        8 => 0,
+        16 => 1,
+        // 64-bit floats use the 8-byte HEAPF64 view (shift 3). 64-bit ints keep
+        // shift 2 because the scalar @bitCast/scratch idiom views them through the
+        // 32-bit (low-word) array; their array/pointer STRIDE is 8 (see elemSize)
+        // and real loads/stores go through __ld/st64, so values round-trip within
+        // 2^53. (Only >2^53 magnitudes remain lossy - a JS Number limit.)
+        64 => if (e.float) 3 else 2,
+        else => 2, // 32-bit ints and f32
+    };
+}
+
+fn elemSize(e: Elem) usize {
+    // 64-bit ints/floats occupy 8 bytes - the array/pointer STRIDE - even though
+    // 64-bit ints are viewed through the 32-bit (low-word) typed array. Keeping
+    // stride and view-shift separate is what makes `&arr[i]` for i64/u64 land on
+    // the right 8-byte element (the load/store itself reads two words via __ld64).
+    if (e.bits > 32 and e.bits <= 64) {
+        return 8;
+    }
+    return @as(usize, 1) << elemShift(e);
+}
+
 fn parseArrTag(tag: []const u8) ?ArrayInfo {
     if (!startsWith(u8, tag, "arr_")) {
         return null;
@@ -1385,24 +1532,6 @@ fn isStructElemArrayTag(tag: []const u8) bool {
     }
     _ = parseInt(u32, count_s, 10) catch return false; // not an array wrapper count
     return elemFromName(elem_s) == null; // non-primitive element -> array of structs
-}
-
-/// Parse a C integer literal token (`1u`, `0x10`, `-3`, `42UL`) to its value,
-/// stripping integer suffixes. Used for enum constant values.
-fn parseCIntLiteral(text: []const u8) ?i64 {
-    var s: []const u8 = text;
-    while (s.len > 0) {
-        const last: u8 = s[s.len - 1];
-        if (last == 'u' or last == 'U' or last == 'l' or last == 'L') {
-            s = s[0 .. s.len - 1];
-        } else {
-            break;
-        }
-    }
-    if (s.len == 0) {
-        return null;
-    }
-    return parseInt(i64, s, 0) catch null;
 }
 
 /// If `specs` name a fixed-array wrapper struct (`struct arr_..._...`), return
@@ -1529,36 +1658,6 @@ fn structTypeNameOf(specs: []const Token) ?[]const u8 {
         }
     }
     return null;
-}
-
-// elem* - the bridge from a C element/field type (Elem) to how it's physically
-// touched in the emitted JS. elemShift = log2 of the byte stride, elemSize =
-// that stride in bytes, elemView = the typed-array view to index through
-// (__HEAPU8 / __HEAP16 / __HEAPF64 / ...), and fieldElem just lifts a struct
-// Field into the Elem those three expect. Codegen leans on these constantly to
-// turn `*p` / `s.field` into the right `__MEM` view and index.
-fn elemShift(e: Elem) u3 {
-    return switch (e.bits) {
-        8 => 0,
-        16 => 1,
-        // 64-bit floats use the 8-byte HEAPF64 view (shift 3). 64-bit ints keep
-        // shift 2 because the scalar @bitCast/scratch idiom views them through the
-        // 32-bit (low-word) array; their array/pointer STRIDE is 8 (see elemSize)
-        // and real loads/stores go through __ld/st64, so values round-trip within
-        // 2^53. (Only >2^53 magnitudes remain lossy - a JS Number limit.)
-        64 => if (e.float) 3 else 2,
-        else => 2, // 32-bit ints and f32
-    };
-}
-fn elemSize(e: Elem) usize {
-    // 64-bit ints/floats occupy 8 bytes - the array/pointer STRIDE - even though
-    // 64-bit ints are viewed through the 32-bit (low-word) typed array. Keeping
-    // stride and view-shift separate is what makes `&arr[i]` for i64/u64 land on
-    // the right 8-byte element (the load/store itself reads two words via __ld64).
-    if (e.bits > 32 and e.bits <= 64) {
-        return 8;
-    }
-    return @as(usize, 1) << elemShift(e);
 }
 
 /// Byte size of a C primitive type name, used to resolve `sizeof(T)` and the
@@ -1888,6 +1987,10 @@ const Transpiler = struct {
     vars: StringHashMap(VarInfo),
     structs: StringHashMap(StructLayout),
     globals: StringHashMap(u32), // static data name -> heap offset
+    // Scalar global name -> the heap view of its slot. The C backend once read a global through a typed cast,
+    // `(*((T*)&name))`, which carried the type; since Zig 0.17 it writes `(*(&name))`, with no type at the access,
+    // so the type comes from the declaration (`parseLValueBase`).
+    global_scalars: StringHashMap(Elem),
     array_elems: StringHashMap(Elem), // array global/local name -> element type
     struct_vars: StringHashMap([]const u8), // struct local/global name -> struct tag
     struct_ptrs: StringHashMap([]const u8), // struct-pointer temp name -> pointee struct tag
@@ -1988,6 +2091,7 @@ const Transpiler = struct {
             .vars = StringHashMap(VarInfo).init(gpa),
             .structs = StringHashMap(StructLayout).init(gpa),
             .globals = StringHashMap(u32).init(gpa),
+            .global_scalars = StringHashMap(Elem).init(gpa),
             .array_elems = StringHashMap(Elem).init(gpa),
             .struct_vars = StringHashMap([]const u8).init(gpa),
             .struct_ptrs = StringHashMap([]const u8).init(gpa),
@@ -2120,8 +2224,11 @@ const Transpiler = struct {
         // pre-pass: assign heap offsets to initialized string-data statics (also
         // computes struct layouts + lays out scalar/aggregate globals)
         try self.prescanData();
-        // record recursive functions (to flag non-reentrant local-aggregate scratch)
+        // record recursive functions (to flag non-reentrant local-aggregate scratch), and give every
+        // address-taken function its dispatch-table index
         try self.prescanRecursion();
+        // now that functions have their indices, write the pointers the data image waits for
+        self.applyRelocations();
         // Everything past the initialized image is free scratch space. Scratch for
         // locals/globals is bump-allocated from here at parse time and is NOT added
         // to the emitted image (the ArrayBuffer is zero-initialized, and scratch is
@@ -2255,17 +2362,248 @@ const Transpiler = struct {
             \\function __fmax(a, b) { return a !== a ? b : (b !== b ? a : Math.max(a, b)); }
             \\
         );
+        // ---- Base64 and UTF-8 for every scope a program may run in ----
+        //
+        // Besides the JavaScript language itself, a transpiled program needs three things from the scope it runs in:
+        // `atob`, to turn the base64 text of its data section back into bytes; `TextDecoder`, to turn UTF-8 bytes in
+        // its memory into JavaScript strings (the names of the properties and methods it reaches); and `TextEncoder`,
+        // to write strings back into its memory. A page and a web worker have all three. An audio worklet's scope has
+        // none of them: it offers only what the language defines, so that nothing in it can make the audio thread wait.
+        // So the prelude carries its own three, each used only where the built-in is missing - `__base64Bytes`,
+        // `__utf8Decode` and `__utf8EncodeInto` - and each gives exactly what the built-in gives, for every input. The
+        // differential suite checks that at every run (tools/c2js_cases/prelude_fallbacks_test.js), and runs every case
+        // as a worklet loads it (tools/c2js_cases/run_as_worklet.js).
+        try self.emit(
+            // __base64Bytes. Base64 writes bytes as text: every three bytes - 24 bits - as four characters of 6 bits
+            // each, from an alphabet of 64: A-Z stand for 0-25, a-z for 26-51, 0-9 for 52-61, '+' for 62 and '/' for
+            // 63. Decoding reads the characters four at a time, looks up each one's 6-bit value, joins the four into 24
+            // bits, and cuts those into three bytes:
+            //
+            //     characters      T       W       F       u              ("TWFu" is the base64 of "Man")
+            //     6-bit values    19      22      5       46
+            //     24 bits         010011  010110  000101  101110
+            //     3 bytes         01001101  01100001  01101110   =   77 'M', 97 'a', 110 'n'
+            //
+            // When the bytes were not a multiple of three, the text ends in '=' padding: "==" when the last group held
+            // one byte, "=" when it held two. The padding characters stand for nothing, and the bytes they would make
+            // are not kept - the decoded length leaves them out.
+            \\// The bytes a base64 text encodes: atob's where the scope has it, a lookup table's otherwise.
+            \\function __base64Bytes(base64Text) {
+            \\  if (typeof atob === "function") {
+            \\    var binaryText = atob(base64Text);
+            \\    return Uint8Array.from(binaryText, function (character) { return character.charCodeAt(0); });
+            \\  }
+            \\  var base64Alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            \\  var sixBitValueOfCharacterCode = new Uint8Array(128);
+            \\  for (var alphabetIndex = 0; alphabetIndex < 64; alphabetIndex++) {
+            \\    var characterCode = base64Alphabet.charCodeAt(alphabetIndex);
+            \\    sixBitValueOfCharacterCode[characterCode] = alphabetIndex;
+            \\  }
+            \\  var paddingCharacterCount = base64Text.endsWith("==") ? 2 : (base64Text.endsWith("=") ? 1 : 0);
+            \\  var groupCount = base64Text.length / 4;
+            \\  var decodedByteCount = groupCount * 3 - paddingCharacterCount;
+            \\  var decodedBytes = new Uint8Array(decodedByteCount);
+            \\  var nextByteIndex = 0;
+            \\  for (var groupStart = 0; groupStart < base64Text.length; groupStart += 4) {
+            \\    var firstSixBits = sixBitValueOfCharacterCode[base64Text.charCodeAt(groupStart)];
+            \\    var secondSixBits = sixBitValueOfCharacterCode[base64Text.charCodeAt(groupStart + 1)];
+            \\    var thirdSixBits = sixBitValueOfCharacterCode[base64Text.charCodeAt(groupStart + 2)];
+            \\    var fourthSixBits = sixBitValueOfCharacterCode[base64Text.charCodeAt(groupStart + 3)];
+            \\    var twentyFourBits = (firstSixBits << 18) | (secondSixBits << 12) | (thirdSixBits << 6) |
+            \\      fourthSixBits;
+            \\    var firstByte = (twentyFourBits >> 16) & 255;
+            \\    var secondByte = (twentyFourBits >> 8) & 255;
+            \\    var thirdByte = twentyFourBits & 255;
+            \\    if (nextByteIndex < decodedByteCount) { decodedBytes[nextByteIndex] = firstByte; nextByteIndex++; }
+            \\    if (nextByteIndex < decodedByteCount) { decodedBytes[nextByteIndex] = secondByte; nextByteIndex++; }
+            \\    if (nextByteIndex < decodedByteCount) { decodedBytes[nextByteIndex] = thirdByte; nextByteIndex++; }
+            \\  }
+            \\  return decodedBytes;
+            \\}
+            // __utf8Decode. A character is a number, its code point, from U+0000 to U+10FFFF. UTF-8 writes each code
+            // point as 1 to 4 bytes. The first byte - the lead - says how many follow; each following byte - a
+            // continuation - starts with the bits 10 and carries 6 more bits of the code point:
+            //
+            //     lead byte   bytes  code points          bits of the code point
+            //     0xxxxxxx    1      U+0000 - U+007F      7
+            //     110xxxxx    2      U+0080 - U+07FF      5 + 6
+            //     1110xxxx    3      U+0800 - U+FFFF      4 + 6 + 6
+            //     11110xxx    4      U+10000 - U+10FFFF   3 + 6 + 6 + 6
+            //
+            //     e-acute  U+00E9   = 00011 101001                 ->  11000011 10101001                    C3 A9
+            //     euro     U+20AC   = 0010 000010 101100           ->  11100010 10000010 10101100           E2 82 AC
+            //     a smile  U+1F600  = 000 011111 011000 000000     ->  11110000 10011111 10011000 10000000  F0 9F 98 80
+            //
+            // A JavaScript string is not UTF-8 but UTF-16: each code point below U+10000 is one 16-bit unit, and each
+            // one above is two, a surrogate pair. Take the code point's offset past U+10000 (20 bits); the first unit,
+            // the high surrogate, is 0xD800 plus its top 10 bits; the second, the low surrogate, is 0xDC00 plus its
+            // bottom 10 bits:
+            //
+            //     U+1F600 - U+10000 = 0xF600 = 0000111101 1000000000   ->  0xD800 + 0x3D, 0xDC00 + 0x200  =  D83D DE00
+            //
+            // Some byte sequences are not UTF-8 at all: a continuation where a lead was expected, a sequence cut short,
+            // a code point written with more bytes than it needs (an overlong form, which could smuggle a '/' past a
+            // check), a surrogate's value (surrogates exist only in UTF-16), a value past U+10FFFF. The Encoding
+            // Standard - whose algorithm TextDecoder follows - says exactly what to make of each: the broken piece
+            // becomes one U+FFFD, the replacement character, and the byte that broke a sequence is read again as a
+            // fresh start. It narrows the range allowed for the first continuation byte after four lead bytes, which
+            // shuts out the overlong forms (after E0 and F0), the surrogates (after ED) and the values past U+10FFFF
+            // (after F4) in one comparison. A byte order mark (EF BB BF) at the very start is dropped, as TextDecoder
+            // drops it.
+            \\// UTF-8 bytes to a string, by the Encoding Standard's UTF-8 decoder, where the scope has no TextDecoder.
+            \\function __utf8Decode(utf8Bytes) {
+            \\  var decodedText = "";
+            \\  var pendingUtf16Units = [];
+            \\  function appendCodePoint(codePoint) {
+            \\    if (codePoint >= 0x10000) {
+            \\      var offsetPastBasicPlane = codePoint - 0x10000;
+            \\      var highSurrogate = 0xd800 + (offsetPastBasicPlane >> 10);
+            \\      var lowSurrogate = 0xdc00 + (offsetPastBasicPlane & 0x3ff);
+            \\      pendingUtf16Units.push(highSurrogate, lowSurrogate);
+            \\    } else {
+            \\      pendingUtf16Units.push(codePoint);
+            \\    }
+            \\    // Made into text a few thousand units at a time: one call for each unit would be slow, and a single
+            \\    // call for all of them could pass the number of arguments a call may take.
+            \\    if (pendingUtf16Units.length >= 4096) {
+            \\      decodedText += String.fromCharCode.apply(null, pendingUtf16Units);
+            \\      pendingUtf16Units.length = 0;
+            \\    }
+            \\  }
+            \\  var byteCount = utf8Bytes.length;
+            \\  var startsWithByteOrderMark = byteCount >= 3 && utf8Bytes[0] === 0xef && utf8Bytes[1] === 0xbb &&
+            \\    utf8Bytes[2] === 0xbf;
+            \\  var byteIndex = startsWithByteOrderMark ? 3 : 0;
+            \\  var codePointSoFar = 0;
+            \\  var continuationBytesNeeded = 0;
+            \\  var continuationBytesSeen = 0;
+            \\  var lowestAllowedContinuationByte = 0x80;
+            \\  var highestAllowedContinuationByte = 0xbf;
+            \\  while (byteIndex < byteCount) {
+            \\    var currentByte = utf8Bytes[byteIndex];
+            \\    if (continuationBytesNeeded === 0) {
+            \\      // A lead byte: a whole character, or the start of one.
+            \\      byteIndex++;
+            \\      if (currentByte <= 0x7f) {
+            \\        appendCodePoint(currentByte);
+            \\      } else if (currentByte >= 0xc2 && currentByte <= 0xdf) {
+            \\        continuationBytesNeeded = 1;
+            \\        codePointSoFar = currentByte & 0x1f;
+            \\      } else if (currentByte >= 0xe0 && currentByte <= 0xef) {
+            \\        if (currentByte === 0xe0) { lowestAllowedContinuationByte = 0xa0; }
+            \\        if (currentByte === 0xed) { highestAllowedContinuationByte = 0x9f; }
+            \\        continuationBytesNeeded = 2;
+            \\        codePointSoFar = currentByte & 0x0f;
+            \\      } else if (currentByte >= 0xf0 && currentByte <= 0xf4) {
+            \\        if (currentByte === 0xf0) { lowestAllowedContinuationByte = 0x90; }
+            \\        if (currentByte === 0xf4) { highestAllowedContinuationByte = 0x8f; }
+            \\        continuationBytesNeeded = 3;
+            \\        codePointSoFar = currentByte & 0x07;
+            \\      } else {
+            \\        appendCodePoint(0xfffd);
+            \\      }
+            \\      continue;
+            \\    }
+            \\    var isAllowedContinuationByte = currentByte >= lowestAllowedContinuationByte &&
+            \\      currentByte <= highestAllowedContinuationByte;
+            \\    if (!isAllowedContinuationByte) {
+            \\      // The sequence is broken: one U+FFFD for it, and this byte read again as the start of something
+            \\      // new.
+            \\      codePointSoFar = 0;
+            \\      continuationBytesNeeded = 0;
+            \\      continuationBytesSeen = 0;
+            \\      lowestAllowedContinuationByte = 0x80;
+            \\      highestAllowedContinuationByte = 0xbf;
+            \\      appendCodePoint(0xfffd);
+            \\      continue;
+            \\    }
+            \\    byteIndex++;
+            \\    lowestAllowedContinuationByte = 0x80;
+            \\    highestAllowedContinuationByte = 0xbf;
+            \\    var sixMoreBits = currentByte & 0x3f;
+            \\    codePointSoFar = (codePointSoFar << 6) | sixMoreBits;
+            \\    continuationBytesSeen++;
+            \\    if (continuationBytesSeen === continuationBytesNeeded) {
+            \\      appendCodePoint(codePointSoFar);
+            \\      codePointSoFar = 0;
+            \\      continuationBytesNeeded = 0;
+            \\      continuationBytesSeen = 0;
+            \\    }
+            \\  }
+            \\  // Cut short at the very end: one U+FFFD for the unfinished sequence.
+            \\  if (continuationBytesNeeded !== 0) { appendCodePoint(0xfffd); }
+            \\  return decodedText + String.fromCharCode.apply(null, pendingUtf16Units);
+            \\}
+            // __utf8EncodeInto. The other way: a string's UTF-16 units into UTF-8 bytes, into a destination of fixed
+            // size, as TextEncoder.encodeInto writes them. A surrogate pair is joined back into its code point first; a
+            // surrogate alone - half of a pair, which no character is - is written as U+FFFD. Only whole characters are
+            // written: when the next one's bytes do not fit, the writing stops before it. It says how many UTF-16 units
+            // it read and how many bytes it wrote; the kernel's `js_string_into` uses the bytes written.
+            \\// A string's UTF-8 into `destination`, as TextEncoder.encodeInto writes it, where the scope has no
+            \\// TextEncoder.
+            \\function __utf8EncodeInto(text, destination) {
+            \\  var utf16UnitsRead = 0;
+            \\  var bytesWritten = 0;
+            \\  var utf16UnitCount = text.length;
+            \\  var destinationCapacity = destination.length;
+            \\  while (utf16UnitsRead < utf16UnitCount) {
+            \\    var codePoint = text.charCodeAt(utf16UnitsRead);
+            \\    var utf16UnitsOfThisCodePoint = 1;
+            \\    var isHighSurrogate = codePoint >= 0xd800 && codePoint < 0xdc00;
+            \\    var hasNextUnit = utf16UnitsRead + 1 < utf16UnitCount;
+            \\    if (isHighSurrogate && hasNextUnit) {
+            \\      var nextUnit = text.charCodeAt(utf16UnitsRead + 1);
+            \\      var isLowSurrogate = nextUnit >= 0xdc00 && nextUnit < 0xe000;
+            \\      if (isLowSurrogate) {
+            \\        var highTenBits = codePoint - 0xd800;
+            \\        var lowTenBits = nextUnit - 0xdc00;
+            \\        codePoint = 0x10000 + (highTenBits << 10) + lowTenBits;
+            \\        utf16UnitsOfThisCodePoint = 2;
+            \\      }
+            \\    }
+            \\    var isLoneSurrogate = codePoint >= 0xd800 && codePoint < 0xe000;
+            \\    if (isLoneSurrogate) { codePoint = 0xfffd; }
+            \\    var utf8ByteCount = codePoint < 0x80 ? 1 : (codePoint < 0x800 ? 2 : (codePoint < 0x10000 ? 3 : 4));
+            \\    var fitsInDestination = bytesWritten + utf8ByteCount <= destinationCapacity;
+            \\    if (!fitsInDestination) { break; }
+            \\    if (utf8ByteCount === 1) {
+            \\      destination[bytesWritten] = codePoint;
+            \\    } else if (utf8ByteCount === 2) {
+            \\      destination[bytesWritten] = 0xc0 | (codePoint >> 6);
+            \\      destination[bytesWritten + 1] = 0x80 | (codePoint & 0x3f);
+            \\    } else if (utf8ByteCount === 3) {
+            \\      destination[bytesWritten] = 0xe0 | (codePoint >> 12);
+            \\      destination[bytesWritten + 1] = 0x80 | ((codePoint >> 6) & 0x3f);
+            \\      destination[bytesWritten + 2] = 0x80 | (codePoint & 0x3f);
+            \\    } else {
+            \\      destination[bytesWritten] = 0xf0 | (codePoint >> 18);
+            \\      destination[bytesWritten + 1] = 0x80 | ((codePoint >> 12) & 0x3f);
+            \\      destination[bytesWritten + 2] = 0x80 | ((codePoint >> 6) & 0x3f);
+            \\      destination[bytesWritten + 3] = 0x80 | (codePoint & 0x3f);
+            \\    }
+            \\    bytesWritten += utf8ByteCount;
+            \\    utf16UnitsRead += utf16UnitsOfThisCodePoint;
+            \\  }
+            \\  return { read: utf16UnitsRead, written: bytesWritten };
+            \\}
+            \\// The prelude's fallbacks end here.
+            \\
+        );
         // emit the data section as one base64 blob splat into the heap
         if (self.data.items.len > 0) {
             const b64: []u8 = try base64Encode(self.gpa, self.data.items);
             try self.print(
-                "__HEAPU8.set(Uint8Array.from(atob(\"{s}\"), c => c.charCodeAt(0)), {d});\n",
+                "__HEAPU8.set(__base64Bytes(\"{s}\"), {d});\n",
                 .{ b64, self.data_base },
             );
         }
         // --- JS interop kernel (the only hand-written JS; lives here, never edited) ---
         try self.emit(
-            \\const __dec = new TextDecoder("utf-8"), __enc = new TextEncoder();
+            \\// The UTF-8 decoder and encoder: the built-ins where the scope has them, the fallbacks above otherwise.
+            \\const __utf8Decoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8") :
+            \\  { decode: __utf8Decode };
+            \\const __utf8Encoder = typeof TextEncoder === "function" ? new TextEncoder() :
+            \\  { encodeInto: __utf8EncodeInto };
             \\const __nc = new Map(); // memo: comptime method/property name addr -> decoded string
             \\const __H = [null, (typeof globalThis !== "undefined" ? globalThis : this)];
             \\let __Hf = [];
@@ -2274,7 +2612,7 @@ const Transpiler = struct {
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function __cp(p, l) { if (l > 65536) return __HEAPU8.slice(p, p + l); __SCR.set(__HEAPU8.subarray(p, p + l)); return __SCR.subarray(0, l); }
             // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function __jstr(p, l) { let s = __nc.get(p); if (s === undefined) { s = __dec.decode(l < 256 ? __HEAPU8.slice(p, p + l) : __cp(p, l)); __nc.set(p, s); } return s; }
+            \\function __jstr(p, l) { let s = __nc.get(p); if (s === undefined) { s = __utf8Decoder.decode(l < 256 ? __HEAPU8.slice(p, p + l) : __cp(p, l)); __nc.set(p, s); } return s; }
             \\function js_global() { return 1; }
             \\function js_get(o, p, l) { return __href(__H[o][__jstr(p, l)]); }
             \\function js_get_num(o, p, l) { return +__H[o][__jstr(p, l)]; }
@@ -2306,7 +2644,9 @@ const Transpiler = struct {
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call2(o, p, l, a, b) { const f = __H[o][__jstr(p, l)]; return __href(f.call(__H[o], __H[a], __H[b])); }
             \\function js_new0(c) { return __href(new (__H[c])()); }
-            \\function js_str(p, l) { return __href(__dec.decode(l < 256 ? __HEAPU8.slice(p, p + l) : __cp(p, l))); }
+            \\function js_str(p, l) {
+            \\  return __href(__utf8Decoder.decode(l < 256 ? __HEAPU8.slice(p, p + l) : __cp(p, l)));
+            \\}
             \\function js_num(x) { return __href(x); }
             \\function js_to_num(v) { return +__H[v]; }
             \\function js_is_null(v) { return (__H[v] == null) ? 1 : 0; }
@@ -2340,7 +2680,7 @@ const Transpiler = struct {
             \\function js_new3(c,a,b,d){return __href(new (__H[c])(__H[a],__H[b],__H[d]));}
             \\function js_set_index(o,i,v){__H[o][i]=__H[v];}
             // lint:off line-length: emitted-JS template - one source line is one output line
-            \\function js_string_into(h,p,max){const m=Math.min(max,65536);const r=__enc.encodeInto(String(__H[h]),__SCR.subarray(0,m));__HEAPU8.set(__SCR.subarray(0,r.written),p);return r.written;}
+            \\function js_string_into(h,p,max){const m=Math.min(max,65536);const r=__utf8Encoder.encodeInto(String(__H[h]),__SCR.subarray(0,m));__HEAPU8.set(__SCR.subarray(0,r.written),p);return r.written;}
             \\function js_bytes(p,l){return __href(new Uint8Array(__MEM.slice(p,p+l)));}
             \\const __P = [null];
             // lint:off line-length: emitted-JS template - one source line is one output line
@@ -2365,6 +2705,38 @@ const Transpiler = struct {
             // lint:off line-length: emitted-JS template - one source line is one output line
             \\function js_call_n(o,p,l,argp,n){const f=__H[o][__jstr(p,l)];return __href(f.apply(__H[o],__args(argp,n)));}
             \\function js_construct(c,argp,n){return __href(new (__H[c])(...__args(argp,n)));}
+            // js_subclass. In JavaScript, a class is a function that makes objects: `new SomeClass(arguments)` runs its
+            // constructor on a fresh object, and that object's methods come from the class's prototype - an object
+            // every instance shares, holding the functions they all have. A class can extend another, its base: its
+            // objects then have the base's methods too, and its constructor must call the base's constructor -
+            // `super(...)` - before it touches the object, because the base sets the object up first. The browser's
+            // AudioWorkletProcessor is such a base: a worklet's processor must be a class extending it, and the
+            // processor's message port - how it talks to the main thread - is given to the object in
+            // AudioWorkletProcessor's own constructor.
+            //
+            // Transpiled Zig has no way to write a class, so this function writes one: a class extending the class
+            // `base`, whose constructor calls base's with the arguments it was given, then the Zig function `init`,
+            // handing it the new object - `this` - and the same arguments. The Zig code then sets the class's methods
+            // on its prototype (`js_set` on its "prototype"), and gives the class to whatever constructs it: for an
+            // audio worklet, `registerProcessor`.
+            //
+            //     Zig                                           JavaScript it amounts to
+            //     const Processor = js_subclass(Base, init);    class Processor extends Base {
+            //                                                     constructor(...a) { super(...a); init(this, ...a); }
+            //                                                   }
+            //     js_set(Processor.prototype, "process", f);    Processor.prototype.process = f;
+            \\// A class extending `base`, whose constructor calls base's and then the Zig function `init` (see above).
+            \\function js_subclass(baseClassHandle, initializeHandle) {
+            \\  var BaseClass = __H[baseClassHandle];
+            \\  var initializeAfterBase = __H[initializeHandle];
+            \\  var Subclass = class extends BaseClass {
+            \\    constructor(...constructorArguments) {
+            \\      super(...constructorArguments);
+            \\      initializeAfterBase(this, ...constructorArguments);
+            \\    }
+            \\  };
+            \\  return __href(Subclass);
+            \\}
             \\// reflection / control: typeof, instanceof, truthiness, equality
             \\function js_typeof(v){return __href(typeof __H[v]);}
             \\function js_instanceof(v,c){return __H[v] instanceof __H[c] ? 1 : 0;}
@@ -2626,12 +2998,19 @@ const Transpiler = struct {
                     var val: i64 = next_val;
                     if (j < n and eql(u8, self.toks[j].text, "=")) {
                         j += 1;
-                        if (j < n and self.toks[j].kind == .number) {
-                            if (parseCIntLiteral(self.toks[j].text)) |v| {
-                                val = v;
-                            }
-                            j += 1;
+                        // The enumerator's value is a constant (`evaluateConstant`): `5`, `-1`, `UINT8_C(3)`,
+                        // `'\x41'`. It ends at the `,` or `}` after it; anything more there is reported.
+                        var value_end: usize = j;
+                        while (value_end < n and !self.isElementEnd(value_end)) {
+                            value_end += 1;
                         }
+                        var value_index: usize = j;
+                        const value: Constant = self.evaluateConstant(&value_index, value_end);
+                        if (value_index != value_end) {
+                            self.noteUnreadableConstant(value_index);
+                        }
+                        val = @bitCast(value.bits);
+                        j = value_end;
                     }
                     if (!self.defines.contains(name)) {
                         try self.defines.put(name, try allocPrint(self.gpa, "{d}", .{val}));
@@ -2692,7 +3071,7 @@ const Transpiler = struct {
                 if (self.globals.contains(name)) {
                     continue;
                 }
-                const bytes: []u8 = try decodeCString(self.gpa, self.toks[i + 3].text);
+                const bytes: []u8 = try decodeCString(self.gpa, literalBody(self.toks[i + 3].text));
                 // 8-align this global's start: an f64/i64 member is read via a
                 // shift-by-3 typed view and needs 8-byte alignment (the data image
                 // otherwise only 4-aligns, silently mis-reading the 8 bytes).
@@ -2710,8 +3089,9 @@ const Transpiler = struct {
             }
         }
         // second pass: mutable scalar globals. The C backend accesses every global
-        // as `(*((T*)&name))`, so giving each a heap slot makes the existing pointer
-        // load/store machinery handle reads and writes for free.
+        // as `(*((T*)&name))` - or, since Zig 0.17, `(*(&name))` - so giving each a
+        // heap slot makes the existing pointer load/store machinery handle reads and
+        // writes, typed from the declaration when the access carries no cast.
         try self.prescanScalarGlobals();
     }
 
@@ -2815,10 +3195,15 @@ const Transpiler = struct {
                 // writeConstStruct walks the `{{...}}` and writes each element
                 // into the image. Without this the data reads back as zeros.
                 if (ei + 1 < n and eql(u8, self.toks[ei + 1].text, "{")) {
-                    if (structTypeNameOf(specs)) |atag| {
-                        if (self.structs.get(atag)) |alayout| {
-                            _ = try self.writeConstStruct(off, alayout, ei + 1);
-                        }
+                    const wrapper_tag: ?[]const u8 = structTypeNameOf(specs);
+                    const array_layout: ?StructLayout = if (wrapper_tag) |atag| self.structs.get(atag) else null;
+                    if (array_layout) |alayout| {
+                        _ = try self.writeConstStruct(off, alayout, ei + 1);
+                    } else {
+                        self.noteUnmodeledAt(
+                            ei + 1,
+                            "an initializer for an array global whose wrapper struct has no known layout",
+                        );
                     }
                 }
                 continue;
@@ -2853,12 +3238,15 @@ const Transpiler = struct {
                     }
                     continue;
                 }
+                self.noteUnmodeledAt(ni, "a global of a struct type that has no known layout");
+                continue;
             }
             // type must be scalar: pointer, a known int base, or a float.
             const ty: CType = tyFromSpecifiers(specs);
             const is_scalar: bool =
                 ty.kind == .ptr or ty.kind == .int or ty.kind == .float or ty.kind == .boolean;
             if (!is_scalar) {
+                self.noteUnmodeledAt(ni, "an initialized global of a type c2js does not lay out");
                 continue;
             }
             // width in bytes for the slot
@@ -2883,7 +3271,12 @@ const Transpiler = struct {
             var val: u64 = 0;
             if (ty.kind == .ptr) {
                 if (self.addrOfGlobalAt(ei + 1, n)) |gname| {
-                    try self.pending_relocs.append(self.gpa, .{ .addr = off, .target = gname, .width = 4 });
+                    try self.pending_relocs.append(self.gpa, .{
+                        .addr = off,
+                        .target = gname,
+                        .width = 4,
+                        .token_index = ei + 1,
+                    });
                 } else {
                     val = self.parseScalarInit(ei + 1, n);
                 }
@@ -2903,15 +3296,33 @@ const Transpiler = struct {
                 try self.data.append(self.gpa, 0);
             } // align
             try self.globals.put(name, off);
+            // The slot's view: a pointer is a 4-byte heap offset, unsigned; anything else is read as its type.
+            const pointer_elem: Elem = .{ .bits = 32, .signed = false, .float = false };
+            const slot_elem: Elem = if (ty.kind == .ptr) pointer_elem else elemOfTy(ty);
+            try self.global_scalars.put(name, slot_elem);
         }
-        // All globals now have offsets: patch every recorded `&global` pointer
-        // write with its pointee's heap offset. A target that never resolved to a
-        // laid-out global is skipped (the slot keeps its zero = current behavior),
-        // so a stray detection cannot corrupt the image.
-        for (self.pending_relocs.items) |r| {
-            if (self.globals.get(r.target)) |toff| {
-                self.writeBytesAt(r.addr, toff, r.width);
+        // The pointers recorded meanwhile are written once every function's table index is known too
+        // (`applyRelocations`, from `run`): a constant may hold a function's address - a vtable's entry.
+    }
+
+    /// Writes every pointer the data image is waiting for (`pending_relocs`). A global's address is its offset in the
+    /// image. A function's address is its index in the dispatch table (`__FTABLE`, built by `prescanRecursion`) - the
+    /// value `&f` has in an expression, so a vtable in a constant calls the same function as one built at run time. A
+    /// target that is neither is reported: its pointer would otherwise stay zero, a null that nothing would explain.
+    fn applyRelocations(self: *Transpiler) void {
+        for (self.pending_relocs.items) |relocation| {
+            if (self.globals.get(relocation.target)) |global_offset| {
+                self.writeBytesAt(relocation.addr, global_offset, relocation.width);
+                continue;
             }
+            if (self.fn_index.get(relocation.target)) |function_index| {
+                self.writeBytesAt(relocation.addr, function_index, relocation.width);
+                continue;
+            }
+            self.noteUnmodeledAt(
+                relocation.token_index,
+                "the address of something that is neither a global nor an address-taken function",
+            );
         }
         self.pending_relocs.clearRetainingCapacity();
     }
@@ -3072,6 +3483,22 @@ const Transpiler = struct {
                 const unary = eql(u8, prev, "(") or eql(u8, prev, ")") or
                     eql(u8, prev, ",") or eql(u8, prev, "{") or eql(u8, prev, "=");
                 if (unary and k + 1 < n and self.toks[k + 1].kind == .ident) {
+                    // The address of a whole global: only closing parentheses may follow the name before the element
+                    // ends. A field, an index or an offset after it (`&g.field`, `&g.array[4]`, `(&g) + 1`) is an
+                    // address inside the global, which a relocation to the global's start would get wrong.
+                    var after_name: usize = k + 2;
+                    while (after_name < n and self.toks[after_name].kind == .punct and
+                        eql(u8, self.toks[after_name].text, ")"))
+                    {
+                        after_name += 1;
+                    }
+                    const is_whole_global: bool = after_name >= n or self.isElementEnd(after_name);
+                    if (!is_whole_global) {
+                        self.noteUnmodeledAt(
+                            after_name,
+                            "an address inside a global in an initializer: c2js relocates a whole global only",
+                        );
+                    }
                     return self.toks[k + 1].text;
                 }
                 return null; // a binary `&`, or `&` not followed by an identifier
@@ -3080,118 +3507,342 @@ const Transpiler = struct {
         return null;
     }
 
-    /// Parse a scalar global initializer starting at token index `start`, e.g.
-    /// `UINT32_C(0)`, `-INT32_C(1)`, `0`, `-5`, `NULL`. Returns the value as a u64
-    /// bit pattern (negatives via two's complement); best-effort, defaults to 0.
+    /// The value of a constant in a static initializer - one element of a global's `{...}`, or a scalar global's
+    /// whole initializer - starting at token `start`, as the bits the data image stores: a negative integer in two's
+    /// complement, a float as its IEEE bits. The element must end right after the constant, at `,`, `}` or `;`. A form
+    /// this converter does not read is reported (`noteUnreadableConstant`) - the run then fails - and reads as 0.
     fn parseScalarInit(
         self: *Transpiler,
         start: usize,
         n: usize,
     ) u64 {
-        var k: usize = start;
-        var neg: bool = false;
-        while (k < n and eql(u8, self.toks[k].text, "-")) {
-            neg = !neg;
-            k += 1;
-        }
-        if (k >= n) {
+        var index: usize = start;
+        const constant: Constant = self.evaluateConstant(&index, n);
+        const has_element_ended: bool = index >= n or self.isElementEnd(index);
+        if (!has_element_ended) {
+            // Something follows the constant within the element - an operator this reader does not evaluate.
+            self.noteUnreadableConstant(index);
             return 0;
         }
-        var tok: []const u8 = self.toks[k].text;
-        // non-finite float constant: zig_make_special_fNN / zig_init_special_fNN
-        // (sign, name, arg, repr). The 4th field `repr` is the IEEE bit pattern;
-        // recurse on it so the data slot holds the correct inf/nan bytes (without
-        // this a const inf/nan global silently reads back as 0).
-        const is_special = startsWith(u8, tok, "zig_make_special_f") or
-            startsWith(u8, tok, "zig_init_special_f");
-        if (self.toks[k].kind == .ident and is_special and
-            k + 1 < n and eql(u8, self.toks[k + 1].text, "("))
-        {
-            var j: usize = k + 2;
-            var depth: usize = 1;
-            var repr_start: usize = j;
-            while (j < n and depth > 0) : (j += 1) {
-                const tx: []const u8 = self.toks[j].text;
-                if (eql(u8, tx, "(")) {
-                    depth += 1;
-                } else if (eql(u8, tx, ")")) {
-                    depth -= 1;
-                    if (depth == 0) {
-                        break;
-                    }
-                } else if (depth == 1 and eql(u8, tx, ",")) {
-                    repr_start = j + 1; // last field seen so far = repr
-                }
+        return constant.bits;
+    }
+
+    /// A constant read from a static initializer: the bits the data image stores, and whether they are a float's IEEE
+    /// pattern - which neither a minus sign nor an integer cast may treat as an integer.
+    const Constant = struct {
+        bits: u64,
+        is_float: bool = false,
+    };
+
+    /// Whether token `index` ends an initializer element: a `,`, `}` or `;` punctuator.
+    fn isElementEnd(self: *Transpiler, index: usize) bool {
+        const token: Token = self.toks[index];
+        if (token.kind != .punct) {
+            return false;
+        }
+        return eql(u8, token.text, ",") or eql(u8, token.text, "}") or eql(u8, token.text, ";");
+    }
+
+    /// Reads one constant at `index.*`, before `end`, advancing past it. The grammar is that of the constants Zig's C
+    /// backend writes in static initializers:
+    ///
+    ///     constant := '-' constant | '+' constant | '(' type ')' constant | '(' constant ')' | literal
+    ///     literal  := an integer, with any u/l suffixes (`42`, `0xaaaaaaaaul`) | a character constant (`'\x76'`)
+    ///               | NULL | true | false | a type-limit macro (`UINT64_MAX`, `INT8_MIN`)
+    ///               | an integer macro, its argument a constant (`UINT32_C(5)`, `INT8_C(-1)`)
+    ///               | `zig_make_f32(hexfloat, bits)` or `zig_make_f64(...)`: a float, by its bits
+    ///               | `zig_make_special_fNN(sign, name, argument, bits)` or `zig_init_special_fNN(...)`:
+    ///                 an inf or a nan
+    ///
+    /// A cast to an integer type keeps the bits that type holds (`castConstant`): `(uint8_t)0x1ff` is 0xff. A pointer
+    /// cast keeps the value: the C backend writes an undefined pointer as `((T const *)0xaaaaaaaaul)`. Anything outside
+    /// the grammar is reported (`noteUnreadableConstant`) and reads as 0.
+    fn evaluateConstant(self: *Transpiler, index: *usize, end: usize) Constant {
+        if (index.* >= end) {
+            self.noteUnreadableConstant(@min(index.*, self.toks.len - 1));
+            return .{ .bits = 0 };
+        }
+        const token: Token = self.toks[index.*];
+        const is_sign: bool = token.kind == .punct and (eql(u8, token.text, "-") or eql(u8, token.text, "+"));
+        if (is_sign) {
+            const sign_index: usize = index.*;
+            index.* += 1;
+            const operand: Constant = self.evaluateConstant(index, end);
+            if (eql(u8, token.text, "+")) {
+                return operand;
             }
-            return self.parseScalarInit(repr_start, n); // repr is a UINTxx_C(...) / hex
-        }
-        // float literal: zig_make_fNN(<hexfloat>, <bitpattern>) -> the bit pattern
-        // (the 2nd arg), so the slot holds the correct IEEE bytes.
-        if (self.toks[k].kind == .ident and
-            (eql(u8, tok, "zig_make_f32") or eql(u8, tok, "zig_make_f64")) and
-            k + 1 < n and eql(u8, self.toks[k + 1].text, "("))
-        {
-            // find the comma at paren depth 1, then read the bit-pattern token
-            var j: usize = k + 2;
-            var depth: usize = 1;
-            while (j < n and depth > 0) : (j += 1) {
-                const tx: []const u8 = self.toks[j].text;
-                if (eql(u8, tx, "(")) {
-                    depth += 1;
-                }
-                if (eql(u8, tx, ")")) {
-                    depth -= 1;
-                }
-                if (depth == 1 and eql(u8, tx, ",")) {
-                    var bt: []const u8 = self.toks[j + 1].text;
-                    // unwrap UINTxx_C( ... )
-                    if (self.toks[j + 1].kind == .ident and endsWith(u8, bt, "_C") and
-                        eql(u8, self.toks[j + 2].text, "("))
-                    {
-                        bt = self.toks[j + 3].text;
-                    }
-                    return parseInt(u64, bt, 0) catch 0;
-                }
+            if (operand.is_float) {
+                // The C backend writes a negative float with its sign inside `zig_make_fNN`. A minus before one would
+                // flip the sign bit, not negate the bits as an integer; that form is not written, so it is reported.
+                self.noteUnreadableConstant(sign_index);
+                return .{ .bits = 0 };
             }
-            return 0;
+            return .{ .bits = 0 -% operand.bits };
         }
-        // unwrap UINTxx_C( / INTxx_C( macro: take the inner number
-        if (self.toks[k].kind == .ident and
-            endsWith(u8, tok, "_C") and
-            k + 1 < n and eql(u8, self.toks[k + 1].text, "("))
-        {
-            tok = self.toks[k + 2].text;
+        const is_parenthesis: bool = token.kind == .punct and eql(u8, token.text, "(");
+        if (is_parenthesis) {
+            const opening_index: usize = index.*;
+            const closing_index: usize = self.matching(opening_index, "(", ")");
+            if (closing_index >= end) {
+                self.noteUnreadableConstant(opening_index);
+                return .{ .bits = 0 };
+            }
+            if (self.isCastType(opening_index + 1, closing_index)) {
+                const cast_type: CType = tyFromSpecifiers(self.toks[opening_index + 1 .. closing_index]);
+                index.* = closing_index + 1;
+                const operand: Constant = self.evaluateConstant(index, end);
+                return self.castConstant(operand, cast_type, opening_index);
+            }
+            index.* = opening_index + 1;
+            const inner: Constant = self.evaluateConstant(index, closing_index);
+            if (index.* != closing_index) {
+                // Something follows the constant inside the parentheses - an operator this reader does not evaluate.
+                self.noteUnreadableConstant(index.*);
+            }
+            index.* = closing_index + 1;
+            return inner;
         }
-        if (eql(u8, tok, "NULL")) {
-            return 0;
+        return self.evaluateConstantLiteral(index, end);
+    }
+
+    /// Whether the tokens from `from` up to `to` - the inside of a pair of parentheses - name a type, which makes the
+    /// parentheses a cast. A type is identifiers and `*` only, each identifier a type word (`isTypeWord`) or the tag
+    /// after `struct`, `union` or `enum`. `(NULL)` and `(UINT32_C(5))` are no casts: NULL is no type word, and a type
+    /// holds no parentheses.
+    fn isCastType(self: *Transpiler, from: usize, to: usize) bool {
+        if (from >= to) {
+            return false;
         }
-        if (eql(u8, tok, "true")) {
-            return 1;
+        var has_type_word: bool = false;
+        var expects_tag: bool = false;
+        for (self.toks[from..to]) |token| {
+            if (token.kind == .punct and eql(u8, token.text, "*")) {
+                continue;
+            }
+            if (token.kind != .ident) {
+                return false;
+            }
+            if (expects_tag) {
+                expects_tag = false;
+                continue;
+            }
+            const is_tag_keyword: bool = eql(u8, token.text, "struct") or eql(u8, token.text, "union") or
+                eql(u8, token.text, "enum");
+            if (is_tag_keyword) {
+                expects_tag = true;
+                has_type_word = true;
+                continue;
+            }
+            if (!self.isTypeWord(token.text)) {
+                return false;
+            }
+            has_type_word = true;
         }
-        if (eql(u8, tok, "false")) {
-            return 0;
+        return has_type_word;
+    }
+
+    /// Whether a struct field declared with `specifiers` has a type this converter can size: a nested struct whose
+    /// layout is known (`nested_tag`), or words that each name or qualify a known type (`isTypeWord`), the word after
+    /// `struct` or `union` being a struct with a known layout.
+    fn isSizedFieldType(
+        self: *Transpiler,
+        specifiers: []const Token,
+        nested_tag: ?[]const u8,
+    ) bool {
+        if (nested_tag) |tag| {
+            return self.structs.contains(tag);
         }
-        // The C backend emits type-limit constants as bare macros (UINT64_MAX,
-        // INT64_MIN, ...), which parseInt can't read - without this they would
-        // silently become 0.
-        if (limitMacroValue(tok)) |v| {
-            return if (neg) 0 -% v else v;
-        }
-        // Strip any integer suffix (u/U/l/L) the backend may attach; parseInt
-        // rejects trailing non-digits, and the `catch 0` would silently zero it.
-        var tend: usize = tok.len;
-        while (tend > 0) {
-            const sc: u8 = tok[tend - 1];
-            if (sc == 'u' or sc == 'U' or sc == 'l' or sc == 'L') {
-                tend -= 1;
-            } else {
-                break;
+        var expects_struct_tag: bool = false;
+        for (specifiers) |token| {
+            if (token.kind != .ident) {
+                continue;
+            }
+            if (expects_struct_tag) {
+                if (!self.structs.contains(token.text)) {
+                    return false;
+                }
+                expects_struct_tag = false;
+                continue;
+            }
+            if (eql(u8, token.text, "struct") or eql(u8, token.text, "union")) {
+                expects_struct_tag = true;
+                continue;
+            }
+            if (!self.isTypeWord(token.text)) {
+                return false;
             }
         }
-        const mag = parseInt(u64, tok[0..tend], 0) catch 0;
-        // Wrapping negation computes the two's-complement directly, avoiding an
-        // i64 cast that would panic for INT64_MIN's magnitude (2^63) in safe builds.
-        return if (neg) 0 -% mag else mag;
+        return true;
+    }
+
+    /// Whether `word` names or qualifies a type: a C or `zig.h` base type (`baseType`), a qualifier or specifier
+    /// (`isTypeQualifierOrSpecifier`), or a type the program declared with `typedef`, as the converter recorded it.
+    fn isTypeWord(self: *Transpiler, word: []const u8) bool {
+        const is_declared_type: bool = self.typedefs.contains(word) or self.type_aliases.contains(word) or
+            self.bitpack_sizes.contains(word);
+        return baseType(word) != null or isTypeQualifierOrSpecifier(word) or is_declared_type;
+    }
+
+    /// A constant cast to `cast_type`. An integer type keeps the bits it holds: the low `bits`, sign-extended to 64
+    /// when it is signed, so `(int8_t)0xff` is -1 and `(uint8_t)0x1ff` is 0xff. A pointer keeps its 32-bit value; a
+    /// bool is 0 or 1. A float cast to anything, or anything cast to a float or to void, would change the value
+    /// itself rather than its width; no such cast is written in an initializer, so it is reported.
+    fn castConstant(
+        self: *Transpiler,
+        operand: Constant,
+        cast_type: CType,
+        cast_index: usize,
+    ) Constant {
+        if (operand.is_float) {
+            self.noteUnreadableConstant(cast_index);
+            return .{ .bits = 0 };
+        }
+        switch (cast_type.kind) {
+            .ptr => return .{ .bits = operand.bits & 0xffff_ffff },
+            .boolean => return .{ .bits = if (operand.bits != 0) 1 else 0 },
+            .int => {
+                const width: u16 = cast_type.bits;
+                if (width == 0 or width >= 64) {
+                    return operand;
+                }
+                const width_mask: u64 = (@as(u64, 1) << @intCast(width)) - 1;
+                const kept_bits: u64 = operand.bits & width_mask;
+                if (!cast_type.signed) {
+                    return .{ .bits = kept_bits };
+                }
+                const sign_bit: u64 = @as(u64, 1) << @intCast(width - 1);
+                const is_negative: bool = kept_bits & sign_bit != 0;
+                return .{ .bits = if (is_negative) kept_bits | ~width_mask else kept_bits };
+            },
+            else => {
+                self.noteUnreadableConstant(cast_index);
+                return .{ .bits = 0 };
+            },
+        }
+    }
+
+    /// Reads one literal of the constant grammar (`evaluateConstant`) at `index.*`, advancing past it - past its
+    /// parenthesized arguments, for a macro.
+    fn evaluateConstantLiteral(self: *Transpiler, index: *usize, end: usize) Constant {
+        const literal_index: usize = index.*;
+        const token: Token = self.toks[literal_index];
+        index.* += 1;
+        switch (token.kind) {
+            .char => {
+                const byte: u8 = characterConstantByte(literalBody(token.text)) orelse {
+                    self.noteUnreadableConstant(literal_index);
+                    return .{ .bits = 0 };
+                };
+                const character_value: i64 = characterConstantValue(byte);
+                return .{ .bits = @bitCast(character_value) };
+            },
+            .number => {
+                const digits: []const u8 = withoutIntegerSuffix(token.text);
+                const value: u64 = parseInt(u64, digits, 0) catch {
+                    self.noteUnreadableConstant(literal_index);
+                    return .{ .bits = 0 };
+                };
+                return .{ .bits = value };
+            },
+            .ident => {},
+            else => {
+                self.noteUnreadableConstant(literal_index);
+                return .{ .bits = 0 };
+            },
+        }
+        const name: []const u8 = token.text;
+        if (eql(u8, name, "NULL") or eql(u8, name, "false")) {
+            return .{ .bits = 0 };
+        }
+        if (eql(u8, name, "true")) {
+            return .{ .bits = 1 };
+        }
+        if (limitMacroValue(name)) |limit_value| {
+            return .{ .bits = limit_value };
+        }
+        const has_arguments: bool = index.* < end and eql(u8, self.toks[index.*].text, "(");
+        if (!has_arguments) {
+            self.noteUnreadableConstant(literal_index);
+            return .{ .bits = 0 };
+        }
+        const opening_index: usize = index.*;
+        const closing_index: usize = self.matching(opening_index, "(", ")");
+        if (closing_index >= end) {
+            self.noteUnreadableConstant(literal_index);
+            return .{ .bits = 0 };
+        }
+        index.* = closing_index + 1;
+        // An integer macro, `UINT32_C(constant)`: the constant.
+        if (endsWith(u8, name, "_C")) {
+            return self.evaluateArgument(literal_index, opening_index, closing_index, 0, 1);
+        }
+        // A float, `zig_make_f32(hexfloat, bits)`: its bits, the second argument.
+        if (eql(u8, name, "zig_make_f32") or eql(u8, name, "zig_make_f64")) {
+            const float_bits: Constant = self.evaluateArgument(literal_index, opening_index, closing_index, 1, 2);
+            return .{ .bits = float_bits.bits, .is_float = true };
+        }
+        // An inf or a nan, `zig_make_special_f64(sign, name, argument, bits)`: its bits, the fourth argument.
+        const is_special_float: bool = startsWith(u8, name, "zig_make_special_f") or
+            startsWith(u8, name, "zig_init_special_f");
+        if (is_special_float) {
+            const float_bits: Constant = self.evaluateArgument(literal_index, opening_index, closing_index, 3, 4);
+            return .{ .bits = float_bits.bits, .is_float = true };
+        }
+        self.noteUnreadableConstant(literal_index);
+        return .{ .bits = 0 };
+    }
+
+    /// The constant that is argument `argument_number` (from 0) of the call whose parentheses are at `opening_index`
+    /// and `closing_index`, which must have exactly `argument_count` arguments - a whole constant each.
+    fn evaluateArgument(
+        self: *Transpiler,
+        call_index: usize,
+        opening_index: usize,
+        closing_index: usize,
+        argument_number: usize,
+        argument_count: usize,
+    ) Constant {
+        var argument_start: usize = opening_index + 1;
+        var found_count: usize = 0;
+        var wanted_start: ?usize = null;
+        var wanted_end: usize = closing_index;
+        var depth: usize = 0;
+        var scan_index: usize = opening_index + 1;
+        while (scan_index <= closing_index) : (scan_index += 1) {
+            const text: []const u8 = self.toks[scan_index].text;
+            const is_punct: bool = self.toks[scan_index].kind == .punct;
+            const is_opening: bool = is_punct and (eql(u8, text, "(") or eql(u8, text, "{") or eql(u8, text, "["));
+            const is_closing: bool = is_punct and (eql(u8, text, ")") or eql(u8, text, "}") or eql(u8, text, "]"));
+            const ends_argument: bool = scan_index == closing_index or (depth == 0 and is_punct and eql(u8, text, ","));
+            if (ends_argument) {
+                if (found_count == argument_number) {
+                    wanted_start = argument_start;
+                    wanted_end = scan_index;
+                }
+                found_count += 1;
+                argument_start = scan_index + 1;
+                continue;
+            }
+            if (is_opening) {
+                depth += 1;
+            } else if (is_closing and depth > 0) {
+                depth -= 1;
+            }
+        }
+        const start: usize = wanted_start orelse {
+            self.noteUnreadableConstant(call_index);
+            return .{ .bits = 0 };
+        };
+        if (found_count != argument_count) {
+            self.noteUnreadableConstant(call_index);
+            return .{ .bits = 0 };
+        }
+        var argument_index: usize = start;
+        const value: Constant = self.evaluateConstant(&argument_index, wanted_end);
+        if (argument_index != wanted_end) {
+            self.noteUnreadableConstant(argument_index);
+        }
+        return value;
     }
 
     /// Overwrite `width` bytes of the data image at heap address `addr` with the
@@ -3243,11 +3894,13 @@ const Transpiler = struct {
     /// Write the constant brace initializer for struct `layout` into the data
     /// image at heap byte `base`. Token `idx` is at the opening `{`. Returns the
     /// token index just past the matching `}`. Handles scalar fields, array-typed
-    /// fields (the `{e0, e1, ...}` inner brace that SIMD vectors lower to), and
-    /// nested struct fields (recursively). Constant leaves are evaluated by
-    /// parseScalarInit (so `zig_make_f32(hexfloat, bits)` stores the exact IEEE
-    /// bytes). Struct-element arrays aren't unrolled (left zeroed) - rare and not
-    /// reached by the vector/matrix-of-scalars constants this targets.
+    /// fields (the `{e0, e1, ...}` inner brace that SIMD vectors lower to, or a
+    /// string literal for an array of bytes), nested struct fields (recursively),
+    /// and arrays of structs (element by element). Constant leaves are evaluated
+    /// by parseScalarInit (so `zig_make_f32(hexfloat, bits)` stores the exact IEEE
+    /// bytes). Whatever it cannot place - a field the struct does not have, more
+    /// elements than fields, a struct with no known layout - is reported
+    /// (`noteUnmodeledAt`), never left silently zero.
     fn writeConstStruct(
         self: *Transpiler,
         base: u32,
@@ -3262,6 +3915,7 @@ const Transpiler = struct {
             // by name; otherwise positional.
             var f: Field = undefined;
             if (eql(u8, self.toks[k].text, ".") and self.toks[k + 1].kind == .ident) {
+                const designator_index: usize = k + 1;
                 const fname: []const u8 = self.toks[k + 1].text;
                 k += 2; // '.' name
                 if (k < self.toks.len and eql(u8, self.toks[k].text, "=")) {
@@ -3276,6 +3930,10 @@ const Transpiler = struct {
                     }
                 }
                 if (!found) {
+                    self.noteUnmodeledAt(
+                        designator_index,
+                        "an initializer names a field its struct's layout does not have",
+                    );
                     k = self.skipInitElement(k);
                     if (k < self.toks.len and eql(u8, self.toks[k].text, ",")) {
                         k += 1;
@@ -3285,6 +3943,7 @@ const Transpiler = struct {
             } else if (fi < layout.fields.len) {
                 f = layout.fields[fi];
             } else {
+                self.noteUnmodeledAt(k, "an initializer has more elements than its struct's layout has fields");
                 break;
             }
             if (f.struct_tag) |ntag| {
@@ -3301,6 +3960,10 @@ const Transpiler = struct {
                             if (eql(u8, self.toks[k].text, "{")) {
                                 k = try self.writeConstStruct(base + f.offset + j * nl.size, nl, k);
                             } else {
+                                self.noteUnmodeledAt(
+                                    k,
+                                    "an element of an array of structs that is not a brace initializer",
+                                );
                                 k = self.skipInitElement(k);
                             }
                             j += 1;
@@ -3314,15 +3977,29 @@ const Transpiler = struct {
                     } else if (eql(u8, self.toks[k].text, "{")) {
                         k = try self.writeConstStruct(base + f.offset, nl, k);
                     } else {
+                        self.noteUnmodeledAt(
+                            k,
+                            "a struct field initialized by something other than a brace initializer",
+                        );
                         k = self.skipInitElement(k);
                     }
                 } else {
+                    self.noteUnmodeledAt(k, "an initializer for a struct field whose struct has no known layout");
                     k = self.skipInitElement(k);
                 }
             } else {
                 const esize: u32 = @intCast(elemSize(fieldElem(f)));
                 const is_array: bool = f.size > esize;
-                if (is_array and eql(u8, self.toks[k].text, "{")) {
+                if (is_array and esize == 1 and self.toks[k].kind == .str) {
+                    // An array of bytes written as a string literal, `{"\001\002"}`: its bytes, each in turn.
+                    const string_bytes: []u8 = try decodeCString(self.gpa, literalBody(self.toks[k].text));
+                    const byte_count: usize = @min(string_bytes.len, f.size);
+                    for (string_bytes[0..byte_count], 0..) |string_byte, byte_index| {
+                        const byte_address: u32 = base + f.offset + @as(u32, @intCast(byte_index));
+                        self.writeBytesAt(byte_address, string_byte, 1);
+                    }
+                    k += 1;
+                } else if (is_array and eql(u8, self.toks[k].text, "{")) {
                     k += 1; // past inner '{'
                     var j: u32 = 0;
                     while (k < self.toks.len and !eql(u8, self.toks[k].text, "}")) {
@@ -3331,6 +4008,7 @@ const Transpiler = struct {
                                 .addr = base + f.offset + j * esize,
                                 .target = gname,
                                 .width = @intCast(esize),
+                                .token_index = k,
                             });
                         } else {
                             self.writeBytesAt(
@@ -3354,6 +4032,7 @@ const Transpiler = struct {
                             .addr = base + f.offset,
                             .target = gname,
                             .width = @intCast(f.size),
+                            .token_index = k,
                         });
                     } else {
                         self.writeBytesAt(
@@ -3369,6 +4048,9 @@ const Transpiler = struct {
             if (k < self.toks.len and eql(u8, self.toks[k].text, ",")) {
                 k += 1;
             }
+        }
+        if (k < self.toks.len and !eql(u8, self.toks[k].text, "}")) {
+            self.noteUnmodeledAt(k, "tokens left over at the end of a struct initializer");
         }
         while (k < self.toks.len and !eql(u8, self.toks[k].text, "}")) {
             k += 1;
@@ -3705,7 +4387,7 @@ const Transpiler = struct {
                     // (`(struct { u8 array[N]; }){"\005\006..."}`) - the form Zig's
                     // C backend uses for a runtime [N]u8 value. Decode the bytes and
                     // store each at field_offset + j (element size is 1 for u8).
-                    const bytes: []u8 = try decodeCString(self.gpa, self.current().text);
+                    const bytes: []u8 = try decodeCString(self.gpa, literalBody(self.current().text));
                     self.p += 1; // consume the string token
                     const elemField = Field{
                         .name = "",
@@ -3801,7 +4483,9 @@ const Transpiler = struct {
                     try parts.appendSlice(self.gpa, ", ");
                 }
             } else {
-                _ = try self.parseAssign(); // extra initializer: parse and ignore
+                // An element with no field to go to: a designator the layout lacks, or one element too many.
+                self.noteUnmodeledAt(self.p, "a compound literal element with no field of its struct to initialize");
+                _ = try self.parseAssign();
             }
             fi += 1;
             if (self.atText(",")) {
@@ -4068,6 +4752,12 @@ const Transpiler = struct {
                 }
                 break :blk null;
             };
+            // A field's type must be one this converter can size: a pointer, a struct with a known layout, or words
+            // it knows (`isTypeWord`). Any other would be laid out as a 4-byte int, putting every later field of the
+            // struct at a wrong offset.
+            if (fty.kind != .ptr and !self.isSizedFieldType(seg[0..nk], nested_tag)) {
+                self.noteUnmodeledAt(seg_start, "a struct field of a type c2js does not know how to size");
+            }
             const fsize: u32 = blk: {
                 if (nested_tag) |ntag| {
                     if (self.structs.get(ntag)) |nl| {
@@ -5866,8 +6556,19 @@ const Transpiler = struct {
                     }
                     const save: usize = self.p;
                     self.p += 3; // '*' '(' '&'
+                    const operand_start: usize = self.p;
                     const inner: []const u8 = try self.parsePostfix();
                     if (self.atText(")")) {
+                        // `*(&x)` for a bare name is x itself. A longer operand - a member or index chain - is a shape
+                        // `tryDerefAddrOf` could not model, and reading it here as a plain value can leak an address
+                        // as a property access, which reads back undefined: reported rather than guessed.
+                        const operand_token_count: usize = self.p - operand_start;
+                        if (operand_token_count > 1) {
+                            self.noteUnmodeledAt(
+                                operand_start,
+                                "a dereferenced address-of (`*(&...)`) of a shape c2js does not model",
+                            );
+                        }
                         self.p += 1; // ')'
                         return inner;
                     }
@@ -6790,6 +7491,15 @@ const Transpiler = struct {
                 self.p += 1;
                 return LValue{ .addr = try allocPrint(self.gpa, "({s})", .{t.text}), .tag = tag };
             }
+            // A scalar global: its heap slot, viewed as its declared type. This is what `*(&name)` - the C backend's
+            // global read and store since Zig 0.17 - resolves through; without it the read fell back to the bare
+            // name, which lowers to the slot's ADDRESS, and the store was dropped.
+            if (self.global_scalars.get(t.text)) |slot_elem| {
+                if (self.globals.get(t.text)) |off| {
+                    self.p += 1;
+                    return LValue{ .addr = try allocPrint(self.gpa, "{d}", .{off}), .elem = slot_elem };
+                }
+            }
         }
         return null;
     }
@@ -7221,6 +7931,36 @@ const Transpiler = struct {
         return false;
     }
 
+    /// Records a construct this converter does not model, at token `token_index`, with its C line: a diagnostic
+    /// (`noteDiag`), so the run fails rather than produce output that is silently wrong.
+    fn noteUnmodeledAt(
+        self: *Transpiler,
+        token_index: usize,
+        comptime what: []const u8,
+    ) void {
+        const line_index: usize = @min(token_index, self.toks.len - 1);
+        const token: Token = self.toks[line_index];
+        const message: []const u8 = allocPrint(
+            self.gpa,
+            "C line {d}, at {s}: " ++ what,
+            .{ token.line, token.text },
+        ) catch what;
+        self.noteDiag(message);
+    }
+
+    /// Records a constant in an initializer this converter cannot read. Such a constant is written into the data image,
+    /// where it would read back as zero - a silently wrong value - so it joins the run's diagnostics (`noteDiag`): the
+    /// conversion fails, naming the C line and the constant's text.
+    fn noteUnreadableConstant(self: *Transpiler, token_index: usize) void {
+        const token: Token = self.toks[token_index];
+        const message: []const u8 = allocPrint(
+            self.gpa,
+            "C line {d}: the constant {s} in an initializer is not a form c2js reads; it would read back as 0",
+            .{ token.line, token.text },
+        ) catch "a constant in an initializer is not a form c2js reads; it would read back as 0";
+        self.noteDiag(message);
+    }
+
     /// Record a place where c2js had to GUESS rather than model. Reported at the
     /// end of the run alongside the `/*?...*/` markers: a guessed width silently
     /// drops a mask or a sign-extension, which is the same silently-wrong-value
@@ -7334,6 +8074,12 @@ const Transpiler = struct {
         const is_u64_extract: bool = eql(u8, op, "lo") or eql(u8, op, "hi");
         const wide_bits: u16 = if (eql(u8, width_str, "128")) 128 else 64;
         self.last_w = if (is_u64_extract) 0 else wide_bits;
+        // `not`, `lo` and `hi` take one operand; every other operation two. A call with fewer is malformed C.
+        const is_unary_operation: bool = eql(u8, op, "not") or eql(u8, op, "lo") or eql(u8, op, "hi");
+        const operand_count: usize = if (is_unary_operation) 1 else 2;
+        if (args.len < operand_count) {
+            self.noteUnmodeledAt(self.p -| 1, "a zig.h wide-integer helper called with fewer operands than it takes");
+        }
         const a: []const u8 = if (args.len > 0) args[0] else "0";
         const b: []const u8 = if (args.len > 1) args[1] else "0";
         // wrapping ops carry the result bit-width as their last arg; default to width_str.
@@ -7896,7 +8642,7 @@ const Transpiler = struct {
                 self.p += 1;
             }
             const a0: []const u8 = self.current().text;
-            var v = std.fmt.parseFloat(f64, a0) catch blk: {
+            var v = parseFloat(f64, a0) catch blk: {
                 // skip arg0, use the bits in arg1
                 while (self.current().kind != .eof and !self.atText(",")) {
                     self.p += 1;
@@ -8548,7 +9294,10 @@ const Transpiler = struct {
             const field: []const u8 = self.current().text;
             self.p += 1;
             self.expect(")");
-            const off: u32 = self.fieldOffsetOf(tag, field) orelse 0;
+            const off: u32 = self.fieldOffsetOf(tag, field) orelse blk: {
+                self.noteUnmodeledAt(self.p - 2, "the offset of a field its struct's layout does not have");
+                break :blk 0;
+            };
             return try allocPrint(self.gpa, "{d}", .{off});
         }
 
@@ -8690,11 +9439,14 @@ const Transpiler = struct {
                 // zero case, @byteSwap and @bitReverse all depend on the real width, so
                 // a u40/u48 computed leading zeros / swapped bytes over 64 bits.
                 // Prefer the second arg; fall back to the name suffix when absent.
-                var width: u16 = SuffixWidth.parse(name) orelse 32;
+                var width: u16 = SuffixWidth.parse(name) orelse blk: {
+                    self.noteUnmodeledAt(self.p - 2, "a bit builtin whose name carries no width");
+                    break :blk 32;
+                };
                 if (self.atText(",")) {
                     self.p += 1;
                     const w_e: []const u8 = try self.parseExpr();
-                    width = parseInt(u16, trim(u8, w_e, "() "), 10) catch width;
+                    width = self.bitsArg(w_e, width);
                 }
                 self.expect(")");
                 return try allocPrint(self.gpa, "{s}({s}, {d})", .{ entry.helper, a, width });
@@ -8951,7 +9703,9 @@ const Transpiler = struct {
                             return r;
                         }
                     }
-                    // unknown struct: skip the brace body, yield 0
+                    // A struct with no known layout: its value cannot be built. Reported, and the body skipped so that
+                    // the rest still parses and every other problem is reported in the same run.
+                    self.noteUnmodeledAt(self.p, "a compound literal of a struct that has no known layout");
                     const ce: usize = self.matching(self.p, "{", "}");
                     self.p = ce + 1;
                     return self.gpa.dupe(u8, "0");
@@ -9066,6 +9820,16 @@ const Transpiler = struct {
             self.last_w = 32; // numeric literals are Numbers (64-bit literals arrive as UINT64_C)
             return self.emitNumber(t.text);
         }
+        // A character constant is an int: its value with C's signed char (`characterConstantValue`).
+        if (t.kind == .char) {
+            self.p += 1;
+            self.last_w = 32;
+            const byte: u8 = characterConstantByte(literalBody(t.text)) orelse {
+                self.noteUnreadableConstant(self.p - 1);
+                return self.gpa.dupe(u8, "0");
+            };
+            return allocPrint(self.gpa, "{d}", .{characterConstantValue(byte)});
+        }
         if (t.kind == .ident) {
             self.p += 1;
             // function-like builtin?
@@ -9131,10 +9895,10 @@ const Transpiler = struct {
 // I/O (use std.posix to avoid the new std.Io abstraction churn)
 // ----------------------------------------------------------------------------
 
-fn readAllStdin(gpa: Allocator, io: std.Io) ![]u8 {
+fn readAllStdin(gpa: Allocator, io: Io) ![]u8 {
     var list: ArrayList(u8) = .empty;
     var buf: [64 * 1024]u8 = undefined;
-    const in: File = File.stdin();
+    const in: File = .stdin();
     while (true) {
         var iov = [_][]u8{&buf};
         const n: usize = in.readStreaming(io, &iov) catch |err| switch (err) {
@@ -9150,19 +9914,19 @@ fn readAllStdin(gpa: Allocator, io: std.Io) ![]u8 {
 }
 
 // Write all bytes to stdout (cross-platform via std.Io) - the plain-filter output.
-fn writeAllStdout(io: std.Io, bytes: []const u8) !void {
+fn writeAllStdout(io: Io, bytes: []const u8) !void {
     try File.stdout().writeStreamingAll(io, bytes);
 }
 
 // Write all bytes to stderr (usage / errors - keeps stdout a clean JS stream).
-fn writeAllStderr(io: std.Io, bytes: []const u8) !void {
+fn writeAllStderr(io: Io, bytes: []const u8) !void {
     try File.stderr().writeStreamingAll(io, bytes);
 }
 
 /// Write `bytes` to `path` (create/truncate). Cross-platform via Dir,
 /// so the same native pipeline builds on Linux and Windows.
 fn writeFile(
-    io: std.Io,
+    io: Io,
     path: []const u8,
     bytes: []const u8,
 ) !void {
@@ -9172,7 +9936,7 @@ fn writeFile(
 }
 
 /// Read a whole file into memory (used by `--wasm-embed` to inline a .wasm).
-fn readFileAlloc(io: std.Io, gpa: Allocator, path: []const u8) ![]u8 {
+fn readFileAlloc(io: Io, gpa: Allocator, path: []const u8) ![]u8 {
     const file: File = try Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
     var list: ArrayList(u8) = .empty;
@@ -9296,101 +10060,67 @@ fn buildSourceMap(
 // for the source map), then build a Transpiler and run it. Afterwards write the
 // JS to stdout, and if a basename arg was passed, also write "<name>.js.map" and
 // append a //# sourceMappingURL.
+/// The command line (std's cli, `src/command_line.zig`). Without arguments it is a plain stdin -> stdout filter
+/// (the smoke, canary and corpus steps rely on it). The hand parser this replaced already refused unknown flags,
+/// but its usage text had fallen three options behind, and a value-taking option at the end of the line (`--title`
+/// with nothing after it) was dropped without a word.
+const C2jsArgs = struct {
+    @"--min": bool = false,
+    @"--safe": bool = false,
+    @"--html": bool = false,
+    @"--title": ?[]const u8 = null,
+    @"--fullscreen-landscape": bool = false,
+    @"--wasm-url": ?[]const u8 = null,
+    @"--wasm-embed": ?[]const u8 = null,
+    @"--kernel-wasm-embed": ?[]const u8 = null,
+    @"--worker-js-embed": ?[]const u8 = null,
+    @"--audio-worklet-js-embed": ?[]const u8 = null,
+    @"--external-js": ?[]const u8 = null,
+    basename: ?[]const u8 = null,
+};
+
+const c2js_cli: cli.Config(C2jsArgs) = .{
+    .prog = "c2js",
+    .description = "Transpiles the Zig C backend's output (C on stdin) to JavaScript on stdout.",
+    .args = .{
+        .@"--min" = .{ .description = "minify the JS output" },
+        .@"--safe" = .{ .description = "SAFE_HEAP: bounds/alignment/null-check every heap access (debug)" },
+        .@"--html" = .{ .description = "wrap the JS in a minimal HTML page" },
+        .@"--title" = .{ .description = "the page's <title> (with --html)" },
+        .@"--fullscreen-landscape" = .{ .description = "a full-canvas page with the fullscreen-toggle button" },
+        .@"--wasm-url" = .{ .description = "set window.WASM_URL, so the page fetches a sibling .wasm" },
+        .@"--wasm-embed" = .{ .description = "base64-inline this .wasm into the page (self-contained)" },
+        .@"--kernel-wasm-embed" = .{ .description = "base64-inline the compute kernels' .wasm too" },
+        // Injected as window.ZIMR_WORKER_JS: the bridge is compiled in six places, and threading a module import
+        // through all of them to carry one string would be worse than reading a global.
+        .@"--worker-js-embed" = .{ .description = "inline the jobs worker's program (itself made by this tool)" },
+        .@"--audio-worklet-js-embed" = .{ .description = "inline the audio worklet's program (made by this tool too)" },
+        .@"--external-js" = .{ .description = "reference a shared runtime JS by URL instead of inlining it" },
+        .basename = .{ .description = "also write <basename>.js.map and point the JS at it" },
+    },
+};
+
 pub fn main(init: std.process.Init) !void {
     // Use an arena for all transpiler allocations: it frees everything at once on
     // deinit, so we don't fight the (leak-checking) default gpa over the fact that
     // this tool intentionally never frees individual allocations.
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(init.gpa);
+    var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
     const gpa: Allocator = arena.allocator();
 
-    // If a base name is given as argv[1], also emit a source map:
-    //   <base>.js.map  (JS -> preprocessed-C, line granularity)
-    // and append a sourceMappingURL comment to the JS so debuggers find it.
-    // Without an arg, behave as a plain stdin->stdout filter (tests rely on this).
-    // initAllocator works on every OS (Windows/WASI need the allocation; POSIX
-    // tolerates it), unlike the bare .init which compile-errors on Windows.
-    var arg_it: std.process.Args.Iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
-    _ = arg_it.next(); // exe name
-    var base_opt: ?[]const u8 = null;
-    var minify_out: bool = false;
-    var safe_heap: bool = false;
-    var html_out: bool = false;
-    var fullscreen_landscape: bool = false;
-    var title_opt: ?[]const u8 = null;
-    var wasm_url_opt: ?[]const u8 = null;
-    var wasm_embed_opt: ?[]const u8 = null;
-    var kernel_wasm_opt: ?[]const u8 = null;
-    // The WORKER's program, itself produced by this very tool from src/jobs_worker.zig.
-    // Injected as window.ZIMR_WORKER_JS for the same reason the kernel wasm is: the bridge is
-    // compiled in six places, and threading a module import through all of them to carry one
-    // string would be worse than reading a global.
-    var worker_js_opt: ?[]const u8 = null;
-    var external_js_opt: ?[]const u8 = null;
-    const usage_text: []const u8 =
-        \\wz_c2js — transpile the Zig C-backend's output (C on stdin) to JavaScript on stdout.
-        \\
-        \\Usage: wz_c2js [options] [basename] < input.c > output.js
-        \\
-        \\Options:
-        \\  --min                minify the JS output
-        \\  --safe               SAFE_HEAP: bounds/alignment/null-check every heap access (debug)
-        \\  --html               wrap the JS in a minimal HTML page (emitted to stdout)
-        \\  --title <text>       page <title> (with --html)
-        \\  --wasm-url <url>     set window.WASM_URL so the page fetches a sibling .wasm
-        \\  --wasm-embed <file>  base64-inline the .wasm into the page (self-contained)
-        \\  --external-js <url>  reference a shared runtime JS via <script src> instead of
-        \\                       inlining it (the gallery: one cached zimr.js, tiny pages)
-        \\  -h, --help           show this help and exit
-        \\
-        \\If [basename] is given, also writes "<basename>.js.map" and appends a
-        \\sourceMappingURL comment to the JS. With no arguments, acts as a plain
-        \\stdin->stdout filter.
-        \\
-    ;
-    while (arg_it.next()) |a| {
-        if (eql(u8, a, "--min")) {
-            minify_out = true;
-        } else if (eql(u8, a, "--safe")) {
-            safe_heap = true;
-        } else if (eql(u8, a, "--html")) {
-            html_out = true;
-        } else if (eql(u8, a, "--title")) {
-            title_opt = if (arg_it.next()) |v| try gpa.dupe(u8, v) else null;
-        } else if (eql(u8, a, "--fullscreen-landscape")) {
-            fullscreen_landscape = true;
-        } else if (eql(u8, a, "--wasm-url")) {
-            wasm_url_opt = if (arg_it.next()) |v| try gpa.dupe(u8, v) else null;
-        } else if (eql(u8, a, "--kernel-wasm-embed")) {
-            kernel_wasm_opt = if (arg_it.next()) |v| try gpa.dupe(u8, v) else null;
-        } else if (eql(u8, a, "--worker-js-embed")) {
-            worker_js_opt = if (arg_it.next()) |v| try gpa.dupe(u8, v) else null;
-        } else if (eql(u8, a, "--wasm-embed")) {
-            wasm_embed_opt = if (arg_it.next()) |v| try gpa.dupe(u8, v) else null;
-        } else if (eql(u8, a, "--external-js")) {
-            external_js_opt = if (arg_it.next()) |v| try gpa.dupe(u8, v) else null;
-        } else if (eql(u8, a, "--help") or eql(u8, a, "-h")) {
-            try writeAllStdout(init.io, usage_text);
-            return;
-        } else if (a.len > 0 and a[0] == '-') {
-            // Unknown flag: fail loudly. Previously this fell through to the
-            // basename catch-all, so a typo like `--htlm` silently became the
-            // output basename (emitting a stray .js.map and no HTML).
-            try writeAllStderr(init.io, "wz_c2js: unknown option '");
-            try writeAllStderr(init.io, a);
-            try writeAllStderr(init.io, "'\n\n");
-            try writeAllStderr(init.io, usage_text);
-            std.process.exit(2);
-        } else if (base_opt == null) {
-            base_opt = try gpa.dupe(u8, a);
-        } else {
-            try writeAllStderr(init.io, "wz_c2js: unexpected extra argument '");
-            try writeAllStderr(init.io, a);
-            try writeAllStderr(init.io, "' (only one basename is used)\n\n");
-            try writeAllStderr(init.io, usage_text);
-            std.process.exit(2);
-        }
-    }
+    const args: C2jsArgs = cli.args(&init, C2jsArgs, c2js_cli);
+    const base_opt: ?[]const u8 = args.basename;
+    const minify_out: bool = args.@"--min";
+    const safe_heap: bool = args.@"--safe";
+    const html_out: bool = args.@"--html";
+    const fullscreen_landscape: bool = args.@"--fullscreen-landscape";
+    const title_opt: ?[]const u8 = args.@"--title";
+    const wasm_url_opt: ?[]const u8 = args.@"--wasm-url";
+    const wasm_embed_opt: ?[]const u8 = args.@"--wasm-embed";
+    const kernel_wasm_opt: ?[]const u8 = args.@"--kernel-wasm-embed";
+    const worker_js_opt: ?[]const u8 = args.@"--worker-js-embed";
+    const audio_worklet_js_opt: ?[]const u8 = args.@"--audio-worklet-js-embed";
+    const external_js_opt: ?[]const u8 = args.@"--external-js";
 
     // Args are parsed (so --help / bad-flag errors never blocked on a stdin
     // read). Now read the C and transpile it.
@@ -9419,6 +10149,9 @@ pub fn main(init: std.process.Init) !void {
             break;
         }
     }
+
+    // Adjacent string literals are one literal in C; they are joined before anything reads them.
+    try mergeAdjacentStringLiterals(gpa, &toks);
 
     var t = Transpiler.init(gpa, toks.items, pp.defines, safe_heap);
     try t.run();
@@ -9515,7 +10248,7 @@ pub fn main(init: std.process.Init) !void {
             // * 64 KB per chunk: comfortably under any plausible line limit, and few enough
             // concatenations that no parser is troubled by the expression depth.
             const chunk: usize = 64 * 1024;
-            var js: std.ArrayList(u8) = .empty;
+            var js: ArrayList(u8) = .empty;
             defer js.deinit(gpa);
             try js.appendSlice(gpa, "<script>window.WASM_BYTES = Uint8Array.from(atob(\n");
             var at: usize = 0;
@@ -9564,7 +10297,7 @@ pub fn main(init: std.process.Init) !void {
             // still unset - it throws inside the worker and is never heard from again. There
             // is no `await` in Zig to reach for, so this can only fire if someone reintroduces
             // hand-written JS. Catch it HERE, where the message can say what went wrong.
-            if (std.mem.indexOf(u8, wbytes, "await") != null) {
+            if (indexOf(u8, wbytes, "await") != null) {
                 std.log.err(
                     "worker JS '{s}' contains `await`.\n" ++
                         "  An async message handler YIELDS, so a job that arrives while the " ++
@@ -9585,6 +10318,22 @@ pub fn main(init: std.process.Init) !void {
                 gpa,
                 "<script>window.ZIMR_WORKER_JS = atob(\"{s}\");</script>\n",
                 .{b64},
+            );
+        } else "";
+
+        // --audio-worklet-js-embed <f> -> window.ZIMR_AUDIO_WORKLET_JS
+        //
+        // The audio worklet's program, also c2js output (from src/audio_worklet.zig): the bridge loads it as the
+        // worklet's module. Base64 for the reason the worker's program is.
+        const audio_worklet_setup: []const u8 = if (audio_worklet_js_opt) |audio_worklet_path| blk: {
+            const audio_worklet_bytes: []u8 = try readFileAlloc(init.io, gpa, audio_worklet_path);
+            const encoder: std.base64.Base64Encoder = std.base64.standard.Encoder;
+            const base64_text: []u8 = try gpa.alloc(u8, encoder.calcSize(audio_worklet_bytes.len));
+            _ = encoder.encode(base64_text, audio_worklet_bytes);
+            break :blk try allocPrint(
+                gpa,
+                "<script>window.ZIMR_AUDIO_WORKLET_JS = atob(\"{s}\");</script>\n",
+                .{base64_text},
             );
         } else "";
 
@@ -9709,14 +10458,14 @@ pub fn main(init: std.process.Init) !void {
         const js_section: []const u8 = if (external_js_opt) |ext|
             try allocPrint(
                 gpa,
-                "{s}{s}{s}<script src=\"{s}\"></script>",
-                .{ wasm_setup, kernel_setup, worker_setup, ext },
+                "{s}{s}{s}{s}<script src=\"{s}\"></script>",
+                .{ wasm_setup, kernel_setup, worker_setup, audio_worklet_setup, ext },
             )
         else
             try allocPrint(
                 gpa,
-                "{s}{s}{s}<script>\n{s}\n</script>",
-                .{ wasm_setup, kernel_setup, worker_setup, js_out },
+                "{s}{s}{s}{s}<script>\n{s}\n</script>",
+                .{ wasm_setup, kernel_setup, worker_setup, audio_worklet_setup, js_out },
             );
         const html: []u8 = try allocPrint(gpa,
             \\<!doctype html>
@@ -9773,4 +10522,52 @@ pub fn main(init: std.process.Init) !void {
     } else {
         try writeAllStdout(init.io, js_out);
     }
+}
+
+test "a C literal's characters decode as C reads them" {
+    const expectEqual = std.testing.expectEqual;
+    // A hex escape with two digits and with one, an octal escape, a plain character, an escaped quote.
+    try expectEqual(@as(?u8, 0x76), characterConstantByte("\\x76"));
+    try expectEqual(@as(?u8, 0x0a), characterConstantByte("\\xa"));
+    try expectEqual(@as(?u8, 0x76), characterConstantByte("\\166"));
+    try expectEqual(@as(?u8, 'v'), characterConstantByte("v"));
+    try expectEqual(@as(?u8, '\''), characterConstantByte("\\'"));
+    // A multi-character constant, and an empty one, hold no single character.
+    try expectEqual(@as(?u8, null), characterConstantByte("ab"));
+    try expectEqual(@as(?u8, null), characterConstantByte(""));
+    // wasm32's char is signed: 0xaa is -86 as a value.
+    try expectEqual(@as(i32, -86), characterConstantValue(0xaa));
+    try expectEqual(@as(i32, 0x76), characterConstantValue(0x76));
+    // A literal's text keeps its quotes; its body is what lies between them.
+    try expectEqualStrings("}", literalBody("\"}\""));
+    try expectEqualStrings("\\x7d", literalBody("'\\x7d'"));
+    const decoded: []u8 = try decodeCString(testing_allocator, "\\000\\a\\x41\\\"z\\x0041");
+    defer testing_allocator.free(decoded);
+    try expectEqualSlices(u8, &.{ 0, 7, 0x41, '"', 'z', 0x41 }, decoded);
+}
+
+test "adjacent string literals join as C joins them, escapes ending at each literal's end" {
+    const gpa: Allocator = testing_allocator;
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var tokens: ArrayList(Token) = .empty;
+    try tokens.appendSlice(arena, &.{
+        .{ .kind = .punct, .text = "{" },
+        .{ .kind = .str, .text = "\"\\x1\"" },
+        .{ .kind = .str, .text = "\"2\"" },
+        .{ .kind = .punct, .text = "}" },
+    });
+    try mergeAdjacentStringLiterals(arena, &tokens);
+    try std.testing.expectEqual(@as(usize, 3), tokens.items.len);
+    const joined: []u8 = try decodeCString(arena, literalBody(tokens.items[1].text));
+    try expectEqualSlices(u8, &.{ 0x01, '2' }, joined);
+    // Every byte survives a round trip through the encoding.
+    var every_byte: [256]u8 = undefined;
+    for (&every_byte, 0..) |*byte, value| {
+        byte.* = @intCast(value);
+    }
+    const encoded: []const u8 = try encodeCString(arena, &every_byte);
+    const decoded: []u8 = try decodeCString(arena, literalBody(encoded));
+    try expectEqualSlices(u8, &every_byte, decoded);
 }

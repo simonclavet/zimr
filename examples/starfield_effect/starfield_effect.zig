@@ -12,6 +12,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -32,7 +33,7 @@ const Star = struct {
 const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     stars: [num_stars]Star = @splat(.{ .x = 0, .y = 0, .z = 1 }),
     speed: f32 = 10.0 / 9.0,
     draw_lines: bool = true,
@@ -41,7 +42,7 @@ const State = struct {
 };
 
 fn randf(
-    rand: std.Random,
+    rand: Random,
     low: f32,
     high: f32,
 ) f32 {
@@ -50,7 +51,7 @@ fn randf(
 
 fn respawn(
     star: *Star,
-    rand: std.Random,
+    rand: Random,
     hw: f32,
     hh: f32,
 ) void {
@@ -64,9 +65,9 @@ fn init(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .ui_host = z.UiHost.init(gpa, font),
         .font = font,
-        .rng = std.Random.DefaultPrng.init(0xC0DECAFE),
+        .rng = Random.DefaultPrng.init(0xC0DECAFE),
     };
-    const rand: std.Random = s.rng.random();
+    const rand: Random = s.rng.random();
     const hw: f32 = @max(1.0, f.window.widthf() * 0.5);
     const hh: f32 = @max(1.0, f.window.heightf() * 0.5);
     for (&s.stars) |*star| {
@@ -83,7 +84,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn drawUiPanel(
     f: *z.Frame,
     s: *State,
-    rand: std.Random,
+    rand: Random,
     hw: f32,
     hh: f32,
 ) void {
@@ -116,7 +117,7 @@ fn update(f: *z.Frame, s: *State) void {
     const h: f32 = f.window.heightf();
     const hw: f32 = w * 0.5;
     const hh: f32 = h * 0.5;
-    const rand: std.Random = s.rng.random();
+    const rand: Random = s.rng.random();
 
     // Paint our own background (fills our viewport - works full-screen or in a
     // cell). The runner/launcher already opened the frame; we don't clear it.

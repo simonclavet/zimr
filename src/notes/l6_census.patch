@@ -1,0 +1,112 @@
+--- a/tools/zimrlint.zig
++++ b/tools/zimrlint.zig
+@@ -7091,7 +7091,109 @@
+     return 0;
+ }
+ 
++// ==== SCRATCH (L6 investigation): a census of decl-literal calls - never landed ====
++
++/// Mark the decl-literal calls an initializer holds where the declaration's type is in view: the initializer
++/// itself, through `try`, `catch` / `orelse` (either side), parentheses and `if` branches.
++fn censusMarkInView(ast: *const Ast, node: Index, in_view: *std.DynamicBitSetUnmanaged) void {
++    switch (ast.nodeTag(node)) {
++        .@"try" => censusMarkInView(ast, ast.nodeData(node).node, in_view),
++        .@"catch", .@"orelse" => {
++            const sides: [2]Index = ast.nodeData(node).node_and_node;
++            censusMarkInView(ast, sides[0], in_view);
++            censusMarkInView(ast, sides[1], in_view);
++        },
++        .grouped_expression => censusMarkInView(ast, ast.nodeData(node).node_and_token[0], in_view),
++        .if_simple, .@"if" => {
++            const full: Ast.full.If = ast.fullIf(node).?;
++            censusMarkInView(ast, full.ast.then_expr, in_view);
++            if (full.ast.else_expr.unwrap()) |else_expr| {
++                censusMarkInView(ast, else_expr, in_view);
++            }
++        },
++        .call, .call_comma, .call_one, .call_one_comma => in_view.set(@intFromEnum(node)),
++        else => {},
++    }
++}
++
++/// Where a decl-literal call sits, from the tokens before its `.`.
++fn censusPositionKind(tags: []const std.zig.Token.Tag, dot_token: u32) []const u8 {
++    if (dot_token == 0) {
++        return "other";
++    }
++    var before: u32 = dot_token - 1;
++    while (tags[before] == .keyword_try and before > 0) {
++        before -= 1;
++    }
++    switch (tags[before]) {
++        .keyword_return => return "return",
++        .keyword_break => return "break",
++        .equal => {
++            const is_field: bool = before >= 2 and tags[before - 1] == .identifier and tags[before - 2] == .period;
++            return if (is_field) "field" else "assignment";
++        },
++        .l_paren, .comma, .l_brace => {
++            // The bracket this sits in: `(` an argument, `{` an element of a literal.
++            var depth: u32 = 0;
++            var cursor: u32 = before;
++            while (true) {
++                switch (tags[cursor]) {
++                    .r_paren, .r_brace, .r_bracket => depth += 1,
++                    .l_paren, .l_brace, .l_bracket => {
++                        if (depth == 0) {
++                            return switch (tags[cursor]) {
++                                .l_paren => "argument",
++                                .l_brace => "element",
++                                else => "other",
++                            };
++                        }
++                        depth -= 1;
++                    },
++                    else => {},
++                }
++                if (cursor == 0) {
++                    return "other";
++                }
++                cursor -= 1;
++            }
++        },
++        else => return "other",
++    }
++}
++
++/// One finding per decl-literal call: `census <name> <kind>`, kind `in-view` where a typed declaration holds it.
++fn censusDeclLiterals(ctx: Ctx) !void {
++    const ast: *const Ast = ctx.ast;
++    var in_view: std.DynamicBitSetUnmanaged = try .initEmpty(ctx.alloc, ast.nodes.len);
++    defer in_view.deinit(ctx.alloc);
++    for (0..ast.nodes.len) |index| {
++        const node: Index = @enumFromInt(index);
++        const vd: Ast.full.VarDecl = ast.fullVarDecl(node) orelse continue;
++        if (vd.ast.type_node == .none) {
++            continue;
++        }
++        const init_node: Index = vd.ast.init_node.unwrap() orelse continue;
++        censusMarkInView(ast, init_node, &in_view);
++    }
++    const tags: []const std.zig.Token.Tag = ast.tokens.items(.tag);
++    for (0..ast.nodes.len) |index| {
++        const node: Index = @enumFromInt(index);
++        const callee: Index = switch (ast.nodeTag(node)) {
++            .call, .call_comma => ast.nodeData(node).node_and_extra[0],
++            .call_one, .call_one_comma => ast.nodeData(node).node_and_opt_node[0],
++            else => continue,
++        };
++        if (ast.nodeTag(callee) != .enum_literal) {
++            continue;
++        }
++        const name_token: u32 = ast.nodeMainToken(callee);
++        const kind: []const u8 = if (in_view.isSet(index)) "in-view" else censusPositionKind(tags, name_token - 1);
++        try ctx.emitAt(name_token, "prefer-decl-literal", 0, "census {s} {s}", .{ ast.tokenSlice(name_token), kind });
++    }
++}
++
+ fn runChecks(ctx: Ctx) !void {
++    try censusDeclLiterals(ctx);
+     // Fast path for the reorder tooling: run ONLY the decl-order check and skip
+     // the full node walk + every other rule. Turns an O(all-rules) pass into a
+     // single O(nodes) pass, which is what makes iterative reordering of large

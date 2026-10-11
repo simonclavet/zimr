@@ -70,6 +70,7 @@ const translation = zm.translation;
 const scaling = zm.scaling;
 const mulMat = zm.mulMat;
 const quatToMat = zm.quatToMat;
+const Quat = zm.Quat;
 
 const leg_count: usize = 4;
 const sim_timestep: f32 = 1.0 / 500.0;
@@ -160,6 +161,13 @@ const State = struct {
     transform: [1]Mat,
 };
 
+fn footAt(model: *const rbt.Model, d: *const rbt.Data, geom: u32) Vec {
+    const body: u32 = model.geom_body[geom];
+    return d.body_xpos[body] + zm.rotate(d.body_xrot[body], model.geom_pos[geom]);
+}
+
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
     s.doc = try z.codecs.xml.parse(gpa, @embedFile("go1.xml"), null);
@@ -242,11 +250,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.imported.deinit();
     s.robot.deinit();
     s.doc.deinit();
-}
-
-fn footAt(model: *const rbt.Model, d: *const rbt.Data, geom: u32) Vec {
-    const body: u32 = model.geom_body[geom];
-    return d.body_xpos[body] + zm.rotate(d.body_xrot[body], model.geom_pos[geom]);
 }
 
 /// Push one contact under every foot that is meant to be down.
@@ -510,117 +513,6 @@ fn resetRobot(s: *State) void {
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    // * PROFILING OFF ACROSS THE CONTROL LOOP. Physics runs at 500 Hz and each tick also does
-    // four IK solves, so a frame executes thousands of instrumented calls - each zone costing
-    // two timestamps, which on wasm are two JS boundary crossings. Measured here: 5602 host
-    // calls per frame before this, 200 after. The instrument is priced for a frame that does a
-    // few things; everything outside this call is still profiled normally.
-    const was_frozen: bool = profiler.isFrozen();
-    profiler.freeze();
-    if (s.running) {
-        s.accumulator += @min(f.time.delta_time, 0.1);
-        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            controlTick(s);
-        }
-    }
-    if (!was_frozen) {
-        profiler.unfreeze();
-    }
-    if (s.data.body_xpos[1][2] < 0.05) {
-        resetRobot(s);
-    }
-
-    z.clearViewport(f, bg);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 0.6, .max_distance = 4.0 });
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 16, 0.25);
-    drawRobot(s, gl);
-    z.endMode3D(gl);
-}
-
-fn drawRobot(s: *State, gl: *z.WgpuGl) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        const body_rot: zm.Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
-        const place: Mat = mulMat(
-            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
-            world_rot,
-        );
-        var tint: Color = if (body == 0) trunk_col else link_col;
-        for (0..leg_count) |leg| {
-            if (s.foot_geom[leg] == g) {
-                tint = if (@as(i32, @intCast(leg)) == s.lift_index) lifted_col else planted_col;
-            }
-        }
-        switch (m.geom_shape[g]) {
-            .sphere => |sph| {
-                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-            },
-            .capsule => |cap| {
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-                inline for ([_]f32{ -1.0, 1.0 }) |end| {
-                    s.transform[0] = mulMat(
-                        mulMat(place, translation(0, end * cap.half_height, 0)),
-                        scaling(cap.radius, cap.radius, cap.radius),
-                    );
-                    z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-                }
-            },
-            .box => |box| {
-                s.transform[0] = mulMat(place, scaling(
-                    2.0 * box.half_extent[0],
-                    2.0 * box.half_extent[1],
-                    2.0 * box.half_extent[2],
-                ));
-                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
-            },
-            else => {},
-        }
-    }
-
-    // * THE SUPPORT TRIANGLE AND THE CENTRE OF MASS, which is what makes the demo worth
-    // watching: the whole question is whether the yellow dot is over the green triangle.
-    var tri: [3]Vec = undefined;
-    var k: usize = 0;
-    for (0..leg_count) |leg| {
-        if (@as(i32, @intCast(leg)) == s.lift_index) {
-            continue;
-        }
-        tri[k] = s.pinned[leg];
-        k += 1;
-    }
-    for (0..3) |i| {
-        const a: Vec = tri[i];
-        const b: Vec = tri[(i + 1) % 3];
-        z.drawLine3D(gl, vec(a[0], 0.002, -a[1]), vec(b[0], 0.002, -b[1]), support_col);
-    }
-    const com: Vec = s.data.subtree_com[rbt.world_body];
-    s.transform[0] = mulMat(translation(com[0], 0.004, -com[1]), scaling(0.022, 0.004, 0.022));
-    z.drawMeshInstanced(gl, &s.sphere, &s.transform, com_col);
-    // And a line from the CM straight down, so its height is readable too.
-    s.transform[0] = mulMat(
-        mulMat(to_y_up, translation(com[0], com[1], com[2])),
-        scaling(0.016, 0.016, 0.016),
-    );
-    z.drawMeshInstanced(gl, &s.sphere, &s.transform, com_col);
-    z.drawLine3D(gl, vec(com[0], com[2], -com[1]), vec(com[0], 0.004, -com[1]), com_col);
-}
-
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
@@ -717,7 +609,116 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn drawRobot(s: *State, gl: *z.WgpuGl) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const to_y_up: Mat = zm.zUpToYUp();
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        const body_rot: Quat = s.data.body_xrot[body];
+        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
+        const world_rot: Mat = quatToMat(zm.qmul(body_rot, m.geom_rot[g]));
+        const place: Mat = mulMat(
+            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
+            world_rot,
+        );
+        var tint: Color = if (body == 0) trunk_col else link_col;
+        for (0..leg_count) |leg| {
+            if (s.foot_geom[leg] == g) {
+                tint = if (@as(i32, @intCast(leg)) == s.lift_index) lifted_col else planted_col;
+            }
+        }
+        switch (m.geom_shape[g]) {
+            .sphere => |sph| {
+                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+            },
+            .capsule => |cap| {
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cap.half_height, 0)),
+                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+                inline for ([_]f32{ -1.0, 1.0 }) |end| {
+                    s.transform[0] = mulMat(
+                        mulMat(place, translation(0, end * cap.half_height, 0)),
+                        scaling(cap.radius, cap.radius, cap.radius),
+                    );
+                    z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+                }
+            },
+            .box => |box| {
+                s.transform[0] = mulMat(place, scaling(
+                    2.0 * box.half_extent[0],
+                    2.0 * box.half_extent[1],
+                    2.0 * box.half_extent[2],
+                ));
+                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
+            },
+            else => {},
+        }
+    }
+
+    // * THE SUPPORT TRIANGLE AND THE CENTRE OF MASS, which is what makes the demo worth
+    // watching: the whole question is whether the yellow dot is over the green triangle.
+    var tri: [3]Vec = undefined;
+    var k: usize = 0;
+    for (0..leg_count) |leg| {
+        if (@as(i32, @intCast(leg)) == s.lift_index) {
+            continue;
+        }
+        tri[k] = s.pinned[leg];
+        k += 1;
+    }
+    for (0..3) |i| {
+        const a: Vec = tri[i];
+        const b: Vec = tri[(i + 1) % 3];
+        z.drawLine3D(gl, vec(a[0], 0.002, -a[1]), vec(b[0], 0.002, -b[1]), support_col);
+    }
+    const com: Vec = s.data.subtree_com[rbt.world_body];
+    s.transform[0] = mulMat(translation(com[0], 0.004, -com[1]), scaling(0.022, 0.004, 0.022));
+    z.drawMeshInstanced(gl, &s.sphere, &s.transform, com_col);
+    // And a line from the CM straight down, so its height is readable too.
+    s.transform[0] = mulMat(
+        mulMat(to_y_up, translation(com[0], com[1], com[2])),
+        scaling(0.016, 0.016, 0.016),
+    );
+    z.drawMeshInstanced(gl, &s.sphere, &s.transform, com_col);
+    z.drawLine3D(gl, vec(com[0], com[2], -com[1]), vec(com[0], 0.004, -com[1]), com_col);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    // * PROFILING OFF ACROSS THE CONTROL LOOP. Physics runs at 500 Hz and each tick also does
+    // four IK solves, so a frame executes thousands of instrumented calls - each zone costing
+    // two timestamps, which on wasm are two JS boundary crossings. Measured here: 5602 host
+    // calls per frame before this, 200 after. The instrument is priced for a frame that does a
+    // few things; everything outside this call is still profiled normally.
+    const was_frozen: bool = profiler.isFrozen();
+    profiler.freeze();
+    if (s.running) {
+        s.accumulator += @min(f.time.delta_time, 0.1);
+        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
+            controlTick(s);
+        }
+    }
+    if (!was_frozen) {
+        profiler.unfreeze();
+    }
+    if (s.data.body_xpos[1][2] < 0.05) {
+        resetRobot(s);
+    }
+
+    z.clearViewport(f, bg);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 0.6, .max_distance = 4.0 });
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 16, 0.25);
+    drawRobot(s, gl);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

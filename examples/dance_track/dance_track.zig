@@ -432,7 +432,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     rbt.forward(&s.imported.model, &s.data);
 
     // ---- the world the character actually stands on ----
-    s.world = try .init(gpa, 256);
+    s.world = try zp.World.init(gpa, 256);
     s.world.gravity = vec(0, 0, -9.81);
     const ground: zp.ShapeId = try s.world.shapes.add(gpa, .{
         .box = .{ .half_extent = vec(8, 8, 0.5), .convex_radius = 0.01 },
@@ -445,7 +445,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // 256, matching `max_contacts` above. This was dropped to 64 during a bisection and never
     // put back - and a bridge smaller than the contact budget is its own overflow, separate
     // from the one the budget was raised to fix.
-    s.bridge = try .init(gpa, &s.world, &s.imported.model, &s.data, 256);
+    s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.imported.model, &s.data, 256);
     s.bridge.listen(&s.world);
 
     const bodies: usize = s.imported.model.nbody;
@@ -616,57 +616,41 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     @memcpy(s.target, s.data.pos);
 }
 
-/// Put the simulated character back on the clip's first frame, at rest.
+/// Target body positions, built by walking the robot's tree and pointing each bone along the
+/// direction its human counterpart points, at the ROBOT's own bone length.
 ///
-/// Reference state initialisation in its simplest form. Without it the character gets exactly
-/// one attempt per page load, which is no way to look at anything.
-fn resetToClip(s: *State) void {
-    // ** THE CHARACTER STARTS ON THE CLIP'S FIRST FRAME, not in its rest pose. Starting in the
-    // T-pose while the target is a dance pose makes the controller cross that gap in one step -
-    // a shove at t = 0 that has nothing to do with whether the clip is trackable.
-    writeTargetFromClip(s, 0);
-    @memcpy(s.data.pos, s.target);
-    @memset(s.data.vel, 0);
-    s.accumulator = 0;
-    s.playhead = 0;
-    s.survived = 0;
-    s.fallen = false;
-    rbt.forward(&s.imported.model, &s.data);
-    s.start_height = s.data.body_xpos[1][2];
-}
+/// ** THE LENGTHS COME FROM THE ROBOT AND THE DIRECTIONS FROM THE HUMAN. A capture's limbs are
+/// whatever length that performer had; copying them would stretch the robot. Copying only the
+/// direction keeps the robot's proportions and asks the solve for the closest reachable pose.
+fn buildRetargetedSkeleton(s: *State, positions: []const Vec) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const limit: usize = @min(m.nbody, s.retargeted.len);
+    s.retargeted[0] = vec(0, 0, 0);
 
-fn deinit(gpa: Allocator, s: *State) void {
-    gpa.free(s.previous_target);
-    gpa.free(s.previous_qpos);
-    gpa.free(s.robot_rest_pos);
-    gpa.free(s.robot_rest_rot);
-    gpa.free(s.human_rest_rot);
-    gpa.free(s.human_metres);
-    gpa.free(s.human_rest_pos);
-    gpa.free(s.retargeted);
-    gpa.free(s.ik_scratch);
-    gpa.free(s.ik_tasks);
-    gpa.free(s.samples);
-    gpa.free(s.human_of_body);
-    gpa.free(s.human_rot);
-    s.kin_data.deinit();
-    gpa.free(s.target);
-    gpa.free(s.human_parent);
-    gpa.free(s.human_points);
-    gpa.free(s.clip_root);
-    gpa.free(s.clip_rotations);
-    s.bridge.deinit(&s.world);
-    s.world.deinit(gpa);
-    s.actuation.deinit();
-    s.data.deinit();
-    s.imported.deinit();
-    s.robot.deinit();
-    s.doc.deinit();
-    z.unloadMesh(gpa, s.cylinder);
-    z.unloadMesh(gpa, s.cube);
-    z.unloadMesh(gpa, s.sphere);
-    s.ui_host.deinit();
-    z.unloadFont(gpa, s.font);
+    for (1..limit) |b| {
+        const parent: u32 = m.body_parent[b];
+        const own_length: f32 = length3(m.body_pos[b]);
+        const hb: i32 = s.human_of_body[b];
+
+        if (parent == 0) {
+            s.retargeted[b] = if (hb >= 0 and @as(usize, @intCast(hb)) < positions.len)
+                positions[@intCast(hb)]
+            else
+                vec(0, 0, 0);
+            continue;
+        }
+        const hp: i32 = s.human_of_body[parent];
+        if (hb < 0 or hp < 0 or own_length < 1.0e-6) {
+            s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
+            continue;
+        }
+        const bone: Vec = positions[@intCast(hb)] - positions[@intCast(hp)];
+        if (length3(bone) < 1.0e-6) {
+            s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
+            continue;
+        }
+        s.retargeted[b] = s.retargeted[parent] + normalize3(bone) * @as(Vec, @splat(own_length));
+    }
 }
 
 /// Pose the kinematic robot on the capture by IK, and read its joint angles as the PD target.
@@ -779,41 +763,112 @@ fn solveKinematicPose(s: *State, frame: usize) void {
     s.has_previous = true;
 }
 
-/// Target body positions, built by walking the robot's tree and pointing each bone along the
-/// direction its human counterpart points, at the ROBOT's own bone length.
-///
-/// ** THE LENGTHS COME FROM THE ROBOT AND THE DIRECTIONS FROM THE HUMAN. A capture's limbs are
-/// whatever length that performer had; copying them would stretch the robot. Copying only the
-/// direction keeps the robot's proportions and asks the solve for the closest reachable pose.
-fn buildRetargetedSkeleton(s: *State, positions: []const Vec) void {
+/// Copy the solved kinematic pose into the PD target.
+fn writeTargetFromClip(s: *State, frame: usize) void {
+    solveKinematicPose(s, frame);
+    @memcpy(s.target, s.kin_data.pos[0..s.imported.model.nq]);
+
+    // ---- CLAMP THE TARGET TO EACH JOINT'S DECLARED RANGE ----
+    //
+    // `PointCloudOptions.limit_barrier` defaults to 1.0, so the IK already respects limits and
+    // this should be a no-op. **It is here because "should be" is not "is"**, and a target
+    // outside a joint's range is a PD chasing somewhere the joint cannot go - which produces
+    // exactly the runaway torque the shaking looks like.
+    //
+    // ** IT CANNOT MASK THE OPPOSITE FAILURE. If the SIMULATED joint has escaped its limit, the
+    // error stays large and the panel's `max |angle|` line says so - clamping the target does
+    // not quieten a sim that is already out of range, it only stops this end contributing.
     const m: *const rbt.Model = &s.imported.model;
-    const limit: usize = @min(m.nbody, s.retargeted.len);
-    s.retargeted[0] = vec(0, 0, 0);
-
-    for (1..limit) |b| {
-        const parent: u32 = m.body_parent[b];
-        const own_length: f32 = length3(m.body_pos[b]);
-        const hb: i32 = s.human_of_body[b];
-
-        if (parent == 0) {
-            s.retargeted[b] = if (hb >= 0 and @as(usize, @intCast(hb)) < positions.len)
-                positions[@intCast(hb)]
-            else
-                vec(0, 0, 0);
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] != .hinge) {
             continue;
         }
-        const hp: i32 = s.human_of_body[parent];
-        if (hb < 0 or hp < 0 or own_length < 1.0e-6) {
-            s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
-            continue;
+        if (m.jnt_range[j]) |range| {
+            const q: u32 = m.jnt_qpos_adr[j];
+            s.target[q] = clamp(s.target[q], range[0], range[1]);
         }
-        const bone: Vec = positions[@intCast(hb)] - positions[@intCast(hp)];
-        if (length3(bone) < 1.0e-6) {
-            s.retargeted[b] = s.retargeted[parent] + m.body_pos[b];
-            continue;
-        }
-        s.retargeted[b] = s.retargeted[parent] + normalize3(bone) * @as(Vec, @splat(own_length));
     }
+
+    // ---- HOW FAR THE TARGET MOVES BETWEEN ADJACENT FRAMES ----
+    //
+    // *** THE SERVO IS CLEARED (0ar): ONE ELBOW FOLLOWS A SMOOTH SINE TO 9 DEGREES AND TEN FREE
+    // BODIES DO NOT DEGRADE IT. So if it shakes on the real target, the target may not be
+    // smooth - and an IK solve that flips between two equally good poses on adjacent frames
+    // hands the PD a STEP INPUT every sixtieth of a second, which is indistinguishable from
+    // shaking and is nothing to do with stiffness.
+    //
+    // A dance at 60 fps should not turn any joint by much more than a tenth of a radian per
+    // frame. **A tenth is smooth; a whole radian is a different pose.** `previous_qpos` is the
+    // only thing preventing the flip, and nobody has checked that it does.
+    var jump: f32 = 0;
+    var where: usize = 0;
+    for (0..m.njnt) |j| {
+        if (m.jnt_type[j] != .hinge) {
+            continue;
+        }
+        const q: u32 = m.jnt_qpos_adr[j];
+        const moved: f32 = @abs(s.target[q] - s.previous_target[q]);
+        if (moved > jump) {
+            jump = moved;
+            where = j;
+        }
+    }
+    s.target_jump = jump;
+    s.jump_joint = where;
+    @memcpy(s.previous_target, s.target);
+}
+
+/// Put the simulated character back on the clip's first frame, at rest.
+///
+/// Reference state initialisation in its simplest form. Without it the character gets exactly
+/// one attempt per page load, which is no way to look at anything.
+fn resetToClip(s: *State) void {
+    // ** THE CHARACTER STARTS ON THE CLIP'S FIRST FRAME, not in its rest pose. Starting in the
+    // T-pose while the target is a dance pose makes the controller cross that gap in one step -
+    // a shove at t = 0 that has nothing to do with whether the clip is trackable.
+    writeTargetFromClip(s, 0);
+    @memcpy(s.data.pos, s.target);
+    @memset(s.data.vel, 0);
+    s.accumulator = 0;
+    s.playhead = 0;
+    s.survived = 0;
+    s.fallen = false;
+    rbt.forward(&s.imported.model, &s.data);
+    s.start_height = s.data.body_xpos[1][2];
+}
+
+fn deinit(gpa: Allocator, s: *State) void {
+    gpa.free(s.previous_target);
+    gpa.free(s.previous_qpos);
+    gpa.free(s.robot_rest_pos);
+    gpa.free(s.robot_rest_rot);
+    gpa.free(s.human_rest_rot);
+    gpa.free(s.human_metres);
+    gpa.free(s.human_rest_pos);
+    gpa.free(s.retargeted);
+    gpa.free(s.ik_scratch);
+    gpa.free(s.ik_tasks);
+    gpa.free(s.samples);
+    gpa.free(s.human_of_body);
+    gpa.free(s.human_rot);
+    s.kin_data.deinit();
+    gpa.free(s.target);
+    gpa.free(s.human_parent);
+    gpa.free(s.human_points);
+    gpa.free(s.clip_root);
+    gpa.free(s.clip_rotations);
+    s.bridge.deinit(&s.world);
+    s.world.deinit(gpa);
+    s.actuation.deinit();
+    s.data.deinit();
+    s.imported.deinit();
+    s.robot.deinit();
+    s.doc.deinit();
+    z.unloadMesh(gpa, s.cylinder);
+    z.unloadMesh(gpa, s.cube);
+    z.unloadMesh(gpa, s.sphere);
+    s.ui_host.deinit();
+    z.unloadFont(gpa, s.font);
 }
 
 /// Pull the ragdoll's root toward a fixed point above and beside the kinematic robot.
@@ -945,59 +1000,300 @@ fn measureJointError(s: *State) void {
     s.limit_max_angle = limit_max;
 }
 
-/// Copy the solved kinematic pose into the PD target.
-fn writeTargetFromClip(s: *State, frame: usize) void {
-    solveKinematicPose(s, frame);
-    @memcpy(s.target, s.kin_data.pos[0..s.imported.model.nq]);
+/// The control panel.
+///
+/// ---- WHAT A PANEL IS FOR HERE ----
+///
+/// This example exists to answer one question - does open-loop playback nearly work - and the
+/// answer depends on gains nobody has tuned for a MOVING reference. A panel turns that from a
+/// rebuild per guess into a drag, which is the difference between asking the question once and
+/// asking it twenty times.
+///
+/// ** THE RESET BUTTON SETS A FLAG RATHER THAN RESETTING. The panel draws mid-frame, after the
+/// physics has stepped and while the draw is in flight; rewriting `data.pos` there would put the
+/// character somewhere the frame already decided it was not. `update` consumes the flag at the
+/// top of the next frame, where a reset is a normal thing to do.
+/// The stage-0 bar, as words. Under 0.2 s the retarget or the gains are wrong and no policy
+/// will fix it; one to two seconds is DReCon's "comes close" and is what learning builds on.
+fn verdict(survived: f32) []const u8 {
+    if (survived < 0.2) {
+        return "TOO SHORT - check retarget or gains";
+    }
+    if (survived < 1.0) {
+        return "short";
+    }
+    return "clears the bar";
+}
 
-    // ---- CLAMP THE TARGET TO EACH JOINT'S DECLARED RANGE ----
-    //
-    // `PointCloudOptions.limit_barrier` defaults to 1.0, so the IK already respects limits and
-    // this should be a no-op. **It is here because "should be" is not "is"**, and a target
-    // outside a joint's range is a PD chasing somewhere the joint cannot go - which produces
-    // exactly the runaway torque the shaking looks like.
-    //
-    // ** IT CANNOT MASK THE OPPOSITE FAILURE. If the SIMULATED joint has escaped its limit, the
-    // error stays large and the panel's `max |angle|` line says so - clamping the target does
-    // not quieten a sim that is already out of range, it only stops this end contributing.
+/// Returns whether the pointer belongs to the UI, so the camera can leave it alone.
+fn drawPanel(s: *State, f: *z.Frame, clip_length: f32) bool {
+    const u: ui.Ui = s.ui_host.begin(f);
     const m: *const rbt.Model = &s.imported.model;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
-            continue;
-        }
-        if (m.jnt_range[j]) |range| {
-            const q: u32 = m.jnt_qpos_adr[j];
-            s.target[q] = clamp(s.target[q], range[0], range[1]);
-        }
-    }
+    const captured: bool = u.wantCaptureMouse();
 
-    // ---- HOW FAR THE TARGET MOVES BETWEEN ADJACENT FRAMES ----
-    //
-    // *** THE SERVO IS CLEARED (0ar): ONE ELBOW FOLLOWS A SMOOTH SINE TO 9 DEGREES AND TEN FREE
-    // BODIES DO NOT DEGRADE IT. So if it shakes on the real target, the target may not be
-    // smooth - and an IK solve that flips between two equally good poses on adjacent frames
-    // hands the PD a STEP INPUT every sixtieth of a second, which is indistinguishable from
-    // shaking and is nothing to do with stiffness.
-    //
-    // A dance at 60 fps should not turn any joint by much more than a tenth of a radian per
-    // frame. **A tenth is smooth; a whole radian is a different pose.** `previous_qpos` is the
-    // only thing preventing the flip, and nobody has checked that it does.
-    var jump: f32 = 0;
-    var where: usize = 0;
-    for (0..m.njnt) |j| {
-        if (m.jnt_type[j] != .hinge) {
-            continue;
+    if (u.window("dance_track", .{})) |window| {
+        defer window.close();
+
+        // `njnt` is ALL joints, not ball ones - the old label said "24 ball joints" for a
+        // model that has none. A label that contradicts the model it describes is worse than
+        // no label, because it is read as information.
+        u.text("{d} bodies   {d} DOF   {d} joints", .{ m.nbody - 1, m.nv, m.njnt });
+
+        // ---- THE TWO HEIGHTS, SIDE BY SIDE ----
+        //
+        // The solved reference and the simulated character. **A reference root at 0.00 means the
+        // IK targets lost their world position** and the figure is buried - which is how the
+        // ragdoll came to pop out of the floor on its first step, launched by a pose that put it
+        // underground. Two numbers catch that without anyone having to rotate the camera.
+        // ---- THE TRACKING NUMBER, WHICH IS THE POINT OF THE SUSPENSION ----
+        //
+        // Suspended, this is a clean measure of whether the PD reaches the angles the IK solved.
+        // **A learned correction's whole job is to make this smaller**, so it is the first
+        // number on the panel that will still mean something once learning exists.
+        // The joint INDEX, not a name: joint names are comptime-only on `Spec`-built models and
+        // an imported one carries body names but not joint ones. An index is enough to find it.
+        u.text("max joint error {d:.3} rad ({d:.1} deg)   worst: joint {d} on {s}", .{
+            s.max_joint_error,
+            s.max_joint_error * 57.2957795,
+            s.worst_joint,
+            s.imported.names[s.imported.model.jnt_body[s.worst_joint]],
+        });
+
+        // A dance should move no joint much past 0.1 rad per frame at 60 fps. Above that the
+        // target is not smooth and the PD is being step-driven.
+        // The solve's OWN accuracy: did it put the bodies where it was asked to?
+        u.text("IK residual {d:.3} m on {s}   {s}", .{
+            s.ik_residual,
+            s.imported.names[s.ik_residual_body],
+            if (s.ik_residual > 0.10) "NOT CONVERGING" else "converged",
+        });
+
+        u.text("target jump/frame {d:.3} rad on joint {d} ({s})   {s}", .{
+            s.target_jump,
+            s.jump_joint,
+            s.imported.names[s.imported.model.jnt_body[s.jump_joint]],
+            if (s.target_jump > 0.3) "NOT SMOOTH" else "smooth",
+        });
+
+        u.text("max |angle|:  target {d:.2}   sim {d:.2}   widest limit {d:.2} rad", .{
+            s.target_max_angle,
+            s.sim_max_angle,
+            s.limit_max_angle,
+        });
+
+        u.text("root height:  reference {d:.3} m   ragdoll {d:.3} m", .{
+            s.kin_data.body_xpos[1][2],
+            s.data.body_xpos[1][2],
+        });
+        const current_frame: usize = @floor(s.playhead * s.clip_fps);
+        u.text("clip {d:.2}s / {d:.2}s   frame {d} of {d}", .{
+            s.playhead,
+            clip_length,
+            @min(s.clip_frames - 1, current_frame),
+            s.clip_frames,
+        });
+
+        // THE STAGE-0 GATE, READ OFF THE SCREEN. DReCon's premise is that open-loop playback is
+        // nearly a working controller - "not sufficient for maintained balance, but comes
+        // close". Under 0.2 s means the retarget or the gains are wrong and no policy will fix
+        // it; one to two seconds means the premise holds and learning has something to build on.
+        u.text("survived {d:.2}s   {s}", .{
+            s.survived,
+            verdict(s.survived),
+        });
+
+        u.text("contacts: swept {d} + events {d} = {d}   capacity {d}   harvest {s}   overflow frames {d}", .{
+            s.last_swept,
+            s.last_events,
+            s.last_swept + s.last_events,
+            s.last_capacity,
+            if (harvest_contacts) "ON" else "OFF",
+            s.overflows,
+        });
+
+        u.separator();
+
+        if (u.button("reset to frame 0", .{})) {
+            s.want_reset = true;
         }
-        const q: u32 = m.jnt_qpos_adr[j];
-        const moved: f32 = @abs(s.target[q] - s.previous_target[q]);
-        if (moved > jump) {
-            jump = moved;
-            where = j;
+        _ = u.checkbox("pause", &s.paused);
+        _ = u.checkbox("ragdoll (no control - does it just fall?)", &s.ragdoll);
+        _ = u.checkbox("suspend (soft hook - it can still swing)", &s.suspend_ragdoll);
+        _ = u.checkbox("PIN root in world (hard - only joints can move)", &s.pin_root);
+        _ = u.checkbox("scale by inertia (kp becomes frequency - try WITH pin)", &s.inertia_scaled);
+        _ = u.checkbox("robot reference (pale, retargeted)", &s.show_reference);
+        _ = u.checkbox("capture skeleton (orange, NO retarget - the control)", &s.show_capture);
+
+        u.separator();
+
+        // Gains borrowed from the humanoid example, which tuned them for a STATIC pose. A moving
+        // reference is a different problem and these are the first thing to try turning.
+        _ = u.slider("kp", &s.kp, .{ .min = 10.0, .max = 1500.0, .fmt = "{d:.0}" });
+        _ = u.slider("kv", &s.kv, .{ .min = 0.0, .max = 60.0, .fmt = "{d:.1}" });
+
+        u.text("no learning in this example - the clip drives everything", .{});
+    }
+    return captured;
+}
+
+/// Draw the IK-SOLVED kinematic robot - the same geoms as the ragdoll, posed by `solvePointCloud`.
+///
+/// ---- THIS IS WHAT "FOLLOWS PRECISELY" MEANS ----
+///
+/// *** IT READS `kin_data`, THE SOLVE'S OWN OUTPUT, not the retarget's raw global rotations.
+/// The previous version drew from `clip_global` and walked the tree by hand - so the IK ran
+/// every frame and nothing on screen used it. **A solve whose result is never read is a solve
+/// that may as well not run**, and it looked like the IK was failing when it was being ignored.
+///
+/// ** THE SAME GEOMS AS THE SIMULATED CHARACTER. Both read `m.geom_*` and differ only in which
+/// `Data` supplies the body transforms - so any difference between them is the PHYSICS, which
+/// is the whole point of drawing them side by side.
+fn drawReference(s: *State, gl: *z.WgpuGl) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const to_y_up: Mat = zm.zUpToYUp();
+    // A fixed side offset so the two do not overlap; the solved pose already carries the clip's
+    // travel, because the IK targets were built from the capture's world positions.
+    const side: Vec = vec(1.2, 0, 0);
+
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        const body_rot: Quat = s.kin_data.body_xrot[body];
+        const world_pos: Vec = s.kin_data.body_xpos[body] + side + zm.rotate(body_rot, m.geom_pos[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const place: Mat = mulMat(
+            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
+            world_rot,
+        );
+        switch (m.geom_shape[g]) {
+            .sphere => |sph| {
+                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, ref_col);
+            },
+            .box => |b| {
+                s.transform[0] = mulMat(place, scaling(
+                    2.0 * b.half_extent[0],
+                    2.0 * b.half_extent[1],
+                    2.0 * b.half_extent[2],
+                ));
+                z.drawMeshInstanced(gl, &s.cube, &s.transform, ref_col);
+            },
+            .capsule => |cap| {
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cap.half_height, 0)),
+                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, ref_col);
+            },
+            else => {},
         }
     }
-    s.target_jump = jump;
-    s.jump_joint = where;
-    @memcpy(s.previous_target, s.target);
+}
+
+/// Draw the capture's own skeleton, posed by its own forward kinematics.
+///
+/// ---- THE CONTROL, AND IT SHARES NOTHING WITH THE OTHER TWO CHARACTERS ----
+///
+/// No retarget, no match table, no rest alignment, no robot model. Offsets and rotations
+/// straight from the BVH, which is what `geno_dance` draws and what is visibly correct there.
+///
+/// *** IF THIS DANCES AND THE ROBOT REFERENCE DOES NOT, THE FAULT IS IN THE RETARGET OR THE
+/// MODEL. If neither dances, the fault is upstream of both, in how the clip is read - and that
+/// would be the more useful answer, because it is one bug rather than two.
+fn drawCaptureSkeleton(s: *State, gl: *z.WgpuGl, frame: usize) void {
+    const count: usize = s.human_count;
+    const points: []const Vec = s.human_points[frame * count ..][0..count];
+
+    // ---- RE-ORIGIN HORIZONTALLY, KEEP HEIGHT ABSOLUTE ----
+    //
+    // *** THE FIRST VERSION SUBTRACTED THE WHOLE ROOT POSITION, WHICH PINNED THE HIPS TO z = 0.
+    // The skeleton then walked along the floor with its pelvis dragging - all the joint motion
+    // correct, the character sunk into the ground.
+    //
+    // The clip's origin is wherever the mocap studio put it (this one starts at 1.79, 3.32
+    // horizontally), so the horizontal part has to be re-origined or the character is off
+    // screen. **The HEIGHT is not arbitrary** - 0.83 m is where this performer's hips actually
+    // were, and it is the one component that must survive untouched.
+    // The walk produced BVH-space points relative to the root, so the root's own travel is
+    // added here and the whole figure converted once: centimetres to metres, Y-up to Z-up.
+    const now: Vec = s.clip_root[frame];
+    const first: Vec = s.clip_root[0];
+    const root_m: Vec = vec(
+        (now[0] - first[0]) * 0.01,
+        (now[2] - first[2]) * 0.01,
+        now[1] * 0.01,
+    );
+
+    for (1..count) |j| {
+        const parent: i32 = s.human_parent[j];
+        if (parent < 0) {
+            continue;
+        }
+        // Placed a third of the way along, so the three characters read left to right:
+        // ragdoll at the origin, capture skeleton at 2.4 m, robot reference at 1.2 m.
+        const side: Vec = vec(2.4, 0, 0);
+        const pa: Vec = points[@intCast(parent)];
+        const pb: Vec = points[j];
+        const a: Vec = root_m + side + vec(pa[0] * 0.01, pa[2] * 0.01, pa[1] * 0.01);
+        const b: Vec = root_m + side + vec(pb[0] * 0.01, pb[2] * 0.01, pb[1] * 0.01);
+        z.drawLine3D(gl, zm.zUpToYUpPoint(a), zm.zUpToYUpPoint(b), capture_col);
+    }
+}
+
+fn drawRobot(s: *State, gl: *z.WgpuGl, tint: Color) void {
+    const m: *const rbt.Model = &s.imported.model;
+    const to_y_up: Mat = zm.zUpToYUp();
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        const body_rot: Quat = s.data.body_xrot[body];
+        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
+        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+        const place: Mat = mulMat(
+            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
+            world_rot,
+        );
+        switch (m.geom_shape[g]) {
+            .sphere => |sph| {
+                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+            },
+            .box => |b| {
+                s.transform[0] = mulMat(place, scaling(
+                    2.0 * b.half_extent[0],
+                    2.0 * b.half_extent[1],
+                    2.0 * b.half_extent[2],
+                ));
+                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
+            },
+            .capsule => |cap| {
+                // ---- THE CYLINDER MESH RUNS ALONG Y WITH ITS BASE AT THE ORIGIN ----
+                //
+                // `genMeshCylinder(r=1, h=1)` spans y in [0, 1] and x, z in [-1, 1] - so it is
+                // Y-axis and BASE-anchored, not centred. Scaling it as (radius, radius, length)
+                // and skipping the offset, which the first version did, stretches every capsule
+                // across the wrong axis from the wrong origin: **the elliptical bands**.
+                //
+                // Translate down by a half-height to centre it, then scale length along Y.
+                // Copied from `examples/humanoid`, whose own comment says the extents were
+                // MEASURED rather than derived - a previous version there read the UV helper,
+                // concluded Z, and rotated by ninety degrees it did not need.
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, -cap.half_height, 0)),
+                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+            },
+            else => {
+                // ---- A SHAPE THIS SWITCH DOES NOT HANDLE IS DRAWN AS A MARKER, NOT SKIPPED ----
+                //
+                // An empty `else` makes an unsupported geom INVISIBLE, and an invisible geom is
+                // indistinguishable from one that is not there - which is exactly how the
+                // missing floor read for three device runs. A small sphere at the right place
+                // says "something is here and this code does not know how to draw it".
+                s.transform[0] = mulMat(place, scaling(0.04, 0.04, 0.04));
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, missing_col);
+            },
+        }
+    }
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -1157,301 +1453,6 @@ fn update(f: *z.Frame, s: *State) void {
     // `examples/quadruped` does not call it either - the runtime closes the frame after `update`
     // returns. Calling it explicitly ran the deferred `ui_host.render` AFTER the frame had
     // already ended, which panicked.
-}
-
-fn drawRobot(s: *State, gl: *z.WgpuGl, tint: Color) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const to_y_up: Mat = zm.zUpToYUp();
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        const body_rot: Quat = s.data.body_xrot[body];
-        const world_pos: Vec = s.data.body_xpos[body] + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
-        const place: Mat = mulMat(
-            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
-            world_rot,
-        );
-        switch (m.geom_shape[g]) {
-            .sphere => |sph| {
-                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-            },
-            .box => |b| {
-                s.transform[0] = mulMat(place, scaling(
-                    2.0 * b.half_extent[0],
-                    2.0 * b.half_extent[1],
-                    2.0 * b.half_extent[2],
-                ));
-                z.drawMeshInstanced(gl, &s.cube, &s.transform, tint);
-            },
-            .capsule => |cap| {
-                // ---- THE CYLINDER MESH RUNS ALONG Y WITH ITS BASE AT THE ORIGIN ----
-                //
-                // `genMeshCylinder(r=1, h=1)` spans y in [0, 1] and x, z in [-1, 1] - so it is
-                // Y-axis and BASE-anchored, not centred. Scaling it as (radius, radius, length)
-                // and skipping the offset, which the first version did, stretches every capsule
-                // across the wrong axis from the wrong origin: **the elliptical bands**.
-                //
-                // Translate down by a half-height to centre it, then scale length along Y.
-                // Copied from `examples/humanoid`, whose own comment says the extents were
-                // MEASURED rather than derived - a previous version there read the UV helper,
-                // concluded Z, and rotated by ninety degrees it did not need.
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-            },
-            else => {
-                // ---- A SHAPE THIS SWITCH DOES NOT HANDLE IS DRAWN AS A MARKER, NOT SKIPPED ----
-                //
-                // An empty `else` makes an unsupported geom INVISIBLE, and an invisible geom is
-                // indistinguishable from one that is not there - which is exactly how the
-                // missing floor read for three device runs. A small sphere at the right place
-                // says "something is here and this code does not know how to draw it".
-                s.transform[0] = mulMat(place, scaling(0.04, 0.04, 0.04));
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, missing_col);
-            },
-        }
-    }
-}
-
-/// The control panel.
-///
-/// ---- WHAT A PANEL IS FOR HERE ----
-///
-/// This example exists to answer one question - does open-loop playback nearly work - and the
-/// answer depends on gains nobody has tuned for a MOVING reference. A panel turns that from a
-/// rebuild per guess into a drag, which is the difference between asking the question once and
-/// asking it twenty times.
-///
-/// ** THE RESET BUTTON SETS A FLAG RATHER THAN RESETTING. The panel draws mid-frame, after the
-/// physics has stepped and while the draw is in flight; rewriting `data.pos` there would put the
-/// character somewhere the frame already decided it was not. `update` consumes the flag at the
-/// top of the next frame, where a reset is a normal thing to do.
-/// The stage-0 bar, as words. Under 0.2 s the retarget or the gains are wrong and no policy
-/// will fix it; one to two seconds is DReCon's "comes close" and is what learning builds on.
-fn verdict(survived: f32) []const u8 {
-    if (survived < 0.2) {
-        return "TOO SHORT - check retarget or gains";
-    }
-    if (survived < 1.0) {
-        return "short";
-    }
-    return "clears the bar";
-}
-
-/// Returns whether the pointer belongs to the UI, so the camera can leave it alone.
-fn drawPanel(s: *State, f: *z.Frame, clip_length: f32) bool {
-    const u: ui.Ui = s.ui_host.begin(f);
-    const m: *const rbt.Model = &s.imported.model;
-    const captured: bool = u.wantCaptureMouse();
-
-    if (u.window("dance_track", .{})) |window| {
-        defer window.close();
-
-        // `njnt` is ALL joints, not ball ones - the old label said "24 ball joints" for a
-        // model that has none. A label that contradicts the model it describes is worse than
-        // no label, because it is read as information.
-        u.text("{d} bodies   {d} DOF   {d} joints", .{ m.nbody - 1, m.nv, m.njnt });
-
-        // ---- THE TWO HEIGHTS, SIDE BY SIDE ----
-        //
-        // The solved reference and the simulated character. **A reference root at 0.00 means the
-        // IK targets lost their world position** and the figure is buried - which is how the
-        // ragdoll came to pop out of the floor on its first step, launched by a pose that put it
-        // underground. Two numbers catch that without anyone having to rotate the camera.
-        // ---- THE TRACKING NUMBER, WHICH IS THE POINT OF THE SUSPENSION ----
-        //
-        // Suspended, this is a clean measure of whether the PD reaches the angles the IK solved.
-        // **A learned correction's whole job is to make this smaller**, so it is the first
-        // number on the panel that will still mean something once learning exists.
-        // The joint INDEX, not a name: joint names are comptime-only on `Spec`-built models and
-        // an imported one carries body names but not joint ones. An index is enough to find it.
-        u.text("max joint error {d:.3} rad ({d:.1} deg)   worst: joint {d} on {s}", .{
-            s.max_joint_error,
-            s.max_joint_error * 57.2957795,
-            s.worst_joint,
-            s.imported.names[s.imported.model.jnt_body[s.worst_joint]],
-        });
-
-        // A dance should move no joint much past 0.1 rad per frame at 60 fps. Above that the
-        // target is not smooth and the PD is being step-driven.
-        // The solve's OWN accuracy: did it put the bodies where it was asked to?
-        u.text("IK residual {d:.3} m on {s}   {s}", .{
-            s.ik_residual,
-            s.imported.names[s.ik_residual_body],
-            if (s.ik_residual > 0.10) "NOT CONVERGING" else "converged",
-        });
-
-        u.text("target jump/frame {d:.3} rad on joint {d} ({s})   {s}", .{
-            s.target_jump,
-            s.jump_joint,
-            s.imported.names[s.imported.model.jnt_body[s.jump_joint]],
-            if (s.target_jump > 0.3) "NOT SMOOTH" else "smooth",
-        });
-
-        u.text("max |angle|:  target {d:.2}   sim {d:.2}   widest limit {d:.2} rad", .{
-            s.target_max_angle,
-            s.sim_max_angle,
-            s.limit_max_angle,
-        });
-
-        u.text("root height:  reference {d:.3} m   ragdoll {d:.3} m", .{
-            s.kin_data.body_xpos[1][2],
-            s.data.body_xpos[1][2],
-        });
-        u.text("clip {d:.2}s / {d:.2}s   frame {d} of {d}", .{
-            s.playhead,
-            clip_length,
-            @min(s.clip_frames - 1, @as(usize, @trunc(s.playhead * s.clip_fps))),
-            s.clip_frames,
-        });
-
-        // THE STAGE-0 GATE, READ OFF THE SCREEN. DReCon's premise is that open-loop playback is
-        // nearly a working controller - "not sufficient for maintained balance, but comes
-        // close". Under 0.2 s means the retarget or the gains are wrong and no policy will fix
-        // it; one to two seconds means the premise holds and learning has something to build on.
-        u.text("survived {d:.2}s   {s}", .{
-            s.survived,
-            verdict(s.survived),
-        });
-
-        u.text("contacts: swept {d} + events {d} = {d}   capacity {d}   harvest {s}   overflow frames {d}", .{
-            s.last_swept,
-            s.last_events,
-            s.last_swept + s.last_events,
-            s.last_capacity,
-            if (harvest_contacts) "ON" else "OFF",
-            s.overflows,
-        });
-
-        u.separator();
-
-        if (u.button("reset to frame 0", .{})) {
-            s.want_reset = true;
-        }
-        _ = u.checkbox("pause", &s.paused);
-        _ = u.checkbox("ragdoll (no control - does it just fall?)", &s.ragdoll);
-        _ = u.checkbox("suspend (soft hook - it can still swing)", &s.suspend_ragdoll);
-        _ = u.checkbox("PIN root in world (hard - only joints can move)", &s.pin_root);
-        _ = u.checkbox("scale by inertia (kp becomes frequency - try WITH pin)", &s.inertia_scaled);
-        _ = u.checkbox("robot reference (pale, retargeted)", &s.show_reference);
-        _ = u.checkbox("capture skeleton (orange, NO retarget - the control)", &s.show_capture);
-
-        u.separator();
-
-        // Gains borrowed from the humanoid example, which tuned them for a STATIC pose. A moving
-        // reference is a different problem and these are the first thing to try turning.
-        _ = u.slider("kp", &s.kp, .{ .min = 10.0, .max = 1500.0, .fmt = "{d:.0}" });
-        _ = u.slider("kv", &s.kv, .{ .min = 0.0, .max = 60.0, .fmt = "{d:.1}" });
-
-        u.text("no learning in this example - the clip drives everything", .{});
-    }
-    return captured;
-}
-
-/// Draw the capture's own skeleton, posed by its own forward kinematics.
-///
-/// ---- THE CONTROL, AND IT SHARES NOTHING WITH THE OTHER TWO CHARACTERS ----
-///
-/// No retarget, no match table, no rest alignment, no robot model. Offsets and rotations
-/// straight from the BVH, which is what `geno_dance` draws and what is visibly correct there.
-///
-/// *** IF THIS DANCES AND THE ROBOT REFERENCE DOES NOT, THE FAULT IS IN THE RETARGET OR THE
-/// MODEL. If neither dances, the fault is upstream of both, in how the clip is read - and that
-/// would be the more useful answer, because it is one bug rather than two.
-fn drawCaptureSkeleton(s: *State, gl: *z.WgpuGl, frame: usize) void {
-    const count: usize = s.human_count;
-    const points: []const Vec = s.human_points[frame * count ..][0..count];
-
-    // ---- RE-ORIGIN HORIZONTALLY, KEEP HEIGHT ABSOLUTE ----
-    //
-    // *** THE FIRST VERSION SUBTRACTED THE WHOLE ROOT POSITION, WHICH PINNED THE HIPS TO z = 0.
-    // The skeleton then walked along the floor with its pelvis dragging - all the joint motion
-    // correct, the character sunk into the ground.
-    //
-    // The clip's origin is wherever the mocap studio put it (this one starts at 1.79, 3.32
-    // horizontally), so the horizontal part has to be re-origined or the character is off
-    // screen. **The HEIGHT is not arbitrary** - 0.83 m is where this performer's hips actually
-    // were, and it is the one component that must survive untouched.
-    // The walk produced BVH-space points relative to the root, so the root's own travel is
-    // added here and the whole figure converted once: centimetres to metres, Y-up to Z-up.
-    const now: Vec = s.clip_root[frame];
-    const first: Vec = s.clip_root[0];
-    const root_m: Vec = vec(
-        (now[0] - first[0]) * 0.01,
-        (now[2] - first[2]) * 0.01,
-        now[1] * 0.01,
-    );
-
-    for (1..count) |j| {
-        const parent: i32 = s.human_parent[j];
-        if (parent < 0) {
-            continue;
-        }
-        // Placed a third of the way along, so the three characters read left to right:
-        // ragdoll at the origin, capture skeleton at 2.4 m, robot reference at 1.2 m.
-        const side: Vec = vec(2.4, 0, 0);
-        const pa: Vec = points[@intCast(parent)];
-        const pb: Vec = points[j];
-        const a: Vec = root_m + side + vec(pa[0] * 0.01, pa[2] * 0.01, pa[1] * 0.01);
-        const b: Vec = root_m + side + vec(pb[0] * 0.01, pb[2] * 0.01, pb[1] * 0.01);
-        z.drawLine3D(gl, zm.zUpToYUpPoint(a), zm.zUpToYUpPoint(b), capture_col);
-    }
-}
-
-/// Draw the IK-SOLVED kinematic robot - the same geoms as the ragdoll, posed by `solvePointCloud`.
-///
-/// ---- THIS IS WHAT "FOLLOWS PRECISELY" MEANS ----
-///
-/// *** IT READS `kin_data`, THE SOLVE'S OWN OUTPUT, not the retarget's raw global rotations.
-/// The previous version drew from `clip_global` and walked the tree by hand - so the IK ran
-/// every frame and nothing on screen used it. **A solve whose result is never read is a solve
-/// that may as well not run**, and it looked like the IK was failing when it was being ignored.
-///
-/// ** THE SAME GEOMS AS THE SIMULATED CHARACTER. Both read `m.geom_*` and differ only in which
-/// `Data` supplies the body transforms - so any difference between them is the PHYSICS, which
-/// is the whole point of drawing them side by side.
-fn drawReference(s: *State, gl: *z.WgpuGl) void {
-    const m: *const rbt.Model = &s.imported.model;
-    const to_y_up: Mat = zm.zUpToYUp();
-    // A fixed side offset so the two do not overlap; the solved pose already carries the clip's
-    // travel, because the IK targets were built from the capture's world positions.
-    const side: Vec = vec(1.2, 0, 0);
-
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        const body_rot: Quat = s.kin_data.body_xrot[body];
-        const world_pos: Vec = s.kin_data.body_xpos[body] + side + zm.rotate(body_rot, m.geom_pos[g]);
-        const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
-        const place: Mat = mulMat(
-            mulMat(to_y_up, translation(world_pos[0], world_pos[1], world_pos[2])),
-            world_rot,
-        );
-        switch (m.geom_shape[g]) {
-            .sphere => |sph| {
-                s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, ref_col);
-            },
-            .box => |b| {
-                s.transform[0] = mulMat(place, scaling(
-                    2.0 * b.half_extent[0],
-                    2.0 * b.half_extent[1],
-                    2.0 * b.half_extent[2],
-                ));
-                z.drawMeshInstanced(gl, &s.cube, &s.transform, ref_col);
-            },
-            .capsule => |cap| {
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, -cap.half_height, 0)),
-                    scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.cylinder, &s.transform, ref_col);
-            },
-            else => {},
-        }
-    }
 }
 
 pub const app: z.AppSpec(State) = .{

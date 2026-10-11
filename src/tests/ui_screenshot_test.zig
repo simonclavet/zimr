@@ -12,6 +12,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
 const ui = @import("../ui.zig");
 const shapes2d = @import("../shapes2d.zig");
 const text2d = @import("../text2d.zig");
@@ -24,7 +26,7 @@ test "ui: tab-bar scene -> PNG for visual debug" {
     // produce the screenshot; environments without it skip via the
     // catch on renderToPng below.
 
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
         // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
@@ -71,9 +73,9 @@ test "ui: tab-bar scene -> PNG for visual debug" {
     // no /mnt, etc.).  PNG is for visual inspection in the Linux
     // sandbox; on other hosts the rest of the test still exercises
     // the codepath.
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
     ui.renderToPng(
         gpa,
         io,

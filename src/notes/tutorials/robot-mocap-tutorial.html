@@ -199,10 +199,10 @@ robot description, and build the simulator's model from that — stepping at 60 
 frame rate.</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="fn readFile("><code class="zig">/// Read a whole file into memory. The captures are a few megabytes at most, so there's no point
 /// streaming them.
-fn readFile(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
+fn readFile(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     errdefer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -223,7 +223,7 @@ const Robot = struct {
     fn load(r: *Robot, gpa: Allocator, xml: []const u8, weld_root: bool) !void {
         const free_joint: []const u8 = "&lt;freejoint name=\"root\"/&gt;";
         const cut: usize = if (weld_root) free_joint.len else 0;
-        const at: usize = if (weld_root) std.mem.indexOf(u8, xml, free_joint) orelse return error.NoFreeJoint else 0;
+        const at: usize = if (weld_root) indexOf(u8, xml, free_joint) orelse return error.NoFreeJoint else 0;
         r.text = try gpa.alloc(u8, xml.len - cut);
         errdefer gpa.free(r.text);
         @memcpy(r.text[0..at], xml[0..at]);
@@ -254,8 +254,8 @@ const Robot = struct {
 };</code></pre>
 <p>The program itself:</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 2:"><code class="zig">test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
 
     // The capture: a dance, and the performer standing in the pose the skeleton was built in.
     const dance_bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
@@ -292,9 +292,9 @@ const Robot = struct {
     const dt: f32 = clip.frame_time;
     try expect(root_len == 7 and @abs(dt - m.opt.timestep) &lt; 1.0e-6);
 
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -391,7 +391,7 @@ one arena, so a single <code>deinit</code> frees it.</p>
 /// shape as `xml.Document`, and for the same reason: a document is freed all at once or not
 /// at all, and per-field frees are a source of leaks nobody notices.
 pub const Data = struct {
-    arena: *std.heap.ArenaAllocator,
+    arena: *ArenaAllocator,
     joints: []const Joint,
     frame_count: usize,
     /// Columns per motion row, summed over every joint. End sites contribute zero.
@@ -560,8 +560,8 @@ retarget uses it to relate each robot body to the capture joints it follows (<a 
 
 <h3 id="capturex">3.7 Example<a class="anchor" href="#capturex">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 3:"><code class="zig">test "tutorial 3: a capture - its skeleton, its channels, one frame's joints" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
     const bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
     defer gpa.free(bytes);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
@@ -591,7 +591,7 @@ retarget uses it to relate each robot body to the capture joints it follows (<a 
             try expect(joint.channels.len == 0);
             continue;
         }
-        try expect(std.mem.eql(codecs.bvh.Channel, joint.channels, &amp;expected));
+        try expect(eql(codecs.bvh.Channel, joint.channels, &amp;expected));
         channels += joint.channels.len;
     }
     // A frame is every joint's channels, one after another.
@@ -756,8 +756,8 @@ one. Handedness has to be checked directly.</p>
 
 <h3 id="framesx">4.5 Example<a class="anchor" href="#framesx">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 4:"><code class="zig">test "tutorial 4: into the robot's frame - a rotation, never a swizzle" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
 
     // The capture's Y-up space becomes the robot's Z-up one by a quarter turn about X, and
     // centimetres become metres: a capture's "one metre up" is the robot's.
@@ -959,7 +959,7 @@ pub fn bodyVelocity(m: *const rbt.Model, d: *const rbt.Data, body: usize) rbt.Mo
 
 <h3 id="robotx">5.5 Example<a class="anchor" href="#robotx">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 5:"><code class="zig">test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, flex2_xml, false);
     defer r.deinit(gpa);
@@ -981,7 +981,7 @@ pub fn bodyVelocity(m: *const rbt.Model, d: *const rbt.Data, body: usize) rbt.Mo
 
     // A pose moved along a velocity for a time, and the velocity recovered from the two poses:
     // `integratePos` and `differentiatePos` are each other's inverse, quaternions included.
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     d.reset(m);
     for (d.vel, 0..) |*v, k| {
@@ -1001,12 +1001,12 @@ pub fn bodyVelocity(m: *const rbt.Model, d: *const rbt.Data, body: usize) rbt.Mo
     // centre of mass moved a millisecond along the same velocity.
     rbt.forward(m, &amp;d);
     const hand: usize = for (r.imported.names, 0..) |name, b| {
-        if (std.mem.eql(u8, name, "hand_right")) {
+        if (eql(u8, name, "hand_right")) {
             break b;
         }
     } else return error.NoHand;
     const velocity: rbt.Motion = dance.bodyVelocity(m, &amp;d, hand);
-    var later: rbt.Data = try rbt.Data.init(gpa, m);
+    var later: rbt.Data = try .init(gpa, m);
     defer later.deinit();
     @memcpy(later.pos, d.pos);
     rbt.integratePos(m, later.pos, d.vel, 1.0e-3);
@@ -1297,7 +1297,7 @@ pub const lafan_to_humanoid = [_]MatchRow{
     for (table) |row| {
         var robot_body: ?usize = null;
         for (robot_body_names, 0..) |name, index| {
-            if (std.mem.eql(u8, name, row.robot_body)) {
+            if (eql(u8, name, row.robot_body)) {
                 robot_body = index;
                 break;
             }
@@ -1756,12 +1756,12 @@ pub fn buildPointSamples(
             continue;
         }
         const name: []const u8 = in.body_names[b];
-        if (std.mem.startsWith(u8, name, "hand") or std.mem.startsWith(u8, name, "foot") or
-            std.mem.eql(u8, name, "head"))
+        if (startsWith(u8, name, "hand") or startsWith(u8, name, "foot") or
+            eql(u8, name, "head"))
         {
             out[i].weight *= in.extremity_weight;
         }
-        if (std.mem.indexOf(u8, name, "arm") != null) {
+        if (indexOf(u8, name, "arm") != null) {
             out[i].weight *= in.arm_weight;
         }
     }
@@ -2002,7 +2002,7 @@ pub fn retargetClip(
     const human_joints: usize = capture.joints.len;
 
     // -- The robot at rest, and which capture joint drives which body. --
-    var rest: rbt.Data = try rbt.Data.init(gpa, m);
+    var rest: rbt.Data = try .init(gpa, m);
     defer rest.deinit();
     @memcpy(rest.pos, m.qpos0);
     rest.stage = .stale;
@@ -2071,7 +2071,7 @@ pub fn retargetClip(
     const residual_body: []u32 = try gpa.alloc(u32, frame_count);
     errdefer gpa.free(residual_body);
 
-    var kin: rbt.Data = try rbt.Data.init(gpa, m);
+    var kin: rbt.Data = try .init(gpa, m);
     defer kin.deinit();
     const global: []Quat = try gpa.alloc(Quat, human_joints);
     defer gpa.free(global);
@@ -2159,7 +2159,7 @@ pub fn retargetClip(
             rbt.forward(m, &amp;kin);
             lowest[frame] = lowestFootPoint(m, &amp;kin, names);
         }
-        std.mem.sort(f32, lowest, {}, std.sort.asc(f32));
+        sortSlice(f32, lowest, {}, std.sort.asc(f32));
         const median: f32 = lowest[frame_count / 2];
         const root_z: usize = m.jnt_qpos_adr[0] + 2;
         assertf(m.jnt_type[0] == .free, @src(), "grounding moves a free root; joint 0 is not free", .{});
@@ -2317,10 +2317,10 @@ pub const Clip = struct {
             .frame_time = self.frame_time,
         };
         const parts = [_][]const u8{
-            std.mem.asBytes(&amp;header),
-            std.mem.sliceAsBytes(self.targets),
-            std.mem.sliceAsBytes(self.residual),
-            std.mem.sliceAsBytes(self.residual_body),
+            asBytes(&amp;header),
+            sliceAsBytes(self.targets),
+            sliceAsBytes(self.residual),
+            sliceAsBytes(self.residual_body),
         };
         var total: usize = 0;
         for (parts) |part| {
@@ -2342,7 +2342,7 @@ pub const Clip = struct {
             return error.NotABakedClip;
         }
         const header: BakedHeader = std.mem.bytesToValue(BakedHeader, bytes[0..@sizeOf(BakedHeader)]);
-        if (!std.mem.eql(u8, &amp;header.magic, &amp;baked_magic)) {
+        if (!eql(u8, &amp;header.magic, &amp;baked_magic)) {
             return error.NotABakedClip;
         }
         const frames: usize = header.frame_count;
@@ -2358,9 +2358,9 @@ pub const Clip = struct {
         const residual_body: []u32 = try gpa.alloc(u32, frames);
         var at: usize = @sizeOf(BakedHeader);
         for ([_][]u8{
-            std.mem.sliceAsBytes(targets),
-            std.mem.sliceAsBytes(residual),
-            std.mem.sliceAsBytes(residual_body),
+            sliceAsBytes(targets),
+            sliceAsBytes(residual),
+            sliceAsBytes(residual_body),
         }) |part| {
             @memcpy(part, bytes[at..][0..part.len]);
             at += part.len;
@@ -2600,8 +2600,8 @@ pub fn auditClip(m: *const rbt.Model, clip: *const Clip) ClipAudit {
 
 <h3 id="retargetx">6.9 Example<a class="anchor" href="#retargetx">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 6:"><code class="zig">test "tutorial 6: retargeting - one second of the dance, and what the IK achieved" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
     const dance_bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
     defer gpa.free(dance_bytes);
     const rest_bytes: []u8 = try readFile(gpa, io, "assets/Geno_stance.bvh");
@@ -2626,7 +2626,7 @@ pub fn auditClip(m: *const rbt.Model, clip: *const Clip) ClipAudit {
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&amp;rbt.lafan_to_humanoid, names, human_names, human_of_body);
     const thigh: usize = bodyNamed(names, "thigh_left") orelse return error.NoThigh;
-    try expect(std.mem.eql(u8, human_names[@intCast(human_of_body[thigh])], "LeftUpLeg"));
+    try expect(eql(u8, human_names[@intCast(human_of_body[thigh])], "LeftUpLeg"));
 
     // One second of the dance.
     var clip: dance.Clip = try dance.retargetClip(gpa, m, names, &amp;capture, &amp;rest, .{ .seconds = 1.0 });
@@ -2634,7 +2634,7 @@ pub fn auditClip(m: *const rbt.Model, clip: *const Clip) ClipAudit {
 
     // Every frame: each matched body within centimetres of where the skeleton asked for it, and
     // every hinge inside its range.
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     const lowest: []f32 = try gpa.alloc(f32, clip.frame_count);
     defer gpa.free(lowest);
@@ -2654,7 +2654,7 @@ pub fn auditClip(m: *const rbt.Model, clip: *const Clip) ClipAudit {
         lowest[f] = dance.lowestFootPoint(m, &amp;d, names);
     }
     // Grounded: in the typical frame, the lowest point of the feet is on the floor.
-    std.mem.sort(f32, lowest, {}, std.sort.asc(f32));
+    sortSlice(f32, lowest, {}, std.sort.asc(f32));
     try expect(@abs(lowest[lowest.len / 2]) &lt; 0.005);
 
     // Filtered: the capture's jitter shows as acceleration, and the 5 Hz low-pass removes it.
@@ -2887,12 +2887,12 @@ pub fn limpKeepArmature(m: *rbt.Model) void {
 <p>A held target — the same pose as <em>prev</em>, <em>now</em> and <em>next</em> — has no velocity or
 acceleration, so what is left is the spring alone:</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 7a:"><code class="zig">test "tutorial 7a: a held target - the spring alone" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, arm_xml, false);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -2921,19 +2921,19 @@ acceleration, so what is left is the spring alone:</p>
 }</code></pre>
 <p>A moving target, on a limp model and on the model as written:</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 7b:"><code class="zig">test "tutorial 7b: a moving target followed exactly - and what passive forces do to it" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, flex2_xml, true);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
     const shoulder: usize = for (0..m.njnt) |j| {
-        if (std.mem.eql(u8, r.robot.joints[j].name, "shoulder1_right")) {
+        if (eql(u8, r.robot.joints[j].name, "shoulder1_right")) {
             break j;
         }
     } else return error.NoShoulder;
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -2950,7 +2950,7 @@ acceleration, so what is left is the spring alone:</p>
     defer for (poses) |p| gpa.free(p);
     const angleAt = struct {
         fn at(t: f32) f32 {
-            return 0.5 * @sin(2.0 * pi * t);
+            return 0.5 * sinTurns(t);
         }
     }.at;
 
@@ -3005,8 +3005,8 @@ free to be anything.</p>
 the first six rows of the result are the force and torque the world would have to apply at the root
 to perform the frame exactly. On a floor, that is the floor's job.</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 8:"><code class="zig">test "tutorial 8: what the floor must supply to perform a clip" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
     const dance_bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
     defer gpa.free(dance_bytes);
     const rest_bytes: []u8 = try readFile(gpa, io, "assets/Geno_stance.bvh");
@@ -3024,7 +3024,7 @@ to perform the frame exactly. On a floor, that is the floor's job.</p>
     var clip: dance.Clip = try raw.smoothed(m, 5.0);
     defer clip.deinit();
 
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     const v_next: []f32 = try gpa.alloc(f32, m.nv);
     defer gpa.free(v_next);
@@ -3516,7 +3516,7 @@ fn buildAtRest(
     m: *const rbt.Model,
     opts: Options,
 ) !Ragdoll {
-    var rest: rbt.Data = try rbt.Data.init(gpa, m);
+    var rest: rbt.Data = try .init(gpa, m);
     defer rest.deinit();
     @memcpy(rest.pos, m.qpos0);
     rest.stage = .stale;
@@ -3539,7 +3539,7 @@ fn buildAtRest(
 
     const part_of_body: []u32 = try gpa.alloc(u32, body_count);
     errdefer gpa.free(part_of_body);
-    var robot_body_list: std.ArrayList(u32) = .empty;
+    var robot_body_list: ArrayList(u32) = .empty;
     defer robot_body_list.deinit(gpa);
     part_of_body[0] = no_part;
     for (1..body_count) |b| {
@@ -3567,7 +3567,7 @@ fn buildAtRest(
     errdefer gpa.free(com_local);
 
     // -- One compound per part, from every geom of the bodies that make it up. --
-    var children: std.ArrayList(zimrphysics.CompoundChild) = .empty;
+    var children: ArrayList(zimrphysics.CompoundChild) = .empty;
     defer children.deinit(gpa);
     for (0..part_count) |part| {
         const home: u32 = robot_body[part];
@@ -3618,7 +3618,7 @@ fn buildAtRest(
     }
 
     // -- One joint per part below the root, from the hinges its robot body carries. --
-    var joint_list: std.ArrayList(Joint) = .empty;
+    var joint_list: ArrayList(Joint) = .empty;
     defer joint_list.deinit(gpa);
     for (0..part_count) |part| {
         const child_body: u32 = robot_body[part];
@@ -3980,12 +3980,12 @@ pub fn limpReduced(m: *rbt.Model) void {
 
 <h3 id="ragdollx">9.5 Example<a class="anchor" href="#ragdollx">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 9:"><code class="zig">test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and motors" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, flex_xml, true);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
-    var rest: rbt.Data = try rbt.Data.init(gpa, m);
+    var rest: rbt.Data = try .init(gpa, m);
     defer rest.deinit();
     rest.reset(m);
     rbt.forward(m, &amp;rest);
@@ -4000,11 +4000,11 @@ pub fn limpReduced(m: *rbt.Model) void {
     defer ragdoll.deinit();
 
     // A target: the rest pose with the right elbow bent. The motors drive every joint toward it.
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     target.reset(m);
     const elbow: usize = for (0..m.njnt) |j| {
-        if (std.mem.eql(u8, r.robot.joints[j].name, "elbow_right")) {
+        if (eql(u8, r.robot.joints[j].name, "elbow_right")) {
             break j;
         }
     } else return error.NoElbow;
@@ -4029,7 +4029,7 @@ pub fn limpReduced(m: *rbt.Model) void {
     var ball: Robot = undefined;
     try ball.load(gpa, flex2_xml, true);
     defer ball.deinit(gpa);
-    var ball_rest: rbt.Data = try rbt.Data.init(gpa, ball.model());
+    var ball_rest: rbt.Data = try .init(gpa, ball.model());
     defer ball_rest.deinit();
     ball_rest.reset(ball.model());
     rbt.forward(ball.model(), &amp;ball_rest);
@@ -4598,7 +4598,7 @@ is not credited to the decision that failed.</p>
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_ppo_track.zig" data-decl="pub fn iterate("><summary><code>Trainer.iterate</code></summary><pre><code class="zig">/// A whole batch in one call: `collect` until full, then `learn`. What a test or a
 /// chunk wants; a page calls the two halves itself, a slice per frame.
-pub fn iterate(self: *Self) !Stats {
+pub fn iterate(self: *Self) Stats {
     while (!self.collect(self.options.horizon)) {}
     return self.learn();
 }</code></pre></details>
@@ -4614,9 +4614,9 @@ is put straight back on it and scores well from that fresh start. How long it st
 reference is the honest number.</p>
 <details class="src-fold" data-src="src/robot_ppo_track.zig" data-decl="pub fn evaluate("><summary><code>Trainer.evaluate</code></summary><pre><code class="zig">pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
     const envs: usize = self.options.envs;
-    const dofs: usize = self.subset.dofs;
+    const dofs: usize = self.env.subset.dofs;
     const hold: u32 = @max(self.options.decimation, 1);
-    const judge: *track.Fleet = try track.Fleet.init(self.gpa, self.m, self.fleet.clips, .{
+    const judge: *track.Fleet = try track.Fleet.init(self.gpa, self.m, self.env.fleet.clips, .{
         .envs = envs,
         .capacity = 16,
         .seed = evaluation_seed,
@@ -4625,7 +4625,7 @@ reference is the honest number.</p>
         .body_names = self.body_names,
     });
     defer judge.deinit();
-    var controller: policy.Controller = try policy.Controller.init(self.gpa, self.m, self.subset, envs, .{
+    var controller: policy.Controller = try .init(self.gpa, self.m, self.env.subset, envs, .{
         .beta = self.options.beta,
         .decimation = self.options.decimation,
     });
@@ -4644,23 +4644,23 @@ reference is the honest number.</p>
     var ended_length: u64 = 0;
     for (0..decisions) |_| {
         for (0..envs) |env| {
-            const slot: []f32 = self.applied[env * dofs ..][0..dofs];
+            const slot: []f32 = self.env.applied[env * dofs ..][0..dofs];
             if (servo_only) {
                 @memset(slot, 0.0);
             } else {
-                track.stateOf(self.m, &amp;judge.data[env], &amp;self.sim_state);
+                track.stateOf(self.m, &amp;judge.data[env], &amp;self.env.sim_state);
                 policy.observeFrom(
                     self.m,
-                    self.subset,
+                    self.env.subset,
                     judge,
                     judge.clips[judge.clip_of[env]],
                     judge.frame[env],
-                    self.sim_state,
-                    &amp;self.views,
+                    self.env.sim_state,
+                    &amp;self.env.views,
                     controller.lastAction(env),
                     self.obs_scratch,
                 );
-                self.normalize(self.obs_scratch, false);
+                self.normalizeObservations(self.obs_scratch, false);
                 self.ppo.actMean(self.obs_scratch, slot);
                 for (slot) |*a| {
                     a.* = clamp(a.*, -1.0, 1.0);
@@ -4668,7 +4668,7 @@ reference is the honest number.</p>
             }
         }
         for (0..hold) |_| {
-            const full: []const f32 = controller.apply(self.applied);
+            const full: []const f32 = controller.apply(self.env.applied);
             _ = judge.step(full);
             for (0..envs) |env| {
                 lengths[env] += 1;
@@ -4731,11 +4731,11 @@ pub fn importWeights(self: *Self, bytes: []const u8) !void {
         return error.NotAWeightsFile;
     }
     const header: Header = std.mem.bytesToValue(Header, bytes[0..@sizeOf(Header)]);
-    if (!std.mem.eql(u8, &amp;header.magic, &amp;magic)) {
+    if (!eql(u8, &amp;header.magic, &amp;magic)) {
         return error.NotAWeightsFile;
     }
     const count: usize = self.ppo.param_count;
-    if (header.observations != self.n_obs or header.actions != self.subset.dofs or
+    if (header.observations != self.n_obs or header.actions != self.env.subset.dofs or
         header.hidden != self.options.hidden or header.param_count != count)
     {
         return error.WeightsShape;
@@ -4756,7 +4756,7 @@ pub fn importWeights(self: *Self, bytes: []const u8) !void {
     // Copied into aligned floats: the bytes came from a file and owe nothing to alignment.
     const values: []f32 = try self.gpa.alloc(f32, 3 * count);
     defer self.gpa.free(values);
-    @memcpy(std.mem.sliceAsBytes(values), bytes[@sizeOf(Header)..][0 .. 3 * count * @sizeOf(f32)]);
+    @memcpy(sliceAsBytes(values), bytes[@sizeOf(Header)..][0 .. 3 * count * @sizeOf(f32)]);
     self.ppo.pipe.upload(.params, values[0..count]);
     self.ppo.pipe.upload(.adam_m, values[count .. 2 * count]);
     self.ppo.pipe.upload(.adam_v, values[2 * count .. 3 * count]);
@@ -4769,7 +4769,7 @@ pub fn importWeights(self: *Self, bytes: []const u8) !void {
         const extra: []f32 = try self.gpa.alloc(f32, normaliser);
         defer self.gpa.free(extra);
         const start: usize = @sizeOf(Header) + 3 * count * @sizeOf(f32);
-        @memcpy(std.mem.sliceAsBytes(extra), bytes[start..]);
+        @memcpy(sliceAsBytes(extra), bytes[start..]);
         self.obs_count = header.obs_count;
         const n: f64 = @floatFromInt(@max(self.obs_count, 1));
         const means: []const f32 = extra[0..self.n_obs];
@@ -4788,20 +4788,20 @@ a few minutes, and saves — weights and the optimiser's moments both, because a
 without its moments takes full-size steps in directions it had already learned to damp.</p>
 <details class="src-fold" data-src="src/robot_ppo_track.zig" data-decl="pub fn save("><summary><code>Trainer.save</code></summary><pre><code class="zig">/// The weights to a file, for runs on a machine with a disk. Written to a temporary name
 /// and renamed into place, so a run killed mid-write keeps its previous file intact.
-pub fn save(self: *Self, io: std.Io, path: []const u8) !void {
+pub fn save(self: *Self, io: Io, path: []const u8) !void {
     const bytes: []u8 = try self.exportWeights(self.gpa);
     defer self.gpa.free(bytes);
     if (std.fs.path.dirname(path)) |dir| {
-        try std.Io.Dir.cwd().createDirPath(io, dir);
+        try Io.Dir.cwd().createDirPath(io, dir);
     }
     var temp_buffer: [512]u8 = undefined;
     const temp: []const u8 = try bufPrint(&amp;temp_buffer, "{s}.partial", .{path});
     {
-        const file: std.Io.File = try std.Io.Dir.cwd().createFile(io, temp, .{});
+        const file: Io.File = try Io.Dir.cwd().createFile(io, temp, .{});
         defer file.close(io);
         try file.writeStreamingAll(io, bytes);
     }
-    try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io);
+    try Io.Dir.cwd().rename(temp, Io.Dir.cwd(), path, io);
 }</code></pre></details>
 <p>The clip it learns from is five seconds of getting up off the floor: the capture's hips go from
 six centimetres to eighty-one across it, so every episode starts somewhere between lying down and
@@ -4884,8 +4884,8 @@ fn rootAssist(
 <p><code>examples/getup_train</code> puts all of this in a page: the characters stepped on the device's
 CPU, the policy and value networks trained on its GPU, and nothing pre-trained anywhere — every
 weight it uses is learned where it runs, or uploaded by whoever runs it. Build it as one
-self-contained file with <code>zig build getup-train-standalone -Dmode=release</code> and open that
-file on a phone. Two motions are on offer, switched with a button: <strong>getting up</strong> off the
+self-contained file with <code>zig build getup-train -Dplatform=web -Dmode=release</code> and open
+<code>zig-out/standalone/getup_train.html</code> on a phone. Two motions are on offer, switched with a button: <strong>getting up</strong> off the
 floor (five seconds, contact-rich) and <strong>dancing</strong> (twenty seconds of continuous balance).</p>
 <p>The number it shows is the <strong>mean time to failure</strong>: how long a character tracks, on
 average, before it loses the reference. That is not the same as how long episodes last. Characters
@@ -4909,14 +4909,14 @@ because a phone only saves or opens a file from inside a genuine tap.</p>
 <details class="src-fold" data-src="examples/getup_train/getup_train.zig" data-decl="fn takeUploads("><summary><code>takeUploads</code></summary><pre><code class="zig">/// Weights the user picked: carried on from if they fit this network AND this motion, refused by
 /// name if not.
 fn takeUploads(s: *State) void {
-    while (z.web.userfile.pendingCount() &gt; 0) {
-        const size: u32 = z.web.userfile.nextSize();
+    while (z.userfile.pendingCount() &gt; 0) {
+        const size: u32 = z.userfile.nextSize();
         const bytes: []u8 = s.gpa.alloc(u8, size) catch {
-            z.web.userfile.discardNext();
+            z.userfile.discardNext();
             return;
         };
         defer s.gpa.free(bytes);
-        _ = z.web.userfile.readNext(bytes);
+        _ = z.userfile.readNext(bytes);
         if (s.trainer.importWeights(bytes)) |_| {
             // A fresh record from here: the servo stands, the history and milestones restart.
             const servo_exposure: u64 = s.progress.servo_exposure;
@@ -4989,7 +4989,7 @@ ends when the torso falls below <code>healthy_height</code>, or at <code>max_ste
     torque: []f32,
     full: []f32,
     dense: []f32,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     steps: u32,
 
     /// Build the environment from MJCF text (a floating humanoid made of hinges). Call `reset`
@@ -5049,7 +5049,7 @@ ends when the torso falls below <code>healthy_height</code>, or at <code>max_ste
 
         env.data = try rbt.Data.init(gpa, m);
         errdefer env.data.deinit();
-        env.tracker = try .init(gpa, m.nv);
+        env.tracker = try dance.Tracker.init(gpa, m.nv);
         errdefer env.tracker.deinit();
 
         var hinges: usize = 0;
@@ -5082,9 +5082,9 @@ ends when the torso falls below <code>healthy_height</code>, or at <code>max_ste
         env.base[2] -= dance.lowestFootPoint(m, &amp;env.data, env.imported.names);
 
         env.world = try floorWorld(gpa);
-        env.bridge = try .init(gpa, &amp;env.world, m, &amp;env.data, 256);
+        env.bridge = try robot_physics.Bridge.init(gpa, &amp;env.world, m, &amp;env.data, 256);
         env.bridge.listen(&amp;env.world);
-        env.rng = .init(0);
+        env.rng = Random.DefaultPrng.init(0);
         env.steps = 0;
         return env;
     }
@@ -5135,10 +5135,10 @@ ends when the torso falls below <code>healthy_height</code>, or at <code>max_ste
         env.world.deinit(env.gpa);
         env.data.reset(m);
         env.world = try floorWorld(env.gpa);
-        env.bridge = try .init(env.gpa, &amp;env.world, m, &amp;env.data, 256);
+        env.bridge = try robot_physics.Bridge.init(env.gpa, &amp;env.world, m, &amp;env.data, 256);
         env.bridge.listen(&amp;env.world);
-        env.rng = .init(seed);
-        const random: std.Random = env.rng.random();
+        env.rng = Random.DefaultPrng.init(seed);
+        const random: Random = env.rng.random();
         @memcpy(env.data.pos, env.base);
         @memset(env.data.vel, 0.0);
         for (env.hinge_qpos, env.hinge_dof) |q, v| {
@@ -5248,13 +5248,13 @@ pub const Layer = struct {
 
     pub fn init(
         arena: Allocator,
-        random: std.Random,
+        random: Random,
         in: usize,
         out: usize,
         gain: f32,
     ) !Layer {
-        const w: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ in, out });
-        const b: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ 1, out });
+        const w: zn.Tensor(f32) = try .alloc(arena, &amp;.{ in, out });
+        const b: zn.Tensor(f32) = try .alloc(arena, &amp;.{ 1, out });
         const limit: f32 = gain * @sqrt(6.0 / float(in + out));
         for (w.data) |*x| {
             x.* = limit * (2.0 * random.float(f32) - 1.0);
@@ -5326,7 +5326,7 @@ pub const TrainerStats = struct {
 /// zimrnum's `ppoUpdate`, `gae` and `RolloutBuffer` underneath; a 64-64 tanh Gaussian policy and
 /// value net built on its graph; observations normalised by running statistics.
 pub const PpoTrainer = struct {
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: ArenaAllocator,
     gpa: Allocator,
     env: *HumanoidEnv,
     options: TrainerOptions,
@@ -5338,7 +5338,7 @@ pub const PpoTrainer = struct {
     v3: Layer,
     log_std: zn.Tensor(f32),
     graph: zn.Graph(f32),
-    model: zn.PpoModel(f32),
+    model: zrl.PpoModel(f32),
     norm: Normalizer,
     raw: []f32,
     normed: []f32,
@@ -5351,8 +5351,8 @@ pub const PpoTrainer = struct {
     actions: zn.Tensor(f32),
     advantages: []f64,
     returns: []f64,
-    rollout: zn.RolloutBuffer,
-    rng: std.Random.DefaultPrng,
+    rollout: zrl.RolloutBuffer,
+    rng: Random.DefaultPrng,
     episode_seed: u64,
     episode_length: u32 = 0,
     episode_return: f32 = 0,
@@ -5410,7 +5410,7 @@ pub const PpoTrainer = struct {
             .moments = undefined,
             .velocities = undefined,
         };
-        t.arena_state = .init(gpa);
+        t.arena_state = ArenaAllocator.init(gpa);
         errdefer t.arena_state.deinit();
         const arena: Allocator = t.arena_state.allocator();
         t.gpa = gpa;
@@ -5430,29 +5430,29 @@ pub const PpoTrainer = struct {
         const n_act: usize = env.actionSize();
         const hidden: usize = options.hidden;
         const batch: usize = options.minibatch;
-        t.rng = .init(options.seed);
-        const random: std.Random = t.rng.random();
-        t.p1 = try .init(arena, random, n_obs, hidden, 1.0);
-        t.p2 = try .init(arena, random, hidden, hidden, 1.0);
-        t.p3 = try .init(arena, random, hidden, n_act, 0.01);
-        t.v1 = try .init(arena, random, n_obs, hidden, 1.0);
-        t.v2 = try .init(arena, random, hidden, hidden, 1.0);
-        t.v3 = try .init(arena, random, hidden, 1, 1.0);
+        t.rng = Random.DefaultPrng.init(options.seed);
+        const random: Random = t.rng.random();
+        t.p1 = try Layer.init(arena, random, n_obs, hidden, 1.0);
+        t.p2 = try Layer.init(arena, random, hidden, hidden, 1.0);
+        t.p3 = try Layer.init(arena, random, hidden, n_act, 0.01);
+        t.v1 = try Layer.init(arena, random, n_obs, hidden, 1.0);
+        t.v2 = try Layer.init(arena, random, hidden, hidden, 1.0);
+        t.v3 = try Layer.init(arena, random, hidden, 1, 1.0);
         t.log_std = try zn.Tensor(f32).alloc(arena, &amp;.{ 1, n_act });
         @memset(t.log_std.data, options.initial_log_std);
 
         // -- The update's graph, built once at minibatch size. --
-        t.graph = .init(arena);
+        t.graph = zn.Graph(f32).init(arena);
         // The graph lives as long as the trainer and runs thousands of passes: its backward
         // temporaries need an allocator that can free (zimrnum's `Graph.scratch`).
         t.graph.useScratchAllocator(gpa);
         const g: *zn.Graph(f32) = &amp;t.graph;
-        const obs_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ batch, n_obs });
-        const act_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ batch, n_act });
-        const adv_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ batch, 1 });
-        const old_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ batch, 1 });
-        const ret_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ batch, 1 });
-        const ones_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ batch, 1 });
+        const obs_leaf: zn.Tensor(f32) = try .alloc(arena, &amp;.{ batch, n_obs });
+        const act_leaf: zn.Tensor(f32) = try .alloc(arena, &amp;.{ batch, n_act });
+        const adv_leaf: zn.Tensor(f32) = try .alloc(arena, &amp;.{ batch, 1 });
+        const old_leaf: zn.Tensor(f32) = try .alloc(arena, &amp;.{ batch, 1 });
+        const ret_leaf: zn.Tensor(f32) = try .alloc(arena, &amp;.{ batch, 1 });
+        const ones_t: zn.Tensor(f32) = try .alloc(arena, &amp;.{ batch, 1 });
         for ([_]zn.Tensor(f32){ obs_leaf, act_leaf, adv_leaf, old_leaf, ret_leaf }) |leaf| {
             @memset(leaf.data, 0.0);
         }
@@ -5468,12 +5468,12 @@ pub const PpoTrainer = struct {
         const mean: zn.Var = try t.p3.apply(g, h2, ones);
         const log_std_var: zn.Var = try g.parameter(t.log_std);
         const log_prob_new: zn.Var = try g.diagGaussianLogProb(mean, log_std_var, act_leaf);
-        const clip_loss: zn.Var = try g.ppoClipLoss(log_prob_new, old_leaf.data, adv_leaf.data, 0.2);
+        const clip_loss: zrl.PpoClipLoss(f32) = try .build(g, log_prob_new, old_leaf.data, adv_leaf.data, 0.2);
         const k1: zn.Var = try g.tanh(try t.v1.apply(g, obs_var, ones));
         const k2: zn.Var = try g.tanh(try t.v2.apply(g, k1, ones));
         const value: zn.Var = try t.v3.apply(g, k2, ones);
         const value_loss: zn.Var = try g.mseLoss(value, ret_var);
-        const loss: zn.Var = try g.add(clip_loss, try g.scale(value_loss, 0.5));
+        const loss: zn.Var = try g.add(clip_loss.loss, try g.scale(value_loss, 0.5));
         const weights: []zn.Tensor(f32) = try arena.dupe(zn.Tensor(f32), &amp;.{
             t.p1.w, t.p1.b, t.p2.w, t.p2.b, t.p3.w, t.p3.b, t.log_std,
             t.v1.w, t.v1.b, t.v2.w, t.v2.b, t.v3.w, t.v3.b,
@@ -5520,7 +5520,7 @@ pub const PpoTrainer = struct {
         t.actions = try zn.Tensor(f32).alloc(arena, &amp;.{ options.horizon, n_act });
         t.advantages = try arena.alloc(f64, options.horizon);
         t.returns = try arena.alloc(f64, options.horizon);
-        t.rollout = try zn.RolloutBuffer.init(arena, options.horizon);
+        t.rollout = try zrl.RolloutBuffer.init(arena, options.horizon);
         t.episode_seed = options.seed;
         try env.reset(t.episode_seed, t.raw);
         return t;
@@ -5605,7 +5605,7 @@ pub const PpoTrainer = struct {
     fn shuffleRollout(t: *PpoTrainer) void {
         const n_obs: usize = t.raw.len;
         const n_act: usize = t.act.len;
-        const random: std.Random = t.rng.random();
+        const random: Random = t.rng.random();
         var i: usize = t.rollout.len;
         while (i &gt; 1) {
             i -= 1;
@@ -5614,15 +5614,15 @@ pub const PpoTrainer = struct {
                 continue;
             }
             for (0..n_obs) |k| {
-                std.mem.swap(f32, &amp;t.observations.data[i * n_obs + k], &amp;t.observations.data[j * n_obs + k]);
+                swap(f32, &amp;t.observations.data[i * n_obs + k], &amp;t.observations.data[j * n_obs + k]);
             }
             for (0..n_act) |k| {
-                std.mem.swap(f32, &amp;t.actions.data[i * n_act + k], &amp;t.actions.data[j * n_act + k]);
+                swap(f32, &amp;t.actions.data[i * n_act + k], &amp;t.actions.data[j * n_act + k]);
             }
-            std.mem.swap(f64, &amp;t.advantages[i], &amp;t.advantages[j]);
-            std.mem.swap(f64, &amp;t.returns[i], &amp;t.returns[j]);
-            std.mem.swap(zn.RolloutStep, &amp;t.rollout.steps[i], &amp;t.rollout.steps[j]);
-            std.mem.swap(f64, &amp;t.rollout.log_prob[i], &amp;t.rollout.log_prob[j]);
+            swap(f64, &amp;t.advantages[i], &amp;t.advantages[j]);
+            swap(f64, &amp;t.returns[i], &amp;t.returns[j]);
+            swap(zrl.RolloutStep, &amp;t.rollout.steps[i], &amp;t.rollout.steps[j]);
+            swap(f64, &amp;t.rollout.log_prob[i], &amp;t.rollout.log_prob[j]);
         }
     }
 
@@ -5634,8 +5634,8 @@ pub const PpoTrainer = struct {
     pub fn updateSlice(t: *PpoTrainer) !bool {
         assertf(t.rolloutFull(), @src(), "updateSlice before the rollout is full", .{});
         if (t.epoch == 0 and t.minibatch_index == 0) {
-            try zn.gae(t.rollout.steps[0..t.rollout.len], 0.99, 0.95, t.advantages, t.returns);
-            try zn.normalizeAdvantages(f64, t.advantages, 1.0e-8);
+            try zrl.gae(t.rollout.steps[0..t.rollout.len], 0.99, 0.95, t.advantages, t.returns);
+            try zrl.normalizeAdvantages(f64, t.advantages, 1.0e-8);
         }
         if (t.minibatch_index == 0) {
             t.shuffleRollout();
@@ -5658,7 +5658,7 @@ pub const PpoTrainer = struct {
             old_leaf[i] = @floatCast(t.rollout.log_prob[at + i]);
             ret_leaf[i] = @floatCast(t.returns[at + i]);
         }
-        try g.setPpoClipInputs(t.model.clip_loss, old_leaf, adv_leaf);
+        try t.model.clip_loss.setInputs(old_leaf, adv_leaf);
         try g.recompute();
         try g.backward(t.model.loss);
         t.adam_step += 1;
@@ -5728,6 +5728,15 @@ samples than PPO; PPO parallelises across many cheap environments more easily.</
     /// Uniformly random actions before learning starts.
     warmup: usize = 1000,
     seed: u64 = 1,
+    /// OBSERVATIONS NORMALISED AT SAMPLE TIME: running statistics (`zrl.ObsNormalizer`,
+    /// f64 Welford) fed from every observation the agent acts on in training; the replay keeps RAW rows, and each
+    /// sampled batch's observations and next observations are normalised on the batch's copy with the statistics of
+    /// that moment - so a stored row never goes stale as the statistics move. Acting normalises its input the same
+    /// way; a deterministic (evaluation) action reads the statistics without feeding them. Off: raw observations
+    /// everywhere, the agent exactly as before.
+    normalize_observations: bool = false,
+    /// With the normaliser on: normalised values are clamped to this many standard deviations.
+    obs_clip: f64 = 5.0,
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_gym.zig" data-decl="pub const AdamSet ="><summary><code>AdamSet</code></summary><pre><code class="zig">/// Adam over a list of tensors: a moment and a velocity each, and a step count.
 pub const AdamSet = struct {
@@ -5764,11 +5773,11 @@ pub const AdamSet = struct {
 <details class="src-fold" data-src="src/robot_gym.zig" data-decl="pub const SacAgent ="><summary><code>SacAgent</code></summary><pre><code class="zig">/// Soft Actor-Critic (Haarnoja et al. 2018), assembled from zimrnum's parts: a tanh-squashed
 /// Gaussian actor (`squashedReparameterize`), twin critics on `concat(s, a)` with polyak targets,
 /// the target y = r + gamma (1 - done)(min Q' - alpha log pi), and a tuned temperature
-/// (`zn.Temperature`). Every network steps ADAM: zimrnum's `offPolicyUpdate` steps plain SGD,
+/// (`zrl.Temperature`). Every network steps ADAM: zimrnum's `offPolicyUpdate` steps plain SGD,
 /// the trap `ppoUpdate` already sprang (rl_track_journal.md section 6). Env-agnostic: flat observations
 /// and actions in [-1, 1].
 pub const SacAgent = struct {
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: ArenaAllocator,
     gpa: Allocator,
     options: SacOptions,
     n_obs: usize,
@@ -5800,11 +5809,11 @@ pub const SacAgent = struct {
     actor_loss: zn.Var,
     critic_adam: AdamSet,
     actor_adam: AdamSet,
-    temperature: zn.Temperature,
+    temperature: zrl.Temperature,
     alpha_moment: f64 = 0,
     alpha_velocity: f64 = 0,
-    replay: zn.ReplayBuffer(f32),
-    rng: std.Random.DefaultPrng,
+    replay: zrl.ReplayBuffer(f32),
+    rng: Random.DefaultPrng,
     updates: usize = 0,
     // plain-forward scratch
     row: []f32,
@@ -5817,6 +5826,13 @@ pub const SacAgent = struct {
     /// hands them to `updateWith`, which a check can call with its own.
     batch_rows: []f32,
     next_noise: []f32,
+    /// The observation normaliser (`normalize_observations`), or null when it is off. It works in f64 (its running
+    /// mean over millions of observations would stall in f32), so `normalizer_in` / `normalizer_out` carry one
+    /// observation across; `normalized_obs` is the normalised observation acting hands the policy.
+    obs_normalizer: ?zrl.ObsNormalizer,
+    normalizer_in: []f64,
+    normalizer_out: []f64,
+    normalized_obs: []f32,
     /// One action's noise, for `policy`.
     noise_row: []f32,
 
@@ -5867,8 +5883,12 @@ pub const SacAgent = struct {
             .batch_rows = undefined,
             .next_noise = undefined,
             .noise_row = undefined,
+            .obs_normalizer = null,
+            .normalizer_in = undefined,
+            .normalizer_out = undefined,
+            .normalized_obs = undefined,
         };
-        a.arena_state = .init(gpa);
+        a.arena_state = ArenaAllocator.init(gpa);
         errdefer a.arena_state.deinit();
         const arena: Allocator = a.arena_state.allocator();
         a.gpa = gpa;
@@ -5878,16 +5898,16 @@ pub const SacAgent = struct {
         a.alpha_moment = 0;
         a.alpha_velocity = 0;
         a.updates = 0;
-        a.rng = .init(options.seed);
-        const random: std.Random = a.rng.random();
+        a.rng = Random.DefaultPrng.init(options.seed);
+        const random: Random = a.rng.random();
         const h: usize = options.hidden;
         const b: usize = options.batch;
-        a.actor = try .init(arena, random, n_obs, h, n_act, 0.01);
+        a.actor = try Mlp3.init(arena, random, n_obs, h, n_act, 0.01);
         a.raw_log_std = try zeros(arena, &amp;.{ 1, n_act });
-        a.q1 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
-        a.q2 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
-        a.target1 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
-        a.target2 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.q1 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.q2 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.target1 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.target2 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
         for (a.target1.tensors(), a.q1.tensors()) |t, o| {
             @memcpy(t.data, o.data);
         }
@@ -5898,15 +5918,15 @@ pub const SacAgent = struct {
         // passed +1.0 at first: a target entropy of +1, which a tanh-squashed 1-D action cannot
         // reach (its maximum is the uniform's, log 2 ~ 0.69) - so alpha rose from the first update
         // and ran away, doubling every 2k steps, and the cartpole policy collapsed after 8k.
-        a.temperature = try zn.Temperature.forActionDim(n_act, -1.0);
+        a.temperature = try zrl.Temperature.forActionDim(n_act, -1.0);
 
-        const ones_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ b, 1 });
+        const ones_t: zn.Tensor(f32) = try .alloc(arena, &amp;.{ b, 1 });
         @memset(ones_t.data, 1.0);
-        const mean_row_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ 1, b });
+        const mean_row_t: zn.Tensor(f32) = try .alloc(arena, &amp;.{ 1, b });
         @memset(mean_row_t.data, 1.0 / float(b));
 
         // -- The critic graph: both critics against one target column. --
-        a.critic_graph = .init(arena);
+        a.critic_graph = zn.Graph(f32).init(arena);
         a.critic_graph.useScratchAllocator(gpa);
         const cg: *zn.Graph(f32) = &amp;a.critic_graph;
         a.critic_obs = try cg.constant(try zeros(arena, &amp;.{ b, n_obs }));
@@ -5920,7 +5940,7 @@ pub const SacAgent = struct {
         a.critic_vars = concatVars(a.q1.vars(), a.q2.vars());
 
         // -- The actor graph: a reparameterised draw through the (shared) critics. --
-        a.actor_graph = .init(arena);
+        a.actor_graph = zn.Graph(f32).init(arena);
         a.actor_graph.useScratchAllocator(gpa);
         const ag: *zn.Graph(f32) = &amp;a.actor_graph;
         a.actor_obs = try ag.constant(try zeros(arena, &amp;.{ b, n_obs }));
@@ -5929,7 +5949,7 @@ pub const SacAgent = struct {
         a.raw_log_std_var = try ag.parameter(a.raw_log_std);
         const raw_log_std: zn.Var = a.raw_log_std_var;
         const half_span: f32 = 0.5 * (log_std_max - log_std_min);
-        const offset_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &amp;.{ 1, n_act });
+        const offset_t: zn.Tensor(f32) = try .alloc(arena, &amp;.{ 1, n_act });
         @memset(offset_t.data, log_std_min + half_span);
         const log_std_span: zn.Var = try ag.scale(try ag.tanh(raw_log_std), half_span);
         const log_std: zn.Var = try ag.add(log_std_span, try ag.constant(offset_t));
@@ -5943,9 +5963,9 @@ pub const SacAgent = struct {
         const per_sample: zn.Var = try ag.sub(try ag.mul(a.actor_alpha, draw.log_prob), try ag.min(w1, w2));
         a.actor_loss = try ag.matmul(try ag.constant(mean_row_t), per_sample);
 
-        a.critic_adam = try .init(arena, &amp;concatTensors(a.q1.tensors(), a.q2.tensors()));
-        a.actor_adam = try .init(arena, &amp;(a.actor.tensors() ++ [1]zn.Tensor(f32){a.raw_log_std}));
-        a.replay = try zn.ReplayBuffer(f32).init(arena, options.replay_capacity, 2 * n_obs + n_act + 2);
+        a.critic_adam = try AdamSet.init(arena, &amp;concatTensors(a.q1.tensors(), a.q2.tensors()));
+        a.actor_adam = try AdamSet.init(arena, &amp;(a.actor.tensors() ++ [1]zn.Tensor(f32){a.raw_log_std}));
+        a.replay = try zrl.ReplayBuffer(f32).init(arena, options.replay_capacity, 2 * n_obs + n_act + 2);
         a.row = try arena.alloc(f32, 2 * n_obs + n_act + 2);
         a.t1 = try arena.alloc(f32, h);
         a.t2 = try arena.alloc(f32, h);
@@ -5955,6 +5975,15 @@ pub const SacAgent = struct {
         a.batch_rows = try arena.alloc(f32, b * (2 * n_obs + n_act + 2));
         a.next_noise = try arena.alloc(f32, b * n_act);
         a.noise_row = try arena.alloc(f32, n_act);
+        a.normalizer_in = try arena.alloc(f64, n_obs);
+        a.normalizer_out = try arena.alloc(f64, n_obs);
+        a.normalized_obs = try arena.alloc(f32, n_obs);
+        if (options.normalize_observations) {
+            // In the agent's arena, freed with it. Its clip is ours (5 deviations), not its own default (10).
+            var normalizer: zrl.ObsNormalizer = try .init(arena, n_obs);
+            normalizer.clip = options.obs_clip;
+            a.obs_normalizer = normalizer;
+        }
         return a;
     }
 
@@ -5966,7 +5995,7 @@ pub const SacAgent = struct {
     }
 
     fn zeros(arena: Allocator, shape: []const usize) !zn.Tensor(f32) {
-        const t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, shape);
+        const t: zn.Tensor(f32) = try .alloc(arena, shape);
         @memset(t.data, 0.0);
         return t;
     }
@@ -6010,22 +6039,72 @@ pub const SacAgent = struct {
         return a.policyWithNoise(obs, action, a.noise_row);
     }
 
+    /// The action for `obs`, into `action`. In training (`deterministic` false): a uniform random action while the
+    /// replay is still inside its warm-up, the policy's draw after that. In an evaluation (`deterministic`): the
+    /// policy's mean, never random. With the normaliser on, every TRAINING observation also feeds its statistics -
+    /// warm-up ones too, they are the start of the data - and the policy always sees the observation normalised with
+    /// the statistics as they stand. An evaluation only reads them: judging a policy must not change what it sees next.
     pub fn act(
         a: *SacAgent,
         obs: []const f32,
         action: []f32,
         deterministic: bool,
     ) void {
+        if (!deterministic) {
+            a.feedNormalizer(obs);
+        }
         if (!deterministic and a.replay.len &lt; a.options.warmup) {
             for (action) |*x| {
                 x.* = 2.0 * a.rng.random().float(f32) - 1.0;
             }
             return;
         }
-        _ = a.policy(obs, action, deterministic);
+        const policy_input: []const f32 = a.normalized(obs);
+        _ = a.policy(policy_input, action, deterministic);
     }
 
-    /// Store one transition. `done` is a TERMINATION (no bootstrap), not a truncation.
+    /// With the normaliser on: `obs` into its running statistics. Off: nothing.
+    fn feedNormalizer(a: *SacAgent, obs: []const f32) void {
+        if (a.obs_normalizer) |*normalizer| {
+            widen(obs, a.normalizer_in);
+            // The lengths match by construction; a mismatch here is a bug, not an input.
+            normalizer.observe(a.normalizer_in) catch |err| {
+                assertUnreachable(@src(), "observation normaliser: {s}", .{@errorName(err)});
+            };
+        }
+    }
+
+    /// `obs` as the policy should see it: normalised with the statistics as they stand (into `normalized_obs`), or
+    /// `obs` itself when the normaliser is off.
+    fn normalized(a: *SacAgent, obs: []const f32) []const f32 {
+        if (a.obs_normalizer == null) {
+            return obs;
+        }
+        a.normalizeInto(obs, a.normalized_obs);
+        return a.normalized_obs;
+    }
+
+    /// `obs` normalised into `out` with the statistics as they stand - in place is fine (`out` may be `obs`): the
+    /// values cross into f64 scratch first, because `ObsNormalizer` works in f64.
+    fn normalizeInto(a: *SacAgent, obs: []const f32, out: []f32) void {
+        widen(obs, a.normalizer_in);
+        a.obs_normalizer.?.apply(a.normalizer_in, a.normalizer_out) catch |err| {
+            assertUnreachable(@src(), "observation normaliser: {s}", .{@errorName(err)});
+        };
+        for (out, a.normalizer_out) |*to, x| {
+            to.* = @floatCast(x);
+        }
+    }
+
+    /// An f32 observation into f64 scratch of the same length.
+    fn widen(from: []const f32, into: []f64) void {
+        for (into, from) |*to, x| {
+            to.* = x;
+        }
+    }
+
+    /// Store one transition. `done` is a TERMINATION (no bootstrap), not a truncation. The row keeps the DISCOUNT
+    /// that multiplies the bootstrap - for a one-step row, `gamma * (1 - done)`: gamma, or zero after a termination.
     pub fn remember(
         a: *SacAgent,
         obs: []const f32,
@@ -6034,12 +6113,27 @@ pub const SacAgent = struct {
         next: []const f32,
         done: bool,
     ) !void {
+        const done_f: f32 = if (done) 1.0 else 0.0;
+        try a.rememberDiscounted(obs, action, reward, next, a.options.gamma * (1.0 - done_f));
+    }
+
+    /// Store one transition whose bootstrap discount is given - an n-step row: `reward` is the window's discounted
+    /// return, `next` where it bootstraps from, `discount` gamma^k (zero when the window ended in a termination).
+    /// The target is `reward + discount * (min Q' - alpha log pi')`.
+    pub fn rememberDiscounted(
+        a: *SacAgent,
+        obs: []const f32,
+        action: []const f32,
+        reward: f32,
+        next: []const f32,
+        discount: f32,
+    ) !void {
         const n_obs: usize = a.n_obs;
         @memcpy(a.row[0..n_obs], obs);
         @memcpy(a.row[n_obs..][0..a.n_act], action);
         a.row[n_obs + a.n_act] = reward;
         @memcpy(a.row[n_obs + a.n_act + 1 ..][0..n_obs], next);
-        a.row[2 * n_obs + a.n_act + 1] = if (done) 1.0 else 0.0;
+        a.row[2 * n_obs + a.n_act + 1] = discount;
         try a.replay.push(a.row);
     }
 
@@ -6059,11 +6153,7 @@ pub const SacAgent = struct {
         if (a.replay.len &lt; @max(a.options.warmup, a.options.batch)) {
             return;
         }
-        const width: usize = 2 * a.n_obs + a.n_act + 2;
-        const sample_rng: zn.Rng = .init(@truncate(a.updates *% 2654435761));
-        for (0..a.options.batch) |i| {
-            try a.replay.sample(sample_rng, @intCast(i), a.batch_rows[i * width ..][0..width]);
-        }
+        try a.sampleBatch();
         for (a.next_noise) |*x| {
             x.* = a.rng.random().floatNorm(f32);
         }
@@ -6073,7 +6163,28 @@ pub const SacAgent = struct {
         try a.updateWith(a.batch_rows, a.next_noise, a.actor_noise.data);
     }
 
-    /// One SAC update from the given batch (replay rows: obs, action, reward, next obs, done)
+    /// Draw this update's batch into `batch_rows` - and, with the normaliser on, normalise the batch's observations
+    /// and next observations THERE, with the statistics of this moment: the replay's rows stay raw, so none of them
+    /// goes stale as the statistics move. Normaliser off: exactly the draw `update` always made.
+    pub fn sampleBatch(a: *SacAgent) !void {
+        const n_obs: usize = a.n_obs;
+        const width: usize = 2 * n_obs + a.n_act + 2;
+        const sample_rng: zn.Rng = .init(@truncate(a.updates *% 2654435761));
+        for (0..a.options.batch) |i| {
+            try a.replay.sample(sample_rng, @intCast(i), a.batch_rows[i * width ..][0..width]);
+        }
+        if (a.obs_normalizer == null) {
+            return;
+        }
+        for (0..a.options.batch) |i| {
+            const row: []f32 = a.batch_rows[i * width ..][0..width];
+            a.normalizeInto(row[0..n_obs], row[0..n_obs]);
+            const next: []f32 = row[n_obs + a.n_act + 1 ..][0..n_obs];
+            a.normalizeInto(next, next);
+        }
+    }
+
+    /// One SAC update from the given batch (replay rows: obs, action, reward, next obs, discount)
     /// and noise (next actions', then the actor's; [batch, n_act] each).
     pub fn updateWith(
         a: *SacAgent,
@@ -6099,7 +6210,7 @@ pub const SacAgent = struct {
             const action: []const f32 = row[n_obs..][0..n_act];
             const reward: f32 = row[n_obs + n_act];
             const next: []const f32 = row[n_obs + n_act + 1 ..][0..n_obs];
-            const done: f32 = row[2 * n_obs + n_act + 1];
+            const discount: f32 = row[2 * n_obs + n_act + 1];
             @memcpy(obs_c[i * n_obs ..][0..n_obs], obs);
             @memcpy(obs_a[i * n_obs ..][0..n_obs], obs);
             @memcpy(act_c[i * n_act ..][0..n_act], action);
@@ -6110,7 +6221,7 @@ pub const SacAgent = struct {
             @memcpy(a.qin[0..n_obs], next);
             @memcpy(a.qin[n_obs..][0..n_act], action_buf[0..n_act]);
             const q_next: f32 = criticMin(&amp;a.target1, &amp;a.target2, a);
-            y[i] = reward + a.options.gamma * (1.0 - done) * (q_next - alpha * next_log_prob);
+            y[i] = reward + discount * (q_next - alpha * next_log_prob);
         }
         _ = next_action;
         try cg.recompute();
@@ -6168,7 +6279,12 @@ pub const SacAgent = struct {
 <h3 id="learnx">10.9 Examples<a class="anchor" href="#learnx">#</a></h3>
 <p>The humanoid gym, and one iteration of PPO on it:</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 10a:"><code class="zig">test "tutorial 10a: the humanoid gym, and one iteration of PPO" {
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const env: *gym.HumanoidEnv = try .init(gpa, flex2_xml, .{});
     defer env.deinit();
     const observation: []f32 = try gpa.alloc(f32, env.observationSize());
@@ -6195,8 +6311,13 @@ pub const SacAgent = struct {
 }</code></pre>
 <p>SAC's loop, on the cartpole:</p>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 10b:"><code class="zig">test "tutorial 10b: SAC - act, remember, update" {
-    const gpa: Allocator = std.testing.allocator;
-    const agent: *gym.SacAgent = try .init(gpa, zn.cartpole_state_dim, zn.cartpole_action_dim, .{
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    const agent: *gym.SacAgent = try .init(gpa, zrl.cartpole_state_dim, zrl.cartpole_action_dim, .{
         .warmup = 64,
         .batch = 32,
     });
@@ -6205,23 +6326,23 @@ pub const SacAgent = struct {
     var next_obs: [4]f32 = undefined;
     var action: [1]f32 = undefined;
     var episode: u32 = 0;
-    var state = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
-    try zn.cartpoleObserve(f32, state, &amp;obs);
+    var state = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
+    try zrl.cartpoleObserve(f32, state, &amp;obs);
     const alpha_before: f64 = agent.temperature.alpha();
 
     // Every step: act with the stochastic policy, remember the transition, update from the replay.
     for (0..400) |_| {
         agent.act(&amp;obs, &amp;action, false);
-        const stepped = zn.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
-        try zn.cartpoleObserve(f32, stepped.state, &amp;next_obs);
+        const stepped = zrl.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
+        try zrl.cartpoleObserve(f32, stepped.state, &amp;next_obs);
         try agent.remember(&amp;obs, &amp;action, stepped.reward, &amp;next_obs, stepped.failed);
         try agent.update();
         state = stepped.state;
         obs = next_obs;
         if (stepped.failed) {
             episode += 1;
-            state = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
-            try zn.cartpoleObserve(f32, state, &amp;obs);
+            state = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
+            try zrl.cartpoleObserve(f32, state, &amp;obs);
         }
     }
     // The squashed actions stay in [-1, 1]; after the warmup every step updated; and the
@@ -6272,7 +6393,7 @@ pub const State4 = [4]f32;</code></pre></details>
 <details class="src-fold" data-src="src/robot_supertrack.zig" data-decl="pub const acc_scale: f32 ="><summary><code>acc_scale</code></summary><pre><code class="zig">/// The world model's outputs are the two accelerations DIVIDED by this: the graph's one-hot pick
 /// columns and the kit's `acc_scale` both multiply it back, so the two stay one model.
 pub const acc_scale: f32 = 10.0;</code></pre></details>
-<details class="src-fold" data-src="src/robot_supertrack.zig" data-decl="pub fn fromCartpole("><summary><code>fromCartpole</code></summary><pre><code class="zig">pub fn fromCartpole(s: zn.CartpoleState(f32)) State4 {
+<details class="src-fold" data-src="src/robot_supertrack.zig" data-decl="pub fn fromCartpole("><summary><code>fromCartpole</code></summary><pre><code class="zig">pub fn fromCartpole(s: zrl.CartpoleState(f32)) State4 {
     return .{ s.cart, s.cart_rate, s.pole_rad, s.pole_rate_rad };
 }</code></pre></details>
 <details class="src-fold" data-src="src/robot_supertrack.zig" data-decl="pub const Options ="><summary><code>Options</code></summary><pre><code class="zig">pub const Options = struct {
@@ -6303,7 +6424,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
     seed: u64 = 1,
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_supertrack.zig" data-decl="pub const SuperTrack ="><summary><code>SuperTrack</code></summary><pre><code class="zig">pub const SuperTrack = struct {
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: ArenaAllocator,
     gpa: Allocator,
     options: Options,
     policy: Net,
@@ -6318,7 +6439,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
     per_env: usize,
     heads: []usize,
     lens: []usize,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     // -- The world model's graph: a window of real states and forces, rolled out. --
     wm_graph: Graph,
     wm_states: [][4]Var,
@@ -6377,19 +6498,19 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
             .t1 = undefined,
             .t2 = undefined,
         };
-        st.arena_state = .init(gpa);
+        st.arena_state = ArenaAllocator.init(gpa);
         errdefer st.arena_state.deinit();
         const arena: Allocator = st.arena_state.allocator();
         st.gpa = gpa;
         st.options = options;
         st.out = .{0};
-        st.rng = .init(options.seed);
-        const random: std.Random = st.rng.random();
+        st.rng = Random.DefaultPrng.init(options.seed);
+        const random: Random = st.rng.random();
         const h: usize = options.hidden;
         const b: usize = options.batch;
-        st.policy = try .init(arena, random, 4, h, 1, 0.01);
+        st.policy = try Net.init(arena, random, 4, h, 1, 0.01);
         // In: cart rate, pole angle, pole rate, force / max_force. Out: the two accelerations / 10.
-        st.world = try .init(arena, random, 4, h, 2, 1.0);
+        st.world = try Net.init(arena, random, 4, h, 2, 1.0);
         st.per_env = options.capacity / options.envs;
         st.records = try arena.alloc(Record, st.per_env * options.envs);
         st.heads = try arena.alloc(usize, options.envs);
@@ -6405,16 +6526,16 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
 
         const ones_t: Tensor = try filled(arena, &amp;.{ b, 1 }, 1.0);
         // One-hot columns that pick an acceleration out of the world model's [rows, 2] output.
-        const pick_cart: Tensor = try Tensor.alloc(arena, &amp;.{ 2, 1 });
+        const pick_cart: Tensor = try .alloc(arena, &amp;.{ 2, 1 });
         pick_cart.data[0] = acc_scale;
         pick_cart.data[1] = 0.0;
-        const pick_pole: Tensor = try Tensor.alloc(arena, &amp;.{ 2, 1 });
+        const pick_pole: Tensor = try .alloc(arena, &amp;.{ 2, 1 });
         pick_pole.data[0] = 0.0;
         pick_pole.data[1] = acc_scale;
         const zero_col: Tensor = try filled(arena, &amp;.{ b, 1 }, 0.0);
 
         // -- The world model's graph. --
-        st.wm_graph = .init(arena);
+        st.wm_graph = Graph.init(arena);
         st.wm_graph.useScratchAllocator(gpa);
         const wg: *Graph = &amp;st.wm_graph;
         st.wm_vars = try st.world.vars(wg);
@@ -6439,10 +6560,10 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
             loss = if (loss) |l| try wg.add(l, term) else term;
         }
         st.wm_loss = loss.?;
-        st.wm_adam = try .init(arena, &amp;st.world.tensors());
+        st.wm_adam = try gym.AdamSet.init(arena, &amp;st.world.tensors());
 
         // -- The policy's graph: rolled out through the SAME world model weights. --
-        st.pi_graph = .init(arena);
+        st.pi_graph = Graph.init(arena);
         st.pi_graph.useScratchAllocator(gpa);
         const pg: *Graph = &amp;st.pi_graph;
         st.pi_vars = try st.policy.vars(pg);
@@ -6470,7 +6591,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
             pi_loss = if (pi_loss) |l| try pg.add(l, term) else term;
         }
         st.pi_loss = pi_loss.?;
-        st.pi_adam = try .init(arena, &amp;st.policy.tensors());
+        st.pi_adam = try gym.AdamSet.init(arena, &amp;st.policy.tensors());
         return st;
     }
 
@@ -6482,7 +6603,7 @@ pub const acc_scale: f32 = 10.0;</code></pre></details>
     }
 
     fn filled(arena: Allocator, shape: []const usize, value: f32) !Tensor {
-        const t: Tensor = try Tensor.alloc(arena, shape);
+        const t: Tensor = try .alloc(arena, shape);
         @memset(t.data, value);
         return t;
     }
@@ -7003,6 +7124,20 @@ at every reset and every shove, and the sampler only ever returns frames sharing
 stored is the simulator's own pose and velocity rather than the features a network sees: half the
 memory, and it cannot disagree with the model, because forward kinematics reconstructs the rest on
 the way out.</p>
+
+<p>The machinery works the same way as zimrnum's general <code>SequenceReplay</code> &mdash; a ring per character
+read in time order across its physical wrap, a window found with just two random numbers (which character, where it
+starts), a batch laid out step by step for the rollout &mdash; which is explained once, with diagrams, in
+<a href="zimrrl-tutorial.html#wm-replay">the zimrrl tutorial's SequenceReplay section</a>. What is particular here is
+the window rule. <code>SequenceReplay</code> lets a window run straight through an episode's end and masks the steps
+after it; this replay never lets a window cross a segment boundary at all, so every frame of every window is real,
+unbroken motion. The difference matters because a shove is not an ending: the motion carries on, just not in a way
+anything in the state could have predicted.</p>
+<p>A segment is not an episode, though. A shove begins a new segment but not a new episode, and whatever
+the controller was applying carries straight through it. So each record also keeps how far into its episode its step
+was, which is what says what was being applied just before it: rest on an episode's first step, and otherwise the
+action recorded one step earlier. When that earlier record has already left the ring, the answer is
+<em>unknown</em> rather than a guess, and a learner that would read it draws another window.</p>
 <details class="src-fold" data-src="src/robot_track.zig" data-decl="pub const Replay ="><summary><code>Replay</code></summary><pre><code class="zig">/// Experience, kept per environment in a ring: what the simulator was, what was done to it, and
 /// which stretch of unbroken motion it belongs to.
 ///
@@ -7033,6 +7168,12 @@ pub const Replay = struct {
     frames: []u32,
     clips: []u16,
     segments: []u32,
+    /// How far into its EPISODE each record's step was - 0 on an episode's first step - or null for a record that
+    /// is not a step of a rollout at all (a teacher's label, a probe's state: `append`). The segment cannot stand in
+    /// for it: a segment ends at a SHOVE as well as at a restart, and a shove ends neither the episode nor what the
+    /// controller is applying. This can say what was being applied before a record: rest on an episode's first
+    /// step, otherwise the action recorded one step earlier, shove or no shove.
+    episode_steps: []?u32,
     /// How many records this environment has ever written. The ring holds the last `capacity`.
     written: []u64,
 
@@ -7060,6 +7201,8 @@ pub const Replay = struct {
         errdefer gpa.free(clips);
         const segments: []u32 = try gpa.alloc(u32, slots);
         errdefer gpa.free(segments);
+        const episode_steps: []?u32 = try gpa.alloc(?u32, slots);
+        errdefer gpa.free(episode_steps);
         const written: []u64 = try gpa.alloc(u64, envs);
         @memset(written, 0);
         return .{
@@ -7075,6 +7218,7 @@ pub const Replay = struct {
             .frames = frames,
             .clips = clips,
             .segments = segments,
+            .episode_steps = episode_steps,
             .written = written,
         };
     }
@@ -7086,6 +7230,7 @@ pub const Replay = struct {
         self.gpa.free(self.frames);
         self.gpa.free(self.clips);
         self.gpa.free(self.segments);
+        self.gpa.free(self.episode_steps);
         self.gpa.free(self.written);
     }
 
@@ -7093,8 +7238,10 @@ pub const Replay = struct {
         return env * self.capacity + @as(usize, @intCast(index % self.capacity));
     }
 
-    /// Append one frame of experience for `env`: the state it was in, the action taken from it, the
-    /// reference frame it was tracking, and the segment it belongs to.
+    /// Append one frame of experience for `env` that is NOT a step of a rollout - a teacher's label, a probe's
+    /// state: the state, the action taken from it, the reference frame it was tracking, and its segment. What was
+    /// being applied before it is unknown, and `episodeStepAt` says so (null). A fleet's own steps go through
+    /// `appendStep`, which knows.
     pub fn append(
         self: *Replay,
         env: usize,
@@ -7104,6 +7251,22 @@ pub const Replay = struct {
         frame: u32,
         clip: u16,
         segment: u32,
+    ) void {
+        self.appendStep(env, pose, velocity, action, frame, clip, segment, null);
+    }
+
+    /// Append one STEP of a rollout for `env`, `episode_step` steps into its episode (0 on its first step): the
+    /// state it was in, the action applied from it, the reference frame it was tracking, and its segment.
+    pub fn appendStep(
+        self: *Replay,
+        env: usize,
+        pose: []const f32,
+        velocity: []const f32,
+        action: []const f32,
+        frame: u32,
+        clip: u16,
+        segment: u32,
+        episode_step: ?u32,
     ) void {
         assertf(
             env &lt; self.envs and pose.len == self.nq and velocity.len == self.nv and action.len == self.action_size,
@@ -7118,6 +7281,7 @@ pub const Replay = struct {
         self.frames[at] = frame;
         self.clips[at] = clip;
         self.segments[at] = segment;
+        self.episode_steps[at] = episode_step;
         self.written[env] += 1;
     }
 
@@ -7146,6 +7310,12 @@ pub const Replay = struct {
         return self.segments[self.slot(env, index)];
     }
 
+    /// How far into its episode the record's step was (0 on an episode's first step), or null when the record is
+    /// not a step of a rollout (`append`).
+    pub fn episodeStepAt(self: Replay, env: usize, index: u64) ?u32 {
+        return self.episode_steps[self.slot(env, index)];
+    }
+
     /// A stretch of unbroken motion from one environment: `steps` transitions, which is `steps + 1`
     /// records, all in one segment.
     ///
@@ -7170,7 +7340,7 @@ pub const Replay = struct {
     /// since a segment id only ever increases, so equal ends mean an equal middle. A few dozen
     /// tries are plenty: segments are long compared with a window, and a ring full of short
     /// segments deserves to fail rather than to loop.
-    pub fn sampleWindow(self: Replay, random: std.Random, steps: usize) ?Window {
+    pub fn sampleWindow(self: Replay, random: Random, steps: usize) ?Window {
         assertf(steps &gt; 0, @src(), "a window of no transitions is not a window", .{});
         const frames: usize = steps + 1;
         for (0..64) |_| {
@@ -7235,7 +7405,7 @@ pub const Fleet = struct {
     /// Everything the fleet owns comes from here, and goes back in one call. A dozen buffers
     /// allocated one at a time is a dozen chances to leak the previous eleven when the thirteenth
     /// fails; an arena has one.
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     m: *rbt.Model,
     /// The clips themselves are BORROWED - they must outlive the fleet, and they are read every
     /// step - but the list of them is COPIED into the fleet's own memory. A caller naturally builds
@@ -7259,7 +7429,7 @@ pub const Fleet = struct {
     segment: []u32,
     steps: []u32,
     next_segment: u32,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     replay: Replay,
     /// Per-environment scratch, allocated once.
     reference_data: rbt.Data,
@@ -7362,7 +7532,7 @@ pub const Fleet = struct {
             .terminal_frame = undefined,
             .terminal_clip = undefined,
         };
-        fleet.arena = .init(gpa);
+        fleet.arena = ArenaAllocator.init(gpa);
         errdefer fleet.arena.deinit();
         const owned: Allocator = fleet.arena.allocator();
         fleet.* = .{
@@ -7387,8 +7557,8 @@ pub const Fleet = struct {
             .terminal_frame = try owned.alloc(u32, options.envs),
             .terminal_clip = try owned.alloc(usize, options.envs),
             .next_segment = 0,
-            .rng = .init(options.seed),
-            .replay = try .init(owned, m, options.envs, options.capacity),
+            .rng = Random.DefaultPrng.init(options.seed),
+            .replay = try Replay.init(owned, m, options.envs, options.capacity),
             .reference_data = try rbt.Data.init(owned, m),
             .sim_state = try State.init(owned, m.nbody),
             .reference_state = try State.init(owned, m.nbody),
@@ -7437,7 +7607,7 @@ pub const Fleet = struct {
     /// Start an environment somewhere new: a random clip, a random frame, a fresh segment.
     /// A new episode for `env` at a RANDOM clip and frame - reference-state initialisation (`startAt`).
     fn restart(self: *Fleet, env: usize) void {
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         const clip_index: usize = random.uintLessThan(usize, self.clips.len);
         const frame: usize = 1 + random.uintLessThan(usize, self.clips[clip_index].frame_count - 2);
         self.startAt(env, clip_index, frame);
@@ -7668,7 +7838,7 @@ pub const Fleet = struct {
             actions.len,
             self.options.envs * size,
         });
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         var reward_total: f32 = 0.0;
         for (0..self.options.envs) |env| {
             const clip: *const dance.Clip = self.clips[self.clip_of[env]];
@@ -7678,7 +7848,17 @@ pub const Fleet = struct {
 
             // Record the state the action was taken FROM, so a window reads as
             // (state, action) -&gt; the next record's state.
-            self.replay.append(env, d.pos, d.vel, action, at, @intCast(self.clip_of[env]), self.segment[env]);
+            // And how far into its episode this step is, which is what says what was being applied before it.
+            self.replay.appendStep(
+                env,
+                d.pos,
+                d.vel,
+                action,
+                at,
+                @intCast(self.clip_of[env]),
+                self.segment[env],
+                self.steps[env],
+            );
 
             // Loudly: a collision world that quietly stops working leaves a character quietly
             // falling through the floor, which is exactly the failure this coupling was added for.
@@ -7818,7 +7998,7 @@ pub fn measureDrift(
     source: Source,
     draws: usize,
     steps: usize,
-    random: std.Random,
+    random: Random,
 ) !Drift {
     const m: *rbt.Model = fleet.m;
     const position: []f32 = try gpa.alloc(f32, steps);
@@ -7831,9 +8011,9 @@ pub fn measureDrift(
     @memset(rotation, 0.0);
     @memset(pose, 0.0);
 
-    var predicted: State = try State.init(gpa, m.nbody);
+    var predicted: State = try .init(gpa, m.nbody);
     defer predicted.deinit(gpa);
-    var actual: State = try State.init(gpa, m.nbody);
+    var actual: State = try .init(gpa, m.nbody);
     defer actual.deinit(gpa);
     const input: []f32 = try gpa.alloc(f32, worldInputSize(m));
     defer gpa.free(input);
@@ -7847,10 +8027,10 @@ pub fn measureDrift(
     defer gpa.free(targets);
     const scratch: []f32 = try gpa.alloc(f32, m.nv);
     defer gpa.free(scratch);
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
 
-    var held: State = try State.init(gpa, m.nbody);
+    var held: State = try .init(gpa, m.nbody);
     defer held.deinit(gpa);
     const held_linear: []Vec = try gpa.alloc(Vec, m.nbody);
     defer gpa.free(held_linear);
@@ -7943,7 +8123,7 @@ it actually produced.</p>
 };</code></pre></details>
 <details class="src-fold" data-src="src/robot_world.zig" data-decl="        pub fn trainStep("><summary><code>WorldModel.trainStep</code></summary><pre><code class="zig">/// Fill a batch from the replay and take one step on it. Null when the replay cannot yet
 /// supply a full batch of transitions.
-pub fn trainStep(self: *Self, fleet: *track.Fleet, random: std.Random) !?f32 {
+pub fn trainStep(self: *Self, fleet: *track.Fleet, random: Random) !?f32 {
     const in_dim: usize = track.worldInputSize(self.m);
     const out_dim: usize = track.worldOutputSize(self.m);
     const dt: f32 = self.m.opt.timestep;
@@ -8040,7 +8220,7 @@ pub fn trainStep(self: *LatentWorld, fleet: *track.Fleet) !?f32 {
     // All the windows are drawn BEFORE any is filled in. Filling draws no random numbers, so the
     // sequence of draws is exactly what it was when drawing and filling were interleaved - every
     // test measured before the split (D15, T8d) still sees the same windows.
-    const random: std.Random = self.rng.random();
+    const random: Random = self.rng.random();
     for (self.windows) |*window| {
         window.* = fleet.replay.sampleWindow(random, self.options.steps) orelse return null;
     }
@@ -8079,12 +8259,47 @@ the blend is differentiated like everything else, so a decision is credited with
 still shapes. And the world model is taught with the action that was actually <em>applied</em> — the
 filtered one the servo received — because that, not what the policy asked for, is what moved the
 body.</p>
+<p><strong>And it sees what it is applying.</strong> Behind a filter, the same request means different things
+from different places: asking for 1.0 while 0.9 is already applied is a nudge, and the same 1.0 from rest is a
+shove. So what to ask depends on what is already being applied, and a policy that cannot see it is blind to half of
+its own control state. With <code>sees_applied</code> on, the action being applied just before each decision is a
+third input to the policy's first layer, beside the character and the reference — DReCon's observation carries the
+same thing. It is read through a block of weights of its own that starts at zero, so the policy begins exactly as one
+that cannot see it and learns to read the input as training goes. At an episode's start it is told rest. In the
+training rollouts it is the filter's state as it stands before each decision, differentiated like everything else, so
+a decision is also credited with how it changes what later decisions are told.</p>
+<p><strong>All of that is one value.</strong> The action's reach (0.6 rad a unit), the exploration noise, the
+30 Hz clock, the 0.2 filter, seeing what it applies, the normaliser from the clip and a training grace (the paper's
+shortest episode, 48 steps, during which the task's rule does not end an episode &mdash; the judge never has one) are
+Geno's SuperTrack recipe,
+<code>robot_geno.supertrack_recipe</code> &mdash; handed whole to whatever trains, never rebuilt setting by setting at
+the place it is used, which is how settings quietly drift apart. It carries the action's reach beside the learner's
+options because the reach belongs to the fleet: it turns a unit of action into a joint offset before the learner sees
+anything. An experiment copies the recipe and changes one field. Its tests check each choice against its reason
+rather than its number: the clock and the filter must agree with DReCon's controller, a filtered policy must see what
+it applies, and a learner built from the recipe must come out with 30 decisions a second on Geno's own timestep and
+the clip's normaliser, bit for bit.</p>
+<p><strong>A change to the recipe is judged by a learning curve.</strong> <code>zig build st-bench</code> builds a
+bench that trains the CPU learner on the 10-second dance from the recipe and, every so often, judges the policy in the
+real simulator from the same 20 starts and asks the world model how far it can be trusted where the policy goes. It
+is deterministic &mdash; the same seed gives the same curve, number for number &mdash; so two runs that differ in one
+setting are a comparison rather than two anecdotes. It comes in two builds that give identical numbers: a fast one for
+long runs, and a checked one, slower, that watches every index and stops on any failed check. A new setting's first
+stretch is run checked, and the long fast run is then held against it row by row.</p>
 <p>One principle governs all of it: <strong>a policy trained through a model can only be as right as
 the model.</strong> Where the model cannot yet say what an action does, the policy learns to exploit
 its mistakes — large actions that look good in prediction and do nothing in the simulator. So the
 model is trained first, on data whose actions actually vary; the collection noise is wide enough to
 keep teaching it what actions do; and the policy pays a price for the size of its actions, which
 keeps it where the model has seen data. And the judge is always the simulator, never the model.</p>
+<p><strong>Two models, and where they disagree.</strong> The learner can also train a second world model beside
+the first &mdash; the same data, a different starting point (<code>twin_world</code>). Where the data pins them down,
+the two predict alike; off the data nothing does, and they drift apart. So their disagreement is a map of exactly
+where the model cannot be trusted &mdash; which is also where a policy would exploit it. The policy's rollouts step
+through the two models' average, and every step pays for the distance between their predictions
+(<code>w_disagree</code>): steering toward states the models disagree on costs something, and the gradient pulls the
+policy back toward what both of them know. It knocks nothing the models already predict well: where they agree, it
+costs nothing at all.</p>
 <p><strong>Smooth, not just small.</strong> A price on an action's size does not stop it from
 <em>changing</em>. A policy trained through a model can learn outputs that swing with every small change of
 state, so on a character every joint's target lurches each frame and the servo spends itself chasing
@@ -8096,13 +8311,12 @@ of each pair &mdash; the later action pulled back toward the earlier and the ear
 <details class="src-fold" data-src="src/robot_latent.zig" data-decl="pub fn trainPolicy("><summary><code>Learner.trainPolicy</code></summary><pre><code class="zig">/// One policy update on `batch` windows of the replay: start on the real recorded state,
 /// then roll the policy through the model. Null until the replay can supply the windows.
 pub fn trainPolicy(self: *Learner) !?f32 {
-    const random: std.Random = self.rng.random();
+    const random: Random = self.rng.random();
     // Sample and fill row by row, in that order: filling draws the rollout's noise from the same
     // random stream, so drawing every window first would reorder the draws - and silently change
     // every result measured with this learner.
     for (0..self.options.batch) |row| {
-        const window: track.Replay.Window =
-            self.fleet.replay.sampleWindow(random, self.options.window) orelse return null;
+        const window: track.Replay.Window = self.drawWindow(random, self.options.window) orelse return null;
         self.fillRow(row, window, random);
     }
     return try self.update();
@@ -8211,18 +8425,18 @@ pub const push_every: u32 = 40;</code></pre></details>
 <details class="src-fold" data-src="src/robot_supertrack.zig" data-decl="pub fn evaluate("><summary><code>evaluate</code></summary><pre><code class="zig">/// Mean episode length of `episodes` REAL cartpole episodes under pushes: the policy without
 /// noise, or no force at all (`policy` null) for the baseline.
 pub fn evaluate(st: ?*SuperTrack, episodes: u32, seed: u64) f32 {
-    var rng: std.Random.DefaultPrng = .init(seed);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(seed);
+    const random: Random = rng.random();
     var total: u32 = 0;
     for (0..episodes) |e| {
-        var state = zn.cartpoleTaskReset(f32, zn.Rng.init(@truncate(seed)), @intCast(e), .hold);
+        var state = zrl.cartpoleTaskReset(f32, zn.Rng.init(@truncate(seed)), @intCast(e), .hold);
         var steps: u32 = 0;
         while (steps &lt; episode_cap) : (steps += 1) {
             if (steps &gt; 0 and steps % push_every == 0) {
                 state.pole_rate_rad += push_size * (2.0 * random.float(f32) - 1.0);
             }
             const force: f32 = if (st) |s| s.act(fromCartpole(state), false) else 0.0;
-            const stepped = zn.cartpoleContinuousStep(f32, state, force);
+            const stepped = zrl.cartpoleContinuousStep(f32, state, force);
             if (stepped.failed) {
                 break;
             }
@@ -8242,17 +8456,22 @@ and the policy on top of them are what this code is working on now.</p>
 
 <h3 id="supertrackx">11.16 Example<a class="anchor" href="#supertrackx">#</a></h3>
 <pre data-src="src/robot_mocap_tutorial.zig" data-decl="test &quot;tutorial 11:"><code class="zig">test "tutorial 11: SuperTrack on the cartpole - supervised, with no reward and no critic" {
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const st: *supertrack.SuperTrack = try .init(gpa, .{});
     defer st.deinit();
     const envs: usize = 8;
-    var states: [envs]zn.CartpoleState(f32) = undefined;
+    var states: [envs]zrl.CartpoleState(f32) = undefined;
     var steps: [envs]u32 = @splat(0);
     var segments: [envs]u32 = undefined;
     var next_segment: u32 = 0;
     var episode: u32 = 0;
     for (0..envs) |e| {
-        states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+        states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
         episode += 1;
         segments[e] = next_segment;
         next_segment += 1;
@@ -8272,10 +8491,10 @@ and the policy on top of them are what this code is working on now.</p>
                 }
                 const force: f32 = st.act(supertrack.fromCartpole(states[e]), true);
                 st.remember(e, supertrack.fromCartpole(states[e]), force, segments[e]);
-                const stepped = zn.cartpoleContinuousStep(f32, states[e], force);
+                const stepped = zrl.cartpoleContinuousStep(f32, states[e], force);
                 steps[e] += 1;
                 if (stepped.failed or steps[e] &gt;= supertrack.episode_cap) {
-                    states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+                    states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
                     episode += 1;
                     steps[e] = 0;
                     segments[e] = next_segment;
@@ -8609,17 +8828,18 @@ pub fn squash_logp(id: u32) void {
     }
     b_acts[params.l_off + id] = logp;
 }</code></pre></details>
-<details class="src-fold" data-src="src/gpu/zn_mlp.zig" data-decl="pub fn sac_target("><summary><code>sac_target</code></summary><pre><code class="zig">/// y = r + gamma (1 - done)(min(q1', q2') - alpha log pi'): q1' at acts[y_off], q2' at
-/// acts[z_off], log pi' at acts[l_off], rewards then dones at acts[x_off]; y to acts[t_off].
+<details class="src-fold" data-src="src/gpu/zn_mlp.zig" data-decl="pub fn sac_target("><summary><code>sac_target</code></summary><pre><code class="zig">/// y = r + discount (min(q1', q2') - alpha log pi'): q1' at acts[y_off], q2' at acts[z_off], log pi'
+/// at acts[l_off], rewards then DISCOUNTS at acts[x_off] - the replay row's last column, gamma (1 - done)
+/// for a one-step row, gamma^k for an n-step one; y to acts[t_off].
 pub fn sac_target(id: u32) void {
     if (id &gt;= params.rows) {
         return;
     }
     const q_next: f32 = @min(b_acts[params.y_off + id], b_acts[params.z_off + id]);
     const reward: f32 = b_acts[params.x_off + id];
-    const done: f32 = b_acts[params.x_off + params.rows + id];
+    const discount: f32 = b_acts[params.x_off + params.rows + id];
     const soft: f32 = q_next - alpha() * b_acts[params.l_off + id];
-    b_acts[params.t_off + id] = reward + params.gamma * (1.0 - done) * soft;
+    b_acts[params.t_off + id] = reward + discount * soft;
 }</code></pre></details>
 <details class="src-fold" data-src="src/gpu/zn_mlp.zig" data-decl="pub fn min_route("><summary><code>min_route</code></summary><pre><code class="zig">/// The actor loss's -mean(min(q1, q2)) gradient, routed WHOLE to the smaller critic (ties go to
 /// the first, as zimrnum's graph `min`): into dacts[dy_off] for q1 and dacts[dx_off] for q2.
@@ -8665,7 +8885,7 @@ pub fn squash_logstd_grad(id: u32) void {
     const bound_slope: f32 = 0.5 * (params.log_std_max - params.log_std_min) * (1.0 - t * t);
     b_grads[params.w_off + id] = (acc - alpha()) * bound_slope;
 }</code></pre></details>
-<details class="src-fold" data-src="src/gpu/zn_mlp.zig" data-decl="pub fn alpha_grad("><summary><code>alpha_grad</code></summary><pre><code class="zig">/// Log alpha's gradient, -alpha (mean log pi + target entropy): `zn.Temperature.gradient`.
+<details class="src-fold" data-src="src/gpu/zn_mlp.zig" data-decl="pub fn alpha_grad("><summary><code>alpha_grad</code></summary><pre><code class="zig">/// Log alpha's gradient, -alpha (mean log pi + target entropy): `zrl.Temperature.gradient`.
 pub fn alpha_grad(id: u32) void {
     if (id != 0) {
         return;
@@ -9090,7 +9310,8 @@ pub fn uploadAt(
                     assertUnreachable(@src(), "uploadAt: .worker needs initWorker(gpa)", .{});
                     return;
                 });
-                const dst = &amp;@field(wk.mirror.*, @tagName(field));
+                const field_name: [:0]const u8 = @tagName(field);
+                const dst: *@TypeOf(@field(wk.mirror.*, field_name)) = &amp;@field(wk.mirror.*, field_name);
                 @memcpy(dst[offset..][0..data.len], data);
             }
         },
@@ -9098,7 +9319,7 @@ pub fn uploadAt(
             const fi: usize = fieldIndex(@tagName(field));
             const byte_offset: u32 = @intCast(offset * @sizeOf(ElemOf(field)));
             const gp: *Gpu = &amp;self.gpu.?;
-            wgpu.queueWriteBuffer(gp.queue, gp.field_bufs[fi], byte_offset, std.mem.sliceAsBytes(data));
+            wgpu.queueWriteBuffer(gp.queue, gp.field_bufs[fi], byte_offset, sliceAsBytes(data));
         },
     }
 }</code></pre></details>
@@ -9227,7 +9448,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
                     wk.gpa,
                     komputeKernel(M, name),
                     .{ .n = n, .params = self.params },
-                    std.mem.asBytes(wk.mirror), // OUR state, not the module's
+                    asBytes(wk.mirror), // OUR state, not the module's
                 ) catch |err| blk: {
                     std.log.err("Compute.run('" ++ name ++ "') on .worker: {s}", .{@errorName(err)});
                     break :blk .{};
@@ -9236,7 +9457,7 @@ pub fn run(self: *Self, comptime name: []const u8, n: u32) void {
         },
         .gpu =&gt; {
             const gp: *Gpu = &amp;self.gpu.?;
-            const workgroups: u32 = (n + M.config.workgroup - 1) / M.config.workgroup;
+            const workgroups: u32 = @divCeil(n, M.config.workgroup);
             // Find this kernel's slot so we get BOTH its pipeline and its
             // own bind group - each kernel binds a different subset of the
             // buffers now, so the two always travel together.
@@ -9357,7 +9578,7 @@ pub fn readGeneration(self: *Self) Generation {
                 if (wk.job.poll()) |maybe_bytes| {
                     if (maybe_bytes) |bytes| {
                         if (bytes.len == @sizeOf(Buffers)) {
-                            @memcpy(std.mem.asBytes(wk.mirror), bytes);
+                            @memcpy(asBytes(wk.mirror), bytes);
                             wk.have_read = true;
                         }
                         wk.job.deinit();
@@ -9376,7 +9597,7 @@ pub fn readGeneration(self: *Self) Generation {
         .gpu =&gt; {
             const gp: *Gpu = &amp;self.gpu.?;
             if (gp.read != .invalid and wgpu.bufferReadPoll(gp.read)) {
-                const mirror_bytes: []u8 = std.mem.asBytes(gp.mirror);
+                const mirror_bytes: []u8 = asBytes(gp.mirror);
                 wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                 unpackPrefixes(mirror_bytes, gp.read_count);
                 wgpu.bufferReadRelease(gp.read);
@@ -9555,8 +9776,8 @@ pub fn trainStep(self: *Self, inputs: []const f32, targets: []const f32) !f32 {
         .beta1 = self.spec.beta1,
         .beta2 = self.spec.beta2,
         .epsilon = self.spec.epsilon,
-        .correction1 = 1.0 / (1.0 - zm.pow(self.spec.beta1, step)),
-        .correction2 = 1.0 / (1.0 - zm.pow(self.spec.beta2, step)),
+        .correction1 = 1.0 / (1.0 - pow(self.spec.beta1, step)),
+        .correction2 = 1.0 / (1.0 - pow(self.spec.beta2, step)),
     }, self.param_count);
     self.pipe.submitRecording();
 
@@ -9691,8 +9912,8 @@ pub fn GpuPpoOn(comptime M: type) type {
             p.t1 = try gpa.alloc(f32, options.hidden);
             p.t2 = try gpa.alloc(f32, options.hidden);
             p.mean = try gpa.alloc(f32, n_act);
-            var rng: std.Random.DefaultPrng = .init(options.seed);
-            const random: std.Random = rng.random();
+            var rng: Random.DefaultPrng = .init(options.seed);
+            const random: Random = rng.random();
             const gains = [3]f32{ 1.0, 1.0, 0.01 };
             for (layer_sizes, p.p_off, gains) |dims, off, gain| {
                 initLayer(p.cpu_params[off..][0 .. dims[0] * dims[1] + dims[1]], dims[0], dims[1], gain, random);
@@ -9725,7 +9946,7 @@ pub fn GpuPpoOn(comptime M: type) type {
             in: u32,
             width: u32,
             gain: f32,
-            random: std.Random,
+            random: Random,
         ) void {
             const limit: f32 = gain * @sqrt(6.0 / float(in + width));
             for (out[0 .. in * width]) |*w| {
@@ -9739,7 +9960,7 @@ pub fn GpuPpoOn(comptime M: type) type {
             p: *Self,
             obs: []const f32,
             action: []f32,
-            random: std.Random,
+            random: Random,
         ) f32 {
             kitLayer(p.cpu_params, p.p_off[0], obs, p.t1, true);
             kitLayer(p.cpu_params, p.p_off[1], p.t1, p.t2, true);
@@ -10011,7 +10232,11 @@ pub fn GpuPpoOn(comptime M: type) type {
         /// cloned is the very network PPO then fine-tunes; nothing is copied between two nets. The Adam step
         /// count is shared with PPO's (its bias corrections are ~1 after the first hundred steps anyway).
         /// `observations`: rows x n_obs, normalised exactly as PPO sees them; `labels`: rows x n_act.
-        pub fn cloneMinibatch(p: *Self, observations: []const f32, labels: []const f32) void {
+        pub fn cloneMinibatch(
+            p: *Self,
+            observations: []const f32,
+            labels: []const f32,
+        ) void {
             const rows: u32 = @intCast(p.options.rows);
             const no: u32 = @intCast(p.n_obs);
             const na: u32 = @intCast(p.n_act);
@@ -10261,7 +10486,7 @@ pub fn GpuSacOn(comptime M: type) type {
             p: *Self,
             obs: []const f32,
             action: []f32,
-            random: std.Random,
+            random: Random,
             deterministic: bool,
         ) void {
             kitLayer(p.cpu_actor, p.actor[0], obs, p.t1_cpu, true);
@@ -10277,7 +10502,11 @@ pub fn GpuSacOn(comptime M: type) type {
 
         /// A learner holding `agent`'s exact weights, log-std and log alpha - for checking one
         /// against the other on the same numbers.
-        pub fn initFrom(gpa: Allocator, pipe: *compute_host.Compute(M), agent: *const SacAgent) !Self {
+        pub fn initFrom(
+            gpa: Allocator,
+            pipe: *compute_host.Compute(M),
+            agent: *const SacAgent,
+        ) !Self {
             var p: Self = try .init(gpa, pipe, agent.n_obs, agent.n_act, agent.options);
             errdefer p.deinit(gpa);
             const params_: []f32 = try gpa.alloc(f32, p.param_count);
@@ -10704,7 +10933,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         staging: []f32,
         pol_step: u32 = 0,
         wm_step: u32 = 0,
-        arena_state: std.heap.ArenaAllocator,
+        arena_state: ArenaAllocator,
         // -- The FUSED path (st_ kernels): its own upload region, records, per-row gradients. --
         f_p_start: u32,
         f_p_eps: u32,
@@ -10739,9 +10968,13 @@ pub fn SuperTrackKitOn(comptime M: type) type {
             return in * out + out;
         }
 
-        pub fn init(gpa: Allocator, pipe: *compute_host.Compute(M), options: Options) !Self {
+        pub fn init(
+            gpa: Allocator,
+            pipe: *compute_host.Compute(M),
+            options: Options,
+        ) !Self {
             var p: Self = undefined;
-            p.arena_state = .init(gpa);
+            p.arena_state = ArenaAllocator.init(gpa);
             errdefer p.arena_state.deinit();
             const arena: Allocator = p.arena_state.allocator();
             p.pipe = pipe;
@@ -10830,7 +11063,11 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         }
 
         /// A kit holding `st`'s exact weights - for checking one against the other.
-        pub fn initFrom(gpa: Allocator, pipe: *compute_host.Compute(M), st: *const SuperTrack) !Self {
+        pub fn initFrom(
+            gpa: Allocator,
+            pipe: *compute_host.Compute(M),
+            st: *const SuperTrack,
+        ) !Self {
             var p: Self = try .init(gpa, pipe, st.options);
             errdefer p.deinit();
             const arena: Allocator = p.arena_state.allocator();
@@ -11043,7 +11280,11 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         }
 
         /// `SuperTrack.trainWorldWith`, as kernels.
-        pub fn trainWorldWith(p: *Self, states: []const f32, forces_unit: []const f32) void {
+        pub fn trainWorldWith(
+            p: *Self,
+            states: []const f32,
+            forces_unit: []const f32,
+        ) void {
             const n: usize = p.options.wm_window;
             const r: usize = p.rows;
             for (0..r) |row| {
@@ -11068,7 +11309,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
                 k -= 1;
                 const last: bool = k == n - 1;
                 p.stepBackward(p.w_state[k + 1], p.w_target[k], cur, nxt, p.w_in[k], p.w_g1[k], p.w_g2[k], last, true);
-                std.mem.swap(u32, &amp;cur, &amp;nxt);
+                swap(u32, &amp;cur, &amp;nxt);
             }
             p.wm_step += 1;
             p.adam(p.wm[0], p.wm_count, p.wm_step, p.options.wm_rate);
@@ -11124,7 +11365,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
                 add.dx_off = p.d_pin;
                 add.count = p.rows * 4;
                 p.run("add_block", add, p.rows * 4);
-                std.mem.swap(u32, &amp;cur, &amp;nxt);
+                swap(u32, &amp;cur, &amp;nxt);
             }
             p.pol_step += 1;
             p.adam(p.pol[0], p.pol_count, p.pol_step, p.options.policy_rate);
@@ -11133,7 +11374,11 @@ pub fn SuperTrackKitOn(comptime M: type) type {
 
         /// `trainWorldWith`, FUSED: four dispatches (forward, backward, reduce, Adam) instead of
         /// ~150 - one thread per row walks the whole window.
-        pub fn trainWorldFused(p: *Self, states: []const f32, forces_unit: []const f32) void {
+        pub fn trainWorldFused(
+            p: *Self,
+            states: []const f32,
+            forces_unit: []const f32,
+        ) void {
             const n: usize = p.options.wm_window;
             const r: usize = p.rows;
             for (0..r) |row| {
@@ -11777,7 +12022,7 @@ the CPU implementation on identical inputs: the gather bitwise, a world-model up
 in a hundred thousand, a policy update to one in ten million. What remains for the loop itself is that
 the pieces fit and that it moves: the ring stays in step with the replay, the slots keep their windows
 apart, and the mirror follows the GPU.</p>
-<details class="src-fold" data-src="src/robot_track_resident.zig" data-decl="pub fn round("><summary><code>Resident.round</code></summary><pre><code class="zig">/// One round of the loop: simulate, then train each network, each update in its own slot.
+<details class="src-fold" data-src="src/robot_track_resident.zig" data-decl="pub fn simulateAndTrain("><summary><code>Resident.simulateAndTrain</code></summary><pre><code class="zig">/// One round of the loop: simulate, then train each network, each update in its own slot.
 ///
 /// ONE RECORDING PER ROUND, and not one for several. Every `run` inside a recording carries
 /// its own parameters - without it each dispatch would read whichever parameters were written
@@ -11785,7 +12030,7 @@ apart, and the mirror follows the GPU.</p>
 /// recording may not span rounds either: an upload made while one is open lands before the
 /// WHOLE recording executes, so a later round's appends would overwrite ring slots this
 /// round's gathers are still about to read. Simulate, record this round's dispatches, submit.
-pub fn round(self: *Self) void {
+pub fn simulateAndTrain(self: *Self) void {
     self.act(self.options.collect, 1.0);
     self.kit.pipe.beginRecording();
     var slot: u32 = 0;
@@ -11809,7 +12054,7 @@ pub fn round(self: *Self) void {
 /// into the judged pair rather than the collected one. They are still recorded: noise-free
 /// on-policy steps are perfectly good data, and the ring must stay in step with the replay.
 pub fn act(self: *Self, steps: u32, noise_scale: f32) void {
-    const random: std.Random = self.rng.random();
+    const random: Random = self.rng.random();
     const actions: usize = self.raw.len;
     for (0..steps) |_| {
         // Every character chooses its action from the SAME mirror within a step - the weights
@@ -11998,7 +12243,7 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
         s.cost_history[s.cost_history_len] = result.cost;
         s.cost_history_len += 1;
     } else {
-        std.mem.copyForwards(f32, s.cost_history[0 .. s.cost_history.len - 1], s.cost_history[1..]);
+        copyForwards(f32, s.cost_history[0 .. s.cost_history.len - 1], s.cost_history[1..]);
         s.cost_history[s.cost_history.len - 1] = result.cost;
     }
 
@@ -12428,14 +12673,14 @@ so it always lists what exists — a new public function appears here the moment
 <tr><td><code>Clip</code></td><td>A retargeted clip: one complete robot pose (<code>qpos</code>) per frame, plus a note of how well the IK managed on each frame.</td></tr>
 <tr><td><code>ClipAudit</code></td><td>The handful of numbers that say whether a retargeted clip is fit to learn from.</td></tr>
 <tr><td><code>auditClip</code></td><td>Audit a clip against the model it was retargeted for.</td></tr>
-<tr><td><code>retargetClip</code></td><td>Retarget the first <code>seconds</code> of a capture onto a robot, one frame at a time.</td></tr>
-<tr><td><code>lowestFootPoint</code></td><td>How low the robot's feet reach right now: the lowest point, in world z, of any body with "foot" in its name - capsule ends and sphere bottoms, radius included.</td></tr>
-<tr><td><code>lowestBodyPoint</code></td><td>The same for the WHOLE robot: how low any part of it reaches.</td></tr>
-<tr><td><code>lowestGeomNamed</code></td><td>The lowest world z of the bodies whose name contains <code>want</code> - a foot, say, or a toe.</td></tr>
-<tr><td><code>toRobot</code></td><td>A BVH position (centimetres, Y-up) as the robot sees it (metres, Z-up).</td></tr>
-<tr><td><code>rotationToRobot</code></td><td>A BVH rotation as the robot sees it.</td></tr>
 <tr><td><code>globalsAtFrame</code></td><td>One frame of the capture, turned into rotations: every joint's GLOBAL rotation (in the capture's world, not relative to its parent), plus the root's translation.</td></tr>
 <tr><td><code>bvhPoints</code></td><td>Where every joint is, relative to the root, from the global rotations <code>globalsAtFrame</code> made.</td></tr>
+<tr><td><code>toRobot</code></td><td>A BVH position (centimetres, Y-up) as the robot sees it (metres, Z-up).</td></tr>
+<tr><td><code>rotationToRobot</code></td><td>A BVH rotation as the robot sees it.</td></tr>
+<tr><td><code>lowestFootPoint</code></td><td>How low the robot's feet reach right now: the lowest point, in world z, of any body with "foot" in its name - capsule ends and sphere bottoms, radius included.</td></tr>
+<tr><td><code>retargetClip</code></td><td>Retarget the first <code>seconds</code> of a capture onto a robot, one frame at a time.</td></tr>
+<tr><td><code>lowestBodyPoint</code></td><td>The same for the WHOLE robot: how low any part of it reaches.</td></tr>
+<tr><td><code>lowestGeomNamed</code></td><td>The lowest world z of the bodies whose name contains <code>want</code> - a foot, say, or a toe.</td></tr>
 <tr><td><code>Tracker</code></td><td>The servo: the acceleration each joint of a FIXED-base robot needs to follow a moving target.</td></tr>
 <tr><td><code>max_contact_points</code></td><td>The most contacts a contact solve will use.</td></tr>
 <tr><td><code>ContactScratch</code></td><td>Scratch memory for the contact solves, sized once for a model so the per-frame solves never allocate.</td></tr>
@@ -12520,11 +12765,11 @@ so it always lists what exists — a new public function appears here the moment
 <tr><td><code>adam</code></td><td>Adam over <code>count</code> elements from <code>w_off</code>, with the host's bias corrections.</td></tr>
 <tr><td><code>squash_fwd</code></td><td>u = mean + std eps, a = tanh(u): u kept at acts[u_off], the action written into a strided block (acts[z_off + r stride + col + k]).</td></tr>
 <tr><td><code>squash_logp</code></td><td>log pi per row: sum over dimensions of -eps^2/2 - log std - log(2 pi)/2 - log(1 - tanh(u)^2).</td></tr>
-<tr><td><code>sac_target</code></td><td>y = r + gamma (1 - done)(min(q1', q2') - alpha log pi'): q1' at acts[y_off], q2' at acts[z_off], log pi' at acts[l_off], rewards then dones at acts[x_off]; y to acts[t_off].</td></tr>
+<tr><td><code>sac_target</code></td><td>y = r + discount (min(q1', q2') - alpha log pi'): q1' at acts[y_off], q2' at acts[z_off], log pi' at acts[l_off], rewards then DISCOUNTS at acts[x_off] - the replay row's last column, gamma (1 - done) for a one-step row, gamma^k for an n-step one; y to acts[t_off].</td></tr>
 <tr><td><code>min_route</code></td><td>The actor loss's -mean(min(q1, q2)) gradient, routed WHOLE to the smaller critic (ties go to the first, as zimrnum's graph <code>min</code>): into dacts[dy_off] for q1 and dacts[dx_off] for q2.</td></tr>
 <tr><td><code>squash_bwd</code></td><td>dL/du for the actor loss mean(alpha log pi - min q): the critics' gradient at their action input (both blocks, dacts[dx_off] and dacts[e_off], strided; one of each row's is zero) through tanh, plus alpha's pull through the squash correction (d/du of -log(1 - tanh^2) is 2 tanh).</td></tr>
 <tr><td><code>squash_logstd_grad</code></td><td>The raw log-std's gradient: sum over rows of dL/du std eps, less alpha (the -log std in log pi, averaged), through the tanh bound.</td></tr>
-<tr><td><code>alpha_grad</code></td><td>Log alpha's gradient, -alpha (mean log pi + target entropy): <code>zn.Temperature.gradient</code>.</td></tr>
+<tr><td><code>alpha_grad</code></td><td>Log alpha's gradient, -alpha (mean log pi + target entropy): <code>zrl.Temperature.gradient</code>.</td></tr>
 <tr><td><code>polyak</code></td><td>target = tau online + (1 - tau) target, over <code>count</code> params: target at w_off, online at v_off.</td></tr>
 <tr><td><code>cp_wm_input</code></td><td>[cart rate, pole angle, pole rate] of the state at acts[x_off] and the force at acts[u_off] into the world model's input rows at acts[z_off].</td></tr>
 <tr><td><code>cp_wm_input_bwd</code></td><td>The world-model input's gradient (dacts[dx_off], rows x 4) back to the state: ADDED into the state gradient at dacts[dy_off] (columns 1-3); the force's share to dacts[e_off].</td></tr>
@@ -12536,11 +12781,11 @@ so it always lists what exists — a new public function appears here the moment
 <tr><td><code>add_block</code></td><td>dacts[dy_off + i] += dacts[dx_off + i] over <code>count</code>: a gradient arriving by a second path.</td></tr>
 <tr><td><code>lat_advance</code></td><td>The next state, in two places at once: z_{k+1} = z_k + change, written into the next block's z columns (strided, so the next step's first layer reads it) AND into a contiguous block (the loss kernels read contiguous rows).</td></tr>
 <tr><td><code>lat_take</code></td><td>The backward join: the gradient that reached a block's z columns (strided, at <code>dx_off</code>) added into the state's contiguous gradient (at <code>dy_off</code>) - the path by which the loss at later steps reaches earlier states THROUGH the network, beside the residual path <code>add_block</code> carries.</td></tr>
-<tr><td><code>lat_gather</code></td><td>A batch of training windows, assembled on the GPU from what is resident there: the feature ring (a record per character per step: raw features, action, table row), the reference tables (a row per clip frame: raw goal features, encoded targets) and the normaliser (means, then spreads).</td></tr>
 <tr><td><code>latRecordWidth</code></td><td>Floats in one record of the feature ring: a character's raw (unnormalised) features, the action it took on that step, and one more for which reference-table row it was aiming at.</td></tr>
-<tr><td><code>latRecordAction</code></td><td>Where a record's action begins.</td></tr>
 <tr><td><code>latRecordTableRow</code></td><td>Where a record's reference-table row sits: the last column, kept as a float like everything else in the buffer and rounded back to an integer when read.</td></tr>
 <tr><td><code>latTableWidth</code></td><td>Floats in one row of the reference tables: a frame's features, then the servo targets the fleet would aim at for it - everything a rollout needs about a reference frame, so a window can be built without the clips being on the device at all.</td></tr>
+<tr><td><code>latRecordAction</code></td><td>Where a record's action begins.</td></tr>
+<tr><td><code>lat_gather</code></td><td>A batch of training windows, assembled on the GPU from what is resident there: the feature ring (a record per character per step: raw features, action, table row), the reference tables (a row per clip frame: raw goal features, encoded targets) and the normaliser (means, then spreads).</td></tr>
 <tr><td><code>latNoise</code></td><td>—</td></tr>
 <tr><td><code>latStepSeed</code></td><td>A different seed for every step of the rollout, from one seed per training step.</td></tr>
 <tr><td><code>lat_act</code></td><td>The policy's action into its row: <code>lat_scale * raw</code> into the wide row's action columns, so the world model's next step reads the action the policy just chose.</td></tr>

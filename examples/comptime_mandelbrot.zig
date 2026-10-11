@@ -4,7 +4,7 @@
 //!
 //! Run:
 //!
-//!   zig build comptime-mandelbrot
+//!   zig build comptime-mandelbrot-ascii
 //!
 //! What this proves:
 //!
@@ -50,7 +50,7 @@ fn mandelbrotEscape(
     max_iter: u32,
 ) ?f32 {
     @setRuntimeSafety(false);
-    const BAIL_R2: f32 = 256.0;
+    const bail_r2: f32 = 256.0;
     var zx: f32 = 0;
     var zy: f32 = 0;
     var iter: u32 = 0;
@@ -59,7 +59,7 @@ fn mandelbrotEscape(
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) {
+        if (zx2 + zy2 > bail_r2) {
             break;
         }
         const zxy_new: f32 = 2 * zx * zy + cy;

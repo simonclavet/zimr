@@ -43,6 +43,8 @@
 //! hand is the prose around the code - which is exactly the part a tool can't write for you.
 
 const std = @import("std");
+const ArenaAllocator = std.heap.ArenaAllocator;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const eql = std.mem.eql;
 const indexOf = std.mem.indexOf;
@@ -54,11 +56,11 @@ const trim = std.mem.trim;
 const trimStart = std.mem.trimStart;
 const allocPrint = std.fmt.allocPrint;
 const splitScalar = std.mem.splitScalar;
-const ArgIterator = std.process.Args.Iterator;
 
-const File = std.Io.File;
-const Dir = std.Io.Dir;
 const Io = std.Io;
+const ArrayList = std.ArrayList;
+const File = Io.File;
+const Dir = Io.Dir;
 
 /// Plenty for any page or source file here (the biggest source is a few hundred kilobytes).
 const read_limit: Io.Limit = .limited(64 << 20);
@@ -102,21 +104,21 @@ fn trimmed(line: []const u8) []const u8 {
     return trim(u8, line, " \t\r");
 }
 
-/// Split a file into lines, dropping any carriage returns so Windows checkouts behave.
-fn splitLines(gpa: Allocator, text: []const u8) ![]const []const u8 {
-    var lines: std.ArrayList([]const u8) = .empty;
-    var it: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, text, '\n');
-    while (it.next()) |line| {
-        try lines.append(gpa, trimStartCr(line));
-    }
-    return lines.items;
-}
-
 fn trimStartCr(line: []const u8) []const u8 {
     if (line.len > 0 and line[line.len - 1] == '\r') {
         return line[0 .. line.len - 1];
     }
     return line;
+}
+
+/// Split a file into lines, dropping any carriage returns so Windows checkouts behave.
+fn splitLines(gpa: Allocator, text: []const u8) ![]const []const u8 {
+    var lines: ArrayList([]const u8) = .empty;
+    var it: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        try lines.append(gpa, trimStartCr(line));
+    }
+    return lines.items;
 }
 
 /// The line a declaration starts on: the one whose text (after its indentation) starts with
@@ -187,21 +189,7 @@ fn spanOf(lines: []const []const u8, first: usize) DeclError!Span {
     return error.Unterminated;
 }
 
-/// The declaration as a block shows it: dedented by its first line's indentation, lines joined
-/// with newlines, no trailing newline, and escaped for HTML.
-fn render(gpa: Allocator, lines: []const []const u8, span: Span) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
-    for (lines[span.start .. span.end + 1], 0..) |line, i| {
-        if (i > 0) {
-            try out.append(gpa, '\n');
-        }
-        const body: []const u8 = if (indentOf(line) >= span.indent) line[span.indent..] else trimStart(u8, line, " ");
-        try appendEscaped(gpa, &out, body);
-    }
-    return out.items;
-}
-
-fn appendEscaped(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+fn appendEscaped(gpa: Allocator, out: *ArrayList(u8), text: []const u8) !void {
     for (text) |c| {
         switch (c) {
             '&' => try out.appendSlice(gpa, "&amp;"),
@@ -212,13 +200,27 @@ fn appendEscaped(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) !voi
     }
 }
 
+/// The declaration as a block shows it: dedented by its first line's indentation, lines joined
+/// with newlines, no trailing newline, and escaped for HTML.
+fn render(gpa: Allocator, lines: []const []const u8, span: Span) ![]u8 {
+    var out: ArrayList(u8) = .empty;
+    for (lines[span.start .. span.end + 1], 0..) |line, i| {
+        if (i > 0) {
+            try out.append(gpa, '\n');
+        }
+        const body: []const u8 = if (indentOf(line) >= span.indent) line[span.indent..] else trimStart(u8, line, " ");
+        try appendEscaped(gpa, &out, body);
+    }
+    return out.items;
+}
+
 /// An attribute's value from a tag, un-escaped (`&quot;` and friends), or null when absent.
 fn attribute(gpa: Allocator, tag: []const u8, name: []const u8) !?[]const u8 {
     const needle: []u8 = try allocPrint(gpa, " {s}=\"", .{name});
     const at: usize = indexOf(u8, tag, needle) orelse return null;
     const from: usize = at + needle.len;
     const to: usize = indexOfPos(u8, tag, from, "\"") orelse return null;
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     var i: usize = from;
     while (i < to) {
         const entities = [_][2][]const u8{
@@ -244,7 +246,7 @@ fn attribute(gpa: Allocator, tag: []const u8, name: []const u8) !?[]const u8 {
 fn sourceFor(
     gpa: Allocator,
     io: Io,
-    cache: *std.ArrayList(Source),
+    cache: *ArrayList(Source),
     path: []const u8,
 ) !Source {
     for (cache.items) |s| {
@@ -266,7 +268,7 @@ fn say(io: Io, gpa: Allocator, comptime fmt: []const u8, args: anytype) !void {
 /// The first sentence of a declaration's doc comment, ready for a table cell: backticks become
 /// `<code>`, decoration (`--`, `*`) is dropped, and HTML is escaped. "-" when there's no doc.
 fn summary(gpa: Allocator, lines: []const []const u8, span: Span, first: usize) ![]u8 {
-    var text: std.ArrayList(u8) = .empty;
+    var text: ArrayList(u8) = .empty;
     for (lines[span.start..first]) |line| {
         var t: []const u8 = trimmed(line);
         t = trimmed(t[3..]);
@@ -299,7 +301,7 @@ fn summary(gpa: Allocator, lines: []const []const u8, span: Span, first: usize) 
             break;
         }
     }
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     var in_code: bool = false;
     for (text.items[0..cut]) |c| {
         if (c == '`') {
@@ -334,10 +336,10 @@ fn declName(line: []const u8) ?[]const u8 {
 fn reference(
     gpa: Allocator,
     io: Io,
-    cache: *std.ArrayList(Source),
+    cache: *ArrayList(Source),
     files: []const u8,
 ) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     var it: std.mem.TokenIterator(u8, .scalar) = std.mem.tokenizeScalar(u8, files, ' ');
     while (it.next()) |path| {
         const source: Source = try sourceFor(gpa, io, cache, path);
@@ -370,8 +372,8 @@ fn processPage(
     text: []const u8,
     rep: *Report,
 ) ![]u8 {
-    var cache: std.ArrayList(Source) = .empty;
-    var out: std.ArrayList(u8) = .empty;
+    var cache: ArrayList(Source) = .empty;
+    var out: ArrayList(u8) = .empty;
     var pos: usize = 0;
     while (indexOfPos(u8, text, pos, " data-src=\"")) |attr_at| {
         const tag_start: usize = lastIndexOf(u8, text[0..attr_at], "<") orelse break;
@@ -430,7 +432,7 @@ fn processPage(
         if (!eql(u8, joined[region_start..region_end], generated)) {
             rep.stale += 1;
             try say(io, gpa, "{s}: the reference is out of date\n", .{page});
-            var rebuilt: std.ArrayList(u8) = .empty;
+            var rebuilt: ArrayList(u8) = .empty;
             try rebuilt.appendSlice(gpa, joined[0..region_start]);
             try rebuilt.appendSlice(gpa, generated);
             try rebuilt.appendSlice(gpa, joined[region_end..]);
@@ -441,28 +443,34 @@ fn processPage(
     return joined;
 }
 
+/// The command line (std's cli, `src/command_line.zig`). `--check` is `--fix`'s CLEAR - the PR's name for an option
+/// that puts another back to its default - so the two are one switch, the last one written wins, and `--help`
+/// shows them as a pair.
+const FoldArgs = struct {
+    @"--fix": bool = false,
+    pages: []const []const u8 = &.{},
+};
+
+const fold_cli: cli.Config(FoldArgs) = .{
+    .prog = "doc_folds",
+    .description = "Fills every source fold in the pages from the declaration it names (--fix), or checks they match.",
+    .args = .{
+        .@"--fix" = .{ .description = "rewrite the pages; without it, only check them", .clear = .@"--check" },
+        .pages = .{ .description = "the pages whose folds to fill or check" },
+    },
+};
+
 pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
     const gpa: Allocator = arena.allocator();
     const io: Io = init.io;
 
-    var mode: Mode = .check;
-    var pages: std.ArrayList([]const u8) = .empty;
-    var args: ArgIterator = try ArgIterator.initAllocator(init.minimal.args, gpa);
-    _ = args.skip();
-    while (args.next()) |arg| {
-        if (eql(u8, arg, "--fix")) {
-            mode = .fix;
-        } else if (eql(u8, arg, "--check")) {
-            mode = .check;
-        } else {
-            try pages.append(gpa, arg);
-        }
-    }
+    const args: FoldArgs = cli.args(&init, FoldArgs, fold_cli);
+    const mode: Mode = if (args.@"--fix") .fix else .check;
 
     var failed: bool = false;
-    for (pages.items) |page| {
+    for (args.pages) |page| {
         var rep: Report = .{};
         const text: []u8 = try Dir.cwd().readFileAlloc(io, page, gpa, read_limit);
         const updated: []u8 = try processPage(gpa, io, page, text, &rep);

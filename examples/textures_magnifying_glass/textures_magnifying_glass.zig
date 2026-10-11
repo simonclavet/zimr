@@ -75,7 +75,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .parrots = try uploadPng(gpa, f.gl, parrots_png),
         .bunny = try uploadPng(gpa, f.gl, bunny_png),
         .mask = try buildCircleMask(gpa, f.gl),
-        .rt = z.loadRenderTexture(f.gl, @intFromFloat(glass), @intFromFloat(glass)),
+        .rt = z.loadRenderTexture(f.gl, @round(glass), @round(glass)),
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
     };
 }

@@ -19,15 +19,21 @@ const pi = zm.pi;
 const float = zm.float;
 
 const bufPrint = std.fmt.bufPrint;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const Vec = zm.Vec;
 const vec = zm.vec;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
 const length3 = zm.length3;
+const Quat = zm.Quat;
+const cosRad = zm.cosRad;
+const sinRad = zm.sinRad;
 
 const dt: f32 = 1.0 / 60.0;
 
 /// Floor top sits at y=0: a static box centred at y=-0.5 with half-height 0.5.
-fn addFloor(world: *zp.World, gpa: std.mem.Allocator) !void {
+fn addFloor(world: *zp.World, gpa: Allocator) !void {
     const floor_id: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(20, 0.5, 20),
         .convex_radius = 0.05,
@@ -40,10 +46,10 @@ fn addFloor(world: *zp.World, gpa: std.mem.Allocator) !void {
 }
 
 /// Step `frames` times with a fresh scratch arena each step (mirrors the demo).
-fn simulate(world: *zp.World, gpa: std.mem.Allocator, frames: u32) !void {
+fn simulate(world: *zp.World, gpa: Allocator, frames: u32) !void {
     var f: u32 = 0;
     while (f < frames) : (f += 1) {
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         try zp.step(world, scratch.allocator(), dt);
     }
@@ -78,12 +84,12 @@ const Report = struct {
 /// (its half-height above the floor top), stay finite, and never sink below 0.
 fn restScenario(
     rep: *Report,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     name: []const u8,
     shape_desc: zp.Shape,
     expect_y: f32,
 ) !void {
-    var world: zp.World = try zp.World.init(gpa, 64);
+    var world: zp.World = try .init(gpa, 64);
     try addFloor(&world, gpa);
     const shape: zp.ShapeId = try world.shapes.add(gpa, shape_desc);
     const body: zp.BodyIndex = try world.addBody(gpa, .{
@@ -107,8 +113,8 @@ fn restScenario(
 
 /// Three boxes stacked: they must come to rest in increasing height order with
 /// none tunneling below the floor. This is the canonical box-box solver probe.
-fn boxStackScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 64);
+fn boxStackScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 64);
     try addFloor(&world, gpa);
     const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.5, 0.5, 0.5),
@@ -142,8 +148,8 @@ fn boxStackScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 }
 
 /// A bouncy sphere (restitution 0.8) dropped from 3 m should rebound clearly.
-fn bounceScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 64);
+fn bounceScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 64);
     try addFloor(&world, gpa);
     const sphere: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.5 } });
     const body: zp.BodyIndex = try world.addBody(gpa, .{
@@ -157,7 +163,7 @@ fn bounceScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var touched: bool = false;
     var f: u32 = 0;
     while (f < 240) : (f += 1) {
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         try zp.step(&world, scratch.allocator(), dt);
         const y: f32 = comY(&world, body);
@@ -180,8 +186,8 @@ fn bounceScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 /// Cast a ray straight down at a resting sphere; the hit must exist, be finite,
 /// and (the suspected bug) carry a 0..1 `fraction`, not a world distance.
-fn raycastScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 64);
+fn raycastScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 64);
     try addFloor(&world, gpa);
     const sphere: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.5 } });
     _ = try world.addBody(gpa, .{
@@ -211,8 +217,8 @@ fn raycastScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 /// A box dropped tilted 30 deg about Z must settle finite and rest on the floor
 /// (COM in a sane band), not tunnel. Exercises non-axis-aligned axis selection.
-fn boxTiltedScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 64);
+fn boxTiltedScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 64);
     try addFloor(&world, gpa);
     const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.5, 0.5, 0.5),
@@ -234,8 +240,8 @@ fn boxTiltedScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 /// A 3-2-1 box pyramid must settle without any box tunneling - the box-on-box
 /// under load case the physics_pyramid example needs (boxes use SAT, not EPA).
-fn boxPyramidScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 64);
+fn boxPyramidScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 64);
     try addFloor(&world, gpa);
     const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.5, 0.5, 0.5),
@@ -276,8 +282,8 @@ fn boxPyramidScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 }
 
 /// A settled box must STAY put: COM drift over the final 60 frames is tiny.
-fn restStabilityScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn restStabilityScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     try addFloor(&world, gpa);
     const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.5, 0.5, 0.5),
@@ -299,8 +305,8 @@ fn restStabilityScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 /// Two spheres linked by a max-distance rope: the lower one, pulled by gravity,
 /// must hang at ~the rope length below the static upper one (constraint solver).
-fn distanceConstraintScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn distanceConstraintScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     const sphere: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.3 } });
     const top: zp.BodyIndex = try world.addBody(gpa, .{
         .shape = sphere,
@@ -322,13 +328,13 @@ fn distanceConstraintScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 }
 
 /// queryAabb must return only the bodies whose AABB overlaps the query box.
-fn queryAabbScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn queryAabbScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     const sphere: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.5 } });
     _ = try world.addBody(gpa, .{ .shape = sphere, .position = vec(0, 0, 0), .motion_type = .static });
     _ = try world.addBody(gpa, .{ .shape = sphere, .position = vec(10, 0, 0), .motion_type = .static });
     try simulate(&world, gpa, 2);
-    var hits: std.ArrayListUnmanaged(zp.BodyIndex) = .empty;
+    var hits: ArrayListUnmanaged(zp.BodyIndex) = .empty;
     try world.broadphase.queryAabb(gpa, .{ .min = vec(-1, -1, -1), .max = vec(1, 1, 1) }, &hits);
     var buf: [96]u8 = undefined;
     const detail: []const u8 = bufPrint(&buf, "found {d} in region (want 1)", .{hits.items.len}) catch "fmt";
@@ -337,8 +343,8 @@ fn queryAabbScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 /// World.deinit smoke: build, step, free - exercises every field access in the
 /// new deinit (a wrong field name fails to compile; arena frees are no-ops here).
-fn worldDeinitScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn worldDeinitScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     try addFloor(&world, gpa);
     const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.5, 0.5, 0.5),
@@ -356,8 +362,8 @@ fn worldDeinitScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 /// after the bridge settles every joint gap must stay ~0 while the middle plank
 /// sags below the post line (it hangs) yet never falls through. Proves point
 /// constraints hold a chain under gravity.
-fn pointBridgeScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 32);
+fn pointBridgeScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 32);
     const post: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.2, 0.2, 0.5),
         .convex_radius = 0.05,
@@ -432,8 +438,8 @@ fn pointBridgeScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 /// a hinge about Z, driven by a velocity motor. The static side has zero angular
 /// velocity, so the wheel's spin about Z must climb to ~the motor target. Proves
 /// `addHingeConstraint` + `MotorSettings.velocity` actually drive a joint.
-fn hingeMotorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn hingeMotorScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     world.settings.allow_sleeping = false; // isolate the motor; a parked wheel must not doze off
     const hub: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.2 } });
     const wheel_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .cylinder = .{
@@ -450,7 +456,7 @@ fn hingeMotorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     const wheel: zp.BodyIndex = try world.addBody(gpa, .{
         .shape = wheel_shape,
         .position = vec(0, 3, 0),
-        .rotation = quatFromAxisAngle(vec(1, 0, 0), 0.5 * zm.pi),
+        .rotation = quatFromAxisAngle(vec(1, 0, 0), 0.5 * pi),
         .motion_type = .dynamic,
         .density = 200.0,
         .gravity_factor = 0.0, // isolate the motor; no gravity sag on the joint
@@ -477,10 +483,10 @@ fn hingeMotorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 /// fall as one rigid body. Their COM-to-COM offset must stay ~constant (rigid),
 /// both must rest on the floor, and neither tunnels. Proves the weld locks both
 /// relative position and orientation.
-fn gearChainScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn gearChainScenario(rep: *Report, gpa: Allocator) !void {
     // Two gears about Z: gear A velocity-motored, gear B free, coupled by addGearConstraint
     // (pure velocity coupling, refs -1). B must counter-rotate at the ratio and stay finite.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.settings.allow_sleeping = false;
     const hub: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.12 } });
     const disk: zp.ShapeId = try world.shapes.add(gpa, .{ .cylinder = .{
@@ -537,11 +543,11 @@ fn gearChainScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn rackPinionScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn rackPinionScenario(rep: *Report, gpa: Allocator) !void {
     // Pinion (hinge about Z, velocity-motored) coupled to a rack (slider along X) by
     // addRackAndPinionConstraint (pure velocity coupling, refs -1). Rack must track at
     // v = w / ratio and stay finite.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.settings.allow_sleeping = false;
     const hub: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.12 } });
     const r_pin: f32 = 0.6;
@@ -605,11 +611,11 @@ fn rackPinionScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn pulleyScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn pulleyScenario(rep: *Report, gpa: Allocator) !void {
     // Rigid rope over two fixed points: a heavy box and a light box hang from the
     // ends. The heavy box must descend (to the floor) and haul the light box up,
     // with total rope length |a-fa| + |b-fb| conserved (Jolt PulleyConstraintTest).
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const ground: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -659,11 +665,11 @@ fn pulleyScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn pathScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn pathScenario(rep: *Report, gpa: Allocator) !void {
     // A frictionless bead constrained to a valley-shaped Hermite path (in the XY plane)
     // must (a) stay exactly on the path plane (z == 0), (b) slide down to the bottom, and
     // (c) conserve energy - swing back up to near its start height on the far side.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const anchor: zp.ShapeId = try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.1 } });
@@ -698,7 +704,7 @@ fn pathScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var reached_bottom: bool = false;
     var f: u32 = 0;
     while (f < 200) : (f += 1) {
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         try zp.step(&world, scratch.allocator(), dt);
         const p: Vec = world.bodies.data[b].com_pos;
@@ -728,11 +734,11 @@ fn pathScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn newtonsCradleScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn newtonsCradleScenario(rep: *Report, gpa: Allocator) !void {
     // Two equal balls as planar pendulums, restitution 1: the lifted ball swings in and
     // must transfer (near) all its velocity to the resting ball, stopping itself dead -
     // momentum + energy conservation through the contact (Jolt-style elastic collision).
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     world.settings.min_velocity_for_restitution = 0.02;
@@ -784,7 +790,7 @@ fn newtonsCradleScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var transferred: bool = false;
     var f: u32 = 0;
     while (f < 90) : (f += 1) {
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         try zp.step(&world, scratch.allocator(), dt);
         const v0: f32 = world.motion[b0].lin_vel[0];
@@ -813,11 +819,11 @@ fn newtonsCradleScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn wreckingBallScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn wreckingBallScenario(rep: *Report, gpa: Allocator) !void {
     // A heavy ball on a rigid chain swings into a free-standing brick wall: the wall must
     // stand on its own (small displacement before impact) then be demolished (large mean
     // displacement after), with no NaN - a pendulum + stacking + mass-ratio showcase.
-    var world: zp.World = try zp.World.init(gpa, 128);
+    var world: zp.World = try .init(gpa, 128);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const floor_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -886,7 +892,7 @@ fn wreckingBallScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     var max_ball_x: f32 = -100;
     var f: u32 = 0;
     while (f < 150) : (f += 1) {
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         try zp.step(&world, scratch.allocator(), dt);
         const bx: f32 = world.bodies.data[ball].com_pos[0];
@@ -921,11 +927,11 @@ fn wreckingBallScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn plinkoScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn plinkoScenario(rep: *Report, gpa: Allocator) !void {
     // Galton board: balls are released one at a time from the top centre and cascade through
     // a staggered field of frictionless pegs into bins. Must build a centered, peaked
     // distribution with every ball reaching the bins (no field-jams) and no NaN.
-    var world: zp.World = try zp.World.init(gpa, 256);
+    var world: zp.World = try .init(gpa, 256);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const dx: f32 = 1.4;
@@ -999,7 +1005,7 @@ fn plinkoScenario(rep: *Report, gpa: std.mem.Allocator) !void {
             });
             nb += 1;
         }
-        var scratch: std.heap.ArenaAllocator = .init(gpa);
+        var scratch: ArenaAllocator = .init(gpa);
         defer scratch.deinit();
         try zp.step(&world, scratch.allocator(), dt);
     }
@@ -1041,12 +1047,12 @@ fn plinkoScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn rubeGoldbergScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn rubeGoldbergScenario(rep: *Report, gpa: Allocator) !void {
     // Wave-J flagship chain reaction: a CCD marble rolls down a ramp, topples six
     // dominoes, the last domino shoves a heavy ball off a ledge, and the ball funnels
     // down an angled chute into a catch bin. Gravity-driven end to end. Asserts the
     // whole chain completes: every domino falls, the ball lands in the bin, no NaN.
-    var world: zp.World = try zp.World.init(gpa, 256);
+    var world: zp.World = try .init(gpa, 256);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
 
@@ -1160,11 +1166,11 @@ fn rubeGoldbergScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     ) catch "fmt");
 }
 
-fn hingeOffsetAnchorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn hingeOffsetAnchorScenario(rep: *Report, gpa: Allocator) !void {
     // A door hinged at its EDGE (offset anchor) must swing freely like a pendulum.
     // Guards against the false "offset-anchor lockup" (that was a colliding test post,
     // not a solver bug). A locked door would stay near up_y = 1; a free one swings past.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const post_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -1204,10 +1210,10 @@ fn hingeOffsetAnchorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("hinge-offset-anchor", ok, msg);
 }
 
-fn sliderPerpHoldScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn sliderPerpHoldScenario(rep: *Report, gpa: Allocator) !void {
     // A +Y slider under symmetric perpendicular gravity stress must hold BOTH
     // perpendicular axes (no leak, no asymmetry). Guards the slider dual-axis lock.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(3.0, -9.81, 3.0);
     world.settings.allow_sleeping = false;
     const base_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -1246,10 +1252,10 @@ fn sliderPerpHoldScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("slider-perp-hold", ok, msg);
 }
 
-fn rackReciprocationScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn rackReciprocationScenario(rep: *Report, gpa: Allocator) !void {
     // Reversing a velocity-motored pinion under rack-pinion coupling must reciprocate
     // cleanly through exact rest - no deadlock, no NaN. Guards the motor/coupling path.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const grp: u16 = 8;
@@ -1334,10 +1340,10 @@ fn rackReciprocationScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("rack-reciprocation", ok, msg);
 }
 
-fn gearDriftRefsScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn gearDriftRefsScenario(rep: *Report, gpa: Allocator) !void {
     // Gear coupling with the drift-correction refs SET must stay stable at high spin
     // (wB = -wA, no blow-up). Guards the optional drift path that was feared unstable.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, 0, 0);
     world.settings.allow_sleeping = false;
     const grp: u16 = 8;
@@ -1395,10 +1401,10 @@ fn gearDriftRefsScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("gear-drift-refs", ok, msg);
 }
 
-fn swingTwistMotorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn swingTwistMotorScenario(rep: *Report, gpa: Allocator) !void {
     // The swing-twist twist velocity motor must drive the bone toward its target.
     // Guards that the ragdoll-joint motors are wired and functional.
-    var world: zp.World = try zp.World.init(gpa, 16);
+    var world: zp.World = try .init(gpa, 16);
     world.gravity = vec(0, 0, 0);
     world.settings.allow_sleeping = false;
     const anch_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -1450,10 +1456,10 @@ fn swingTwistMotorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("swingtwist-motor", ok, msg);
 }
 
-fn tumblerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn tumblerScenario(rep: *Report, gpa: Allocator) !void {
     // A motored hexagonal drum (compound) must tumble its load AND contain it:
     // all balls stay inside, the drum holds its spin, nothing goes non-finite.
-    var world: zp.World = try zp.World.init(gpa, 64);
+    var world: zp.World = try .init(gpa, 64);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const center: Vec = vec(0, 3, 0);
@@ -1551,11 +1557,11 @@ fn auditConveyorContact(
     }
 }
 
-fn conveyorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn conveyorScenario(rep: *Report, gpa: Allocator) !void {
     // A flat belt (contact surface velocity) must carry a stream of marbles into a walled
     // bin AND contain them: all reach the bin, none escape (the cascade's fly-off failure
     // is excluded by the left back-stop + walled bin). Guards the conveyor mechanic.
-    var world: zp.World = try zp.World.init(gpa, 64);
+    var world: zp.World = try .init(gpa, 64);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const belt_shape: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -1629,11 +1635,11 @@ fn conveyorScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("conveyor", ok, msg);
 }
 
-fn clockworkScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn clockworkScenario(rep: *Report, gpa: Allocator) !void {
     // A motor-driven 5-gear train (alternating radii) whose last gear drives a rack; the
     // drive reverses periodically. Guards the gear-train + rack-and-pinion + motor combo:
     // every gear holds w0*r0/r_i, the rack reciprocates, nothing goes non-finite.
-    var world: zp.World = try zp.World.init(gpa, 32);
+    var world: zp.World = try .init(gpa, 32);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const grp: u16 = 7;
@@ -1755,7 +1761,7 @@ fn clockworkScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("clockwork", ok, msg);
 }
 
-fn stirrerObjShape(world: *zp.World, gpa: std.mem.Allocator, kind: usize) !zp.ShapeId {
+fn stirrerObjShape(world: *zp.World, gpa: Allocator, kind: usize) !zp.ShapeId {
     return switch (kind) {
         0 => try world.shapes.add(gpa, .{ .sphere = .{ .radius = 0.3 } }),
         1 => try world.shapes.add(gpa, .{ .box = .{ .half_extent = vec(0.24, 0.24, 0.24), .convex_radius = 0.12 } }),
@@ -1768,11 +1774,11 @@ fn stirrerObjShape(world: *zp.World, gpa: std.mem.Allocator, kind: usize) !zp.Sh
     };
 }
 
-fn stirrerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn stirrerScenario(rep: *Report, gpa: Allocator) !void {
     // A swing-twist TWIST-motor-driven rotor spinning about Y inside a walled bowl must
     // churn its load AND contain it: all balls stay in, the rotor holds its spin, nothing
     // goes non-finite. Guards the powered swing-twist joint (used passively in ragdoll).
-    var world: zp.World = try zp.World.init(gpa, 128);
+    var world: zp.World = try .init(gpa, 128);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const grp: u16 = 3;
@@ -1799,8 +1805,8 @@ fn stirrerScenario(rep: *Report, gpa: std.mem.Allocator) !void {
         const azimuth: f32 = float(seg) * (2.0 * pi / float(seg_count));
         _ = try world.addBody(gpa, .{
             .shape = seg_shape,
-            .position = vec(r_wall * zm.cosRad(azimuth), 1.5, r_wall * zm.sinRad(azimuth)),
-            .rotation = quatFromAxisAngle(vec(0, 1, 0), -(azimuth + zm.pi / 2.0)),
+            .position = vec(r_wall * cosRad(azimuth), 1.5, r_wall * sinRad(azimuth)),
+            .rotation = quatFromAxisAngle(vec(0, 1, 0), -(azimuth + pi / 2.0)),
             .motion_type = .static,
         });
     }
@@ -1898,7 +1904,7 @@ const AudRagPart = struct { hh: f32, r: f32, pos: Vec, horiz: bool };
 
 fn buildAuditRagdoll(
     world: *zp.World,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     off: Vec,
     grp: u16,
     bodies: *[12]zp.BodyIndex,
@@ -1917,8 +1923,8 @@ fn buildAuditRagdoll(
         .{ .hh = 0.2, .r = 0.06, .pos = vec(-0.15, 0.3, 0), .horiz = false },
         .{ .hh = 0.2, .r = 0.06, .pos = vec(0.15, 0.3, 0), .horiz = false },
     };
-    const z90: zm.Quat = quatFromAxisAngle(vec(0, 0, 1), 1.5707964); // 90 deg, capsule horizontal
-    const idq: zm.Quat = quatFromAxisAngle(vec(0, 0, 1), 0);
+    const z90: Quat = quatFromAxisAngle(vec(0, 0, 1), 1.5707964); // 90 deg, capsule horizontal
+    const idq: Quat = quatFromAxisAngle(vec(0, 0, 1), 0);
     for (parts, 0..) |pt, i| {
         const shape: zp.ShapeId = try world.shapes.add(gpa, .{ .capsule = .{ .half_height = pt.hh, .radius = pt.r } });
         bodies[i] = try world.addBody(gpa, .{
@@ -1953,19 +1959,19 @@ fn buildAuditRagdoll(
             .twist_axis = twa[k],
             .plane_axis = vec(0, 0, 1),
             .swing_type = .cone,
-            .normal_half_cone = nrd[k] * zm.pi / 180.0,
-            .plane_half_cone = pld[k] * zm.pi / 180.0,
-            .twist_min = -twd[k] * zm.pi / 180.0,
-            .twist_max = twd[k] * zm.pi / 180.0,
+            .normal_half_cone = nrd[k] * pi / 180.0,
+            .plane_half_cone = pld[k] * pi / 180.0,
+            .twist_min = -twd[k] * pi / 180.0,
+            .twist_max = twd[k] * pi / 180.0,
         });
     }
 }
 
-fn ragdollScenario(rep: *Report, gpa: std.mem.Allocator) !void {
+fn ragdollScenario(rep: *Report, gpa: Allocator) !void {
     // A Jolt-standard humanoid ragdoll dropped with a shove must stay finite, hold its joints,
     // and settle flat on the ground (no joint explosion / NaN). Guards the 12-bone swing-twist
     // skeleton used by the ragdoll_pile scene.
-    var world: zp.World = try zp.World.init(gpa, 64);
+    var world: zp.World = try .init(gpa, 64);
     world.gravity = vec(0, -9.81, 0);
     world.settings.allow_sleeping = false;
     const ground: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
@@ -2008,8 +2014,8 @@ fn ragdollScenario(rep: *Report, gpa: std.mem.Allocator) !void {
     rep.check("ragdoll_pile", ok, msg);
 }
 
-fn fixedWeldScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn fixedWeldScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     try addFloor(&world, gpa);
     const box: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(0.5, 0.5, 0.5),
@@ -2045,8 +2051,8 @@ fn fixedWeldScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 
 /// Friction ramp (Jolt FrictionTest): a 23 deg static ramp; a near-frictionless box
 /// must slide much farther downhill than a high-friction box that grips.
-fn frictionRampScenario(rep: *Report, gpa: std.mem.Allocator) !void {
-    var world: zp.World = try zp.World.init(gpa, 16);
+fn frictionRampScenario(rep: *Report, gpa: Allocator) !void {
+    var world: zp.World = try .init(gpa, 16);
     const angle: f32 = 0.40; // ~23 deg, below the grippy box's friction so it holds
     const ramp: zp.ShapeId = try world.shapes.add(gpa, .{ .box = .{
         .half_extent = vec(8, 0.5, 8),
@@ -2087,9 +2093,9 @@ fn frictionRampScenario(rep: *Report, gpa: std.mem.Allocator) !void {
 }
 
 pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
-    const gpa: std.mem.Allocator = arena.allocator();
+    const gpa: Allocator = arena.allocator();
 
     std.debug.print("\n=== zimrphysics headless audit ===\n", .{});
     var rep: Report = .{};

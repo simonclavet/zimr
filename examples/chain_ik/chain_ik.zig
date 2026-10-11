@@ -103,6 +103,8 @@ fn targetAt(s: *const State) Vec {
     return vec(s.target_radius * @cos(s.target_angle), 0, s.target_radius * @sin(s.target_angle));
 }
 
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
     s.doc = try z.codecs.xml.parse(gpa, @embedFile("chain.xml"), null);
@@ -154,92 +156,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.doc.deinit();
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    const model: *const rbt.Model = &s.imported.model;
-    if (s.auto_sweep) {
-        // * THE SWEEP CROSSES THE REACHABLE BOUNDARY AND COMES BACK, because the boundary is
-        // where the conditioning shows. A path that stays comfortably inside proves nothing.
-        s.sweep_phase += f.time.delta_time * 0.25;
-        s.target_radius = 1.0 + 2.4 * @abs(@sin(s.sweep_phase));
-        s.target_angle = 0.6 * @sin(s.sweep_phase * 6.0);
-    }
-
-    @memcpy(s.previous, s.data.pos);
-    const result: ctl.Ik.Result = (ctl.Ik{
-        .max_iterations = 12,
-        .damping = s.damping,
-        // * DELIBERATELY LOOSE. A tight `max_step` clamps away the very divergence this example
-        // exists to show, and the comparison would prove nothing.
-        .max_step = 100.0,
-    }).solve(
-        model,
-        &s.data,
-        s.actuation,
-        .{ .body = s.tip, .offset = vec(0, 0, 0), .goal = targetAt(s) },
-        s.ik_scratch,
-    );
-    s.tip_error = result.error_distance;
-    s.reached = result.reached;
-
-    var moved: f32 = 0;
-    for (0..model.nq) |q| {
-        moved = @max(moved, @abs(s.data.pos[q] - s.previous[q]));
-    }
-    s.last_step = moved;
-    s.peak_step = @max(s.peak_step, moved);
-
-    z.clearViewport(f, background);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 4.0, .max_distance = 20.0 });
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 14, 0.5);
-    drawChain(s, gl);
-    z.endMode3D(gl);
-}
-
-/// The chain lives in the model's x-z plane; the renderer is Y-up, so z maps to depth.
-fn toRender(at: Vec) Vec {
-    return vec(at[0], at[2], 0);
-}
-
-fn drawChain(s: *State, gl: *z.WgpuGl) void {
-    const m: *const rbt.Model = &s.imported.model;
-
-    // The reachable circle, so "at full stretch" is something you can see rather than infer.
-    var previous_edge: Vec = vec(3.0, 0, 0);
-    var i: usize = 1;
-    while (i <= 72) : (i += 1) {
-        const a: f32 = 2.0 * pi * float(i) / 72.0;
-        const edge: Vec = vec(3.0 * @cos(a), 3.0 * @sin(a), 0);
-        z.drawLine3D(gl, previous_edge, edge, reach_colour);
-        previous_edge = edge;
-    }
-
-    // Links, drawn from each body's own frame so what is shown is what the solver produced.
-    for (1..m.nbody) |b| {
-        const at: Vec = toRender(s.data.body_xpos[b]);
-        s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.09, 0.09, 0.09));
-        z.drawMeshInstanced(gl, &s.sphere, &s.transform, joint_colour);
-        const parent: u32 = m.body_parent[b];
-        if (parent != rbt.world_body) {
-            z.drawLine3D(gl, toRender(s.data.body_xpos[parent]), at, link_colour);
-        }
-    }
-
-    const tip_at: Vec = toRender(s.data.body_xpos[s.tip]);
-    s.transform[0] = mulMat(translation(tip_at[0], tip_at[1], tip_at[2]), scaling(0.14, 0.14, 0.14));
-    z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (s.reached) tip_ok else tip_far);
-
-    const goal: Vec = toRender(targetAt(s));
-    s.transform[0] = mulMat(translation(goal[0], goal[1], goal[2]), scaling(0.1, 0.1, 0.1));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
-    z.drawLine3D(gl, tip_at, goal, target_colour);
-}
-
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     // * THE HEIGHT IS NO LONGER NEEDED: the window sizes to its content, so nothing here has to
     // know how tall the viewport is. Kept in the signature because every example shares it.
@@ -287,7 +203,91 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+/// The chain lives in the model's x-z plane; the renderer is Y-up, so z maps to depth.
+fn toRender(at: Vec) Vec {
+    return vec(at[0], at[2], 0);
+}
+
+fn drawChain(s: *State, gl: *z.WgpuGl) void {
+    const m: *const rbt.Model = &s.imported.model;
+
+    // The reachable circle, so "at full stretch" is something you can see rather than infer.
+    var previous_edge: Vec = vec(3.0, 0, 0);
+    var i: usize = 1;
+    while (i <= 72) : (i += 1) {
+        const a: f32 = 2.0 * pi * float(i) / 72.0;
+        const edge: Vec = vec(3.0 * @cos(a), 3.0 * @sin(a), 0);
+        z.drawLine3D(gl, previous_edge, edge, reach_colour);
+        previous_edge = edge;
+    }
+
+    // Links, drawn from each body's own frame so what is shown is what the solver produced.
+    for (1..m.nbody) |b| {
+        const at: Vec = toRender(s.data.body_xpos[b]);
+        s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(0.09, 0.09, 0.09));
+        z.drawMeshInstanced(gl, &s.sphere, &s.transform, joint_colour);
+        const parent: u32 = m.body_parent[b];
+        if (parent != rbt.world_body) {
+            z.drawLine3D(gl, toRender(s.data.body_xpos[parent]), at, link_colour);
+        }
+    }
+
+    const tip_at: Vec = toRender(s.data.body_xpos[s.tip]);
+    s.transform[0] = mulMat(translation(tip_at[0], tip_at[1], tip_at[2]), scaling(0.14, 0.14, 0.14));
+    z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (s.reached) tip_ok else tip_far);
+
+    const goal: Vec = toRender(targetAt(s));
+    s.transform[0] = mulMat(translation(goal[0], goal[1], goal[2]), scaling(0.1, 0.1, 0.1));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
+    z.drawLine3D(gl, tip_at, goal, target_colour);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    const model: *const rbt.Model = &s.imported.model;
+    if (s.auto_sweep) {
+        // * THE SWEEP CROSSES THE REACHABLE BOUNDARY AND COMES BACK, because the boundary is
+        // where the conditioning shows. A path that stays comfortably inside proves nothing.
+        s.sweep_phase += f.time.delta_time * 0.25;
+        s.target_radius = 1.0 + 2.4 * @abs(@sin(s.sweep_phase));
+        s.target_angle = 0.6 * @sin(s.sweep_phase * 6.0);
+    }
+
+    @memcpy(s.previous, s.data.pos);
+    const result: ctl.Ik.Result = (ctl.Ik{
+        .max_iterations = 12,
+        .damping = s.damping,
+        // * DELIBERATELY LOOSE. A tight `max_step` clamps away the very divergence this example
+        // exists to show, and the comparison would prove nothing.
+        .max_step = 100.0,
+    }).solve(
+        model,
+        &s.data,
+        s.actuation,
+        .{ .body = s.tip, .offset = vec(0, 0, 0), .goal = targetAt(s) },
+        s.ik_scratch,
+    );
+    s.tip_error = result.error_distance;
+    s.reached = result.reached;
+
+    var moved: f32 = 0;
+    for (0..model.nq) |q| {
+        moved = @max(moved, @abs(s.data.pos[q] - s.previous[q]));
+    }
+    s.last_step = moved;
+    s.peak_step = @max(s.peak_step, moved);
+
+    z.clearViewport(f, background);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 4.0, .max_distance = 20.0 });
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 14, 0.5);
+    drawChain(s, gl);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

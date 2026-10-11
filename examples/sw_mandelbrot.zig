@@ -81,33 +81,33 @@ const MandelbrotFs = struct {
 
     /// The complex-plane window: roughly the classic Mandelbrot view
     /// centered on the body, zoomed to show the main features.
-    const RE_CENTER: f32 = -0.7;
-    const IM_CENTER: f32 = 0.0;
-    const VIEW_W: f32 = 3.0;
-    const VIEW_H: f32 = 2.4;
-    const MAX_ITER: u32 = 256;
+    const re_center: f32 = -0.7;
+    const im_center: f32 = 0.0;
+    const view_w: f32 = 3.0;
+    const view_h: f32 = 2.4;
+    const max_iter: u32 = 256;
 
     pub fn shaderMain(io: Io) Out {
         // UV [0, 1]^2 -> complex plane (cx, cy)
         const u: f32 = io.frag_uv[0];
         const v: f32 = io.frag_uv[1];
-        const cx: f32 = RE_CENTER + (u - 0.5) * VIEW_W;
-        const cy: f32 = IM_CENTER + (v - 0.5) * VIEW_H;
+        const cx: f32 = re_center + (u - 0.5) * view_w;
+        const cy: f32 = im_center + (v - 0.5) * view_h;
 
         // Iterate z_(n+1) = z_n^2 + c.  Standard Mandelbrot kernel.
         // Bail-out radius of 4 is the classic; using a larger radius
         // (256) lets the smooth-coloring formula below converge to
         // a cleaner continuous gradient (fewer banding artifacts).
-        const BAIL_R2: f32 = 256.0;
+        const bail_r2: f32 = 256.0;
         var zx: f32 = 0;
         var zy: f32 = 0;
         var iter: u32 = 0;
         var zx2: f32 = 0;
         var zy2: f32 = 0;
-        while (iter < MAX_ITER) : (iter += 1) {
+        while (iter < max_iter) : (iter += 1) {
             zx2 = zx * zx;
             zy2 = zy * zy;
-            if (zx2 + zy2 > BAIL_R2) {
+            if (zx2 + zy2 > bail_r2) {
                 break;
             }
             const zxy_new: f32 = 2 * zx * zy + cy;
@@ -117,7 +117,7 @@ const MandelbrotFs = struct {
         }
 
         // Interior -> black.
-        if (iter == MAX_ITER) {
+        if (iter == max_iter) {
             return .{ .out_color = .{ 0, 0, 0, 1 } };
         }
 
@@ -136,10 +136,10 @@ const MandelbrotFs = struct {
         // "Ultra Fractal" Mandelbrot scheme.  Smooth interpolation
         // via cosines in three phase-shifted channels gives a
         // rich navy-->-cream-->-orange-->-purple-->-cyan cycle.
-        const PI2: f32 = 6.28318530718;
-        const r: f32 = 0.5 + 0.5 * @cos(PI2 * (t * 1.0 + 0.00));
-        const g: f32 = 0.5 + 0.5 * @cos(PI2 * (t * 1.0 + 0.10));
-        const b: f32 = 0.5 + 0.5 * @cos(PI2 * (t * 1.0 + 0.20));
+        const pi2: f32 = 6.28318530718;
+        const r: f32 = 0.5 + 0.5 * @cos(pi2 * (t * 1.0 + 0.00));
+        const g: f32 = 0.5 + 0.5 * @cos(pi2 * (t * 1.0 + 0.10));
+        const b: f32 = 0.5 + 0.5 * @cos(pi2 * (t * 1.0 + 0.20));
         return .{ .out_color = .{ r, g, b, 1 } };
     }
 };
@@ -261,17 +261,17 @@ pub fn main() !void {
     defer io_threaded.deinit();
     const io: std.Io = io_threaded.io();
 
-    const WIDTH: u32 = 1280;
-    const HEIGHT: u32 = 720;
+    const image_width: u32 = 1280;
+    const image_height: u32 = 720;
 
     std.debug.print(
         "zimr SW renderer demo — Mandelbrot at {d}×{d}\n" ++
             "(through the turn-3 typed-pipeline architecture)\n\n",
-        .{ WIDTH, HEIGHT },
+        .{ image_width, image_height },
     );
 
     // 1. Set up the raster context - the SW framebuffer.
-    var ctx: raster.Context = try .init(gpa, WIDTH, HEIGHT);
+    var ctx: raster.Context = try .init(gpa, image_width, image_height);
     defer ctx.deinit(gpa);
     ctx.clearColor(.{ .r = 0, .g = 0, .b = 0, .a = 255 });
     ctx.clear(.{ .color = true });
@@ -296,10 +296,10 @@ pub fn main() !void {
     // 5. Time the render across multiple iterations.  Single-shot
     // measurements are noisy; we report min over a small batch so
     // first-call paging/cache effects don't dominate.
-    const ITERS: u32 = 5;
+    const iters: u32 = 5;
     var min_ns: i128 = maxInt(i128);
     var i: u32 = 0;
-    while (i < ITERS) : (i += 1) {
+    while (i < iters) : (i += 1) {
         ctx.clear(.{ .color = true });
         const start_ns: i128 = monotonicNs();
         ps.sw_dispatch.?.flush_batch(@ptrCast(&ctx), @ptrCast(&ps));
@@ -311,7 +311,7 @@ pub fn main() !void {
     const elapsed_ms: f64 = float64(min_ns) / 1_000_000.0;
 
     // 6. Report.
-    const total_pixels: u64 = WIDTH * HEIGHT;
+    const total_pixels: u64 = image_width * image_height;
     const pixels_per_sec: f64 = float64(total_pixels) /
         (float64(min_ns) / 1_000_000_000.0);
     const mpx_per_sec: f64 = pixels_per_sec / 1_000_000.0;
@@ -320,7 +320,7 @@ pub fn main() !void {
             "pixels:       {d:.0}\n" ++
             "throughput:   {d:.2} Mpx/s  (~{d:.1} fps at this size)\n",
         .{
-            elapsed_ms,            ITERS,
+            elapsed_ms,            iters,
             float64(total_pixels), mpx_per_sec,
             1000.0 / elapsed_ms,
         },
@@ -328,6 +328,6 @@ pub fn main() !void {
 
     // 7. Save the result.
     const out_path: []const u8 = "mandelbrot.png";
-    try writePng(gpa, io, out_path, ctx.colorBufferBytes(), WIDTH, HEIGHT);
+    try writePng(gpa, io, out_path, ctx.colorBufferBytes(), image_width, image_height);
     std.debug.print("saved:        {s}\n", .{out_path});
 }

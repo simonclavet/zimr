@@ -1,8 +1,9 @@
 # Architecture
 
 How zimr is put together.  This is the "I want to contribute or fork
-zimr" document; for "I want to use zimr to make something" see
-[`getting-started.md`](getting-started.md).
+zimr" document; for "I want to use zimr to make something" see the
+starter project, [`template/README.md`](../../template/README.md), and
+[`src/web/readme.html`](../web/readme.html).
 
 ## The three-layer cake
 

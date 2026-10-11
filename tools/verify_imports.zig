@@ -16,6 +16,12 @@
 //! wasi_snapshot_preview1 imports are the WASI runtime shim, not bridge.zig's job,
 //! so they're skipped; every other namespace (dom/wgpu/audio/jobs) is `js_`-named.
 const std = @import("std");
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
+const indexOf = std.mem.indexOf;
+const endsWith = std.mem.endsWith;
+const eql = std.mem.eql;
+const cli = @import("cli");
 
 /// Minimal LEB128 + section walker over the wasm binary, pulling out the
 /// (module, field) pair of every import. Only the import section (id 2) is read.
@@ -42,7 +48,7 @@ const WasmImports = struct {
         ctx: anytype,
         comptime sink: fn (@TypeOf(ctx), []const u8, []const u8) anyerror!void,
     ) !void {
-        if (bytes.len < 8 or !std.mem.eql(u8, bytes[0..4], "\x00asm")) {
+        if (bytes.len < 8 or !eql(u8, bytes[0..4], "\x00asm")) {
             return error.NotWasm;
         }
         var pos: usize = 8; // past magic + version
@@ -106,7 +112,7 @@ fn bridgeProvides(bridge: []const u8, field: []const u8) bool {
     buf[0] = '"';
     @memcpy(buf[1 .. 1 + field.len], field);
     buf[1 + field.len] = '"';
-    return std.mem.indexOf(u8, bridge, buf[0 .. field.len + 2]) != null;
+    return indexOf(u8, bridge, buf[0 .. field.len + 2]) != null;
 }
 
 const Ctx = struct {
@@ -117,7 +123,7 @@ const Ctx = struct {
 };
 
 fn check(ctx: *Ctx, module: []const u8, field: []const u8) !void {
-    if (std.mem.eql(u8, module, "wasi_snapshot_preview1")) {
+    if (eql(u8, module, "wasi_snapshot_preview1")) {
         return; // WASI shim, not the bridge's job
     }
     ctx.total.* += 1;
@@ -130,13 +136,13 @@ fn check(ctx: *Ctx, module: []const u8, field: []const u8) !void {
 const Counts = struct { modules: usize = 0, bad: usize = 0, missing: usize = 0 };
 
 fn checkOne(
-    io: std.Io,
-    arena: std.mem.Allocator,
+    io: Io,
+    arena: Allocator,
     bridge: []const u8,
     path: []const u8,
     c: *Counts,
 ) !void {
-    const wasm: []u8 = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch return;
+    const wasm: []u8 = Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited) catch return;
     c.modules += 1;
     var missing: usize = 0;
     var total: usize = 0;
@@ -148,28 +154,44 @@ fn checkOne(
     }
 }
 
+/// The command line (std's cli, `src/command_line.zig`): the host's bridge, then what to hold against it.
+const VerifyArgs = struct {
+    bridge: [:0]const u8,
+    wasm: []const [:0]const u8 = &.{},
+};
+
+const verify_cli: cli.Config(VerifyArgs) = .{
+    .prog = "verify_imports",
+    .description = "Checks that the browser host provides every import each wasm declares - the smoke test's " ++
+        "stubs supply them all, so nothing else can see one missing.",
+    .args = .{
+        .bridge = .{ .description = "the host, src/bridge.zig" },
+        .wasm = .{ .description = "wasm files, or directories scanned (flat) for *.wasm - at least one" },
+    },
+};
+
 pub fn main(init: std.process.Init) !void {
-    const arena: std.mem.Allocator = init.arena.allocator();
-    const io: std.Io = init.io;
-    const argv: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
-    if (argv.len < 3) {
-        std.debug.print("usage: verify_imports <bridge.zig> <wasm-or-dir> [<wasm-or-dir> ...]\n", .{});
+    const arena: Allocator = init.arena.allocator();
+    const io: Io = init.io;
+    const args: VerifyArgs = cli.args(&init, VerifyArgs, verify_cli);
+    if (args.wasm.len == 0) {
+        std.debug.print("verify_imports: no wasm file or directory to check (--help)\n", .{});
         return error.Usage;
     }
     // The bridge is read once and reused across every wasm in the batch.
-    const bridge: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, argv[1], arena, .unlimited);
+    const bridge: []u8 = try Io.Dir.cwd().readFileAlloc(io, args.bridge, arena, .unlimited);
 
     var c: Counts = .{};
-    for (argv[2..]) |path| {
+    for (args.wasm) |path| {
         // A directory arg is scanned (flat) for *.wasm; anything else is a wasm file.
-        if (std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true })) |dir_opened| {
-            var dir: std.Io.Dir = dir_opened;
-            var it: std.Io.Dir.Iterator = dir.iterate();
+        if (Io.Dir.cwd().openDir(io, path, .{ .iterate = true })) |dir_opened| {
+            var dir: Io.Dir = dir_opened;
+            var it: Io.Dir.Iterator = dir.iterate();
             while (try it.next(io)) |entry| {
                 if (entry.kind != .file) {
                     continue;
                 }
-                if (!std.mem.endsWith(u8, entry.name, ".wasm")) {
+                if (!endsWith(u8, entry.name, ".wasm")) {
                     continue;
                 }
                 const full: []const u8 = try std.fs.path.join(arena, &.{ path, entry.name });

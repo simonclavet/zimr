@@ -18,6 +18,7 @@ const std = @import("std");
 const gpu = @import("gpu.zig");
 const bufPrint = std.fmt.bufPrint;
 const eql = std.mem.eql;
+const readInt = std.mem.readInt;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const expect = std.testing.expect;
@@ -25,6 +26,17 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const meta = std.meta;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const indexOfScalar = std.mem.indexOfScalar;
+const asBytes = std.mem.asBytes;
+const zeroes = std.mem.zeroes;
+const splitScalar = std.mem.splitScalar;
+const parseInt = std.fmt.parseInt;
+const Io = std.Io;
+const indexOfPos = std.mem.indexOfPos;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const trim = std.mem.trim;
 const wgpu = @import("wgpu.zig");
 const compute_pass = wgpu.compute_pass;
 const shader_introspect = @import("shader_introspect.zig");
@@ -67,7 +79,7 @@ pub fn JobHeader(comptime M: type) type {
 }
 
 fn JobKernelFn(comptime M: type) type {
-    return fn (Allocator, JobHeader(M), []const u8, *std.Io.Writer) anyerror!void;
+    return fn (Allocator, JobHeader(M), []const u8, *Io.Writer) anyerror!void;
 }
 
 /// Turn a kompute kernel into a JOB kernel - the adapter that makes `.worker` cost an
@@ -83,7 +95,7 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
             gpa: Allocator,
             hdr: JobHeader(M),
             payload: []const u8,
-            out: *std.Io.Writer,
+            out: *Io.Writer,
         ) anyerror!void {
             if (payload.len != @sizeOf(M.Buffers)) {
                 return error.MalformedJob;
@@ -103,10 +115,10 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
             // Heap, via the job's arena - never `const saved = M.g.B`, which would put a
             // possibly-megabyte struct on the wasm shadow stack.
             const saved: *M.Buffers = try gpa.create(M.Buffers);
-            @memcpy(std.mem.asBytes(saved), std.mem.asBytes(&M.g.B));
-            defer @memcpy(std.mem.asBytes(&M.g.B), std.mem.asBytes(saved));
+            @memcpy(asBytes(saved), asBytes(&M.g.B));
+            defer @memcpy(asBytes(&M.g.B), asBytes(saved));
 
-            @memcpy(std.mem.asBytes(&M.g.B), payload);
+            @memcpy(asBytes(&M.g.B), payload);
             M.g.P = hdr.params;
 
             // The second call site that had to learn the lean dialect. Same discriminator as the
@@ -121,7 +133,7 @@ pub fn komputeKernel(comptime M: type, comptime name: []const u8) JobKernelFn(M)
                 }
             }
 
-            try out.writeAll(std.mem.asBytes(&M.g.B));
+            try out.writeAll(asBytes(&M.g.B));
         }
     }.run;
 }
@@ -184,11 +196,20 @@ fn isWgslIdentChar(ch: u8) bool {
         (ch >= '0' and ch <= '9') or ch == '_';
 }
 
+/// The first word of every SPIR-V module, read little-endian.
+const spirv_magic: u32 = 0x07230203;
+
+/// Whether a kernel's embedded bytes are a SPIR-V module rather than WGSL text: the native host embeds the kernel
+/// file's SPIR-V where the web embeds WGSL, under the same import name, and no WGSL text begins with this word.
+fn isSpirv(bytes: []const u8) bool {
+    return bytes.len >= 4 and readInt(u32, bytes[0..4], .little) == spirv_magic;
+}
+
 /// Does `name` appear as a WHOLE word in `line`? (So `kbuf_pos` does not match
 /// inside `kbuf_pos2`, and `arr` does not match inside `narrow`.)
 fn wgslRefsName(line: []const u8, name: []const u8) bool {
     var start: usize = 0;
-    while (std.mem.indexOfPos(u8, line, start, name)) |pos| {
+    while (indexOfPos(u8, line, start, name)) |pos| {
         const before_ok: bool = pos == 0 or !isWgslIdentChar(line[pos - 1]);
         const after_i: usize = pos + name.len;
         const after_ok: bool = after_i >= line.len or !isWgslIdentChar(line[after_i]);
@@ -206,7 +227,7 @@ fn wgslRefsName(line: []const u8, name: []const u8) bool {
 /// so the cross-check below cannot be fooled by a buffer that lost its
 /// `kbuf_<field>` name (exactly the 0.17-dev.956 atomic-buffer regression).
 fn wgslDeclName(line: []const u8) ?[]const u8 {
-    const colon: usize = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+    const colon: usize = indexOfScalar(u8, line, ':') orelse return null;
     var end: usize = colon;
     while (end > 0 and (line[end - 1] == ' ' or line[end - 1] == '\t')) : (end -= 1) {}
     var begin: usize = end;
@@ -229,20 +250,20 @@ fn wgslDeclName(line: []const u8) ?[]const u8 {
 /// cascade at pipeline creation. Catching it here names the kernel + binding.
 fn unboundUsedBinding(wgsl: []const u8, bound: []const u32) ?WgslBinding {
     const tag: []const u8 = "@binding(";
-    var it = std.mem.splitScalar(u8, wgsl, '\n');
+    var it = splitScalar(u8, wgsl, '\n');
     while (it.next()) |line| {
-        const bpos: usize = std.mem.indexOf(u8, line, tag) orelse continue;
+        const bpos: usize = indexOf(u8, line, tag) orelse continue;
         const after: []const u8 = line[bpos + tag.len ..];
-        const close: usize = std.mem.indexOfScalar(u8, after, ')') orelse continue;
-        const num: u32 = std.fmt.parseInt(u32, after[0..close], 10) catch continue;
+        const close: usize = indexOfScalar(u8, after, ')') orelse continue;
+        const num: u32 = parseInt(u32, after[0..close], 10) catch continue;
         const name: []const u8 = wgslDeclName(line) orelse continue;
         // Used = its declared name appears on some line that is NOT itself a
         // binding declaration (every kernel declares ALL bindings at module
         // scope; only the body lines are real uses).
         var used: bool = false;
-        var bit = std.mem.splitScalar(u8, wgsl, '\n');
+        var bit = splitScalar(u8, wgsl, '\n');
         while (bit.next()) |bline| {
-            if (std.mem.indexOf(u8, bline, tag) != null) {
+            if (indexOf(u8, bline, tag) != null) {
                 continue;
             }
             if (wgslRefsName(bline, name)) {
@@ -454,7 +475,7 @@ pub fn Compute(comptime M: type) type {
             // it, `readLatest` reads the answer back into it. Zeroed so a field nobody
             // uploaded is deterministically 0 rather than whatever `create` handed back.
             const mirror: *Buffers = try gpa.create(Buffers);
-            @memset(std.mem.asBytes(mirror), 0);
+            @memset(asBytes(mirror), 0);
             return .{
                 .backend = .worker,
                 .worker = .{ .gpa = gpa, .mirror = mirror },
@@ -527,8 +548,12 @@ pub fn Compute(comptime M: type) type {
         /// module's `installKernel` export) and its standalone WGSL module
         /// (the build pipeline translates the kompute module once per entry
         /// via spv2wgsl --entry).
+        /// One kernel entry, as the app embeds it.
         pub const KernelWgsl = struct {
+            /// The entry's name: the kernel function's.
             name: [:0]const u8,
+            /// The entry's shader: WGSL on the web; on the native host, the kernel file's SPIR-V, which holds every
+            /// entry of the file. The import keeps its WGSL name on both platforms, and so does this field.
             wgsl: []const u8,
         };
 
@@ -577,8 +602,7 @@ pub fn Compute(comptime M: type) type {
             const buf_bytes: u32 = @sizeOf(Buffers);
             // Per-field storage buffers (t1178): one buffer + one binding per
             // Buffers field - the megastruct single-binding shape corrupted
-            // on Adreno. Binding numbers come from the kernels' own WGSL
-            // headers (parsed below), so host and shader agree by definition.
+            // on Adreno. Binding numbers are the ones kompute declares (below).
             var field_bufs: [field_count]wgpu.BufferHandle = undefined;
             inline for (buffer_field_names, 0..) |fname, fi| {
                 field_bufs[fi] = wgpu.createBuffer(dev, .{
@@ -587,15 +611,27 @@ pub fn Compute(comptime M: type) type {
                     .label = "kbuf_" ++ fname,
                 });
             }
-            // * A FAILED INIT MUST NOT LEAK THEM. Everything below can fail (a kernel whose WGSL
-            // declares no bindings fails `parseBindings`), and the caller never gets a `Self` to
-            // deinit - the smoke runner's lifecycle check saw exactly these, buffer+7 per cycle.
+            // * A FAILED INIT MUST NOT LEAK THEM. Everything below can fail, and the caller never
+            // gets a `Self` to deinit - the smoke runner's lifecycle check saw exactly these,
+            // buffer+7 per cycle.
             errdefer for (field_bufs) |fb| {
                 wgpu.destroyBuffer(fb);
             };
+            // The binding numbers kompute declares (`M.g.bindingOf`, `M.g.uniform_binding`). On the web the WGSL
+            // carries the same numbers - spv2wgsl copies them from the SPIR-V - and reading them back must agree;
+            // natively the kernels are SPIR-V, with no text to read.
             var bindings: [field_count]u32 = undefined;
-            var uniform_binding: u32 = 0;
-            try parseBindings(kernels, &bindings, &uniform_binding);
+            inline for (buffer_field_names, 0..) |fname, fi| {
+                bindings[fi] = M.g.bindingOf(@field(Field, fname));
+            }
+            const uniform_binding: u32 = M.g.uniform_binding;
+            // The kernels' form, shared by all of them (one build embeds one form): SPIR-V on the native host, WGSL
+            // on the web.
+            const kernels_are_spirv: bool = kernels.len > 0 and isSpirv(kernels[0].wgsl);
+            if (!kernels_are_spirv) {
+                const agrees: bool = wgslBindingsAgree(kernels, &bindings, uniform_binding);
+                assertf(agrees, @src(), "initGpu: the WGSL's binding numbers differ from kompute's declared ones", .{});
+            }
             const uniform: wgpu.BufferHandle = wgpu.createBuffer(dev, .{
                 .size = @sizeOf(Params),
                 .usage = .{ .uniform = true, .copy_dst = true },
@@ -638,7 +674,9 @@ pub fn Compute(comptime M: type) type {
                     "initGpu: kernel '{s}' has empty WGSL (build/embed step failed?)",
                     .{k.name},
                 );
-                const used: [field_count]bool = usedFields(k.wgsl);
+                // Which fields the kernel uses, from its WGSL; a SPIR-V kernel (the native host) lists every field -
+                // a Vulkan layout may hold bindings its shader does not use.
+                const used: [field_count]bool = if (kernels_are_spirv) @splat(true) else usedFields(k.wgsl);
                 // Build this kernel's layout + bind-group entries together: the
                 // uniform first (always present - the Params block any kernel may
                 // read), then one entry per USED field at its global binding
@@ -695,8 +733,7 @@ pub fn Compute(comptime M: type) type {
                         bound_nums[ei] = e.binding;
                     }
                     if (unboundUsedBinding(k.wgsl, bound_nums[0..n])) |miss| {
-                        assertf(
-                            false,
+                        assertUnreachable(
                             @src(),
                             "kernel '{s}': WGSL uses @binding({d}) '{s}' but the host bind-group " ++
                                 "layout omits it — host<->WGSL binding drift (a buffer the usage scan " ++
@@ -777,6 +814,29 @@ pub fn Compute(comptime M: type) type {
             comptime unreachable;
         }
 
+        /// The field indices in MEMORY order - which for a plain (auto-layout) `Buffers` is NOT
+        /// declaration order: Zig sorts fields by alignment, so `sort_smoke`'s `[32]u32` counts
+        /// land after its `[64]Vec2` arrays. The packed readback must walk fields in this order.
+        /// Packed in declaration order, a field's packed offset could pass its real one, and the
+        /// in-place unpack overwrote prefixes it had yet to move (counts came back as float bits).
+        const fields_by_offset: [field_count]usize = blk: {
+            var order: [field_count]usize = undefined;
+            for (&order, 0..) |*o, fi| {
+                o.* = fi;
+            }
+            for (1..field_count) |i| {
+                var j: usize = i;
+                while (j > 0 and @offsetOf(Buffers, buffer_field_names[order[j - 1]]) >
+                    @offsetOf(Buffers, buffer_field_names[order[j]])) : (j -= 1)
+                {
+                    const t: usize = order[j];
+                    order[j] = order[j - 1];
+                    order[j - 1] = t;
+                }
+            }
+            break :blk order;
+        };
+
         /// The GPU buffer backing one Buffers field (e.g. for a renderer to
         /// bind directly). Null on the CPU backend.
         pub fn fieldBuffer(self: *const Self, comptime field: Field) ?wgpu.BufferHandle {
@@ -796,7 +856,7 @@ pub fn Compute(comptime M: type) type {
         /// both sides - so `kbuf_pos` matches `kbuf_pos[i]` but not `kbuf_pos2`.
         fn refsIdent(line: []const u8, ident: []const u8) bool {
             var start: usize = 0;
-            while (std.mem.indexOfPos(u8, line, start, ident)) |pos| {
+            while (indexOfPos(u8, line, start, ident)) |pos| {
                 const before_ok: bool = pos == 0 or !isIdentChar(line[pos - 1]);
                 const after_i: usize = pos + ident.len;
                 const after_ok: bool = after_i >= line.len or !isIdentChar(line[after_i]);
@@ -820,11 +880,11 @@ pub fn Compute(comptime M: type) type {
         /// and clearGrid binds 1 storage buffer instead of all 10.
         fn usedFields(wgsl: []const u8) [field_count]bool {
             var used: [field_count]bool = @splat(false);
-            var it = std.mem.splitScalar(u8, wgsl, '\n');
+            var it = splitScalar(u8, wgsl, '\n');
             while (it.next()) |line| {
                 // Skip the `@binding(N) var<storage> kbuf_X: ...` declarations
                 // (they list every field); we want USES, in the body.
-                if (std.mem.indexOf(u8, line, "@binding(") != null) {
+                if (indexOf(u8, line, "@binding(") != null) {
                     continue;
                 }
                 inline for (buffer_field_names, 0..) |fname, fi| {
@@ -836,32 +896,32 @@ pub fn Compute(comptime M: type) type {
             return used;
         }
 
-        /// Read binding numbers out of the generated WGSL headers: lines of
-        /// the form `@group(0) @binding(N) var<storage, ...> kbuf_FIELD: ...`
-        /// and `@binding(N) var<uniform>`. The SPIR-V backend assigns the
-        /// numbers; parsing them here means host and shader cannot disagree.
-        /// All kernels must agree (one module = one assignment); verified.
-        fn parseBindings(
+        /// Whether the binding numbers in the kernels' WGSL headers - lines of the form
+        /// `@group(0) @binding(N) var<storage, ...> kbuf_FIELD: ...` and `@binding(N) var<uniform>` -
+        /// are the ones kompute declares (`bindings`, `uniform_binding`). spv2wgsl copies them from the
+        /// SPIR-V, so they should be; this reads them back to be sure.
+        ///
+        /// Only what appears can be compared. A build compiles the entry points its page lists, and a
+        /// buffer only the others use - or the uniform, when no listed entry point reads its parameters -
+        /// is not in its WGSL at all. The layout is built from the declared numbers either way, so an
+        /// absent binding is not a disagreement.
+        fn wgslBindingsAgree(
             kernels: []const KernelWgsl,
-            bindings: *[field_count]u32,
-            uniform_binding: *u32,
-        ) !void {
-            var seen: [field_count]bool = @splat(false);
-            var seen_uniform: bool = false;
+            bindings: *const [field_count]u32,
+            uniform_binding: u32,
+        ) bool {
             for (kernels) |k| {
-                var it = std.mem.splitScalar(u8, k.wgsl, '\n');
+                var it = splitScalar(u8, k.wgsl, '\n');
                 while (it.next()) |line| {
                     const bind_tag: []const u8 = "@binding(";
-                    const bpos: usize = std.mem.indexOf(u8, line, bind_tag) orelse continue;
+                    const bpos: usize = indexOf(u8, line, bind_tag) orelse continue;
                     const after: []const u8 = line[bpos + bind_tag.len ..];
-                    const close: usize = std.mem.indexOfScalar(u8, after, ')') orelse continue;
-                    const num: u32 = std.fmt.parseInt(u32, after[0..close], 10) catch continue;
-                    if (std.mem.indexOf(u8, line, "var<uniform>") != null) {
-                        if (seen_uniform and uniform_binding.* != num) {
-                            return error.BindingMismatch;
+                    const close: usize = indexOfScalar(u8, after, ')') orelse continue;
+                    const num: u32 = parseInt(u32, after[0..close], 10) catch continue;
+                    if (indexOf(u8, line, "var<uniform>") != null) {
+                        if (num != uniform_binding) {
+                            return false;
                         }
-                        uniform_binding.* = num;
-                        seen_uniform = true;
                         continue;
                     }
                     const name_tag: []const u8 = "kbuf_";
@@ -869,45 +929,32 @@ pub fn Compute(comptime M: type) type {
                     // mapped to a Buffers field: it would be silently dropped from
                     // every kernel's layout and surface only as a cryptic Dawn
                     // "Binding doesn't exist" at pipeline creation. Trap here with
-                    // the offending line instead. (This is exactly how the atomic
-                    // grid buffer mis-named `arr` by spv2wgsl on 0.17-dev.956 hid.)
+                    // the offending line instead.
                     assertf(
-                        std.mem.indexOf(u8, line, name_tag) != null,
+                        indexOf(u8, line, name_tag) != null,
                         @src(),
                         "compute storage binding not named kbuf_<field>: '{s}' — host cannot map it to a buffer",
-                        .{std.mem.trim(u8, line, " \t")},
+                        .{trim(u8, line, " \t")},
                     );
-                    const npos: usize = std.mem.indexOf(u8, line, name_tag).?;
+                    const npos: usize = indexOf(u8, line, name_tag).?;
                     const name_rest: []const u8 = line[npos + name_tag.len ..];
-                    const name_end: usize = std.mem.indexOfScalar(u8, name_rest, ':') orelse continue;
+                    const name_end: usize = indexOfScalar(u8, name_rest, ':') orelse continue;
                     const fname: []const u8 = name_rest[0..name_end];
+                    var names_a_field: bool = false;
                     inline for (buffer_field_names, 0..) |bfname, fi| {
                         if (eql(u8, bfname, fname)) {
-                            if (seen[fi] and bindings[fi] != num) {
-                                return error.BindingMismatch;
+                            names_a_field = true;
+                            if (num != bindings[fi]) {
+                                return false;
                             }
-                            bindings[fi] = num;
-                            seen[fi] = true;
                         }
                     }
+                    // A buffer the WGSL binds but the kernel module does not declare would surface later as
+                    // a pipeline the device refuses; name it here instead.
+                    assertf(names_a_field, @src(), "compute storage binding kbuf_{s} names no Buffers field", .{fname});
                 }
             }
-            if (!seen_uniform) {
-                return error.UniformBindingNotFound;
-            }
-            for (seen, 0..) |sv, fi| {
-                if (!sv) {
-                    // A field no kernel touches gets a fresh binding number
-                    // above all parsed ones so the layout entry stays valid.
-                    var max_b: u32 = uniform_binding.*;
-                    for (bindings, 0..) |b, bj| {
-                        if (seen[bj] and b > max_b) {
-                            max_b = b;
-                        }
-                    }
-                    bindings[fi] = max_b + 1 + @as(u32, @intCast(fi));
-                }
-            }
+            return true;
         }
 
         /// `upload` at an ELEMENT offset into the field, not at its start.
@@ -940,7 +987,8 @@ pub fn Compute(comptime M: type) type {
                             assertUnreachable(@src(), "uploadAt: .worker needs initWorker(gpa)", .{});
                             return;
                         });
-                        const dst = &@field(wk.mirror.*, @tagName(field));
+                        const field_name: [:0]const u8 = @tagName(field);
+                        const dst: *@TypeOf(@field(wk.mirror.*, field_name)) = &@field(wk.mirror.*, field_name);
                         @memcpy(dst[offset..][0..data.len], data);
                     }
                 },
@@ -948,12 +996,16 @@ pub fn Compute(comptime M: type) type {
                     const fi: usize = fieldIndex(@tagName(field));
                     const byte_offset: u32 = @intCast(offset * @sizeOf(ElemOf(field)));
                     const gp: *Gpu = &self.gpu.?;
-                    wgpu.queueWriteBuffer(gp.queue, gp.field_bufs[fi], byte_offset, std.mem.sliceAsBytes(data));
+                    wgpu.queueWriteBuffer(gp.queue, gp.field_bufs[fi], byte_offset, sliceAsBytes(data));
                 },
             }
         }
 
-        pub fn upload(self: *Self, comptime field: Field, data: []const ElemOf(field)) void {
+        pub fn upload(
+            self: *Self,
+            comptime field: Field,
+            data: []const ElemOf(field),
+        ) void {
             assertf(
                 data.len <= @field(M.g.B, @tagName(field)).len,
                 @src(),
@@ -986,13 +1038,14 @@ pub fn Compute(comptime M: type) type {
                             assertUnreachable(@src(), "upload: .worker needs initWorker(gpa)", .{});
                             return;
                         });
-                        const dst = &@field(wk.mirror.*, @tagName(field));
+                        const field_name: [:0]const u8 = @tagName(field);
+                        const dst: *@TypeOf(@field(wk.mirror.*, field_name)) = &@field(wk.mirror.*, field_name);
                         @memcpy(dst[0..data.len], data);
                     }
                 },
                 .gpu => {
                     const fi: usize = fieldIndex(@tagName(field));
-                    wgpu.queueWriteBuffer(self.gpu.?.queue, self.gpu.?.field_bufs[fi], 0, std.mem.sliceAsBytes(data));
+                    wgpu.queueWriteBuffer(self.gpu.?.queue, self.gpu.?.field_bufs[fi], 0, sliceAsBytes(data));
                 },
             }
         }
@@ -1021,7 +1074,7 @@ pub fn Compute(comptime M: type) type {
                     return;
                 }
             }
-            wgpu.queueWriteBuffer(gp.queue, gp.uniform, 0, std.mem.asBytes(&self.params));
+            wgpu.queueWriteBuffer(gp.queue, gp.uniform, 0, asBytes(&self.params));
             gp.uniform_synced = self.params;
         }
 
@@ -1088,7 +1141,7 @@ pub fn Compute(comptime M: type) type {
             if (gp.rec_count > 0) {
                 const used: []const Params = gp.rec_slots[gp.rec_base..][0..gp.rec_count];
                 const at: u32 = gp.rec_base * @sizeOf(Params);
-                wgpu.queueWriteBuffer(gp.queue, gp.rec_table, at, std.mem.sliceAsBytes(used));
+                wgpu.queueWriteBuffer(gp.queue, gp.rec_table, at, sliceAsBytes(used));
             }
             const cmd: wgpu.CommandBufferHandle = wgpu.finishCommandEncoder(gp.rec_enc);
             submitDispatch(gp, cmd);
@@ -1257,7 +1310,7 @@ pub fn Compute(comptime M: type) type {
                             wk.gpa,
                             komputeKernel(M, name),
                             .{ .n = n, .params = self.params },
-                            std.mem.asBytes(wk.mirror), // OUR state, not the module's
+                            asBytes(wk.mirror), // OUR state, not the module's
                         ) catch |err| blk: {
                             std.log.err("Compute.run('" ++ name ++ "') on .worker: {s}", .{@errorName(err)});
                             break :blk .{};
@@ -1266,7 +1319,7 @@ pub fn Compute(comptime M: type) type {
                 },
                 .gpu => {
                     const gp: *Gpu = &self.gpu.?;
-                    const workgroups: u32 = (n + M.config.workgroup - 1) / M.config.workgroup;
+                    const workgroups: u32 = @divCeil(n, M.config.workgroup);
                     // Find this kernel's slot so we get BOTH its pipeline and its
                     // own bind group - each kernel binds a different subset of the
                     // buffers now, so the two always travel together.
@@ -1413,25 +1466,26 @@ pub fn Compute(comptime M: type) type {
             const elem: u64 = @sizeOf(@typeInfo(F).array.child);
             const len: u64 = @typeInfo(F).array.len;
             const bytes: u64 = @min(@as(u64, count), len) * elem;
-            return @intCast(@min(whole, (bytes + 3) / 4 * 4));
+            return @intCast(@min(whole, @divCeil(bytes, 4) * 4));
         }
 
-        /// The packed copy sits at the mirror's start; move each field's prefix up to the
-        /// field's own offset. LAST FIELD FIRST: a packed offset never exceeds the real one, so
-        /// a destination only ever covers bytes already moved or never used.
+        /// The packed copy sits at the mirror's start, its fields in MEMORY order
+        /// (`fields_by_offset`); move each field's prefix up to the field's own offset. LAST
+        /// FIELD FIRST: in memory order a packed offset never exceeds the real one, so a
+        /// destination only ever covers bytes already moved or never used.
         fn unpackPrefixes(mirror_bytes: []u8, count: usize) void {
-            var packed_ends: [buffer_field_names.len]u32 = undefined;
+            var packed_ends: [field_count]u32 = undefined;
             var at: u32 = 0;
-            inline for (buffer_field_names, 0..) |fname, fi| {
-                at += prefixBytes(fname, count);
-                packed_ends[fi] = at;
+            inline for (fields_by_offset, 0..) |fi, k| {
+                at += prefixBytes(buffer_field_names[fi], count);
+                packed_ends[k] = at;
             }
-            comptime var fi: usize = buffer_field_names.len;
-            inline while (fi > 0) {
-                fi -= 1;
-                const fname: []const u8 = buffer_field_names[fi];
+            comptime var k: usize = field_count;
+            inline while (k > 0) {
+                k -= 1;
+                const fname: []const u8 = buffer_field_names[fields_by_offset[k]];
                 const bytes: usize = @intCast(prefixBytes(fname, count));
-                const from: usize = @intCast(packed_ends[fi] - bytes);
+                const from: usize = @intCast(packed_ends[k] - bytes);
                 const to: usize = @offsetOf(Buffers, fname);
                 if (bytes > 0 and from != to) {
                     std.mem.copyBackwards(u8, mirror_bytes[to..][0..bytes], mirror_bytes[from..][0..bytes]);
@@ -1460,7 +1514,7 @@ pub fn Compute(comptime M: type) type {
                         if (wk.job.poll()) |maybe_bytes| {
                             if (maybe_bytes) |bytes| {
                                 if (bytes.len == @sizeOf(Buffers)) {
-                                    @memcpy(std.mem.asBytes(wk.mirror), bytes);
+                                    @memcpy(asBytes(wk.mirror), bytes);
                                     wk.have_read = true;
                                 }
                                 wk.job.deinit();
@@ -1479,7 +1533,7 @@ pub fn Compute(comptime M: type) type {
                 .gpu => {
                     const gp: *Gpu = &self.gpu.?;
                     if (gp.read != .invalid and wgpu.bufferReadPoll(gp.read)) {
-                        const mirror_bytes: []u8 = std.mem.asBytes(gp.mirror);
+                        const mirror_bytes: []u8 = asBytes(gp.mirror);
                         wgpu.bufferReadInto(gp.read, mirror_bytes[0..gp.read_bytes]);
                         unpackPrefixes(mirror_bytes, gp.read_count);
                         wgpu.bufferReadRelease(gp.read);
@@ -1508,9 +1562,10 @@ pub fn Compute(comptime M: type) type {
                         // `element_count`.
                         const count: usize = self.element_count;
                         const enc: wgpu.CommandEncoderHandle = wgpu.createCommandEncoder(gp.dev);
+                        // In MEMORY order, which `unpackPrefixes` relies on (`fields_by_offset`).
                         var packed_at: u32 = 0;
-                        inline for (buffer_field_names, 0..) |fname, fi| {
-                            const bytes: u32 = prefixBytes(fname, count);
+                        inline for (fields_by_offset) |fi| {
+                            const bytes: u32 = prefixBytes(buffer_field_names[fi], count);
                             if (bytes > 0) {
                                 wgpu.copyBufferToBuffer(enc, gp.field_bufs[fi], 0, gp.staging, packed_at, bytes);
                             }
@@ -1578,7 +1633,7 @@ test "Compute .worker runs the SAME kernel and gets the SAME answer" {
     // first draft of this test held the slice, and passed for exactly that wrong reason.)
     const cpu_answer: [8]f32 = cpu.readLatest(.data).?[0..8].*;
 
-    var wk: Compute(M) = try .initWorker(std.testing.allocator);
+    var wk: Compute(M) = try .initWorker(testing_allocator);
     defer wk.deinit();
     wk.element_count = n;
     wk.params = .{ .count = n };
@@ -1628,7 +1683,7 @@ test "Compute .worker OWNS its state - two live pipes on one module cannot conta
     try expectEqualSlices(u32, &[_]u32{ 101, 102, 103, 104 }, cpu.readLatest(.data).?[0..4]);
 
     // A WORKER pipe on the SAME module, with DIFFERENT data, live at the same time.
-    var wk: Compute(M) = try .initWorker(std.testing.allocator);
+    var wk: Compute(M) = try .initWorker(testing_allocator);
     defer wk.deinit();
     wk.element_count = 4;
     wk.params = .{ .add = 100 };
@@ -1793,13 +1848,14 @@ test "Compute readback: each field's element_count prefix, packed, unpacks to it
     for (&source.c, 0..) |*v, i| {
         v.* = 300.0 + float(i);
     }
-    var mirror: M.Buffers = std.mem.zeroes(M.Buffers);
-    const bytes: []u8 = std.mem.asBytes(&mirror);
+    var mirror: M.Buffers = zeroes(M.Buffers);
+    const bytes: []u8 = asBytes(&mirror);
     // Pack as the encode does.
     var at: usize = 0;
-    inline for (.{ "a", "b", "c" }) |fname| {
+    inline for (C.fields_by_offset) |fi| {
+        const fname: []const u8 = C.buffer_field_names[fi];
         const n: usize = C.prefixBytes(fname, count);
-        @memcpy(bytes[at..][0..n], std.mem.asBytes(&@field(source, fname))[0..n]);
+        @memcpy(bytes[at..][0..n], asBytes(&@field(source, fname))[0..n]);
         at += n;
     }
     try expectEqual(@as(usize, 10 * 4 + 8 * 4 + 10 * 4), at);
@@ -1807,4 +1863,51 @@ test "Compute readback: each field's element_count prefix, packed, unpacks to it
     try expectEqualSlices(f32, source.a[0..10], mirror.a[0..10]);
     try expectEqualSlices(u32, source.b[0..8], mirror.b[0..8]);
     try expectEqualSlices(f32, source.c[0..10], mirror.c[0..10]);
+}
+
+test "Compute readback: a plain Buffers that Zig REORDERS unpacks every field intact" {
+    // `sort_smoke`'s shape: a plain struct whose `[N]u32` sits between `[N]Vec2`s in the source,
+    // and which Zig moves after them in memory. Packed in declaration order, `visc` landed on
+    // `counts`' packed bytes before they were moved, and `counts` came back as float bits - the
+    // integer overflow in `sort_smoke.checkStages`. The count covers every field whole, which is
+    // when packed and real offsets sit closest and the old order went wrong.
+    const M = struct {
+        pub const config = .{ .max = 8, .workgroup = 8 };
+        pub const Buffers = struct { pos: [8]Vec2, counts: [4]u32, visc: [8]Vec2 };
+        pub const Params = extern struct {
+            count: u32,
+            _pad0: u32 = 0,
+            _pad1: u32 = 0,
+            _pad2: u32 = 0,
+        };
+        pub const g = struct {
+            pub var B: Buffers = undefined;
+            pub var P: Params = undefined;
+        };
+    };
+    const C = Compute(M);
+    // The precondition this test exists for: memory order is not declaration order.
+    try expect(@offsetOf(M.Buffers, "counts") > @offsetOf(M.Buffers, "visc"));
+    const count: usize = 8;
+    var source: M.Buffers = undefined;
+    for (&source.pos, &source.visc, 0..) |*p, *v, i| {
+        p.* = .{ 100.0 + float(i), 150.0 + float(i) };
+        v.* = .{ -1.0 - float(i), 0.5 + float(i) };
+    }
+    for (&source.counts, 0..) |*v, i| {
+        v.* = 200 + @as(u32, @intCast(i));
+    }
+    var mirror: M.Buffers = zeroes(M.Buffers);
+    const bytes: []u8 = asBytes(&mirror);
+    var at: usize = 0;
+    inline for (C.fields_by_offset) |fi| {
+        const fname: []const u8 = C.buffer_field_names[fi];
+        const n: usize = C.prefixBytes(fname, count);
+        @memcpy(bytes[at..][0..n], asBytes(&@field(source, fname))[0..n]);
+        at += n;
+    }
+    C.unpackPrefixes(bytes, count);
+    try expectEqualSlices(Vec2, &source.pos, &mirror.pos);
+    try expectEqualSlices(u32, &source.counts, &mirror.counts);
+    try expectEqualSlices(Vec2, &source.visc, &mirror.visc);
 }

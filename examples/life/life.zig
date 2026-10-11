@@ -13,6 +13,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -31,7 +32,7 @@ const State = struct {
     ui_host: z.UiHost,
     ui_capturing: bool = false,
     /// Per-frame scratch arena, reset at top of update by user code.
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     cur: [grid_w * grid_h]u8 = @splat(0),
     next: [grid_w * grid_h]u8 = @splat(0),
     generation: usize = 0,
@@ -72,7 +73,7 @@ fn initState(
     s: *State,
 ) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32);
-    s.* = .{ .scratch = std.heap.ArenaAllocator.init(gpa), .font = font, .ui_host = z.UiHost.init(gpa, font) };
+    s.* = .{ .scratch = ArenaAllocator.init(gpa), .font = font, .ui_host = z.UiHost.init(gpa, font) };
     seedGlider(&s.cur, 5, 5);
 }
 

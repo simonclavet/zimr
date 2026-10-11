@@ -1,9 +1,7 @@
-//! zn_unary.zig - the floating-point unary activations, ported from znum's `k_unary.zig`.
+//! zn_unary.zig - the floating-point unary activations.
 //!
-//! -- *** PORTED, NOT RE-DERIVED --
-//!
-//! The shape is znum's and so is the reasoning: lean entries taking a raw `id`, one alias per
-//! binding declared at module scope, a `kernels` list with a comptime loop that installs them,
+//! The file has the shape of every zimrnum kernel file: lean entries taking a raw `id`, one alias
+//! per binding declared at module scope, a `kernels` list with a comptime loop that installs them,
 //! and guards written as an early return because a unary kernel has no barrier to strand.
 //!
 //! ** THE BODIES ARE CALLS INTO `zm`, WHICH IS THE POINT. `zm.sigmoid` and friends compile for
@@ -12,8 +10,7 @@
 //! whether that holds on a real device; the tutorial claims it, and a claim nobody measured is
 //! just a sentence.
 //!
-//! * `T` is `f32` here. znum injects it per dtype through a module substitution
-//! (`-Mdtype=kernels/dtype_f32.zig`), which is the next piece of that machinery to bring across.
+//! * The element type is `f32`: this file is the f32 instance of the kernels.
 const k = @import("kompute");
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
@@ -149,8 +146,7 @@ comptime {
 // `zm` vocabulary pin exists to prevent, and it had accumulated on the GPU side where the pin
 // does not reach.
 
-// The element type. znum injects this per dtype via a module substitution; until that machinery
-// is ported, this file is the f32 instance.
+// The element type: this file is the f32 instance.
 const Elem = f32;
 
 pub const config = k.Config{ .max = 1 << 14, .workgroup = 64 };
@@ -241,7 +237,7 @@ pub fn exp2f(id: u32) void {
     bout[id] = exp2(bx[id]);
 }
 
-/// `a * gain + offset`, the one affine that replaced znum's four scalar variants.
+/// `a * gain + offset`: one affine serves every scalar add, subtract, multiply and divide.
 ///
 /// Worth a row because a backend may contract it into a fused multiply-add, which rounds ONCE
 /// where the separate operations round twice. That is a real difference and a small one, which
@@ -589,6 +585,7 @@ pub fn sum_all_tiled(id: u32) void {
     // that follows the loop then sits after control flow the analysis calls non-uniform, and the
     // module is rejected. Deriving the bound from `count` and `lanes` makes it provably uniform,
     // and the range guard becomes a multiply by 0-or-1 instead of a branch.
+    // The ceiling written out: Zig's SPIR-V backend does not lower `@divCeil` yet.
     const per_lane: u32 = (params.count + lanes - 1) / lanes;
     var acc: f32 = 0;
     var step: u32 = 0;

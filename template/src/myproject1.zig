@@ -14,18 +14,19 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
 const bufPrint = std.fmt.bufPrint;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
 const Vec2 = zm.Vec2;
 const float = zm.float;
+const splat2 = zm.splat2;
 const colors = z.colors;
 
 /// Wired by zimr's `Project`. zimr ships no default font: text needs one.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
-
-const max_balls: usize = 256;
 
 /// The longest step the integrator takes. A tab that was in the background
 /// resumes with a huge delta; clamping it keeps balls from tunnelling out.
@@ -44,10 +45,11 @@ const Ball = struct {
 };
 
 const State = struct {
+    /// `update` is not handed an allocator, so spawning a ball uses this one.
+    gpa: Allocator,
     font: z.Font,
     ui_host: z.UiHost,
-    balls: [max_balls]Ball = undefined,
-    ball_count: usize = 0,
+    balls: ArrayList(Ball) = .empty,
 
     // Tunables, driven by the panel.
     gravity: f32 = 980.0, // pixels / second^2
@@ -58,23 +60,20 @@ const State = struct {
     show_velocity: bool = false,
 };
 
-fn spawnBall(s: *State, random: std.Random, pos: Vec2) void {
-    if (s.ball_count >= max_balls) {
-        return;
-    }
+fn spawnBall(s: *State, random: Random, pos: Vec2) void {
     const horizontal_speed: f32 = (random.float(f32) - 0.5) * 360.0;
-    s.balls[s.ball_count] = .{
+    // Out of memory is the only failure: then there is just no new ball.
+    s.balls.append(s.gpa, .{
         .pos = pos,
         .vel = .{ horizontal_speed, -50 },
         .radius = s.spawn_radius,
-        .color = palette[s.ball_count % palette.len],
-    };
-    s.ball_count += 1;
+        .color = palette[s.balls.items.len % palette.len],
+    }) catch return;
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
-    s.* = .{ .font = font, .ui_host = z.UiHost.init(gpa, font) };
+    s.* = .{ .gpa = gpa, .font = font, .ui_host = z.UiHost.init(gpa, font) };
     // A few balls so the first frame is not empty.
     for (0..5) |i| {
         spawnBall(s, f.random, .{ 200 + float(i) * 100, 100 });
@@ -84,13 +83,13 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
     z.unloadFont(gpa, s.font);
+    s.balls.deinit(gpa);
 }
 
 fn stepBalls(s: *State, dt: f32, width: f32, height: f32) void {
-    for (s.balls[0..s.ball_count]) |*ball| {
+    for (s.balls.items) |*ball| {
         ball.vel[1] += s.gravity * dt;
-        ball.pos[0] += ball.vel[0] * dt;
-        ball.pos[1] += ball.vel[1] * dt;
+        ball.pos += ball.vel * splat2(dt);
 
         // Wall bounces: clamp the position back inside, then reflect the velocity.
         const hits_left: bool = ball.pos[0] - ball.radius < 0;
@@ -144,7 +143,7 @@ fn drawPanel(u: z.ui.Ui, f: *z.Frame, s: *State) void {
 
         u.spacing();
         if (u.button("clear", .{})) {
-            s.ball_count = 0;
+            s.balls.clearRetainingCapacity();
         }
         u.sameLine(.{});
         if (u.button("add 10", .{})) {
@@ -176,10 +175,10 @@ fn update(f: *z.Frame, s: *State) void {
         stepBalls(s, @min(f.time.delta_time, max_step_seconds), width, height);
     }
 
-    for (s.balls[0..s.ball_count]) |ball| {
+    for (s.balls.items) |ball| {
         f.gl.circle(ball.pos, ball.radius, .{ .color = ball.color });
         if (s.show_velocity) {
-            const tip: Vec2 = .{ ball.pos[0] + ball.vel[0] * 0.05, ball.pos[1] + ball.vel[1] * 0.05 };
+            const tip: Vec2 = ball.pos + ball.vel * splat2(0.05);
             f.gl.line(ball.pos, tip, .{ .color = colors.white, .thickness = 2 });
         }
     }
@@ -187,8 +186,8 @@ fn update(f: *z.Frame, s: *State) void {
     var status_buf: [64]u8 = undefined;
     const status: []const u8 = bufPrint(
         &status_buf,
-        "balls: {d} / {d}    {s}",
-        .{ s.ball_count, max_balls, if (s.paused) "PAUSED" else "running" },
+        "balls: {d}    {s}",
+        .{ s.balls.items.len, if (s.paused) "PAUSED" else "running" },
     ) catch "balls: ?";
     f.gl.text(.{ 12, height - 28 }, status, .{ .size = 18, .color = colors.slate_400, .font = &s.font });
 

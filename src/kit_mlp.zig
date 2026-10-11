@@ -39,7 +39,11 @@ const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
 const assertf = zm.assertf;
 const float = zm.float;
+const pow = zm.pow;
 const expect = std.testing.expect;
+const Random = std.Random;
+const testing_allocator = std.testing.allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 /// What a network is: its shape, how it is trained, and how many examples at a time.
 pub const Spec = struct {
@@ -87,7 +91,7 @@ pub fn KitMlp(comptime M: type) type {
         const Self = @This();
 
         gpa: Allocator,
-        arena: std.heap.ArenaAllocator,
+        arena: ArenaAllocator,
         pipe: *compute_host.Compute(M),
         spec: Spec,
         layers: []Layer,
@@ -104,7 +108,7 @@ pub fn KitMlp(comptime M: type) type {
             errdefer gpa.destroy(self);
             self.* = .{
                 .gpa = gpa,
-                .arena = .init(gpa),
+                .arena = ArenaAllocator.init(gpa),
                 .pipe = pipe,
                 .spec = spec,
                 .layers = undefined,
@@ -166,8 +170,8 @@ pub fn KitMlp(comptime M: type) type {
 
             // He initialisation for relu, Xavier for tanh: the scale that keeps a signal's variance
             // from shrinking or exploding as it passes through the layers.
-            var rng: std.Random.DefaultPrng = .init(spec.seed);
-            const random: std.Random = rng.random();
+            var rng: Random.DefaultPrng = .init(spec.seed);
+            const random: Random = rng.random();
             for (self.layers, 0..) |layer, i| {
                 const last: bool = i + 1 == self.layers.len;
                 const fan_in: f32 = float(layer.in_dim);
@@ -183,7 +187,7 @@ pub fn KitMlp(comptime M: type) type {
                 @memset(self.cpu_params[layer.weights + weights ..][0..layer.out_dim], 0.0);
             }
             self.pipe.element_count = @max(self.param_count, 1);
-            try self.uploadParameters();
+            self.uploadParameters();
             const zeros: []f32 = try gpa.alloc(f32, self.param_count);
             defer gpa.free(zeros);
             @memset(zeros, 0.0);
@@ -224,20 +228,25 @@ pub fn KitMlp(comptime M: type) type {
             return true;
         }
 
-        pub fn setParameters(self: *Self, values: []const f32) !void {
+        pub fn setParameters(self: *Self, values: []const f32) void {
             assertf(values.len == self.param_count, @src(), "{d} parameters, wanted {d}", .{
                 values.len,
                 self.param_count,
             });
             @memcpy(self.cpu_params, values);
-            try self.uploadParameters();
+            self.uploadParameters();
         }
 
-        fn uploadParameters(self: *Self) !void {
+        fn uploadParameters(self: *Self) void {
             self.pipe.upload(.params, self.cpu_params);
         }
 
-        fn dispatch(self: *Self, comptime kernel: []const u8, params: M.Params, threads: u32) void {
+        fn dispatch(
+            self: *Self,
+            comptime kernel: []const u8,
+            params: M.Params,
+            threads: u32,
+        ) void {
             self.pipe.params = params;
             self.pipe.run(kernel, threads);
         }
@@ -376,8 +385,8 @@ pub fn KitMlp(comptime M: type) type {
                 .beta1 = self.spec.beta1,
                 .beta2 = self.spec.beta2,
                 .epsilon = self.spec.epsilon,
-                .correction1 = 1.0 / (1.0 - zm.pow(self.spec.beta1, step)),
-                .correction2 = 1.0 / (1.0 - zm.pow(self.spec.beta2, step)),
+                .correction1 = 1.0 / (1.0 - pow(self.spec.beta1, step)),
+                .correction2 = 1.0 / (1.0 - pow(self.spec.beta2, step)),
             }, self.param_count);
             self.pipe.submitRecording();
 
@@ -433,14 +442,14 @@ const Reference = struct {
 };
 
 test "kit_mlp: the kit's forward pass is the one on paper" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var host: Host = .initCpu();
     const spec: Spec = .{ .inputs = 5, .hidden = &.{ 7, 6 }, .outputs = 3, .rows = 4, .seed = 12 };
     const net: *Mlp = try Mlp.init(gpa, &host, spec);
     defer net.deinit();
 
-    var rng: std.Random.DefaultPrng = .init(5);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(5);
+    const random: Random = rng.random();
     const inputs: []f32 = try gpa.alloc(f32, spec.rows * spec.inputs);
     defer gpa.free(inputs);
     for (inputs) |*x| {
@@ -462,8 +471,27 @@ test "kit_mlp: the kit's forward pass is the one on paper" {
     try expect(worst < 1.0e-6);
 }
 
+fn referenceLoss(
+    reference: Reference,
+    layers: []const Layer,
+    spec: Spec,
+    inputs: []const f32,
+    targets: []const f32,
+) f32 {
+    var out: [64]f32 = undefined;
+    var total: f32 = 0.0;
+    for (0..spec.rows) |r| {
+        reference.forward(layers, inputs[r * spec.inputs ..][0..spec.inputs], out[0..spec.outputs]);
+        for (0..spec.outputs) |o| {
+            const diff: f32 = out[o] - targets[r * spec.outputs + o];
+            total += diff * diff;
+        }
+    }
+    return total / float(spec.rows * spec.outputs);
+}
+
 test "kit_mlp: one training step moves every weight the way Adam says" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var host: Host = .initCpu();
     const spec: Spec = .{ .inputs = 4, .hidden = &.{5}, .outputs = 2, .rows = 3, .rate = 0.01, .seed = 3 };
     const net: *Mlp = try Mlp.init(gpa, &host, spec);
@@ -472,8 +500,8 @@ test "kit_mlp: one training step moves every weight the way Adam says" {
     defer gpa.free(before);
     net.requestParameters(); // this test compares them afterwards, so it pays for them
 
-    var rng: std.Random.DefaultPrng = .init(8);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(8);
+    const random: Random = rng.random();
     const inputs: []f32 = try gpa.alloc(f32, spec.rows * spec.inputs);
     defer gpa.free(inputs);
     const targets: []f32 = try gpa.alloc(f32, spec.rows * spec.outputs);
@@ -528,35 +556,16 @@ test "kit_mlp: one training step moves every weight the way Adam says" {
     try expect(worst_direction == 0);
 }
 
-fn referenceLoss(
-    reference: Reference,
-    layers: []const Layer,
-    spec: Spec,
-    inputs: []const f32,
-    targets: []const f32,
-) f32 {
-    var out: [64]f32 = undefined;
-    var total: f32 = 0.0;
-    for (0..spec.rows) |r| {
-        reference.forward(layers, inputs[r * spec.inputs ..][0..spec.inputs], out[0..spec.outputs]);
-        for (0..spec.outputs) |o| {
-            const diff: f32 = out[o] - targets[r * spec.outputs + o];
-            total += diff * diff;
-        }
-    }
-    return total / float(spec.rows * spec.outputs);
-}
-
 test "kit_mlp: a residual network starts by doing nothing" {
     // The point of a small output scale: whatever the observation says, the first actions are
     // near zero, so the open-loop controller underneath is what drives the character while the
     // policy learns. Without it a fresh network shouts over a controller that was already nearly
     // right - which is what DReCon's Fig 9 measures the cost of.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var host: Host = .initCpu();
     const spec: Spec = .{ .inputs = 108, .hidden = &.{ 48, 48 }, .outputs = 27, .rows = 8, .seed = 6 };
-    var rng: std.Random.DefaultPrng = .init(11);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(11);
+    const random: Random = rng.random();
     const inputs: []f32 = try gpa.alloc(f32, spec.rows * spec.inputs);
     defer gpa.free(inputs);
     for (inputs) |*x| {
@@ -595,7 +604,7 @@ test "kit_mlp: a residual network starts by doing nothing" {
 }
 
 test "kit_mlp: it learns something a network should find easy" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var host: Host = .initCpu();
     const spec: Spec = .{ .inputs = 2, .hidden = &.{ 32, 32 }, .outputs = 1, .rows = 64, .rate = 0.01, .seed = 7 };
     const net: *Mlp = try Mlp.init(gpa, &host, spec);
@@ -604,8 +613,8 @@ test "kit_mlp: it learns something a network should find easy" {
     defer gpa.free(inputs);
     const targets: []f32 = try gpa.alloc(f32, spec.rows * spec.outputs);
     defer gpa.free(targets);
-    var rng: std.Random.DefaultPrng = .init(21);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(21);
+    const random: Random = rng.random();
 
     // f(x, y) = sin(3x) * y: smooth, nonlinear, and impossible for a linear model - so a falling
     // loss here means the hidden layers and their gradients are both doing something.

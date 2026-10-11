@@ -9,6 +9,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const zeroes = std.mem.zeroes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -21,9 +22,9 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
 
-    search_buf: [128]u8 = std.mem.zeroes([128]u8),
+    search_buf: [128]u8 = zeroes([128]u8),
     search_len: usize = 0,
-    name_buf: [64]u8 = std.mem.zeroes([64]u8),
+    name_buf: [64]u8 = zeroes([64]u8),
     name_len: usize = 0,
 
     yaw_rad: f32 = 0,
@@ -31,7 +32,7 @@ const State = struct {
 
     request_search_focus: bool = true, // focus search on first frame
     focus_button_clicked: bool = false,
-    badge_text: [24]u8 = std.mem.zeroes([24]u8),
+    badge_text: [24]u8 = zeroes([24]u8),
     badge_len: usize = 0,
 };
 

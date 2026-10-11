@@ -180,7 +180,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     while (i < s.ripples.len) : (i += 1) {
         s.ripples[i] = .{ .nx = 0, .ny = 0, .age = 0, .color = peer_colors[0], .active = false };
     }
-    const origin: []const u8 = z.web.ws.originUrl(&s.url_buf);
+    const origin: []const u8 = z.ws.originUrl(&s.url_buf);
     s.url_len = origin.len;
 }
 
@@ -192,7 +192,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn hostRoom(s: *State) void {
     var name_buf: [32]u8 = undefined;
-    const seed: u64 = @trunc(z.web.dom.epochMillis());
+    const seed: u64 = @trunc(z.epochMillis());
     const name: []const u8 = net.generateRoomName(seed, &name_buf);
     const n: usize = @min(name.len, s.room_buf.len);
     @memcpy(s.room_buf[0..n], name[0..n]);
@@ -205,6 +205,32 @@ fn joinRoom(s: *State) void {
         return;
     }
     s.session.connect(s.url_buf[0..s.url_len], s.room_buf[0..s.room_len]);
+}
+
+// A simple arrow-ish cursor: a filled dot with a short tail line.
+fn drawCursor(f: *z.Frame, center: Vec2, col: Color) void {
+    const tail: Vec2 = .{ center[0] - 10.0, center[1] - 10.0 };
+    f.gl.line(tail, center, .{ .color = withAlpha(col, 180), .thickness = 2.0 });
+    f.gl.circle(center, 7.0, .{ .color = col, .segments = 20 });
+    f.gl.circle(center, 3.0, .{ .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, .segments = 12 });
+}
+
+fn activePeers(s: *State) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < s.peers.len) : (i += 1) {
+        if (s.peers[i].active) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+fn clearPeers(s: *State) void {
+    var i: usize = 0;
+    while (i < s.peers.len) : (i += 1) {
+        s.peers[i].active = false;
+    }
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -339,32 +365,6 @@ fn update(f: *z.Frame, s: *State) void {
             }
         }
     }
-}
-
-fn activePeers(s: *State) usize {
-    var n: usize = 0;
-    var i: usize = 0;
-    while (i < s.peers.len) : (i += 1) {
-        if (s.peers[i].active) {
-            n += 1;
-        }
-    }
-    return n;
-}
-
-fn clearPeers(s: *State) void {
-    var i: usize = 0;
-    while (i < s.peers.len) : (i += 1) {
-        s.peers[i].active = false;
-    }
-}
-
-// A simple arrow-ish cursor: a filled dot with a short tail line.
-fn drawCursor(f: *z.Frame, center: Vec2, col: Color) void {
-    const tail: Vec2 = .{ center[0] - 10.0, center[1] - 10.0 };
-    f.gl.line(tail, center, .{ .color = withAlpha(col, 180), .thickness = 2.0 });
-    f.gl.circle(center, 7.0, .{ .color = col, .segments = 20 });
-    f.gl.circle(center, 3.0, .{ .color = .{ .r = 255, .g = 255, .b = 255, .a = 255 }, .segments = 12 });
 }
 
 pub const app: z.AppSpec(State) = .{

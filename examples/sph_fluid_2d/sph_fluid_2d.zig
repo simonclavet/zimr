@@ -38,6 +38,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
 const Vec3 = zm.Vec3;
@@ -159,8 +160,18 @@ const State = struct {
 // --- App bridge ---------------------------------------------------
 
 fn deinit(gpa: Allocator, s: *State) void {
-    _ = gpa;
     s.ui_host.deinit();
+    z.unloadFont(gpa, s.font);
+    gpa.free(s.positions);
+    gpa.free(s.prev_positions);
+    gpa.free(s.velocities);
+    gpa.free(s.densities);
+    gpa.free(s.pos_deltas);
+    gpa.free(s.visc_deltas);
+    gpa.free(s.grid_starts);
+    gpa.free(s.grid_indices);
+    gpa.free(s.grid_cursor);
+    gpa.free(s.grid_cell_of_particle);
 }
 
 // --- Init ---------------------------------------------------------
@@ -187,8 +198,8 @@ fn resetParticles(s: *State) void {
     const spacing_x: f32 = fill_w / cols_f;
     const spacing_y: f32 = fill_h / rows_f;
 
-    var prng: std.Random.DefaultPrng = .init(0x5EED);
-    const rng: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0x5EED);
+    const rng: Random = prng.random();
 
     for (s.positions, 0..) |*p, i| {
         const col: u32 = @as(u32, @intCast(i)) % cols;

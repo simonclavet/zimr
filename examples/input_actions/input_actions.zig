@@ -251,6 +251,115 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.ui_font);
 }
 
+fn dirActive(a: Actions, dir: u2) bool {
+    return switch (dir) {
+        0 => a.up,
+        1 => a.down,
+        2 => a.left,
+        3 => a.right,
+    };
+}
+
+fn drawArrow(f: *z.Frame, ctr: Vec2, dir: u2, r: f32) void {
+    const col: Color = c.slate_200;
+    const a: Vec2 = switch (dir) {
+        0 => .{ ctr[0], ctr[1] - r },
+        1 => .{ ctr[0], ctr[1] + r },
+        2 => .{ ctr[0] - r, ctr[1] },
+        3 => .{ ctr[0] + r, ctr[1] },
+    };
+    const b: Vec2 = switch (dir) {
+        0 => .{ ctr[0] - r * 0.7, ctr[1] + r * 0.4 },
+        1 => .{ ctr[0] - r * 0.7, ctr[1] - r * 0.4 },
+        2 => .{ ctr[0] + r * 0.4, ctr[1] - r * 0.7 },
+        3 => .{ ctr[0] - r * 0.4, ctr[1] - r * 0.7 },
+    };
+    const e: Vec2 = switch (dir) {
+        0 => .{ ctr[0] + r * 0.7, ctr[1] + r * 0.4 },
+        1 => .{ ctr[0] + r * 0.7, ctr[1] - r * 0.4 },
+        2 => .{ ctr[0] + r * 0.4, ctr[1] + r * 0.7 },
+        3 => .{ ctr[0] - r * 0.4, ctr[1] + r * 0.7 },
+    };
+    f.gl.triangle(a, b, e, .{ .color = col });
+}
+
+fn drawControls(f: *z.Frame, s: *State, lay: Layout) void {
+    const idle: Color = .{ .r = 44, .g = 50, .b = 62, .a = 255 };
+    const hot: Color = c.sky_500;
+
+    // scheme toggle button
+    f.gl.rectRoundedXYWH(lay.toggle.x, lay.toggle.y, lay.toggle.width, lay.toggle.height, 0.4, 8, .{
+        .color = .{ .r = 50, .g = 56, .b = 70, .a = 255 },
+    });
+    const label: []const u8 = if (s.scheme == .pad) "scheme: PAD" else "scheme: STICK";
+    f.gl.text(.{ lay.toggle.x + 12, lay.toggle.y + 9 }, label, .{
+        .size = 15,
+        .color = c.slate_100,
+        .font = &s.ui_font,
+    });
+
+    switch (s.scheme) {
+        .pad => {
+            var d: u2 = 0;
+            while (true) : (d += 1) {
+                const ctr: Vec2 = dpadButtonCenter(lay, d);
+                const on: bool = dirActive(s.acts, d);
+                f.gl.circle(ctr, lay.dir_radius, .{ .color = if (on) hot else idle, .segments = 24 });
+                f.gl.circle(ctr, lay.dir_radius, .{ .color = c.slate_500, .outline = 1.5, .segments = 24 });
+                drawArrow(f, ctr, d, lay.dir_radius * 0.5);
+                if (d == 3) {
+                    break;
+                }
+            }
+        },
+        .stick => {
+            f.gl.circle(lay.left_center, lay.base_radius, .{
+                .color = .{ .r = 34, .g = 39, .b = 50, .a = 255 },
+                .segments = 40,
+            });
+            f.gl.circle(lay.left_center, lay.base_radius, .{ .color = c.slate_600, .outline = 1.5, .segments = 40 });
+            const knob_c: Vec2 = .{ lay.left_center[0] + s.knob[0], lay.left_center[1] + s.knob[1] };
+            const moving: bool = s.acts.up or s.acts.down or s.acts.left or s.acts.right;
+            f.gl.circle(knob_c, lay.base_radius * 0.42, .{ .color = if (moving) hot else idle, .segments = 28 });
+            f.gl.circle(knob_c, lay.base_radius * 0.42, .{ .color = c.slate_400, .outline = 1.5, .segments = 28 });
+        },
+    }
+
+    // fire button (both schemes)
+    const fire_hot: bool = s.acts.fire_pressed;
+    const fire_fill: Color = if (fire_hot) c.amber_400 else .{ .r = 90, .g = 44, .b = 44, .a = 255 };
+    f.gl.circle(lay.fire_center, lay.fire_radius, .{ .color = fire_fill, .segments = 32 });
+    f.gl.circle(lay.fire_center, lay.fire_radius, .{
+        .color = .{ .r = 190, .g = 33, .b = 55, .a = 255 },
+        .outline = 2.0,
+        .segments = 32,
+    });
+    const fx: f32 = lay.fire_center[0] - z.measureText(s.ui_font, "FIRE", 16)[0] * 0.5;
+    f.gl.text(.{ fx, lay.fire_center[1] - 8 }, "FIRE", .{ .size = 16, .color = c.slate_100, .font = &s.ui_font });
+}
+
+fn drawReadout(f: *z.Frame, s: *State, lay: Layout) void {
+    const x: f32 = lay.play.x + 12;
+    var y: f32 = lay.play.y + 10;
+    f.gl.text(.{ x, y }, "logical actions (what the game sees):", .{
+        .size = 14,
+        .color = c.slate_400,
+        .font = &s.ui_font,
+    });
+    y += 24;
+    const names = [_][]const u8{ "UP", "DOWN", "LEFT", "RIGHT", "FIRE" };
+    const on = [_]bool{ s.acts.up, s.acts.down, s.acts.left, s.acts.right, s.acts.fire_pressed };
+    var cx: f32 = x;
+    for (names, on) |nm, active| {
+        const col: Color = if (active) c.emerald_400 else .{ .r = 60, .g = 66, .b = 78, .a = 255 };
+        const w: f32 = z.measureText(s.ui_font, nm, 16)[0] + 18;
+        f.gl.rectRoundedXYWH(cx, y, w, 26, 0.4, 6, .{ .color = col });
+        const tcol: Color = if (active) .{ .r = 10, .g = 20, .b = 15, .a = 255 } else c.slate_300;
+        f.gl.text(.{ cx + 9, y + 5 }, nm, .{ .size = 16, .color = tcol, .font = &s.ui_font });
+        cx += w + 8;
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();
@@ -341,115 +450,6 @@ fn update(f: *z.Frame, s: *State) void {
         "Action map: the box logic reads only logical actions - swap the input scheme, it never notices",
     );
     z.endDrawing(f.gl);
-}
-
-fn dirActive(a: Actions, dir: u2) bool {
-    return switch (dir) {
-        0 => a.up,
-        1 => a.down,
-        2 => a.left,
-        3 => a.right,
-    };
-}
-
-fn drawControls(f: *z.Frame, s: *State, lay: Layout) void {
-    const idle: Color = .{ .r = 44, .g = 50, .b = 62, .a = 255 };
-    const hot: Color = c.sky_500;
-
-    // scheme toggle button
-    f.gl.rectRoundedXYWH(lay.toggle.x, lay.toggle.y, lay.toggle.width, lay.toggle.height, 0.4, 8, .{
-        .color = .{ .r = 50, .g = 56, .b = 70, .a = 255 },
-    });
-    const label: []const u8 = if (s.scheme == .pad) "scheme: PAD" else "scheme: STICK";
-    f.gl.text(.{ lay.toggle.x + 12, lay.toggle.y + 9 }, label, .{
-        .size = 15,
-        .color = c.slate_100,
-        .font = &s.ui_font,
-    });
-
-    switch (s.scheme) {
-        .pad => {
-            var d: u2 = 0;
-            while (true) : (d += 1) {
-                const ctr: Vec2 = dpadButtonCenter(lay, d);
-                const on: bool = dirActive(s.acts, d);
-                f.gl.circle(ctr, lay.dir_radius, .{ .color = if (on) hot else idle, .segments = 24 });
-                f.gl.circle(ctr, lay.dir_radius, .{ .color = c.slate_500, .outline = 1.5, .segments = 24 });
-                drawArrow(f, ctr, d, lay.dir_radius * 0.5);
-                if (d == 3) {
-                    break;
-                }
-            }
-        },
-        .stick => {
-            f.gl.circle(lay.left_center, lay.base_radius, .{
-                .color = .{ .r = 34, .g = 39, .b = 50, .a = 255 },
-                .segments = 40,
-            });
-            f.gl.circle(lay.left_center, lay.base_radius, .{ .color = c.slate_600, .outline = 1.5, .segments = 40 });
-            const knob_c: Vec2 = .{ lay.left_center[0] + s.knob[0], lay.left_center[1] + s.knob[1] };
-            const moving: bool = s.acts.up or s.acts.down or s.acts.left or s.acts.right;
-            f.gl.circle(knob_c, lay.base_radius * 0.42, .{ .color = if (moving) hot else idle, .segments = 28 });
-            f.gl.circle(knob_c, lay.base_radius * 0.42, .{ .color = c.slate_400, .outline = 1.5, .segments = 28 });
-        },
-    }
-
-    // fire button (both schemes)
-    const fire_hot: bool = s.acts.fire_pressed;
-    const fire_fill: Color = if (fire_hot) c.amber_400 else .{ .r = 90, .g = 44, .b = 44, .a = 255 };
-    f.gl.circle(lay.fire_center, lay.fire_radius, .{ .color = fire_fill, .segments = 32 });
-    f.gl.circle(lay.fire_center, lay.fire_radius, .{
-        .color = .{ .r = 190, .g = 33, .b = 55, .a = 255 },
-        .outline = 2.0,
-        .segments = 32,
-    });
-    const fx: f32 = lay.fire_center[0] - z.measureText(s.ui_font, "FIRE", 16)[0] * 0.5;
-    f.gl.text(.{ fx, lay.fire_center[1] - 8 }, "FIRE", .{ .size = 16, .color = c.slate_100, .font = &s.ui_font });
-}
-
-fn drawArrow(f: *z.Frame, ctr: Vec2, dir: u2, r: f32) void {
-    const col: Color = c.slate_200;
-    const a: Vec2 = switch (dir) {
-        0 => .{ ctr[0], ctr[1] - r },
-        1 => .{ ctr[0], ctr[1] + r },
-        2 => .{ ctr[0] - r, ctr[1] },
-        3 => .{ ctr[0] + r, ctr[1] },
-    };
-    const b: Vec2 = switch (dir) {
-        0 => .{ ctr[0] - r * 0.7, ctr[1] + r * 0.4 },
-        1 => .{ ctr[0] - r * 0.7, ctr[1] - r * 0.4 },
-        2 => .{ ctr[0] + r * 0.4, ctr[1] - r * 0.7 },
-        3 => .{ ctr[0] - r * 0.4, ctr[1] - r * 0.7 },
-    };
-    const e: Vec2 = switch (dir) {
-        0 => .{ ctr[0] + r * 0.7, ctr[1] + r * 0.4 },
-        1 => .{ ctr[0] + r * 0.7, ctr[1] - r * 0.4 },
-        2 => .{ ctr[0] + r * 0.4, ctr[1] + r * 0.7 },
-        3 => .{ ctr[0] - r * 0.4, ctr[1] + r * 0.7 },
-    };
-    f.gl.triangle(a, b, e, .{ .color = col });
-}
-
-fn drawReadout(f: *z.Frame, s: *State, lay: Layout) void {
-    const x: f32 = lay.play.x + 12;
-    var y: f32 = lay.play.y + 10;
-    f.gl.text(.{ x, y }, "logical actions (what the game sees):", .{
-        .size = 14,
-        .color = c.slate_400,
-        .font = &s.ui_font,
-    });
-    y += 24;
-    const names = [_][]const u8{ "UP", "DOWN", "LEFT", "RIGHT", "FIRE" };
-    const on = [_]bool{ s.acts.up, s.acts.down, s.acts.left, s.acts.right, s.acts.fire_pressed };
-    var cx: f32 = x;
-    for (names, on) |nm, active| {
-        const col: Color = if (active) c.emerald_400 else .{ .r = 60, .g = 66, .b = 78, .a = 255 };
-        const w: f32 = z.measureText(s.ui_font, nm, 16)[0] + 18;
-        f.gl.rectRoundedXYWH(cx, y, w, 26, 0.4, 6, .{ .color = col });
-        const tcol: Color = if (active) .{ .r = 10, .g = 20, .b = 15, .a = 255 } else c.slate_300;
-        f.gl.text(.{ cx + 9, y + 5 }, nm, .{ .size = 16, .color = tcol, .font = &s.ui_font });
-        cx += w + 8;
-    }
 }
 
 /// Descriptor-only: the runner/launcher drives begin/end (no offscreen pass).

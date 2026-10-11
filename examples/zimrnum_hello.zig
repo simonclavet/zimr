@@ -1,17 +1,19 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const zn = @import("zn");
 
 // A complete program: fit a line to noisy data, then report the error before and after.
 pub fn main() !void {
-    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var arena: ArenaAllocator = .init(std.heap.page_allocator);
     defer arena.deinit();
-    const gpa: std.mem.Allocator = arena.allocator();
+    const gpa: Allocator = arena.allocator();
 
     // 1. Some data. y = 3x + 2, with noise.
     const rng: zn.Rng = .init(20260913);
     const x: zn.Tensor(f64) = try zn.linspace(f64, gpa, 0, 1, 32, .include);
-    const y: zn.Tensor(f64) = try zn.Tensor(f64).alloc(gpa, &.{ 32, 1 });
-    const noise: zn.Tensor(f64) = try zn.Tensor(f64).alloc(gpa, &.{32});
+    const y: zn.Tensor(f64) = try .alloc(gpa, &.{ 32, 1 });
+    const noise: zn.Tensor(f64) = try .alloc(gpa, &.{32});
     rng.fillNormal(f64, noise.data);
     for (0..32) |i| {
         y.data[i] = 3.0 * x.data[i] + 2.0 + 0.1 * noise.data[i];

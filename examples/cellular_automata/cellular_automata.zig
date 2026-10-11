@@ -57,7 +57,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const pixels: []Color = try gpa.alloc(Color, im_w * im_h);
     @memset(pixels, off_color);
     pixels[im_w / 2] = on_color;
-    const fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    const fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         @intCast(im_w),
@@ -123,6 +123,42 @@ fn chipX(lay: Layout, i: usize) f32 {
     return lay.pad + float(i) * (lay.chip_w + 4.0);
 }
 
+fn handleTap(s: *State, lay: Layout) void {
+    // chip row?
+    if (s.press[1] >= lay.pad and s.press[1] <= lay.pad + lay.chip_h) {
+        var i: usize = 0;
+        while (i < presets.len) : (i += 1) {
+            const x0: f32 = chipX(lay, i);
+            if (s.press[0] >= x0 and s.press[0] <= x0 + lay.chip_w) {
+                setRule(s, i);
+                return;
+            }
+        }
+    }
+    // otherwise cycle
+    setRule(s, (s.preset + 1) % presets.len);
+}
+
+fn drawChips(f: *z.Frame, s: *State, lay: Layout) void {
+    const gl = f.gl;
+    var i: usize = 0;
+    while (i < presets.len) : (i += 1) {
+        const x0: f32 = chipX(lay, i);
+        const selected: bool = (i == s.preset);
+        const fill: Color = if (selected) common.palette.accent else common.palette.surface;
+        gl.rectRoundedXYWH(x0, lay.pad, lay.chip_w, lay.chip_h, 0.35, 6, .{ .color = fill });
+        var nb: [8]u8 = undefined;
+        const num: []const u8 = bufPrint(&nb, "{d}", .{presets[i]}) catch "";
+        const dim: Vec2 = z.measureText(s.font, num, 14);
+        const tcol: Color = if (selected) common.palette.bg else common.palette.ink_dim;
+        gl.text(
+            .{ x0 + (lay.chip_w - dim[0]) * 0.5, lay.pad + (lay.chip_h - dim[1]) * 0.5 },
+            num,
+            .{ .size = 14, .color = tcol, .font = &s.font },
+        );
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const lay: Layout = layoutOf(f);
     z.clearViewport(f, common.palette.bg);
@@ -163,42 +199,6 @@ fn update(f: *z.Frame, s: *State) void {
     const label: []const u8 = bufPrint(&buf, "rule {d} - tap a preset or the canvas", .{s.rule}) catch "";
     common.caption(f.gl, s.font, label);
     z.endDrawing(f.gl);
-}
-
-fn handleTap(s: *State, lay: Layout) void {
-    // chip row?
-    if (s.press[1] >= lay.pad and s.press[1] <= lay.pad + lay.chip_h) {
-        var i: usize = 0;
-        while (i < presets.len) : (i += 1) {
-            const x0: f32 = chipX(lay, i);
-            if (s.press[0] >= x0 and s.press[0] <= x0 + lay.chip_w) {
-                setRule(s, i);
-                return;
-            }
-        }
-    }
-    // otherwise cycle
-    setRule(s, (s.preset + 1) % presets.len);
-}
-
-fn drawChips(f: *z.Frame, s: *State, lay: Layout) void {
-    const gl = f.gl;
-    var i: usize = 0;
-    while (i < presets.len) : (i += 1) {
-        const x0: f32 = chipX(lay, i);
-        const selected: bool = (i == s.preset);
-        const fill: Color = if (selected) common.palette.accent else common.palette.surface;
-        gl.rectRoundedXYWH(x0, lay.pad, lay.chip_w, lay.chip_h, 0.35, 6, .{ .color = fill });
-        var nb: [8]u8 = undefined;
-        const num: []const u8 = bufPrint(&nb, "{d}", .{presets[i]}) catch "";
-        const dim: Vec2 = z.measureText(s.font, num, 14);
-        const tcol: Color = if (selected) common.palette.bg else common.palette.ink_dim;
-        gl.text(
-            .{ x0 + (lay.chip_w - dim[0]) * 0.5, lay.pad + (lay.chip_h - dim[1]) * 0.5 },
-            num,
-            .{ .size = 14, .color = tcol, .font = &s.font },
-        );
-    }
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

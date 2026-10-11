@@ -28,6 +28,9 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -80,7 +83,7 @@ const State = struct {
     scratch: []PointVertex, // CPU staging for regeneration (max size)
 
     num_points: u32 = 1_000,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
 
     rt: z.RenderTexture,
     ui_host: z.UiHost,
@@ -106,7 +109,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// raylib's GenMeshPoints, verbatim distribution: uniform theta in
 /// [0,pi], phi in [0,2pi], r in [0,10]; colour = HSV(r*360, 1, 1).
 fn regenPoints(s: *State, f: *z.Frame) void {
-    const rand: std.Random = s.rng.random();
+    const rand: Random = s.rng.random();
     var i: u32 = 0;
     while (i < s.num_points) : (i += 1) {
         const theta: f32 = pi * rand.float(f32);
@@ -142,7 +145,7 @@ fn regenPoints(s: *State, f: *z.Frame) void {
         f.gpu.queue,
         s.vbo,
         0,
-        std.mem.sliceAsBytes(s.scratch[0..used]),
+        sliceAsBytes(s.scratch[0..used]),
     );
 }
 
@@ -185,7 +188,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, points3d_vs_wgsl, "points3d_vs");
     const fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, cube3d_fs_wgsl, "cube3d_fs");
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .point_list,
         .none,
         .less,
@@ -218,7 +221,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .vs_ubo = vs_ubo,
         .g0_bg = g0_bg,
         .scratch = scratch,
-        .rng = std.Random.DefaultPrng.init(0x9e3779b97f4a7c15),
+        .rng = Random.DefaultPrng.init(0x9e3779b97f4a7c15),
         .rt = .{},
         .ui_host = z.UiHost.init(gpa, try z.loadFont(f, gpa, atkinson_mono_ttf, 22)),
     };
@@ -302,7 +305,7 @@ fn update(f: *z.Frame, s: *State) void {
     const cam_proj: Mat = perspectiveFovRh(fovy_rad, vw / vh, 0.1, 200.0);
     var vs_io: pts_vs.Io = undefined;
     vs_io.u = .{ .view_projection = mulMat(cam_proj, cam_view) };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, asBytes(&vs_io.u));
 
     // ---- one point_list draw for cloud + landmark ----
     const Backend: type = z.WgpuBackend;

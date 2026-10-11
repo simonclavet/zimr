@@ -15,6 +15,7 @@
 //! for a ~40-line program). For bytes without a file, use `writePngToMemory`.
 
 const std = @import("std");
+const Io = std.Io;
 const zm = @import("zm");
 const float = zm.float;
 const image_mod = @import("image.zig"); // lint:off canonical-alias: `image` is a member name here
@@ -460,10 +461,10 @@ pub fn writePngToMemory(self: *const Canvas) ![]u8 {
 /// `std.Io` chosen in `main`, e.g. from a `std.Io.Threaded`) - same way the
 /// rest of zimr threads its allocator. For bytes-in-memory use
 /// `writePngToMemory` (no `io` needed).
-pub fn savePng(self: *const Canvas, io: std.Io, path: []const u8) !void {
+pub fn savePng(self: *const Canvas, io: Io, path: []const u8) !void {
     const png: []u8 = try self.writePngToMemory();
     defer self.gpa.free(png);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = png });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = png });
 }
 
 // ---- clip helpers ---------------------------------------------------------
@@ -472,7 +473,7 @@ const testing = std.testing;
 
 test "png_canvas: shapes resolve to a valid PNG (no font needed)" {
     const opts: Options = .{ .ss = 3, .background = .{ .r = 255, .g = 255, .b = 255, .a = 255 } };
-    var canvas: Canvas = try Canvas.init(testing.allocator, 80, 60, opts);
+    var canvas: Canvas = try .init(testing.allocator, 80, 60, opts);
     defer canvas.deinit();
     canvas.fillRect(.{ .x = 8, .y = 8, .w = 30, .h = 18 }, .{ .r = 30, .g = 120, .b = 220, .a = 120 });
     canvas.line(.{ 2, 2 }, .{ 78, 58 }, .{ .color = .{ .r = 220, .g = 40, .b = 40, .a = 255 }, .thickness = 2.0 });

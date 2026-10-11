@@ -14,10 +14,12 @@
 //!   spv2wgsl <input.spv> <output.wgsl>            # translate
 //!   spv2wgsl --check <input.spv>                  # parse + verify, no output
 //!   spv2wgsl --strict <input.spv> <output.wgsl>   # fail on any `// ERROR:` marker
+//!   spv2wgsl --entry=NAME <input.spv> <output.wgsl>   # one entry point of a multi-kernel module
+//!   (options in any order; `--help` for the generated usage)
 //!
 //! Exit codes:
 //!   0 - success
-//!   2 - usage error
+//!   1 - usage error (std's cli convention; it was 2)
 //!   3 - input is not valid SPIR-V (magic mismatch / malformed)
 //!   4 - translation failed (panic surfaced as an error in the underlying lib)
 //!   5 - `--strict` and the output contains a `// ERROR:` marker
@@ -25,31 +27,57 @@
 //!       the translator can't fix; engine shaders must always pass --strict)
 
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const eql = std.mem.eql;
-const startsWith = std.mem.startsWith;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const splitScalar = std.mem.splitScalar;
+const indexOf = std.mem.indexOf;
 const spv2wgsl = @import("spv2wgsl");
 
-fn printUsage(io: std.Io) void {
-    var stderr_buf: [512]u8 = undefined;
-    var stderr_w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &stderr_buf);
-    stderr_w.interface.print(
-        \\usage: spv2wgsl <input.spv> <output.wgsl>   # translate
-        \\       spv2wgsl --check <input.spv>          # parse + verify, no output
-        \\       spv2wgsl --strict <input.spv> <output.wgsl>  # fail on any `// ERROR:` marker
-        \\
-    , .{}) catch {}; // lint:off catch-suppression: stderr write, best-effort
-    stderr_w.interface.flush() catch {}; // lint:off catch-suppression: stderr flush, best-effort
+/// The command line (std's cli, `src/command_line.zig`). Options come in any order; the hand parser this replaced
+/// took `--check` / `--strict` only in first position, and a `--walker=` flag it then ignored.
+const SpvArgs = struct {
+    @"--check": bool = false,
+    @"--strict": bool = false,
+    @"--entry": ?[]const u8 = null,
+    input: []const u8,
+    output: ?[]const u8 = null,
+};
+
+const spv_cli: cli.Config(SpvArgs) = .{
+    .prog = "spv2wgsl",
+    .description = "Translates SPIR-V to WGSL, in pure Zig. Exit codes: 3 not valid SPIR-V, 4 translation failed, " ++
+        "5 --strict and the output has an `// ERROR:` marker.",
+    .args = .{
+        .@"--check" = .{ .description = "parse and verify only: no output file, nothing written" },
+        .@"--strict" = .{ .description = "fail (exit 5) on any `// ERROR:` marker - engine shaders always pass it" },
+        .@"--entry" = .{ .description = "the one entry point to translate from a multi-kernel module (else the last)" },
+        .input = .{ .description = "the SPIR-V module" },
+        .output = .{ .description = "the WGSL file to write (not with --check)" },
+    },
+};
+
+/// A command line the parser accepted but that does not make sense - `--check` with an output, a translation with
+/// none: say which, print the generated usage, exit 1 (the parser's own code for a bad command line).
+fn usageError(io: Io, message: []const u8) noreturn {
+    var buf: [2048]u8 = undefined;
+    var stderr: Io.File.Writer = Io.File.stderr().writer(io, &buf);
+    // A report that cannot be written has nowhere left to go: exit 1 either way - it IS a bad command line.
+    stderr.interface.print("spv2wgsl: {s}\n\n", .{message}) catch std.process.exit(1);
+    cli.printUsage(&stderr.interface, SpvArgs, spv_cli, "spv2wgsl") catch std.process.exit(1);
+    stderr.interface.flush() catch std.process.exit(1);
+    std.process.exit(1);
 }
 
 fn printErrorLine(
-    io: std.Io,
+    io: Io,
     comptime fmt: []const u8,
     args: anytype,
 ) !void {
     var stderr_buf: [1024]u8 = undefined;
-    var stderr_w: std.Io.File.Writer = std.Io.File.stderr().writer(io, &stderr_buf);
+    var stderr_w: Io.File.Writer = Io.File.stderr().writer(io, &stderr_buf);
     try stderr_w.interface.print(fmt ++ "\n", args);
     try stderr_w.interface.flush();
 }
@@ -57,15 +85,15 @@ fn printErrorLine(
 /// Same as cmdTranslate but discards the output.  Useful for CI: "does
 /// this SPIR-V translate at all?"  Exit code 0 means yes.
 fn cmdCheck(
-    io: std.Io,
+    io: Io,
     gpa: Allocator,
     input_path: []const u8,
 ) !void {
-    var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
 
-    const bytes: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, input_path, arena, .unlimited);
+    const bytes: []u8 = try Io.Dir.cwd().readFileAlloc(io, input_path, arena, .unlimited);
     if (bytes.len % 4 != 0) {
         try printErrorLine(io, "spv2wgsl: input is not a multiple of 4 bytes (not SPIR-V?)", .{});
         std.process.exit(3);
@@ -74,7 +102,7 @@ fn cmdCheck(
     // byte buffer (readFileAlloc only guarantees byte alignment; the cast
     // panics in safe builds when the buffer is misaligned).
     const words: []u32 = try arena.alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes);
+    @memcpy(sliceAsBytes(words), bytes);
 
     const wgsl: []const u8 = spv2wgsl.convertSpirvToWgsl(arena, words) catch |err| switch (err) {
         error.NotSpirv, error.MalformedSpirv => {
@@ -92,7 +120,7 @@ fn cmdCheck(
     };
     // Quick stat - confirms work was done; aids casual debugging.
     var stdout_buf: [256]u8 = undefined;
-    var stdout_w: std.Io.File.Writer = std.Io.File.stdout().writer(io, &stdout_buf);
+    var stdout_w: Io.File.Writer = Io.File.stdout().writer(io, &stdout_buf);
     stdout_w.interface.print(
         "spv2wgsl: {s} OK ({d} spv bytes -> {d} wgsl bytes)\n",
         .{ input_path, bytes.len, wgsl.len },
@@ -114,17 +142,17 @@ const TranslateOpts = struct {
 /// (don't leave a half-written file on disk) and exit with a non-zero
 /// status code.
 fn cmdTranslate(
-    io: std.Io,
+    io: Io,
     gpa: Allocator,
     input_path: []const u8,
     output_path: []const u8,
     opts: TranslateOpts,
 ) !void {
-    var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var arena_state: ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
 
-    const bytes: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, input_path, arena, .unlimited);
+    const bytes: []u8 = try Io.Dir.cwd().readFileAlloc(io, input_path, arena, .unlimited);
     if (bytes.len % 4 != 0) {
         try printErrorLine(io, "spv2wgsl: input is not a multiple of 4 bytes (not SPIR-V?)", .{});
         std.process.exit(3);
@@ -133,7 +161,7 @@ fn cmdTranslate(
     // byte buffer (readFileAlloc only guarantees byte alignment; the cast
     // panics in safe builds when the buffer is misaligned).
     const words: []u32 = try arena.alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes);
+    @memcpy(sliceAsBytes(words), bytes);
 
     const wgsl: []const u8 = spv2wgsl.convertSpirvToWgslEntry(
         arena,
@@ -163,9 +191,9 @@ fn cmdTranslate(
         // but is unusable; the source must be fixed.
         var line_no: usize = 1;
         var error_count: usize = 0;
-        var it = std.mem.splitScalar(u8, wgsl, '\n');
+        var it = splitScalar(u8, wgsl, '\n');
         while (it.next()) |line| : (line_no += 1) {
-            if (std.mem.indexOf(u8, line, "// ERROR:") != null) {
+            if (indexOf(u8, line, "// ERROR:") != null) {
                 try printErrorLine(io, "spv2wgsl: {s}:{d}: {s}", .{ input_path, line_no, line });
                 error_count += 1;
             }
@@ -183,7 +211,7 @@ fn cmdTranslate(
     // Write the output atomically - write-and-rename is what we'd want
     // in production, but for build-step idempotency the bare write is
     // adequate (the build cache invalidates on input change).
-    try std.Io.Dir.cwd().writeFile(io, .{
+    try Io.Dir.cwd().writeFile(io, .{
         .sub_path = output_path,
         .data = wgsl,
     });
@@ -191,78 +219,17 @@ fn cmdTranslate(
 
 pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = init.gpa;
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    var args_list: ArrayList([]u8) = .empty;
-    defer {
-        for (args_list.items) |a| gpa.free(a);
-        args_list.deinit(gpa);
-    }
-    var arg_it: std.process.Args.Iterator =
-        try std.process.Args.Iterator.initAllocator(init.minimal.args, gpa);
-    defer arg_it.deinit();
-    while (arg_it.next()) |arg| {
-        try args_list.append(gpa, try gpa.dupe(u8, arg));
-    }
-
-    // `args_list` is the SOLE OWNER of every string and frees each element
-    // exactly once above.  So parse over a SEPARATE, BORROWED view.
-    //
-    // This used to filter flags by compacting `args_list.items` IN PLACE:
-    // `pos = items[1..]; pos[0] = args[0];` wrote argv[0]'s pointer into slot 1
-    // (aliasing one allocation into two slots -> DOUBLE FREE at cleanup, and
-    // leaking the string that slot 1 held), and the `--entry=` compaction
-    // `pos[w] = pos[r]` shuffled owned pointers the same way.  Silent UB under
-    // ReleaseFast; ReleaseSafe's allocator caught it instantly.
-    //
-    // RULE: never reorder, overwrite or compact an array whose elements are
-    // owned allocations freed by index.  Build a borrowed view instead.
-    var pos_list: ArrayList([]const u8) = .empty;
-    defer pos_list.deinit(gpa); // borrowed pointers - nothing to free
-
-    // Optional `--entry=NAME` selects ONE OpEntryPoint from a multi-kernel
-    // module (kompute installKernel xN); without it, last entry wins.
-    var entry: ?[]const u8 = null;
-
-    for (args_list.items, 0..) |arg, i| {
-        // Optional leading `--walker=...` flag.  DEPRECATED no-op since F5
-        // deleted the legacy walker: the structured-IR path is the only
-        // driver.  We still ACCEPT and ignore it so existing callers
-        // (`scripts/naga-validate-tint.sh`, `shader_codegen.zig`'s `-Dwalker`)
-        // keep working unchanged; the value is not consulted.
-        if (i == 1 and startsWith(u8, arg, "--walker=")) {
-            continue;
+    const args: SpvArgs = cli.args(&init, SpvArgs, spv_cli);
+    if (args.@"--check") {
+        const only_input: bool = args.output == null and !args.@"--strict" and args.@"--entry" == null;
+        if (!only_input) {
+            usageError(io, "--check takes only the input: it writes nothing");
         }
-        if (startsWith(u8, arg, "--entry=")) {
-            entry = arg["--entry=".len..];
-            continue; // drop this arg
-        }
-        try pos_list.append(gpa, arg);
+        try cmdCheck(io, gpa, args.input);
+        return;
     }
-    const pos: [][]const u8 = pos_list.items;
-
-    if (pos.len < 2) {
-        printUsage(io);
-        std.process.exit(2);
-    }
-
-    if (eql(u8, pos[1], "--check")) {
-        if (pos.len != 3) {
-            printUsage(io);
-            std.process.exit(2);
-        }
-        try cmdCheck(io, gpa, pos[2]);
-    } else if (eql(u8, pos[1], "--strict")) {
-        if (pos.len != 4) {
-            printUsage(io);
-            std.process.exit(2);
-        }
-        try cmdTranslate(io, gpa, pos[2], pos[3], .{ .strict = true, .entry = entry });
-    } else {
-        if (pos.len != 3) {
-            printUsage(io);
-            std.process.exit(2);
-        }
-        try cmdTranslate(io, gpa, pos[1], pos[2], .{ .strict = false, .entry = entry });
-    }
+    const output: []const u8 = args.output orelse usageError(io, "a translation needs the output file (or --check)");
+    try cmdTranslate(io, gpa, args.input, output, .{ .strict = args.@"--strict", .entry = args.@"--entry" });
 }

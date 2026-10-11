@@ -30,6 +30,8 @@ const ArrayList = std.ArrayList;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const asBytes = std.mem.asBytes;
 const wgpu = @import("wgpu.zig");
 
 /// The file *is* the BindGroupCache: `@import("BindGroupCache.zig")` gives this struct.
@@ -49,10 +51,10 @@ pub const Key = struct {
 const KeyContext = struct {
     pub fn hash(_: KeyContext, k: Key) u64 {
         var h: u64 = 0xC0FFEE;
-        h = std.hash.Wyhash.hash(h, std.mem.asBytes(&k.texture_view));
-        h = std.hash.Wyhash.hash(h, std.mem.asBytes(&k.sampler));
-        h = std.hash.Wyhash.hash(h, std.mem.asBytes(&k.material_ubo));
-        h = std.hash.Wyhash.hash(h, std.mem.asBytes(&k.layout));
+        h = std.hash.Wyhash.hash(h, asBytes(&k.texture_view));
+        h = std.hash.Wyhash.hash(h, asBytes(&k.sampler));
+        h = std.hash.Wyhash.hash(h, asBytes(&k.material_ubo));
+        h = std.hash.Wyhash.hash(h, asBytes(&k.layout));
         return h;
     }
     pub fn eql(
@@ -134,7 +136,7 @@ pub fn count(self: *const BindGroupCache) usize {
 // ============================================================================
 
 test "BindGroupCache stores and retrieves entries" {
-    var cache: BindGroupCache = .{ .gpa = std.testing.allocator };
+    var cache: BindGroupCache = .{ .gpa = testing_allocator };
     defer cache.deinit();
 
     const k1: Key = .{
@@ -152,7 +154,7 @@ test "BindGroupCache stores and retrieves entries" {
 }
 
 test "invalidateForTexture removes only matching entries" {
-    var cache: BindGroupCache = .{ .gpa = std.testing.allocator };
+    var cache: BindGroupCache = .{ .gpa = testing_allocator };
     defer cache.deinit();
 
     const tex_a: wgpu.TextureViewHandle = @fromBackingInt(@intCast(1));

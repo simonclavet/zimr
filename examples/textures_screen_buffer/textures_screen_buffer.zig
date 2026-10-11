@@ -5,6 +5,7 @@
 //! palette into an RGBA buffer, then uploaded to a texture and drawn 2x scaled.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -22,7 +23,7 @@ const State = struct {
     flame_root: []u8,
     pixels: []u8,
     palette: [max_colors]Color,
-    prng: std.Random.DefaultPrng,
+    prng: Random.DefaultPrng,
 };
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -59,12 +60,12 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .flame_root = flame_root,
         .pixels = pixels,
         .palette = palette,
-        .prng = std.Random.DefaultPrng.init(0x5EED),
+        .prng = Random.DefaultPrng.init(0x5EED),
     };
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    const rng: std.Random = s.prng.random();
+    const rng: Random = s.prng.random();
     const w: usize = img_w;
     const h: usize = img_h;
 

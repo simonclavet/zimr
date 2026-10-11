@@ -2,6 +2,7 @@
 //! path - bakeFontAtlas -> imageDrawTextWithFont -> exportImageToMemory(PNG) - so the
 //! result can be viewed directly in the sandbox without a device round-trip.
 const std = @import("std");
+const Io = std.Io;
 const text2d = @import("text2d.zig");
 const image = @import("image.zig");
 const codecs = @import("codecs.zig");
@@ -11,9 +12,9 @@ const roboto = @embedFile("roboto");
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     const tt: codecs.truetype.Font = try codecs.truetype.loadFontFromTtf(gpa, roboto);
 
@@ -106,7 +107,7 @@ pub fn main() !void {
     std.debug.print("text-colored pixels in image: {d}\n", .{text_pixels});
 
     const png: []u8 = try image.exportImageToMemory(gpa, img, ".png");
-    const out: std.Io.File = std.Io.File.stdout();
+    const out: Io.File = Io.File.stdout();
     try out.writeStreamingAll(io, png);
     // lint:off debug-print: host-only harness output
     std.debug.print("wrote PNG to stdout ({d} bytes)\n", .{png.len});

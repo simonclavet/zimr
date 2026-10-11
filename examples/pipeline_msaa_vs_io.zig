@@ -4,6 +4,8 @@
 //! `Outputs` is empty and matches the empty FS `Inputs`.
 
 const shader = @import("shader_interface");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 pub const Attributes = struct {
     vertex_position: shader.Attr(.vec2, 0),
@@ -11,7 +13,7 @@ pub const Attributes = struct {
 
 /// Vertex-stage uniform (group 0): a 4x4 rotation the host spins each frame.
 pub const Ubo = struct {
-    transform: [4]@Vector(4, f32),
+    transform: [4]Vec,
 };
 
 /// No varyings - the fragment shader takes no interpolated inputs.

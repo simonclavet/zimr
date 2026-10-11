@@ -7,6 +7,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
@@ -24,7 +25,7 @@ const frames_per_push: usize = 480;
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     audio: z.AudioState = .{},
     stream: z.AudioStream = .{},
     phase_turns: f32 = 0.0,
@@ -46,7 +47,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.streams.pause(&audio.streams, stream); // silent until the user holds
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .audio = audio,
         .stream = stream,
     };

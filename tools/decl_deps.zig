@@ -10,9 +10,12 @@
 //! container-scope decl, so a bare `.identifier` whose name matches a root decl
 //! IS a reference to it - no scope analysis needed. Consumed by decl_reorder.py.
 const std = @import("std");
+const cli = @import("cli");
 const Ast = std.zig.Ast;
 const Index = Ast.Node.Index;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const StringHashMap = std.StringHashMap;
 
 fn declNameToken(ast: *const Ast, node: Index) ?u32 {
     if (ast.nodeTag(node) == .fn_decl) {
@@ -24,24 +27,31 @@ fn declNameToken(ast: *const Ast, node: Index) ?u32 {
     return vd.ast.mut_token + 1;
 }
 
+/// The command line (std's cli, `src/command_line.zig`): `zig build decl-deps -- <file.zig>`.
+const DepsArgs = struct {
+    file: []const u8,
+};
+
+const deps_cli: cli.Config(DepsArgs) = .{
+    .prog = "zig build decl-deps --",
+    .description = "The file-scope dependency graph of a Zig file: one line per top-level declaration.",
+};
+
 pub fn main(init: std.process.Init) !void {
-    const gpa: Allocator = init.gpa;
+    // A one-shot tool: everything lives until exit, so everything comes from the process arena and goes with it.
+    // (It took `init.gpa` and freed two of its eight allocations - 12 leak reports at every exit.)
     const arena: Allocator = init.arena.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    const argv: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
-    if (argv.len < 2) {
-        std.debug.print("usage: decl_deps <file.zig>\n", .{});
-        return;
-    }
-    const path: []const u8 = argv[1];
+    const args: DepsArgs = cli.args(&init, DepsArgs, deps_cli);
+    const path: []const u8 = args.file;
 
-    const bytes: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
-    const source_z: [:0]u8 = try gpa.allocSentinel(u8, bytes.len, 0);
+    const bytes: []u8 = try Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited);
+    const source_z: [:0]u8 = try arena.allocSentinel(u8, bytes.len, 0);
     @memcpy(source_z, bytes);
 
-    var ast: Ast = try std.zig.Ast.parse(gpa, source_z, .{ .mode = .zig });
-    defer ast.deinit(gpa);
+    var ast: Ast = try std.zig.Ast.parse(arena, source_z, .{ .mode = .zig });
+    defer ast.deinit(arena);
     if (ast.errors.len > 0) {
         std.debug.print("PARSE_ERROR ({d})\n", .{ast.errors.len});
         return;
@@ -50,11 +60,11 @@ pub fn main(init: std.process.Init) !void {
     const roots: []const Index = ast.rootDecls();
     const n: usize = roots.len;
 
-    const names: [][]const u8 = try gpa.alloc([]const u8, n);
-    const ftok: []u32 = try gpa.alloc(u32, n);
-    const ltok: []u32 = try gpa.alloc(u32, n);
+    const names: [][]const u8 = try arena.alloc([]const u8, n);
+    const ftok: []u32 = try arena.alloc(u32, n);
+    const ltok: []u32 = try arena.alloc(u32, n);
 
-    var name2idx: std.StringHashMap(usize) = std.StringHashMap(usize).init(gpa);
+    var name2idx: StringHashMap(usize) = .init(arena);
     defer name2idx.deinit();
 
     for (roots, 0..) |node, idx| {
@@ -63,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
         if (declNameToken(&ast, node)) |t| {
             const nm: []const u8 = ast.tokenSlice(t);
             names[idx] = nm;
-            const gop: std.StringHashMap(usize).GetOrPutResult = try name2idx.getOrPut(nm);
+            const gop: StringHashMap(usize).GetOrPutResult = try name2idx.getOrPut(nm);
             if (!gop.found_existing) {
                 gop.value_ptr.* = idx;
             }
@@ -72,9 +82,9 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    const edges: []std.AutoHashMap(usize, void) = try gpa.alloc(std.AutoHashMap(usize, void), n);
+    const edges: []std.AutoHashMap(usize, void) = try arena.alloc(std.AutoHashMap(usize, void), n);
     for (0..n) |k| {
-        edges[k] = std.AutoHashMap(usize, void).init(gpa);
+        edges[k] = std.AutoHashMap(usize, void).init(arena);
     }
 
     // One pass over identifier nodes; attribute each to its enclosing root by
@@ -117,8 +127,8 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var out_buf: [1 << 16]u8 = undefined;
-    var out_writer: std.Io.File.Writer = std.Io.File.stdout().writer(io, &out_buf);
-    const out: *std.Io.Writer = &out_writer.interface;
+    var out_writer: Io.File.Writer = Io.File.stdout().writer(io, &out_buf);
+    const out: *Io.Writer = &out_writer.interface;
     for (0..n) |idx| {
         const fl: usize = ast.tokenLocation(0, ftok[idx]).line + 1;
         const ll: usize = ast.tokenLocation(0, ltok[idx]).line + 1;

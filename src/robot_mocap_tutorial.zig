@@ -23,6 +23,7 @@ const rmx = @import("robot_maximal.zig");
 const gym = @import("robot_gym.zig");
 const supertrack = @import("robot_supertrack.zig");
 const zn = @import("zn");
+const zrl = @import("zrl");
 
 const Allocator = std.mem.Allocator;
 const Vec = zm.Vec;
@@ -35,9 +36,15 @@ const length3 = zm.length3;
 const splat = zm.splat;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
 const pi = zm.pi;
+const sinTurns = zm.sinTurns;
 const float = zm.float;
 const expect = std.testing.expect;
 const expectError = std.testing.expectError;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
+const sortSlice = std.mem.sort;
 
 /// The humanoid the dance is retargeted onto.
 const flex2_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex2.xml");
@@ -46,10 +53,10 @@ const flex_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex.xml"
 
 /// Read a whole file into memory. The captures are a few megabytes at most, so there's no point
 /// streaming them.
-fn readFile(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
+fn readFile(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     errdefer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -71,7 +78,7 @@ const Robot = struct {
     fn load(r: *Robot, gpa: Allocator, xml: []const u8, weld_root: bool) !void {
         const free_joint: []const u8 = "<freejoint name=\"root\"/>";
         const cut: usize = if (weld_root) free_joint.len else 0;
-        const at: usize = if (weld_root) std.mem.indexOf(u8, xml, free_joint) orelse return error.NoFreeJoint else 0;
+        const at: usize = if (weld_root) indexOf(u8, xml, free_joint) orelse return error.NoFreeJoint else 0;
         r.text = try gpa.alloc(u8, xml.len - cut);
         errdefer gpa.free(r.text);
         @memcpy(r.text[0..at], xml[0..at]);
@@ -104,7 +111,7 @@ const Robot = struct {
 /// Find a capture joint by name, or null if the capture has no joint called that.
 fn jointNamed(capture: *const codecs.bvh.Data, name: []const u8) ?usize {
     for (capture.joints, 0..) |joint, i| {
-        if (std.mem.eql(u8, joint.name, name)) {
+        if (eql(u8, joint.name, name)) {
             return i;
         }
     }
@@ -112,8 +119,8 @@ fn jointNamed(capture: *const codecs.bvh.Data, name: []const u8) ?usize {
 }
 
 test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
 
     // The capture: a dance, and the performer standing in the pose the skeleton was built in.
     const dance_bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
@@ -150,9 +157,9 @@ test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
     const dt: f32 = clip.frame_time;
     try expect(root_len == 7 and @abs(dt - m.opt.timestep) < 1.0e-6);
 
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -189,8 +196,8 @@ test "tutorial 2: a dance, retargeted onto a humanoid and servoed along" {
 }
 
 test "tutorial 3: a capture - its skeleton, its channels, one frame's joints" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
     const bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
     defer gpa.free(bytes);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
@@ -220,7 +227,7 @@ test "tutorial 3: a capture - its skeleton, its channels, one frame's joints" {
             try expect(joint.channels.len == 0);
             continue;
         }
-        try expect(std.mem.eql(codecs.bvh.Channel, joint.channels, &expected));
+        try expect(eql(codecs.bvh.Channel, joint.channels, &expected));
         channels += joint.channels.len;
     }
     // A frame is every joint's channels, one after another.
@@ -245,8 +252,8 @@ test "tutorial 3: a capture - its skeleton, its channels, one frame's joints" {
 }
 
 test "tutorial 4: into the robot's frame - a rotation, never a swizzle" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
 
     // The capture's Y-up space becomes the robot's Z-up one by a quarter turn about X, and
     // centimetres become metres: a capture's "one metre up" is the robot's.
@@ -290,7 +297,7 @@ test "tutorial 4: into the robot's frame - a rotation, never a swizzle" {
 }
 
 test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, flex2_xml, false);
     defer r.deinit(gpa);
@@ -312,7 +319,7 @@ test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
 
     // A pose moved along a velocity for a time, and the velocity recovered from the two poses:
     // `integratePos` and `differentiatePos` are each other's inverse, quaternions included.
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     d.reset(m);
     for (d.vel, 0..) |*v, k| {
@@ -332,12 +339,12 @@ test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
     // centre of mass moved a millisecond along the same velocity.
     rbt.forward(m, &d);
     const hand: usize = for (r.imported.names, 0..) |name, b| {
-        if (std.mem.eql(u8, name, "hand_right")) {
+        if (eql(u8, name, "hand_right")) {
             break b;
         }
     } else return error.NoHand;
     const velocity: rbt.Motion = dance.bodyVelocity(m, &d, hand);
-    var later: rbt.Data = try rbt.Data.init(gpa, m);
+    var later: rbt.Data = try .init(gpa, m);
     defer later.deinit();
     @memcpy(later.pos, d.pos);
     rbt.integratePos(m, later.pos, d.vel, 1.0e-3);
@@ -350,7 +357,7 @@ test "tutorial 5: the robot's coordinates - joints, poses and velocities" {
 /// Find a robot body by name, or null if there isn't one.
 fn bodyNamed(names: []const []const u8, name: []const u8) ?usize {
     for (names, 0..) |candidate, b| {
-        if (std.mem.eql(u8, candidate, name)) {
+        if (eql(u8, candidate, name)) {
             return b;
         }
     }
@@ -376,8 +383,8 @@ fn peakAcceleration(gpa: Allocator, m: *const rbt.Model, clip: *const dance.Clip
 }
 
 test "tutorial 6: retargeting - one second of the dance, and what the IK achieved" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
     const dance_bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
     defer gpa.free(dance_bytes);
     const rest_bytes: []u8 = try readFile(gpa, io, "assets/Geno_stance.bvh");
@@ -402,7 +409,7 @@ test "tutorial 6: retargeting - one second of the dance, and what the IK achieve
     defer gpa.free(human_of_body);
     try rbt.resolveMatchTable(&rbt.lafan_to_humanoid, names, human_names, human_of_body);
     const thigh: usize = bodyNamed(names, "thigh_left") orelse return error.NoThigh;
-    try expect(std.mem.eql(u8, human_names[@intCast(human_of_body[thigh])], "LeftUpLeg"));
+    try expect(eql(u8, human_names[@intCast(human_of_body[thigh])], "LeftUpLeg"));
 
     // One second of the dance.
     var clip: dance.Clip = try dance.retargetClip(gpa, m, names, &capture, &rest, .{ .seconds = 1.0 });
@@ -410,7 +417,7 @@ test "tutorial 6: retargeting - one second of the dance, and what the IK achieve
 
     // Every frame: each matched body within centimetres of where the skeleton asked for it, and
     // every hinge inside its range.
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     const lowest: []f32 = try gpa.alloc(f32, clip.frame_count);
     defer gpa.free(lowest);
@@ -430,7 +437,7 @@ test "tutorial 6: retargeting - one second of the dance, and what the IK achieve
         lowest[f] = dance.lowestFootPoint(m, &d, names);
     }
     // Grounded: in the typical frame, the lowest point of the feet is on the floor.
-    std.mem.sort(f32, lowest, {}, std.sort.asc(f32));
+    sortSlice(f32, lowest, {}, std.sort.asc(f32));
     try expect(@abs(lowest[lowest.len / 2]) < 0.005);
 
     // Filtered: the capture's jitter shows as acceleration, and the 5 Hz low-pass removes it.
@@ -452,12 +459,12 @@ const arm_xml: []const u8 =
 ;
 
 test "tutorial 7a: a held target - the spring alone" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, arm_xml, false);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -486,19 +493,19 @@ test "tutorial 7a: a held target - the spring alone" {
 }
 
 test "tutorial 7b: a moving target followed exactly - and what passive forces do to it" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, flex2_xml, true);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
     const shoulder: usize = for (0..m.njnt) |j| {
-        if (std.mem.eql(u8, r.robot.joints[j].name, "shoulder1_right")) {
+        if (eql(u8, r.robot.joints[j].name, "shoulder1_right")) {
             break j;
         }
     } else return error.NoShoulder;
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     var tracker: dance.Tracker = try .init(gpa, m.nv);
     defer tracker.deinit();
@@ -515,7 +522,7 @@ test "tutorial 7b: a moving target followed exactly - and what passive forces do
     defer for (poses) |p| gpa.free(p);
     const angleAt = struct {
         fn at(t: f32) f32 {
-            return 0.5 * @sin(2.0 * pi * t);
+            return 0.5 * sinTurns(t);
         }
     }.at;
 
@@ -553,8 +560,8 @@ test "tutorial 7b: a moving target followed exactly - and what passive forces do
 }
 
 test "tutorial 8: what the floor must supply to perform a clip" {
-    const gpa: Allocator = std.testing.allocator;
-    const io: std.Io = std.testing.io;
+    const gpa: Allocator = testing_allocator;
+    const io: Io = std.testing.io;
     const dance_bytes: []u8 = try readFile(gpa, io, "examples/geno_dance/dance1_20s.bvh");
     defer gpa.free(dance_bytes);
     const rest_bytes: []u8 = try readFile(gpa, io, "assets/Geno_stance.bvh");
@@ -572,7 +579,7 @@ test "tutorial 8: what the floor must supply to perform a clip" {
     var clip: dance.Clip = try raw.smoothed(m, 5.0);
     defer clip.deinit();
 
-    var d: rbt.Data = try rbt.Data.init(gpa, m);
+    var d: rbt.Data = try .init(gpa, m);
     defer d.deinit();
     const v_next: []f32 = try gpa.alloc(f32, m.nv);
     defer gpa.free(v_next);
@@ -623,12 +630,12 @@ test "tutorial 8: what the floor must supply to perform a clip" {
 }
 
 test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and motors" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var r: Robot = undefined;
     try r.load(gpa, flex_xml, true);
     defer r.deinit(gpa);
     const m: *rbt.Model = r.model();
-    var rest: rbt.Data = try rbt.Data.init(gpa, m);
+    var rest: rbt.Data = try .init(gpa, m);
     defer rest.deinit();
     rest.reset(m);
     rbt.forward(m, &rest);
@@ -643,11 +650,11 @@ test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and moto
     defer ragdoll.deinit();
 
     // A target: the rest pose with the right elbow bent. The motors drive every joint toward it.
-    var target: rbt.Data = try rbt.Data.init(gpa, m);
+    var target: rbt.Data = try .init(gpa, m);
     defer target.deinit();
     target.reset(m);
     const elbow: usize = for (0..m.njnt) |j| {
-        if (std.mem.eql(u8, r.robot.joints[j].name, "elbow_right")) {
+        if (eql(u8, r.robot.joints[j].name, "elbow_right")) {
             break j;
         }
     } else return error.NoElbow;
@@ -672,7 +679,7 @@ test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and moto
     var ball: Robot = undefined;
     try ball.load(gpa, flex2_xml, true);
     defer ball.deinit(gpa);
-    var ball_rest: rbt.Data = try rbt.Data.init(gpa, ball.model());
+    var ball_rest: rbt.Data = try .init(gpa, ball.model());
     defer ball_rest.deinit();
     ball_rest.reset(ball.model());
     rbt.forward(ball.model(), &ball_rest);
@@ -682,7 +689,12 @@ test "tutorial 9: a ragdoll - the same humanoid as rigid bodies, joints and moto
 }
 
 test "tutorial 10a: the humanoid gym, and one iteration of PPO" {
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const env: *gym.HumanoidEnv = try .init(gpa, flex2_xml, .{});
     defer env.deinit();
     const observation: []f32 = try gpa.alloc(f32, env.observationSize());
@@ -709,8 +721,13 @@ test "tutorial 10a: the humanoid gym, and one iteration of PPO" {
 }
 
 test "tutorial 10b: SAC - act, remember, update" {
-    const gpa: Allocator = std.testing.allocator;
-    const agent: *gym.SacAgent = try .init(gpa, zn.cartpole_state_dim, zn.cartpole_action_dim, .{
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    const agent: *gym.SacAgent = try .init(gpa, zrl.cartpole_state_dim, zrl.cartpole_action_dim, .{
         .warmup = 64,
         .batch = 32,
     });
@@ -719,23 +736,23 @@ test "tutorial 10b: SAC - act, remember, update" {
     var next_obs: [4]f32 = undefined;
     var action: [1]f32 = undefined;
     var episode: u32 = 0;
-    var state = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
-    try zn.cartpoleObserve(f32, state, &obs);
+    var state = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
+    try zrl.cartpoleObserve(f32, state, &obs);
     const alpha_before: f64 = agent.temperature.alpha();
 
     // Every step: act with the stochastic policy, remember the transition, update from the replay.
     for (0..400) |_| {
         agent.act(&obs, &action, false);
-        const stepped = zn.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
-        try zn.cartpoleObserve(f32, stepped.state, &next_obs);
+        const stepped = zrl.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
+        try zrl.cartpoleObserve(f32, stepped.state, &next_obs);
         try agent.remember(&obs, &action, stepped.reward, &next_obs, stepped.failed);
         try agent.update();
         state = stepped.state;
         obs = next_obs;
         if (stepped.failed) {
             episode += 1;
-            state = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
-            try zn.cartpoleObserve(f32, state, &obs);
+            state = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode, .hold);
+            try zrl.cartpoleObserve(f32, state, &obs);
         }
     }
     // The squashed actions stay in [-1, 1]; after the warmup every step updated; and the
@@ -746,17 +763,22 @@ test "tutorial 10b: SAC - act, remember, update" {
 }
 
 test "tutorial 11: SuperTrack on the cartpole - supervised, with no reward and no critic" {
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const st: *supertrack.SuperTrack = try .init(gpa, .{});
     defer st.deinit();
     const envs: usize = 8;
-    var states: [envs]zn.CartpoleState(f32) = undefined;
+    var states: [envs]zrl.CartpoleState(f32) = undefined;
     var steps: [envs]u32 = @splat(0);
     var segments: [envs]u32 = undefined;
     var next_segment: u32 = 0;
     var episode: u32 = 0;
     for (0..envs) |e| {
-        states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+        states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
         episode += 1;
         segments[e] = next_segment;
         next_segment += 1;
@@ -776,10 +798,10 @@ test "tutorial 11: SuperTrack on the cartpole - supervised, with no reward and n
                 }
                 const force: f32 = st.act(supertrack.fromCartpole(states[e]), true);
                 st.remember(e, supertrack.fromCartpole(states[e]), force, segments[e]);
-                const stepped = zn.cartpoleContinuousStep(f32, states[e], force);
+                const stepped = zrl.cartpoleContinuousStep(f32, states[e], force);
                 steps[e] += 1;
                 if (stepped.failed or steps[e] >= supertrack.episode_cap) {
-                    states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+                    states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
                     episode += 1;
                     steps[e] = 0;
                     segments[e] = next_segment;

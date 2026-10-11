@@ -7,6 +7,8 @@
 const zm = @import("zm");
 const normalize = zm.normalize;
 const clamp01 = zm.clamp01;
+const Vec = zm.Vec;
+const Vec3 = zm.Vec3;
 const shader_externs = @import("skybox_fs_externs");
 
 pub const Io = shader_externs.IoT(void);
@@ -15,10 +17,10 @@ pub const Out = shader_externs.Out;
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
-    const d: zm.Vec3 = normalize(io_in.dir);
+    const d: Vec3 = normalize(io_in.dir);
     const t: f32 = clamp01(d[1] * 0.5 + 0.5);
-    const b: zm.Vec = io_in.sky_bottom;
-    const tp: zm.Vec = io_in.sky_top;
+    const b: Vec = io_in.sky_bottom;
+    const tp: Vec = io_in.sky_top;
     out.final_color = .{
         b[0] + (tp[0] - b[0]) * t,
         b[1] + (tp[1] - b[1]) * t,

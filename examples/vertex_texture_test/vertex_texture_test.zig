@@ -6,6 +6,7 @@
 //! bind-group layout -> `textureSampleLevel` in the VS.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -83,9 +84,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "vtx_test_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(data));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(data));
 
-    const warp: z.WgpuTexture = try z.WgpuTexture.createCheckerboard(
+    const warp: z.WgpuTexture = try .createCheckerboard(
         f.gpu.device,
         f.gpu.queue,
         gpa,

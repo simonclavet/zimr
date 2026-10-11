@@ -57,6 +57,10 @@ const bufPrint = std.fmt.bufPrint;
 const endsWith = std.mem.endsWith;
 const eql = std.mem.eql;
 const startsWith = std.mem.startsWith;
+const splitScalar = std.mem.splitScalar;
+const trim = std.mem.trim;
+const parseInt = std.fmt.parseInt;
+const indexOfScalar = std.mem.indexOfScalar;
 
 fn g() Handle {
     return js_global();
@@ -244,7 +248,7 @@ const Tally = struct {
 
 // Extract the bare verb name from a "name(args)" entry.
 fn bareName(entry: []const u8) []const u8 {
-    if (std.mem.indexOfScalar(u8, entry, '(')) |paren| {
+    if (indexOfScalar(u8, entry, '(')) |paren| {
         return entry[0..paren];
     }
     return entry;
@@ -273,15 +277,6 @@ fn webDir() []const u8 {
     return st.web_dir_buf[0..st.web_dir_len];
 }
 
-/// Call a numeric SUT export, or 0 when this build does not export it (an older wasm,
-/// or a non-runner build) - so every optional counter reads the same way.
-fn sutNumberOrZero(exports: Handle, id_h: Handle, comptime name: []const u8) f64 {
-    if (!hasExport(exports, name)) {
-        return 0;
-    }
-    return js_to_num(js_call2(host(), "sutCall", 7, id_h, s(name)));
-}
-
 fn hasExport(exports: Handle, name: []const u8) bool {
     const len: u32 = @trunc(js_get_num(exports, "length", 6));
     var i: u32 = 0;
@@ -294,6 +289,15 @@ fn hasExport(exports: Handle, name: []const u8) bool {
         }
     }
     return false;
+}
+
+/// Call a numeric SUT export, or 0 when this build does not export it (an older wasm,
+/// or a non-runner build) - so every optional counter reads the same way.
+fn sutNumberOrZero(exports: Handle, id_h: Handle, comptime name: []const u8) f64 {
+    if (!hasExport(exports, name)) {
+        return 0;
+    }
+    return js_to_num(js_call2(host(), "sutCall", 7, id_h, s(name)));
 }
 
 /// The runner's default cap on a page's call log (`webtests/runner.mjs`, `MAX_LOG`); past it, calls are
@@ -325,29 +329,13 @@ fn printFail(label: []const u8, reason: []const u8) void {
     eprint(line);
 }
 
-fn printPass(label: []const u8, byte_len: u32, init_calls: u32, total_calls: u32) void {
-    // per_frame to one decimal, via integer tenths (avoids std.fmt's float
-    // path, which trips a c2js BigInt/Number mix in computePow5).
-    const denom: u32 = if (st.frames == 0) 1 else st.frames;
-    const post: u32 = total_calls - init_calls;
-    const tenths: u32 = (post * 10 + denom / 2) / denom; // rounded
-    const whole: u32 = tenths / 10;
-    const frac: u32 = tenths % 10;
-    var buf: [256]u8 = undefined;
-    const line: []const u8 = bufPrint(
-        &buf,
-        "\u{2713} PASS  {s}  {d} bytes, init {d} calls, ~{d}.{d}/frame",
-        .{ label, byte_len, init_calls, whole, frac },
-    ) catch "\u{2713} PASS";
-    print(line);
-    printByType(label);
-    _ = printLiveHandles("    GPU handles (created-destroyed): ");
-}
-
 // Re-read the last SUT's log and print the top-10 by-type/frame line. We
 // re-fetch via the most-recent id tracked in last_id.
 // lint:off module-var: tracks the SUT whose log we classify
 var last_id: Handle = 0;
+
+// lint:off module-var: paired with last_id for the by-type slice start
+var last_init_calls: u32 = 0;
 
 fn printByType(_: []const u8) void {
     const log: Handle = js_call1(host(), "sutCallLog", 10, last_id);
@@ -408,6 +396,7 @@ const ResType = struct {
     create: []const u8,
     destroy: []const u8,
 };
+
 const res_types = [_]ResType{
     .{ .name = "texture", .create = "js_device_create_texture", .destroy = "js_texture_destroy" },
     .{ .name = "buffer", .create = "js_device_create_buffer", .destroy = "js_buffer_destroy" },
@@ -491,8 +480,25 @@ fn printLiveHandles(prefix: []const u8) [res_types.len]i32 {
     print(out[0..w]);
     return live;
 }
-// lint:off module-var: paired with last_id for the by-type slice start
-var last_init_calls: u32 = 0;
+
+fn printPass(label: []const u8, byte_len: u32, init_calls: u32, total_calls: u32) void {
+    // per_frame to one decimal, via integer tenths (avoids std.fmt's float
+    // path, which trips a c2js BigInt/Number mix in computePow5).
+    const denom: u32 = if (st.frames == 0) 1 else st.frames;
+    const post: u32 = total_calls - init_calls;
+    const tenths: u32 = (post * 10 + denom / 2) / denom; // rounded
+    const whole: u32 = tenths / 10;
+    const frac: u32 = tenths % 10;
+    var buf: [256]u8 = undefined;
+    const line: []const u8 = bufPrint(
+        &buf,
+        "\u{2713} PASS  {s}  {d} bytes, init {d} calls, ~{d}.{d}/frame",
+        .{ label, byte_len, init_calls, whole, frac },
+    ) catch "\u{2713} PASS";
+    print(line);
+    printByType(label);
+    _ = printLiveHandles("    GPU handles (created-destroyed): ");
+}
 
 // Override smokeOne's call path to record last_id/last_init_calls for the
 // by-type pass (kept simple: set them right before printPass).
@@ -541,6 +547,175 @@ fn assertMsg(id_h: Handle, out: []u8) ?[]const u8 {
         }
     }
     return null;
+}
+
+// ---- queue-timeline clobber detector --------------------------------------
+// WebGPU executes every queue.writeBuffer BEFORE the frame's encoder submit,
+// so the SAME (buffer, offset) written twice within one frame means only the
+// LAST value reaches ANY pass segment - including segments recorded before
+// the second write. That silently corrupts per-segment uniforms (the zimr517
+// "duplicated grid" ortho bug). Structural fixes ring-buffer such writes
+// (renderer_2d's ortho ring, flushBatch's vertex ring); this scan makes the
+// whole bug CLASS a smoke FAILURE instead of a device-only visual glitch.
+const max_frame_writes = 512;
+
+/// Parse the Nth (0-based) comma-separated numeric arg of "a, b, c, ...".
+fn nthArg(args: []const u8, n: u32) u64 {
+    var idx: u32 = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i <= args.len) : (i += 1) {
+        const at_end: bool = i == args.len;
+        const at_sep: bool = !at_end and args[i] == ',';
+        const at_close: bool = !at_end and args[i] == ')';
+        if (at_sep or at_close or at_end) {
+            if (idx == n) {
+                var seg: []const u8 = args[start..i];
+                while (seg.len > 0 and seg[0] == ' ') {
+                    seg = seg[1..];
+                }
+                return parseInt(u64, seg, 10) catch 0;
+            }
+            idx += 1;
+            start = i + 1;
+            if (at_close) {
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+const ClobberScan = struct {
+    // (buffer, offset) pairs seen in the current frame.
+    bufs: [max_frame_writes]u32 = @splat(0),
+    offs: [max_frame_writes]u64 = @splat(0),
+    n: u32 = 0,
+    violations: u32 = 0,
+    // First violation's details, for the failure message.
+    first_buf: u32 = 0,
+    first_off: u64 = 0,
+    first_frame: u32 = 0,
+
+    fn scanFrame(
+        self: *ClobberScan,
+        id_h: Handle,
+        start: u32,
+        end: u32,
+        frame: u32,
+    ) void {
+        self.n = 0;
+        const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
+        var i: u32 = start;
+        var buf: [512]u8 = undefined;
+        while (i < end) : (i += 1) {
+            const entry: []const u8 = jsStrInto(js_get_index(log, i), &buf);
+            // A SUBMISSION consumes every write before it: WebGPU orders `writeBuffer` and `submit` on one
+            // queue timeline, so "write, submit, write" to the same bytes is correct - each write reaches
+            // the work submitted after it (the PPO trainer's minibatches do exactly this). Only a repeat
+            // with NO submission between is dead: no GPU work could ever have seen the first write.
+            if (startsWith(u8, entry, "js_queue_submit(")) {
+                self.n = 0;
+                continue;
+            }
+            const prefix: []const u8 = "js_queue_write_buffer(";
+            if (!startsWith(u8, entry, prefix)) {
+                continue;
+            }
+            // "js_queue_write_buffer(queue, buffer, offset, ptr, len)"
+            const args: []const u8 = entry[prefix.len..];
+            const buffer: u32 = @intCast(nthArg(args, 1));
+            const offset: u64 = nthArg(args, 2);
+            var k: u32 = 0;
+            var dup: bool = false;
+            while (k < self.n) : (k += 1) {
+                if (self.bufs[k] == buffer and self.offs[k] == offset) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (dup) {
+                if (self.violations == 0) {
+                    self.first_buf = buffer;
+                    self.first_off = offset;
+                    self.first_frame = frame;
+                }
+                self.violations += 1;
+            } else if (self.n < max_frame_writes) {
+                self.bufs[self.n] = buffer;
+                self.offs[self.n] = offset;
+                self.n += 1;
+            }
+        }
+    }
+};
+
+/// Scan the call log for the host-appended marker "LABEL_MAP(handle, name)"
+/// and return the name for `want_handle` (empty if none). The host appends one
+/// such entry per labeled create.
+fn lookupLabel(id_h: Handle, want_handle: u32, out: []u8) []const u8 {
+    const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
+    const total: u32 = logLen(id_h);
+    var i: u32 = 0;
+    var buf: [512]u8 = undefined;
+    const prefix: []const u8 = "LABEL_MAP(";
+    while (i < total) : (i += 1) {
+        const entry: []const u8 = jsStrInto(js_get_index(log, i), &buf);
+        if (!startsWith(u8, entry, prefix)) {
+            continue;
+        }
+        const args: []const u8 = entry[prefix.len..];
+        const h: u32 = @intCast(nthArg(args, 0));
+        if (h != want_handle) {
+            continue;
+        }
+        // The name is the 2nd arg up to the closing ')'.
+        var start: usize = 0;
+        var commas: u32 = 0;
+        var j: usize = 0;
+        while (j < args.len) : (j += 1) {
+            if (args[j] == ',') {
+                commas += 1;
+                if (commas == 1) {
+                    start = j + 1;
+                }
+            } else if (args[j] == ')') {
+                break;
+            }
+        }
+        var name: []const u8 = args[start..];
+        // trim leading space + trailing ')'
+        while (name.len > 0 and name[0] == ' ') {
+            name = name[1..];
+        }
+        while (name.len > 0 and (name[name.len - 1] == ')' or name[name.len - 1] == ' ')) {
+            name = name[0 .. name.len - 1];
+        }
+        const n: usize = @min(name.len, out.len);
+        @memcpy(out[0..n], name[0..n]);
+        return out[0..n];
+    }
+    return out[0..0];
+}
+
+fn printClobberFail(label: []const u8, c: *const ClobberScan) void {
+    // The format string alone is ~300 bytes before a single arg is filled in.
+    var buf: [512]u8 = undefined;
+    var lbuf: [128]u8 = undefined;
+    // Name the offending buffer from its creation label (empty if it was
+    // created without one - which is itself the signal: add a `.label` at that
+    // createBuffer site so the next clobber names itself).
+    const owner: []const u8 = lookupLabel(last_id, c.first_buf, &lbuf);
+    const msg: []const u8 = bufPrint(
+        &buf,
+        "queue-timeline clobber: buffer {d} (label='{s}') offset {d} written 2+ times in " ++
+            "frame {d} ({d} total violations) — only the LAST write reaches the whole frame. " ++
+            "Fix: ring-buffer the writes (renderer_2d ortho ring / draw3d pbr3d ubo ring) OR " ++
+            "drop a dead init seed (a lazy-init'd subsystem seeding a UBO it also writes in " ++
+            "frame 0 clobbers itself).",
+        .{ c.first_buf, owner, c.first_off, c.first_frame, c.violations },
+    ) catch "queue-timeline clobber";
+    printFail(label, msg);
 }
 
 fn smoke(path: []const u8, label: []const u8) bool {
@@ -779,174 +954,6 @@ fn smoke(path: []const u8, label: []const u8) bool {
     return true;
 }
 
-// ---- queue-timeline clobber detector --------------------------------------
-// WebGPU executes every queue.writeBuffer BEFORE the frame's encoder submit,
-// so the SAME (buffer, offset) written twice within one frame means only the
-// LAST value reaches ANY pass segment - including segments recorded before
-// the second write. That silently corrupts per-segment uniforms (the zimr517
-// "duplicated grid" ortho bug). Structural fixes ring-buffer such writes
-// (renderer_2d's ortho ring, flushBatch's vertex ring); this scan makes the
-// whole bug CLASS a smoke FAILURE instead of a device-only visual glitch.
-const max_frame_writes = 512;
-const ClobberScan = struct {
-    // (buffer, offset) pairs seen in the current frame.
-    bufs: [max_frame_writes]u32 = @splat(0),
-    offs: [max_frame_writes]u64 = @splat(0),
-    n: u32 = 0,
-    violations: u32 = 0,
-    // First violation's details, for the failure message.
-    first_buf: u32 = 0,
-    first_off: u64 = 0,
-    first_frame: u32 = 0,
-
-    fn scanFrame(
-        self: *ClobberScan,
-        id_h: Handle,
-        start: u32,
-        end: u32,
-        frame: u32,
-    ) void {
-        self.n = 0;
-        const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
-        var i: u32 = start;
-        var buf: [512]u8 = undefined;
-        while (i < end) : (i += 1) {
-            const entry: []const u8 = jsStrInto(js_get_index(log, i), &buf);
-            // A SUBMISSION consumes every write before it: WebGPU orders `writeBuffer` and `submit` on one
-            // queue timeline, so "write, submit, write" to the same bytes is correct - each write reaches
-            // the work submitted after it (the PPO trainer's minibatches do exactly this). Only a repeat
-            // with NO submission between is dead: no GPU work could ever have seen the first write.
-            if (startsWith(u8, entry, "js_queue_submit(")) {
-                self.n = 0;
-                continue;
-            }
-            const prefix: []const u8 = "js_queue_write_buffer(";
-            if (!startsWith(u8, entry, prefix)) {
-                continue;
-            }
-            // "js_queue_write_buffer(queue, buffer, offset, ptr, len)"
-            const args: []const u8 = entry[prefix.len..];
-            const buffer: u32 = @intCast(nthArg(args, 1));
-            const offset: u64 = nthArg(args, 2);
-            var k: u32 = 0;
-            var dup: bool = false;
-            while (k < self.n) : (k += 1) {
-                if (self.bufs[k] == buffer and self.offs[k] == offset) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) {
-                if (self.violations == 0) {
-                    self.first_buf = buffer;
-                    self.first_off = offset;
-                    self.first_frame = frame;
-                }
-                self.violations += 1;
-            } else if (self.n < max_frame_writes) {
-                self.bufs[self.n] = buffer;
-                self.offs[self.n] = offset;
-                self.n += 1;
-            }
-        }
-    }
-};
-
-/// Parse the Nth (0-based) comma-separated numeric arg of "a, b, c, ...".
-fn nthArg(args: []const u8, n: u32) u64 {
-    var idx: u32 = 0;
-    var start: usize = 0;
-    var i: usize = 0;
-    while (i <= args.len) : (i += 1) {
-        const at_end: bool = i == args.len;
-        const at_sep: bool = !at_end and args[i] == ',';
-        const at_close: bool = !at_end and args[i] == ')';
-        if (at_sep or at_close or at_end) {
-            if (idx == n) {
-                var seg: []const u8 = args[start..i];
-                while (seg.len > 0 and seg[0] == ' ') {
-                    seg = seg[1..];
-                }
-                return std.fmt.parseInt(u64, seg, 10) catch 0;
-            }
-            idx += 1;
-            start = i + 1;
-            if (at_close) {
-                break;
-            }
-        }
-    }
-    return 0;
-}
-
-fn printClobberFail(label: []const u8, c: *const ClobberScan) void {
-    // The format string alone is ~300 bytes before a single arg is filled in.
-    var buf: [512]u8 = undefined;
-    var lbuf: [128]u8 = undefined;
-    // Name the offending buffer from its creation label (empty if it was
-    // created without one - which is itself the signal: add a `.label` at that
-    // createBuffer site so the next clobber names itself).
-    const owner: []const u8 = lookupLabel(last_id, c.first_buf, &lbuf);
-    const msg: []const u8 = bufPrint(
-        &buf,
-        "queue-timeline clobber: buffer {d} (label='{s}') offset {d} written 2+ times in " ++
-            "frame {d} ({d} total violations) — only the LAST write reaches the whole frame. " ++
-            "Fix: ring-buffer the writes (renderer_2d ortho ring / draw3d pbr3d ubo ring) OR " ++
-            "drop a dead init seed (a lazy-init'd subsystem seeding a UBO it also writes in " ++
-            "frame 0 clobbers itself).",
-        .{ c.first_buf, owner, c.first_off, c.first_frame, c.violations },
-    ) catch "queue-timeline clobber";
-    printFail(label, msg);
-}
-
-/// Scan the call log for the host-appended marker "LABEL_MAP(handle, name)"
-/// and return the name for `want_handle` (empty if none). The host appends one
-/// such entry per labeled create.
-fn lookupLabel(id_h: Handle, want_handle: u32, out: []u8) []const u8 {
-    const log: Handle = js_call1(host(), "sutCallLog", 10, id_h);
-    const total: u32 = logLen(id_h);
-    var i: u32 = 0;
-    var buf: [512]u8 = undefined;
-    const prefix: []const u8 = "LABEL_MAP(";
-    while (i < total) : (i += 1) {
-        const entry: []const u8 = jsStrInto(js_get_index(log, i), &buf);
-        if (!startsWith(u8, entry, prefix)) {
-            continue;
-        }
-        const args: []const u8 = entry[prefix.len..];
-        const h: u32 = @intCast(nthArg(args, 0));
-        if (h != want_handle) {
-            continue;
-        }
-        // The name is the 2nd arg up to the closing ')'.
-        var start: usize = 0;
-        var commas: u32 = 0;
-        var j: usize = 0;
-        while (j < args.len) : (j += 1) {
-            if (args[j] == ',') {
-                commas += 1;
-                if (commas == 1) {
-                    start = j + 1;
-                }
-            } else if (args[j] == ')') {
-                break;
-            }
-        }
-        var name: []const u8 = args[start..];
-        // trim leading space + trailing ')'
-        while (name.len > 0 and name[0] == ' ') {
-            name = name[1..];
-        }
-        while (name.len > 0 and (name[name.len - 1] == ')' or name[name.len - 1] == ' ')) {
-            name = name[0 .. name.len - 1];
-        }
-        const n: usize = @min(name.len, out.len);
-        @memcpy(out[0..n], name[0..n]);
-        return out[0..n];
-    }
-    return out[0..0];
-}
-
 // ---- argv parsing --------------------------------------------------------
 fn parseArgs() void {
     const argv: Handle = js_call0(host(), "argv", 4);
@@ -971,8 +978,8 @@ fn parseArgs() void {
             st.has_focus = true;
         } else if (startsWith(u8, a, "--frames=")) {
             const v: []const u8 = a["--frames=".len..];
-            st.frames = std.fmt.parseInt(u32, v, 10) catch 10;
-        } else if (std.mem.eql(u8, a, "--leak-trace")) {
+            st.frames = parseInt(u32, v, 10) catch 10;
+        } else if (eql(u8, a, "--leak-trace")) {
             st.leak_trace = true;
         }
     }
@@ -985,9 +992,9 @@ fn focusMatch(name: []const u8) bool {
         return true;
     }
     const patterns: []const u8 = st.focus_buf[0..st.focus_len];
-    var it = std.mem.splitScalar(u8, patterns, ',');
+    var it = splitScalar(u8, patterns, ',');
     while (it.next()) |pat_raw| {
-        const pat: []const u8 = std.mem.trim(u8, pat_raw, " ");
+        const pat: []const u8 = trim(u8, pat_raw, " ");
         if (pat.len == 0) {
             continue;
         }
@@ -1017,7 +1024,7 @@ export fn _start() void {
         var path_buf: [600]u8 = undefined;
         var label_buf: [256]u8 = undefined;
         var count: u32 = 0;
-        var it = std.mem.splitScalar(u8, listing, '\n');
+        var it = splitScalar(u8, listing, '\n');
         while (it.next()) |fname| {
             if (fname.len == 0) {
                 continue;

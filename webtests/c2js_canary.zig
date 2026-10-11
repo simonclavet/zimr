@@ -101,9 +101,15 @@ fn battery(s: u32) u32 {
     return acc;
 }
 
-/// The runtime path: every op lowers through the C backend and c2js.
+/// Where the runtime path puts its answer before returning it. Since Zig 0.17 the C backend reads and writes a global
+/// as `(*(&name))`, with no type at the access; c2js lowered that read to the slot's ADDRESS and dropped the store, so
+/// every bundle's module-level `var` went wrong while this canary - which had none - stayed green.
+var round_trip: u32 = 0; // lint:off module-var: the global is what this tests
+
+/// The runtime path: every op lowers through the C backend and c2js, and the answer goes through a global.
 pub export fn canary(s: u32) u32 {
-    return battery(s);
+    round_trip = battery(s);
+    return round_trip;
 }
 
 /// The oracle: the same computation folded by Zig's comptime evaluator, so it

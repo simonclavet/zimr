@@ -35,6 +35,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec = zm.Vec;
@@ -49,6 +51,7 @@ const vec = zm.vec;
 // ============================================================================
 // Cube geometry (reused from examples/cube_split.zig)
 // ============================================================================
+
 //
 // 24 vertices (4 per face) so each face gets clean UVs; 36 indices.
 // Interleaved position(vec3) + tex_coord(vec2) -> ONE vertex buffer,
@@ -107,6 +110,7 @@ const cube_indices = [_]u32{
 // ============================================================================
 // Combined cube schema (Ubo + Samplers -> two bind groups)
 // ============================================================================
+
 //
 // cube_split's VS UBO (mvp) lands at @group(0) and its FS texture0 at
 // @group(1) (the shader was built so the sampler sits in group 1 -
@@ -116,6 +120,7 @@ const cube_indices = [_]u32{
 // Renderer2D: the schema declares BOTH `Ubo` and `Samplers`, Resources
 // builds a bind-group-layout per group (bg_layouts[0]=UBO,
 // bg_layouts[1]=sampler), and we chain both into the pipeline layout.
+
 // ============================================================================
 // Persistent state
 // ============================================================================
@@ -149,10 +154,12 @@ const State = struct {
     index_buffer: z.wgpu.BufferHandle,
 };
 
-const Mat4 = [4]@Vector(4, f32);
+const Mat4 = [4]Vec;
+
 const mat4_bytes: u64 = @sizeOf(Mat4); // 64
 
 const lambert_vs_wgsl = @embedFile("lambert_vs.wgsl");
+
 const lambert_fs_wgsl = @embedFile("lambert_fs.wgsl");
 
 // ============================================================================
@@ -172,7 +179,7 @@ fn initState(
     f.gpu.depth_format = .depth24_plus;
 
     // ---- Checkerboard texture (stand-in for a real albedo map) ----
-    const lit_texture: z.WgpuTexture = try z.WgpuTexture.createCheckerboard(
+    const lit_texture: z.WgpuTexture = try .createCheckerboard(
         device,
         queue,
         gpa,
@@ -188,14 +195,14 @@ fn initState(
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "cube_vbo",
     });
-    z.wgpu.queueWriteBuffer(queue, vertex_buffer, 0, std.mem.sliceAsBytes(&cube_vertices));
+    z.wgpu.queueWriteBuffer(queue, vertex_buffer, 0, sliceAsBytes(&cube_vertices));
 
     const index_buffer: z.wgpu.BufferHandle = z.wgpu.createBuffer(device, .{
         .size = @sizeOf(@TypeOf(cube_indices)),
         .usage = .{ .index = true, .copy_dst = true },
         .label = "cube_ibo",
     });
-    z.wgpu.queueWriteBuffer(queue, index_buffer, 0, std.mem.sliceAsBytes(&cube_indices));
+    z.wgpu.queueWriteBuffer(queue, index_buffer, 0, sliceAsBytes(&cube_indices));
 
     // ---- 3D vertex-buffer layout: ONE interleaved buffer ----
     // slot 0, stride 20: position vec3 @0 (offset 0), tex_coord vec2 @1 (offset 12).
@@ -233,7 +240,7 @@ fn initState(
     });
     // White diffuse tint (col_diffuse stays constant this demo).
     const white: Vec = .{ 1, 1, 1, 1 };
-    z.wgpu.queueWriteBuffer(queue, col_diffuse_buffer, 0, std.mem.asBytes(&white));
+    z.wgpu.queueWriteBuffer(queue, col_diffuse_buffer, 0, asBytes(&white));
 
     // group 0 layout: VS uniforms - mvp@0, mat_model@1.
     const g0_layout_entries = [_]z.shader_introspect.BindGroupLayoutEntry{
@@ -305,7 +312,7 @@ fn initState(
     const fs_module: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, lambert_fs_wgsl, "lambert_fs");
 
     // ---- Render pipeline: depth-tested, back-face culled, 3D layout ----
-    const state_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const state_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less, // depth test (LESS)
@@ -347,6 +354,10 @@ fn initState(
     };
 }
 
+// ============================================================================
+// Frame
+// ============================================================================
+
 fn update(f: *z.Frame, s: *State) void {
     const gf: *z.GpuFrame = f.gpu;
     const Backend: type = z.WgpuBackend;
@@ -374,8 +385,8 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Push mvp + mat_model to their separate uniform buffers (the engine
     // emits one binding per uniform, so two buffers, not one struct).
-    z.wgpu.queueWriteBuffer(gf.queue, s.mvp_buffer, 0, std.mem.asBytes(&mvp));
-    z.wgpu.queueWriteBuffer(gf.queue, s.model_buffer, 0, std.mem.asBytes(&model));
+    z.wgpu.queueWriteBuffer(gf.queue, s.mvp_buffer, 0, asBytes(&mvp));
+    z.wgpu.queueWriteBuffer(gf.queue, s.model_buffer, 0, asBytes(&model));
 
     // ---- Frame ----
     const fctx = Backend.beginFrame(gf);
@@ -423,7 +434,3 @@ pub fn main() !void {
         .window = .{ .title = "zimr - WebGPU - Lambert-lit cube", .width = 800, .height = 600 },
     }, State, initState, update);
 }
-
-// ============================================================================
-// Frame
-// ============================================================================

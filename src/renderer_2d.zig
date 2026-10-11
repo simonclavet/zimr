@@ -37,6 +37,7 @@ const gpu = @import("gpu.zig");
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const zm = @import("zm");
 const assert = zm.assert;
 
@@ -55,6 +56,7 @@ const memwatch = @import("memwatch.zig");
 const shader = @import("shader_interface");
 const shader_runtime = @import("shader_runtime_wgpu.zig");
 const assertf = zm.assertf;
+const Vec = zm.Vec;
 
 /// Slots in the per-frame ortho ring - the max projection switches one
 /// frame can record (frame begin + one per beginTextureMode + one per
@@ -94,7 +96,7 @@ pub const EngineSchema = struct {
     /// Per-frame view-projection matrix.  Equivalent shape to
     /// `default_shapes_vs_io.Ubo` - extern struct with one mat4 field.
     pub const Ubo = struct {
-        view_projection: [4]@Vector(4, f32) = .{
+        view_projection: [4]Vec = .{
             .{ 1, 0, 0, 0 },
             .{ 0, 1, 0, 0 },
             .{ 0, 0, 1, 0 },
@@ -489,7 +491,7 @@ pub const Renderer2D = struct {
         const default_vbl: gpu.VertexBufferLayout = shapesVertexBufferLayout();
         const blend_modes = [_]wgpu.BlendMode{ .none, .alpha, .additive, .multiply, .premultiplied };
         for (blend_modes) |bm| {
-            const state: gpu.StateCombo = gpu.StateCombo.fromParts(
+            const state: gpu.StateCombo = .fromParts(
                 .triangle_list,
                 bm,
                 // When a depth target exists (a 3D scene opted in via
@@ -1162,7 +1164,7 @@ test "orthoTopLeft maps (width, height) to NDC (1, -1)" {
 }
 
 test "Renderer2D default-initialises to invalid handles" {
-    const r: Renderer2D = .{ .gpa = std.testing.allocator };
+    const r: Renderer2D = .{ .gpa = testing_allocator };
     try expectEqual(wgpu.ShaderModuleHandle.invalid, r.shapes_vs_module);
     try expectEqual(wgpu.ShaderModuleHandle.invalid, r.shapes_fs_module);
     try expectEqual(wgpu.RenderPipelineHandle.invalid, r.shapes_pipeline.gpu_handle);

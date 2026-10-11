@@ -19,6 +19,8 @@ const zn_mlp = @import("gpu/zn_mlp.zig");
 
 const Allocator = std.mem.Allocator;
 const expect = std.testing.expect;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
 const Resident = resident.Resident;
 
 test "robot_track_resident: the loop runs, the world model learns, and the simulation acts from the mirror" {
@@ -27,7 +29,12 @@ test "robot_track_resident: the loop runs, the world model learns, and the simul
     // the slots, the layouts - and that the loop does something: the world model's loss falls, and the
     // weights the simulation acts from follow the GPU's. How WELL it learns is a budget question, and
     // the step-for-step comparisons against the CPU reference answer the correctness one.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     var setup: kit_tests.FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -56,7 +63,7 @@ test "robot_track_resident: the loop runs, the world model learns, and the simul
     const before_policy: []f32 = try gpa.dupe(f32, learner.mirror);
     defer gpa.free(before_policy);
     for (0..12) |round| {
-        learner.round();
+        learner.simulateAndTrain();
         if (learner.world_updates > 0) {
             learner.kit.loss();
             const value: f32 = (host.readLatest(.loss) orelse return error.NoReadback)[0];
@@ -94,7 +101,7 @@ test "robot_track_resident: the mirror acts as the GPU's policy would" {
     // compare the actions. They are not bitwise equal and should not be expected to be: the mirror sums
     // the goal and state into one pre-activation as it goes, while the GPU does the two blocks one
     // after the other. Same arithmetic, different order.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var setup: kit_tests.FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -119,7 +126,7 @@ test "robot_track_resident: the mirror acts as the GPU's policy would" {
     // A few rounds, so the comparison is on TRAINED weights rather than the seeded ones - a policy of
     // near-zero outputs would agree with anything.
     for (0..4) |_| {
-        learner.round();
+        learner.simulateAndTrain();
     }
     const kit: *kit_mod.LatentKit(zn_mlp) = &learner.kit;
     const actions: usize = learner.raw.len;
@@ -162,7 +169,12 @@ test "robot_track_resident: the judge's actor - zero weights ARE the servo, trai
     // learner must give the servo's judgement to the bit. After a few rounds the policy has moved, and its judgement
     // must differ - the actor really acts. And judging borrows only the learner's scratch: its own fleet and its
     // random stream are byte-for-byte what they were, so a judged run trains exactly as an unjudged one.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     var setup: kit_tests.FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -197,7 +209,7 @@ test "robot_track_resident: the judge's actor - zero weights ARE the servo, trai
 
     // Trained weights: a different judgement - and the learner's own fleet and random stream untouched by judging.
     for (0..12) |_| {
-        learner.round();
+        learner.simulateAndTrain();
     }
     learner.syncMirror();
     const rng_before: @TypeOf(learner.rng) = learner.rng;
@@ -208,7 +220,7 @@ test "robot_track_resident: the judge's actor - zero weights ARE the servo, trai
     try expect(!std.meta.eql(acting, servo));
     try expect(std.meta.eql(learner.rng, rng_before));
     try expect(std.meta.eql(fleet.rng, fleet_rng_before));
-    try expect(std.mem.eql(u32, fleet.frame, frames_before));
+    try expect(eql(u32, fleet.frame, frames_before));
     report.print("\n  judge's actor after 12 rounds: MTTF {d:.2} s (servo {d:.2} s), reward {d:.3} (servo {d:.3})\n", .{
         acting.meanTimeToFailure(),
         servo.meanTimeToFailure(),

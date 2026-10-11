@@ -19,6 +19,7 @@ const float = zm.float;
 const rad_per_deg = zm.rad_per_deg;
 const Vec2 = zm.Vec2;
 const Color = zm.Color;
+const distance = zm.distance;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bufPrint = std.fmt.bufPrint;
 
@@ -75,6 +76,38 @@ fn selectedColor(s: *State) Color {
     return Color.lerp(grey, pure, s.sat);
 }
 
+fn drawWheel(f: *z.Frame, lay: Layout, value: f32) void {
+    const hub: Color = z.colorFromHSV(0, 0, value);
+    const step: f32 = tau / float(triangle_count);
+    var i: usize = 0;
+    while (i < triangle_count) : (i += 1) {
+        const a0: f32 = step * float(i);
+        const a1: f32 = step * float(i + 1);
+        const p0: Vec2 = .{ lay.center[0] + sinRad(a0) * lay.radius, lay.center[1] - cosRad(a0) * lay.radius };
+        const p1: Vec2 = .{ lay.center[0] + sinRad(a1) * lay.radius, lay.center[1] - cosRad(a1) * lay.radius };
+        const c0: Color = z.colorFromHSV(a0 / rad_per_deg, 1.0, 1.0);
+        const c1: Color = z.colorFromHSV(a1 / rad_per_deg, 1.0, 1.0);
+        f.gl.triangleGradient(p0, lay.center, p1, c0, hub, c1);
+    }
+}
+
+fn drawSwatch(f: *z.Frame, s: *State) void {
+    const color: Color = selectedColor(s);
+    f.gl.rect(.{ .x = 12, .y = 12, .width = 64, .height = 64 }, .{ .color = color });
+    f.gl.rect(
+        .{ .x = 12, .y = 12, .width = 64, .height = 64 },
+        .{ .color = Color.lerp(color, .{ .r = 0, .g = 0, .b = 0, .a = 255 }, 0.5), .outline = 1.0 },
+    );
+    var buf: [48]u8 = undefined;
+    const hex: []const u8 = bufPrint(
+        &buf,
+        "#{X:0>2}{X:0>2}{X:0>2}  ({d}, {d}, {d})",
+        .{ color.r, color.g, color.b, color.r, color.g, color.b },
+    ) catch "";
+    f.gl.text(.{ 12, 84 }, hex, .{ .size = 18, .color = common.palette.ink, .font = &s.font });
+    common.caption(f.gl, s.font, "colour wheel - drag the wheel to pick hue/saturation, the bar for value");
+}
+
 fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, common.palette.bg);
     const lay: Layout = layoutOf(f);
@@ -86,7 +119,7 @@ fn update(f: *z.Frame, s: *State) void {
             m[1] >= lay.sy - 18 and m[1] <= lay.sy + 18);
         if (on_slider) {
             s.mode = mode_slider;
-        } else if (zm.distance(m, lay.center) <= lay.radius + 12) {
+        } else if (distance(m, lay.center) <= lay.radius + 12) {
             s.mode = mode_wheel;
         } else {
             s.mode = mode_none;
@@ -126,38 +159,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     drawSwatch(f, s);
     z.endDrawing(f.gl);
-}
-
-fn drawWheel(f: *z.Frame, lay: Layout, value: f32) void {
-    const hub: Color = z.colorFromHSV(0, 0, value);
-    const step: f32 = tau / float(triangle_count);
-    var i: usize = 0;
-    while (i < triangle_count) : (i += 1) {
-        const a0: f32 = step * float(i);
-        const a1: f32 = step * float(i + 1);
-        const p0: Vec2 = .{ lay.center[0] + sinRad(a0) * lay.radius, lay.center[1] - cosRad(a0) * lay.radius };
-        const p1: Vec2 = .{ lay.center[0] + sinRad(a1) * lay.radius, lay.center[1] - cosRad(a1) * lay.radius };
-        const c0: Color = z.colorFromHSV(a0 / rad_per_deg, 1.0, 1.0);
-        const c1: Color = z.colorFromHSV(a1 / rad_per_deg, 1.0, 1.0);
-        f.gl.triangleGradient(p0, lay.center, p1, c0, hub, c1);
-    }
-}
-
-fn drawSwatch(f: *z.Frame, s: *State) void {
-    const color: Color = selectedColor(s);
-    f.gl.rect(.{ .x = 12, .y = 12, .width = 64, .height = 64 }, .{ .color = color });
-    f.gl.rect(
-        .{ .x = 12, .y = 12, .width = 64, .height = 64 },
-        .{ .color = Color.lerp(color, .{ .r = 0, .g = 0, .b = 0, .a = 255 }, 0.5), .outline = 1.0 },
-    );
-    var buf: [48]u8 = undefined;
-    const hex: []const u8 = bufPrint(
-        &buf,
-        "#{X:0>2}{X:0>2}{X:0>2}  ({d}, {d}, {d})",
-        .{ color.r, color.g, color.b, color.r, color.g, color.b },
-    ) catch "";
-    f.gl.text(.{ 12, 84 }, hex, .{ .size = 18, .color = common.palette.ink, .font = &s.font });
-    common.caption(f.gl, s.font, "colour wheel - drag the wheel to pick hue/saturation, the bar for value");
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

@@ -21,6 +21,7 @@
 
 const profiler = @import("profiler.zig");
 const std = @import("std");
+const sortSlice = std.mem.sort;
 const ui = @import("ui.zig");
 const zm = @import("zm");
 const float64 = zm.float64;
@@ -221,59 +222,6 @@ pub fn frameStrip(u: Ui) void {
     dl.addLine(.{ origin[0], by }, .{ origin[0] + w, by }, budget_line, 1);
 }
 
-/// Per-zone statistics across the rolling window, ranked by total time - the
-/// "what to optimise" report. Steadier than one frame, and it surfaces phases
-/// too thin to read in the flamegraph at coarse timer resolution.
-pub fn statsTable(u: Ui) void {
-    if (!profiler.enabled) {
-        return;
-    }
-    var buf: [128]profiler.SrcStat = undefined;
-    const n: usize = profiler.aggregate(&buf);
-    if (n == 0) {
-        u.text("no data yet", .{});
-        return;
-    }
-    std.mem.sort(profiler.SrcStat, buf[0..n], {}, statGreater);
-
-    if (u.beginTable("prof_stats", 5, .{})) {
-        u.tableSetupColumn("zone", .{});
-        u.tableSetupColumn("count", .{});
-        u.tableSetupColumn("total ms", .{});
-        u.tableSetupColumn("mean ms", .{});
-        u.tableSetupColumn("max ms", .{});
-        u.tableHeadersRow();
-        var r: usize = 0;
-        while (r < n) : (r += 1) {
-            const st: profiler.SrcStat = buf[r];
-            if (st.count == 0) {
-                break; // zero-count rows sorted to the bottom
-            }
-            const count_f: f64 = float64(st.count);
-            const mean: f64 = st.total_ms / count_f;
-            const name: []const u8 = profiler.srcOf(st.src).name;
-            u.tableNextRow();
-            _ = u.tableNextColumn();
-            if (u.selectable(name, st.src == selected_src, .{})) {
-                selected_src = if (st.src == selected_src) no_sel else st.src;
-            }
-            _ = u.tableNextColumn();
-            u.text("{d}", .{st.count});
-            _ = u.tableNextColumn();
-            u.text("{d:.3}", .{st.total_ms});
-            _ = u.tableNextColumn();
-            u.text("{d:.3}", .{mean});
-            _ = u.tableNextColumn();
-            u.text("{d:.3}", .{st.max_ms});
-        }
-        u.endTable();
-    }
-    if (selected_src != no_sel) {
-        u.separator();
-        zoneHistogram(u, selected_src);
-    }
-}
-
 /// Find-zone view: the per-frame distribution of one selected call site across the
 /// window. A tall single bar means the zone is steady; a long tail means it spikes.
 fn zoneHistogram(u: Ui, src: u32) void {
@@ -337,6 +285,59 @@ fn zoneHistogram(u: Ui, src: u32) void {
         const y_base: f32 = origin[1] + height - 2;
         const bw_draw: f32 = @max(bin_w - 1, 1);
         dl.addRectFilled(.{ .x = x0, .y = y_base - bar_h, .width = bw_draw, .height = bar_h }, hist_col);
+    }
+}
+
+/// Per-zone statistics across the rolling window, ranked by total time - the
+/// "what to optimise" report. Steadier than one frame, and it surfaces phases
+/// too thin to read in the flamegraph at coarse timer resolution.
+pub fn statsTable(u: Ui) void {
+    if (!profiler.enabled) {
+        return;
+    }
+    var buf: [128]profiler.SrcStat = undefined;
+    const n: usize = profiler.aggregate(&buf);
+    if (n == 0) {
+        u.text("no data yet", .{});
+        return;
+    }
+    sortSlice(profiler.SrcStat, buf[0..n], {}, statGreater);
+
+    if (u.beginTable("prof_stats", 5, .{})) {
+        u.tableSetupColumn("zone", .{});
+        u.tableSetupColumn("count", .{});
+        u.tableSetupColumn("total ms", .{});
+        u.tableSetupColumn("mean ms", .{});
+        u.tableSetupColumn("max ms", .{});
+        u.tableHeadersRow();
+        var r: usize = 0;
+        while (r < n) : (r += 1) {
+            const st: profiler.SrcStat = buf[r];
+            if (st.count == 0) {
+                break; // zero-count rows sorted to the bottom
+            }
+            const count_f: f64 = float64(st.count);
+            const mean: f64 = st.total_ms / count_f;
+            const name: []const u8 = profiler.srcOf(st.src).name;
+            u.tableNextRow();
+            _ = u.tableNextColumn();
+            if (u.selectable(name, st.src == selected_src, .{})) {
+                selected_src = if (st.src == selected_src) no_sel else st.src;
+            }
+            _ = u.tableNextColumn();
+            u.text("{d}", .{st.count});
+            _ = u.tableNextColumn();
+            u.text("{d:.3}", .{st.total_ms});
+            _ = u.tableNextColumn();
+            u.text("{d:.3}", .{mean});
+            _ = u.tableNextColumn();
+            u.text("{d:.3}", .{st.max_ms});
+        }
+        u.endTable();
+    }
+    if (selected_src != no_sel) {
+        u.separator();
+        zoneHistogram(u, selected_src);
     }
 }
 

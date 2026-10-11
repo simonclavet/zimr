@@ -55,7 +55,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
-    var cam: z.OrbitCamera = z.OrbitCamera.init(pointVec(0, 0, 0), 7.0);
+    var cam: z.OrbitCamera = .init(pointVec(0, 0, 0), 7.0);
     cam.yaw = 0.9;
     cam.pitch = 0.6;
     s.* = .{

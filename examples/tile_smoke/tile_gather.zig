@@ -24,6 +24,7 @@ const clamp = zm.clamp;
 const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const Random = std.Random;
 
 pub const num_particles: u32 = 1024;
 pub const domain: f32 = 512.0;
@@ -250,8 +251,8 @@ fn bruteCount(pos: []const [2]f32, i: usize, h: f32) u32 {
 }
 
 test "tile_gather: per-cell gather matches brute-force O(N^2)" {
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x7f1e);
-    const rnd: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0x7f1e);
+    const rnd: Random = prng.random();
     const N: u32 = num_particles;
     for (0..N) |i| {
         g.B.pos[i] = .{ rnd.float(f32) * domain, rnd.float(f32) * domain };

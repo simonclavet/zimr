@@ -39,6 +39,7 @@ const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const raster = @import("raster.zig");
 const raster_pixel = @import("raster_pixel.zig");
 const zm = @import("zm");
@@ -868,34 +869,6 @@ pub fn rasterizeWithRuntimeOpts(
     }
 }
 
-/// Pure-function sibling of `rasterizeTriangles`: same edge-function math,
-/// same perspective-correct interpolation, same `.less` depth semantics -
-/// but no `raster.Context` and no runtime codec fn pointers, so it runs AT
-/// COMPTIME.  This is what bakes a geometry demo's "third target" corner
-/// (the helmet side-by-side): the compiler itself rasterizes a proxy mesh
-/// through the same `shaderMain` pair the GPU and the live CPU half run.
-/// Depth is an internal z-buffer (always on - a comptime bake of solid
-/// geometry without depth would be draw-order soup).  Returns row-major
-/// RGBA8, `clear` as the background.  Runtime-callable too, which is how
-/// the differential test pins it to `rasterizeTriangles`.
-pub fn rasterizeToImage(
-    comptime VsModule: type,
-    comptime FsModule: type,
-    comptime width: usize,
-    comptime height: usize,
-    vertex_outs: []const VsModule.Out,
-    indices: []const u32,
-    base_fs_io: FsModule.Io,
-    comptime connect: fn (VsModule.Out, *FsModule.Io) void,
-    comptime opts: RasterizeOpts,
-    clear: [4]u8,
-) [width * height][4]u8 {
-    var img: [width * height][4]u8 = @splat(clear);
-    var depth: [width * height]f32 = @splat(1.0);
-    rasterizeToTarget(VsModule, FsModule, width, height, vertex_outs, indices, base_fs_io, connect, opts, &img, &depth);
-    return img;
-}
-
 /// The DRAW-CALL core under `rasterizeToImage`: rasterize one object into
 /// CALLER-OWNED color + depth buffers WITHOUT clearing them.  Clearing once
 /// and then calling this N times with different uniforms/geometry is a
@@ -1057,6 +1030,34 @@ pub fn rasterizeToTarget(
     }
 }
 
+/// Pure-function sibling of `rasterizeTriangles`: same edge-function math,
+/// same perspective-correct interpolation, same `.less` depth semantics -
+/// but no `raster.Context` and no runtime codec fn pointers, so it runs AT
+/// COMPTIME.  This is what bakes a geometry demo's "third target" corner
+/// (the helmet side-by-side): the compiler itself rasterizes a proxy mesh
+/// through the same `shaderMain` pair the GPU and the live CPU half run.
+/// Depth is an internal z-buffer (always on - a comptime bake of solid
+/// geometry without depth would be draw-order soup).  Returns row-major
+/// RGBA8, `clear` as the background.  Runtime-callable too, which is how
+/// the differential test pins it to `rasterizeTriangles`.
+pub fn rasterizeToImage(
+    comptime VsModule: type,
+    comptime FsModule: type,
+    comptime width: usize,
+    comptime height: usize,
+    vertex_outs: []const VsModule.Out,
+    indices: []const u32,
+    base_fs_io: FsModule.Io,
+    comptime connect: fn (VsModule.Out, *FsModule.Io) void,
+    comptime opts: RasterizeOpts,
+    clear: [4]u8,
+) [width * height][4]u8 {
+    var img: [width * height][4]u8 = @splat(clear);
+    var depth: [width * height]f32 = @splat(1.0);
+    rasterizeToTarget(VsModule, FsModule, width, height, vertex_outs, indices, base_fs_io, connect, opts, &img, &depth);
+    return img;
+}
+
 // ---- Near-plane clipping (Sutherland-Hodgman, single plane) --------
 //
 // Clips one triangle against the wgpu near plane `clip.z >= 0`, emitting
@@ -1216,7 +1217,7 @@ test "near-plane clip renders the in-front part of a straddling triangle" {
 }
 
 test "dispatchFragmentShader fills the framebuffer for a constant-color shader" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // A trivial shader inline: no inputs, no UBO; just emits red.
     const ConstantRed = struct {
@@ -1249,7 +1250,7 @@ test "dispatchFragmentShader fills the framebuffer for a constant-color shader" 
 }
 
 test "dispatchFragmentShader handles UV-based shader" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // Returns the UV as RGB.  Pixel at (0, 0) should be (0, 0, ...);
     // pixel at (W-1, H-1) should be near (1, 1, ...).
@@ -1292,7 +1293,7 @@ test "dispatchFragmentShader handles UV-based shader" {
 }
 
 test "rasterizeTriangles draws a clip-space full-screen triangle" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // A trivial VS that emits three vertices forming a triangle
     // covering most of the framebuffer.  No attributes input - the
@@ -1369,7 +1370,7 @@ test "rasterizeTriangles draws a clip-space full-screen triangle" {
 }
 
 test "rasterizeTriangles depth test: nearer fragment wins regardless of draw order" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const FlatVs = struct {
         pub const Io = struct {};
@@ -1446,7 +1447,7 @@ test "rasterizeTriangles depth test: nearer fragment wins regardless of draw ord
 }
 
 test "rasterizeTriangles: alpha-over blend composites src over dst" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const BlendVs = struct {
         pub const Out = struct {
@@ -1507,7 +1508,7 @@ test "rasterizeTriangles: alpha-over blend composites src over dst" {
 }
 
 test "rasterizeTriangles: scissor clips fragments to the scissor rect" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const ScVs = struct {
         pub const Out = struct {
@@ -1618,7 +1619,7 @@ test "raster.Context.ff_triangle routes immediate-mode triangles through rasteri
         }
     };
 
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: raster.Context = try .init(gpa, 16, 16);
     defer ctx.deinit(gpa);
     ctx.clearColor(.{ .r = 0, .g = 0, .b = 0, .a = 255 });
@@ -1665,7 +1666,7 @@ test "rasterizeWithRuntimeOpts maps runtime cull/blend flags to comptime opts" {
     const connect: fn (FlatVs.Out, *FlatFs.Io) void = Connector.connect;
     const base_io: FlatFs.Io = .{ .tint = .{ 0, 0, 0, 0 } };
     const idx: [3]u32 = .{ 0, 1, 2 };
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const center: usize = (8 * 16 + 8) * 4;
 
     // A clip-space CW triangle (reverse of the usual CCW full-screen
@@ -1731,7 +1732,7 @@ fn goldenChecksum(bytes: []const u8) u64 {
 }
 
 test "rasterizeToImage matches rasterizeTriangles pixel-for-pixel" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // Two overlapping triangles with distinct depths and interpolated
     // colors, drawn FAR-LAST so only a correct depth test produces the

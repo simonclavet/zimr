@@ -12,6 +12,7 @@ const float = zm.float;
 const radFromDeg = zm.radFromDeg;
 const int = zm.int;
 const Color = zm.Color;
+const Vec2 = zm.Vec2;
 const c = Color;
 const Rect = z.Rectangle;
 
@@ -74,7 +75,7 @@ fn drawTextureTiled(
     tex: z.WgpuTexture,
     source: Rect,
     dest: Rect,
-    origin: zm.Vec2,
+    origin: Vec2,
     rotation_rad: f32,
     scale: f32,
     tint: Color,
@@ -90,7 +91,15 @@ fn drawTextureTiled(
     const sh: f32 = source.height;
 
     const tile = struct {
-        fn draw(g: *z.WgpuGl, t: z.WgpuTexture, sr: Rect, dr: Rect, o: zm.Vec2, r: f32, ti: Color) void {
+        fn draw(
+            g: *z.WgpuGl,
+            t: z.WgpuTexture,
+            sr: Rect,
+            dr: Rect,
+            o: Vec2,
+            r: f32,
+            ti: Color,
+        ) void {
             g.texture(dr, t, .{
                 .source = sr,
                 .origin = o,

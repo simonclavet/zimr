@@ -13,6 +13,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("lit_shadow_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex attributes. position=0, normal=1 (this example bakes only
 /// position + normal into its interleaved buffer - no texcoord).
@@ -27,9 +29,9 @@ pub const Attributes = struct {
 /// normal into world space (the model's rotation; translation/uniform
 /// scale drop out on normalize) so animated objects shade correctly.
 pub const Ubo = struct {
-    mvp: [4]@Vector(4, f32),
-    light_vp: [4]@Vector(4, f32),
-    normal_matrix: [4]@Vector(4, f32),
+    mvp: [4]Vec,
+    light_vp: [4]Vec,
+    normal_matrix: [4]Vec,
 };
 
 /// Outputs to fragment. Aliases `Interp` from the common interface.

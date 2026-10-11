@@ -34,6 +34,14 @@ const maxInt = zm.maxInt;
 const Vec2 = zm.Vec2;
 const assert = zm.assert;
 const log = std.log;
+const Io = std.Io;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const testing_allocator = std.testing.allocator;
+const refAllDecls = std.testing.refAllDecls;
+const splitScalar = std.mem.splitScalar;
+const asBytes = std.mem.asBytes;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const zeroes = std.mem.zeroes;
 const math = zm;
 
 // =============================================================================
@@ -153,6 +161,7 @@ const world_stamp = struct {
 // =============================================================================
 // Archetype storage internals (formerly nested in `pub const ecs`)
 // =============================================================================
+
 // Inlined to file scope so `Node`, `CmdBuf`, `Registry`, etc. can be
 // referenced unqualified.  Most of this is private machinery used
 // by `Entities(T)`; the public surface is `Node`, `CmdBuf`, and
@@ -194,7 +203,7 @@ pub const meta = struct {
         }
         var Obj: type = T;
         var offset: comptime_int = 0;
-        var parts = std.mem.splitScalar(u8, path, '.');
+        var parts = splitScalar(u8, path, '.');
         while (parts.next()) |field| {
             offset += @offsetOf(Obj, field);
             Obj = @FieldType(Obj, field);
@@ -318,8 +327,8 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
 
                 pub fn format(
                     self: Optional,
-                    writer: *std.Io.Writer,
-                ) std.Io.Writer.Error!void {
+                    writer: *Io.Writer,
+                ) Io.Writer.Error!void {
                     if (self.generation == .invalid) {
                         return writer.writeAll(".none");
                     }
@@ -343,8 +352,8 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
 
             pub fn format(
                 self: Key,
-                writer: *std.Io.Writer,
-            ) std.Io.Writer.Error!void {
+                writer: *Io.Writer,
+            ) Io.Writer.Error!void {
                 try writer.print(
                     "0x{X}:{X}",
                     .{ self.index, @backingInt(self.generation) },
@@ -418,7 +427,11 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
         /// arrays are invalidated, so callers must hold none across this call). The free list is
         /// index-based and survives unchanged; `next_index`/`live`/`saturated` are untouched, so a
         /// subsequent `put` simply bump-allocates into the new tail. No-op if already large enough.
-        pub fn grow(self: *Self, gpa: Allocator, new_capacity: IndexInt) Allocator.Error!void {
+        pub fn grow(
+            self: *Self,
+            gpa: Allocator,
+            new_capacity: IndexInt,
+        ) Allocator.Error!void {
             if (new_capacity <= self.capacity) {
                 return;
             }
@@ -451,7 +464,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
 
                 // The slot's generation has already been bumped on remove;
                 // its current value is the next valid one to issue.
-                const slot = &self.slots[idx_int];
+                const slot: *Slot = &self.slots[idx_int];
                 slot.value = value;
                 self.live += 1;
                 return .{
@@ -468,7 +481,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
             const idx_int = self.next_index;
             self.next_index += 1;
 
-            const slot = &self.slots[idx_int];
+            const slot: *Slot = &self.slots[idx_int];
             // Pristine slots begin at `.invalid`; bump to the first valid
             // generation (1) when issuing the key.
             slot.generation = (Key.Generation.invalid).next();
@@ -496,7 +509,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
             if (idx_int >= self.next_index) {
                 return null;
             }
-            const slot = &self.slots[idx_int];
+            const slot: *Slot = &self.slots[idx_int];
             if (slot.generation != key.generation or key.generation == .invalid) {
                 return null;
             }
@@ -512,7 +525,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
             if (idx_int >= self.next_index) {
                 return;
             }
-            const slot = &self.slots[idx_int];
+            const slot: *Slot = &self.slots[idx_int];
             if (slot.generation != key.generation or key.generation == .invalid) {
                 return;
             }
@@ -547,7 +560,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
             if (idx_int >= self.next_index) {
                 return;
             }
-            const slot = &self.slots[idx_int];
+            const slot: *Slot = &self.slots[idx_int];
             if (slot.generation != key.generation or key.generation == .invalid) {
                 return;
             }
@@ -570,7 +583,7 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
 
             var i: IndexInt = 0;
             while (i < self.next_index) : (i += 1) {
-                const slot = &self.slots[i];
+                const slot: *Slot = &self.slots[i];
                 if (slot.generation == .invalid) {
                     continue; // retired
                 }
@@ -584,8 +597,8 @@ pub fn SlotMap(comptime Value: type, comptime options: SlotMapOptions) type {
 
 test "smoke" {
     const Map = SlotMap(u32, .{});
-    var m: Map = try .init(std.testing.allocator, 8);
-    defer m.deinit(std.testing.allocator);
+    var m: Map = try .init(testing_allocator, 8);
+    defer m.deinit(testing_allocator);
 
     const k0: Map.Key = try m.put(100);
     const k1: Map.Key = try m.put(200);
@@ -609,8 +622,8 @@ test "smoke" {
 
 test "overflow" {
     const Map = SlotMap(u32, .{});
-    var m: Map = try .init(std.testing.allocator, 2);
-    defer m.deinit(std.testing.allocator);
+    var m: Map = try .init(testing_allocator, 2);
+    defer m.deinit(testing_allocator);
 
     _ = try m.put(1);
     _ = try m.put(2);
@@ -619,8 +632,8 @@ test "overflow" {
 
 test "optional" {
     const Map = SlotMap(u32, .{});
-    var m: Map = try .init(std.testing.allocator, 4);
-    defer m.deinit(std.testing.allocator);
+    var m: Map = try .init(testing_allocator, 4);
+    defer m.deinit(testing_allocator);
 
     const k: Map.Key = try m.put(42);
     const opt: Map.Key.Optional = k.toOptional();
@@ -791,8 +804,8 @@ const FlagInt = u6;
 /// about which world or which type without going through that
 /// world's flag table.
 pub const CompFlag = enum(FlagInt) {
-    /// The maximum registered component flags (one per CompFlag value).
-    pub const max = maxInt(FlagInt);
+    /// How many component flags can be registered (one per CompFlag value).
+    pub const capacity = maxInt(FlagInt);
 
     /// A set of component flags.  Used to describe an archetype as
     /// a packed bitset over the world's component-flag space.
@@ -984,7 +997,7 @@ pub const viewLib = struct {
 pub const HandleTab = SlotMap(Entity.Location, .{ .Generation = u8 });
 
 // ============================================================================
-// Entity - persistent entity handle
+// Arches - archetype -> ChunkList map
 // ============================================================================
 
 /// Map from archetype (a bitset of CompFlags) to its `ChunkList`.
@@ -1015,7 +1028,7 @@ pub const Arches = struct {
             // wasm32 (usize = 32) and the typical 64-bit host.
             // Hashing bytes works for both shapes.
             pub fn hash(_: @This(), key: CompFlag.Set) u32 {
-                return @truncate(std.hash.Wyhash.hash(0, std.mem.asBytes(&key.bits)));
+                return @truncate(std.hash.Wyhash.hash(0, asBytes(&key.bits)));
             }
         },
         false,
@@ -1083,7 +1096,7 @@ pub const Arches = struct {
             if (self.map.count() > self.capacity) {
                 return error.EcsArchOverflow;
             }
-            gop.value_ptr.* = try .init(es, cpool, arch);
+            gop.value_ptr.* = try ChunkList.init(es, cpool, arch);
         }
         return gop.value_ptr;
     }
@@ -1162,6 +1175,10 @@ pub const Arches = struct {
         }
     };
 };
+
+// ============================================================================
+// Chunk - packed entity storage
+// ============================================================================
 
 /// A chunk of entity data where each entity has the same archetype. This type is mostly used
 /// internally, you should prefer the higher level API in most cases.
@@ -1574,6 +1591,10 @@ pub const Chunk = opaque {
     };
 };
 
+// ============================================================================
+// Subcmd - encoded subcommands for CmdBuf
+// ============================================================================
+
 /// An unencoded representation of command buffer commands.
 pub const Subcmd = union(enum) {
     /// Binds an existing entity.
@@ -1624,7 +1645,7 @@ pub const Subcmd = union(enum) {
                     inline .add_val, .ext_val => |add| {
                         @setEvalBranchQuota(2000);
                         const id: TypeId = @ptrFromInt(@as(usize, @intCast(self.nextArg().?)));
-                        const ptr = self.nextAny(id);
+                        const ptr: *const anyopaque = self.nextAny(id);
                         const any: Any = .{
                             .id = id,
                             .ptr = ptr,
@@ -1679,14 +1700,14 @@ pub const Subcmd = union(enum) {
         }
 
         pub inline fn nextTag(self: *@This()) ?Subcmd.TagEnum {
-            const tag = self.peekTag() orelse return null;
+            const tag: Subcmd.TagEnum = self.peekTag() orelse return null;
             self.tag_index += 1;
             return tag;
         }
 
         pub inline fn nextArg(self: *@This()) ?u64 {
             if (self.arg_index < self.cb.args.items.len) {
-                const arg = self.cb.args.items[self.arg_index];
+                const arg: u64 = self.cb.args.items[self.arg_index];
                 self.arg_index += 1;
                 return arg;
             } else {
@@ -1702,8 +1723,8 @@ pub const Subcmd = union(enum) {
                 id.alignment,
             );
 
-            // Get the pointer as a slice, this way we don't fail on zero sized types
-            const bytes = &self.cb.data.items[self.comp_bytes_index..][0..id.size];
+            // Take the bytes as a slice - not `&items[index]` - so a zero-sized type does not fail
+            const bytes: []u8 = self.cb.data.items[self.comp_bytes_index..][0..id.size];
 
             // Update the offset and return the pointer
             self.comp_bytes_index += id.size;
@@ -1770,8 +1791,12 @@ pub const Subcmd = union(enum) {
         };
         try Subcmd.encodeBind(cb, entity);
 
-        if (cb.tags.items.len >= cb.tags.capacity) return error.EcsCmdBufOverflow;
-        if (cb.args.items.len >= cb.args.capacity) return error.EcsCmdBufOverflow;
+        if (cb.tags.items.len >= cb.tags.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
+        if (cb.args.items.len >= cb.args.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
         cb.tags.appendAssumeCapacity(.remove);
         cb.args.appendAssumeCapacity(@intFromPtr(id));
     }
@@ -1794,7 +1819,9 @@ pub const Subcmd = union(enum) {
         };
         try Subcmd.encodeBind(cb, entity);
 
-        if (cb.tags.items.len >= cb.tags.capacity) return error.EcsCmdBufOverflow;
+        if (cb.tags.items.len >= cb.tags.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
         cb.tags.appendAssumeCapacity(.destroy);
     }
 
@@ -1804,7 +1831,9 @@ pub const Subcmd = union(enum) {
             cb.invalid = true;
         };
         if (cb.binding != entity.toOptional()) {
-            if (cb.tags.items.len >= cb.tags.capacity) return error.EcsCmdBufOverflow;
+            if (cb.tags.items.len >= cb.tags.capacity) {
+                return error.EcsCmdBufOverflow;
+            }
             cb.binding = entity.toOptional();
             cb.tags.appendAssumeCapacity(.bind_entity);
             cb.args.appendAssumeCapacity(@as(u64, @as(@Int(.unsigned, @bitSizeOf(Entity)), @bitCast(entity))));
@@ -1819,31 +1848,48 @@ pub const Subcmd = union(enum) {
         };
 
         const aligned = std.mem.alignForward(usize, cb.data.items.len, @alignOf(T));
-        if (cb.tags.items.len >= cb.tags.capacity) return error.EcsCmdBufOverflow;
-        if (aligned + @sizeOf(T) > cb.data.capacity) return error.EcsCmdBufOverflow;
+        if (cb.tags.items.len >= cb.tags.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
+        if (aligned + @sizeOf(T) > cb.data.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
         cb.tags.appendAssumeCapacity(tag);
         cb.args.appendAssumeCapacity(@intFromPtr(typeId(T)));
 
         cb.data.items.len = aligned;
-        const result = &cb.data.items.ptr[cb.data.items.len];
-        cb.data.appendSliceAssumeCapacity(std.mem.asBytes(&val));
+        const result: *u8 = &cb.data.items.ptr[cb.data.items.len];
+        cb.data.appendSliceAssumeCapacity(asBytes(&val));
         return @ptrCast(@alignCast(result));
     }
 
     /// Encode a pointer as part of a subcommand.
-    fn encodePtr(cb: *CmdBuf, tag: TagEnum, T: type, ptr: *const T) error{EcsCmdBufOverflow}!void {
+    fn encodePtr(
+        cb: *CmdBuf,
+        tag: TagEnum,
+        T: type,
+        ptr: *const T,
+    ) error{EcsCmdBufOverflow}!void {
         errdefer if (std.debug.runtime_safety) {
             cb.invalid = true;
         };
 
-        if (cb.tags.items.len >= cb.tags.capacity) return error.EcsCmdBufOverflow;
-        if (cb.args.items.len + 2 > cb.args.capacity) return error.EcsCmdBufOverflow;
+        if (cb.tags.items.len >= cb.tags.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
+        if (cb.args.items.len + 2 > cb.args.capacity) {
+            return error.EcsCmdBufOverflow;
+        }
 
         cb.tags.appendAssumeCapacity(tag);
         cb.args.appendAssumeCapacity(@intFromPtr(typeId(T)));
         cb.args.appendAssumeCapacity(@intFromPtr(ptr));
     }
 };
+
+// ============================================================================
+// Entity - persistent entity handle
+// ============================================================================
 
 /// A persistent handle to one entity in the world.
 /// Handles outlive destruction: an entity destroyed under one
@@ -1932,7 +1978,7 @@ pub const Entity = packed struct {
 
         /// Format as the underlying key (e.g. `[index:gen]` or
         /// `null`).
-        pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        pub fn format(self: @This(), writer: *Io.Writer) Io.Writer.Error!void {
             return self.key.format(writer);
         }
 
@@ -2764,7 +2810,7 @@ pub const Entity = packed struct {
     }
 
     /// Default formatting.
-    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *Io.Writer) Io.Writer.Error!void {
         return self.key.format(writer);
     }
 
@@ -2775,10 +2821,6 @@ pub const Entity = packed struct {
         return entity_loc.arch(es);
     }
 };
-
-// ============================================================================
-// Chunk - packed entity storage
-// ============================================================================
 
 // ============================================================================
 // ChunkList - list of chunks for one archetype
@@ -2846,7 +2888,7 @@ pub const ChunkList = struct {
         // reasons: (1) packing alignment-N values first wastes
         // less padding; (2) gives a deterministic layout
         // independent of registration order.
-        var flag_buf: [CompFlag.max]CompFlag = undefined;
+        var flag_buf: [CompFlag.capacity]CompFlag = undefined;
         const sorted: []CompFlag = sortCompsByAlignment(es, &flag_buf, arch);
 
         // Largest alignment of (any component, Entity.Index).
@@ -3095,7 +3137,7 @@ pub const ChunkList = struct {
     /// for consistent chunk cutoffs regardless of registration order.
     inline fn sortCompsByAlignment(
         es: *const Registry,
-        buf: *[CompFlag.max]CompFlag,
+        buf: *[CompFlag.capacity]CompFlag,
         set: CompFlag.Set,
     ) []CompFlag {
         var comps: ArrayList(CompFlag) = .initBuffer(buf);
@@ -3112,12 +3154,12 @@ pub const ChunkList = struct {
         // `Registry` and registers components against it, no
         // process-global state involved.
         var es: Registry = try .init(.{
-            .gpa = std.testing.allocator,
+            .gpa = testing_allocator,
             .cap = .{ .entities = 32, .arches = 4, .chunks = 8, .chunk = 4096 },
         });
-        defer es.deinit(std.testing.allocator);
+        defer es.deinit(testing_allocator);
 
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
 
         // Register various components with different alignments in an arbitrary order
         const a_1 = try es.registerComponent(ta, typeId(struct { x: u8 align(1) }));
@@ -3138,7 +3180,7 @@ pub const ChunkList = struct {
 
         // Test sorting all of them
         {
-            var flag_buf: [CompFlag.max]CompFlag = undefined;
+            var flag_buf: [CompFlag.capacity]CompFlag = undefined;
             const sorted: []CompFlag = sortCompsByAlignment(&es, &flag_buf, .initMany(&.{
                 e_0, c_1, d_0, e_1, a_1, b_1, b_0, a_0,
                 d_1, c_0, c_2, e_2, a_2, b_2, d_2,
@@ -3154,7 +3196,7 @@ pub const ChunkList = struct {
 
         // Test sorting a subset of them
         {
-            var flag_buf: [CompFlag.max]CompFlag = undefined;
+            var flag_buf: [CompFlag.capacity]CompFlag = undefined;
             const sorted: []CompFlag = sortCompsByAlignment(&es, &flag_buf, .initMany(&.{
                 e_0, d_0, c_0, a_0, b_0,
             }));
@@ -3217,7 +3259,7 @@ pub const ChunkPool = struct {
         assert(cap.chunks < math.maxInt(u32), @src());
         assert(cap.chunk >= TypeInfo.max_align.toByteUnits(), @src());
 
-        const alignment: Alignment = Alignment.fromByteUnits(cap.chunk);
+        const alignment: Alignment = .fromByteUnits(cap.chunk);
         const len: usize = @as(usize, cap.chunk) * @as(usize, cap.chunks);
         const buf: []u8 = (gpa.rawAlloc(
             len,
@@ -3293,14 +3335,6 @@ pub const ChunkPool = struct {
         return @fromBackingInt(@intCast(@shrExact(offset, @backingInt(self.size_align))));
     }
 };
-
-// ============================================================================
-// Arches - archetype -> ChunkList map
-// ============================================================================
-
-// ============================================================================
-// Subcmd - encoded subcommands for CmdBuf
-// ============================================================================
 
 // ============================================================================
 // CmdBuf - buffered ECS commands
@@ -3409,7 +3443,7 @@ pub const CmdBuf = struct {
     /// entity-handle cpool.  Errors on allocator OOM and on entity
     /// cpool exhaustion (the world's `cap.entities` ceiling).
     pub fn init(options: InitOptions) error{ OutOfMemory, EcsEntityOverflow }!@This() {
-        comptime assert(CompFlag.max < maxInt(u64), @src());
+        comptime assert(CompFlag.capacity < maxInt(u64), @src());
 
         // Subcmd encoder uses at most two tags per command.
         _ = Subcmd.rename_when_changing_encoding;
@@ -3772,7 +3806,7 @@ pub const CmdBuf = struct {
                 gpa: Allocator,
             ) error{ OutOfMemory, EcsCompTypeOverflow }!Delta {
                 var delta: Delta = .{};
-                var ops = self.iterator();
+                var ops: ArchChange.Iterator = self.iterator();
                 while (ops.next()) |op| {
                     try delta.updateImmediate(es, gpa, op);
                 }
@@ -3981,13 +4015,13 @@ pub const Registry = struct {
     /// `Registry` instances in the same process register
     /// independently - flag-7 in world A might be a different
     /// component than flag-7 in world B.
-    flag_table: std.AutoHashMapUnmanaged(TypeId, CompFlag) = .{},
+    flag_table: AutoHashMapUnmanaged(TypeId, CompFlag) = .{},
     /// Reverse lookup `CompFlag -> TypeId`.  Used by introspection
     /// / debug-print paths and by chunk-layout code that has a
     /// flag and needs to recover the type's size + alignment.
-    /// Sized to `CompFlag.max + 1` so flag values
+    /// Sized to `CompFlag.capacity + 1` so flag values
     /// `[0..reverse_len)` are valid indices.
-    reverse_table: [@as(usize, CompFlag.max) + 1]TypeId = @splat(undefined),
+    reverse_table: [@as(usize, CompFlag.capacity) + 1]TypeId = @splat(undefined),
     /// One past the highest CompFlag value handed out by
     /// `registerComponent`.  Slots `[0, reverse_len)` of
     /// `reverse_table` are the valid TypeIds.
@@ -4078,7 +4112,7 @@ pub const Registry = struct {
 
     /// Register a component type with this world if it isn't
     /// already.  Idempotent - re-registering returns the existing
-    /// flag.  Errors on flag exhaustion (more than `CompFlag.max`
+    /// flag.  Errors on flag exhaustion (more than `CompFlag.capacity`
     /// distinct components in this world) and on hashmap OOM.
     /// Reads/mutates `self.flag_table`, `self.reverse_table`,
     /// `self.reverse_len`.  Allocates from `gpa` for hashmap
@@ -4095,17 +4129,17 @@ pub const Registry = struct {
         std.log.scoped(.ecs).debug("register comp: {s}", .{id.name});
 
         // Single one-shot warning when we cross the halfway mark
-        // gives the user time to either grow CompFlag.max (need
+        // gives the user time to either grow CompFlag.capacity (need
         // wider FlagInt) or audit which components they actually
         // need before hitting the hard ceiling.
-        if (self.reverse_len == CompFlag.max / 2) {
+        if (self.reverse_len == CompFlag.capacity / 2) {
             std.log.warn(
                 "{} component types registered, you're at 50% the fatal capacity!",
                 .{self.reverse_len},
             );
         }
 
-        if (self.reverse_len >= CompFlag.max) {
+        if (self.reverse_len >= CompFlag.capacity) {
             return error.EcsCompTypeOverflow;
         }
 
@@ -4218,7 +4252,7 @@ pub const Registry = struct {
     pub fn getEntity(es: *const Registry, from_comp: anytype) Entity {
         const T: type = @typeInfo(@TypeOf(from_comp)).pointer.child;
         comptime assert(@sizeOf(T) != 0, @src());
-        return getEntityFromAny(es, .init(T, from_comp));
+        return getEntityFromAny(es, Any.init(T, from_comp));
     }
 
     /// `getEntity` for runtime-typed component pointers.
@@ -4245,7 +4279,7 @@ pub const Registry = struct {
     ) ?*Result {
         const T: type = @typeInfo(@TypeOf(from)).pointer.child;
         comptime assert(@sizeOf(T) != 0, @src()); // see `getEntity`
-        const slice: ?[]u8 = getCompFromAny(es, .init(T, from), typeId(Result));
+        const slice: ?[]u8 = getCompFromAny(es, Any.init(T, from), typeId(Result));
         return @ptrCast(@alignCast(slice));
     }
 
@@ -4812,7 +4846,11 @@ pub fn Handle(comptime T_primary: type) type {
         /// dispatched: if `T` is the primary type, takes the pool
         /// fast path; otherwise goes through the archetype lookup.
         /// Stale handles return null on either path.
-        pub fn get(self: @This(), world: *const Entities(T_primary), comptime T: type) ?*T {
+        pub fn get(
+            self: @This(),
+            world: *const Entities(T_primary),
+            comptime T: type,
+        ) ?*T {
             if (T == T_primary) {
                 return self.deref(world);
             }
@@ -5003,7 +5041,7 @@ pub fn Entities(comptime T_primary: type) type {
             // Allocate the pool-side slices.
             const data = try gpa.alloc(T_primary, options.capacity);
             errdefer gpa.free(data);
-            @memset(std.mem.sliceAsBytes(data), 0);
+            @memset(sliceAsBytes(data), 0);
 
             const cycle = try gpa.alloc(u8, options.capacity);
             errdefer gpa.free(cycle);
@@ -5037,7 +5075,7 @@ pub fn Entities(comptime T_primary: type) type {
             // remain identical.  `Handle(T_primary).nil` still carries cycle 0
             // so deref of nil correctly fails against the bumped
             // slot.
-            const anchor: Entity = try Entity.reserveImmediateOrErr(&ecs_world);
+            const anchor: Entity = try .reserveImmediateOrErr(&ecs_world);
             assert(anchor.key.index == 0, @src());
             cycle[0] = @backingInt(anchor.key.generation);
             assert(cycle[0] == 1, @src());
@@ -5077,7 +5115,7 @@ pub fn Entities(comptime T_primary: type) type {
             }
             const new_data: []T_primary = try gpa.alloc(T_primary, new_capacity);
             @memcpy(new_data[0..old_cap], self.data);
-            @memset(std.mem.sliceAsBytes(new_data[old_cap..]), 0);
+            @memset(sliceAsBytes(new_data[old_cap..]), 0);
             gpa.free(self.data);
             self.data = new_data;
 
@@ -5133,7 +5171,7 @@ pub fn Entities(comptime T_primary: type) type {
             const cyc: u8 = self.cycle[idx];
 
             // Zero the slot bytes (donor-pool convention).
-            @memset(std.mem.asBytes(&self.data[idx]), 0);
+            @memset(asBytes(&self.data[idx]), 0);
 
             // ECS-side: reserve the matching slot.  On failure
             // release the pool slot to keep the two sides symmetric.
@@ -5186,17 +5224,25 @@ pub fn Entities(comptime T_primary: type) type {
             // path.  Everything else coerces to `T_primary` and takes
             // the fast path.
             const wants_composite: bool = comptime b: {
-                if (T_arg == T_primary) break :b false;
+                if (T_arg == T_primary) {
+                    break :b false;
+                }
                 const ti = @typeInfo(T_arg);
-                if (ti != .@"struct") break :b false;
-                if (@hasField(T_arg, "primary")) break :b true;
+                if (ti != .@"struct") {
+                    break :b false;
+                }
+                if (@hasField(T_arg, "primary")) {
+                    break :b true;
+                }
                 // Anon struct without `.primary`.  Empty-primary
                 // worlds use this shape to attach secondaries without
                 // a primary value (the primary is zero-sized; we
                 // synthesize the default).  Non-empty-primary worlds
                 // coerce the anon struct to `T_primary` on the fast
                 // path instead.
-                if (@sizeOf(T_primary) == 0) break :b true;
+                if (@sizeOf(T_primary) == 0) {
+                    break :b true;
+                }
                 break :b false;
             };
 
@@ -5227,13 +5273,17 @@ pub fn Entities(comptime T_primary: type) type {
                 // compile time.
                 const arg_covers_all: bool = comptime cov: {
                     for (@typeInfo(T_primary).@"struct".field_names) |pf_name| {
-                        if (!@hasField(T_arg, pf_name)) break :cov false;
+                        if (!@hasField(T_arg, pf_name)) {
+                            break :cov false;
+                        }
                     }
                     break :cov true;
                 };
                 const all_have_defaults: bool = comptime ad: {
                     for (@typeInfo(T_primary).@"struct".field_attrs) |pf_attr| {
-                        if (pf_attr.default_value_ptr == null) break :ad false;
+                        if (pf_attr.default_value_ptr == null) {
+                            break :ad false;
+                        }
                     }
                     break :ad true;
                 };
@@ -5261,7 +5311,7 @@ pub fn Entities(comptime T_primary: type) type {
         /// when `arg` is a `T_primary` value (typed or coercible from
         /// an anon struct literal).
         fn spawnPrimary(self: *Self, primary: T_primary) SpawnError!Handle(T_primary) {
-            const h = self.alloc();
+            const h: Handle(T_primary) = self.alloc();
             if (h.isNil()) {
                 // Distinguish pool exhaustion from ECS overflow by
                 // re-trying the ECS reserve we know just failed --
@@ -5282,7 +5332,11 @@ pub fn Entities(comptime T_primary: type) type {
         /// fields as secondary components.  Field names in the
         /// composite are decorative -- field TYPES drive the ECS
         /// component registration.
-        fn spawnComposite(self: *Self, gpa: Allocator, composite: anytype) !Handle(T_primary) {
+        fn spawnComposite(
+            self: *Self,
+            gpa: Allocator,
+            composite: anytype,
+        ) !Handle(T_primary) {
             const T_composite: type = @TypeOf(composite);
             const ti = @typeInfo(T_composite);
             if (ti != .@"struct") {
@@ -5295,7 +5349,7 @@ pub fn Entities(comptime T_primary: type) type {
             // synthesize the default value.
             const primary_is_zero_sized: bool = @sizeOf(T_primary) == 0;
             const primary_val: T_primary = if (@hasField(T_composite, "primary")) b: {
-                const v = @field(composite, "primary");
+                const v: @FieldType(T_composite, "primary") = @field(composite, "primary");
                 if (@TypeOf(v) != T_primary) {
                     @compileError("spawn `.primary` field type mismatch: expected " ++
                         @typeName(T_primary) ++ ", got " ++ @typeName(@TypeOf(v)));
@@ -5421,8 +5475,10 @@ pub fn Entities(comptime T_primary: type) type {
             const sec_start_with_handle: usize = comptime if (wants_handle) 2 else 1;
 
             const wants_primary: bool = comptime b: {
-                if (params.len <= sec_start_with_handle) break :b false;
-                const P = params[sec_start_with_handle];
+                if (params.len <= sec_start_with_handle) {
+                    break :b false;
+                }
+                const P: type = params[sec_start_with_handle];
                 break :b (P == *T_primary) or (P == *const T_primary);
             };
             const sec_start: usize = comptime sec_start_with_handle + @intFromBool(wants_primary);
@@ -5484,14 +5540,14 @@ pub fn Entities(comptime T_primary: type) type {
                     }
                     if (comptime wants_handle and wants_primary) {
                         const h: Handle(T_primary) = .pack(@intCast(i), self.cycle[i]);
-                        const PrimaryParam = params[2];
+                        const PrimaryParam: type = params[2];
                         const primary_ptr: PrimaryParam = &self.data[i];
                         cb(ctx, h, primary_ptr);
                     } else if (comptime wants_handle) {
                         const h: Handle(T_primary) = .pack(@intCast(i), self.cycle[i]);
                         cb(ctx, h);
                     } else {
-                        const PrimaryParam = params[1];
+                        const PrimaryParam: type = params[1];
                         const primary_ptr: PrimaryParam = &self.data[i];
                         cb(ctx, primary_ptr);
                     }
@@ -5544,7 +5600,7 @@ pub fn Entities(comptime T_primary: type) type {
                         args[1] = h;
                     }
                     if (comptime wants_primary) {
-                        const PrimaryParam = params[sec_start_with_handle];
+                        const PrimaryParam: type = params[sec_start_with_handle];
                         const primary_ptr: PrimaryParam = &self.data[ecs_e.key.index];
                         args[sec_start_with_handle] = primary_ptr;
                     }
@@ -5979,7 +6035,9 @@ test "Entities: forEach pool-scan with handle + primary (no secondaries)" {
         fn cb(c: *Ctx, h: Handle(Primary), p: *Primary) void {
             c.count += 1;
             c.sum += p.v;
-            if (h.isNil()) c.any_handle_nil = true;
+            if (h.isNil()) {
+                c.any_handle_nil = true;
+            }
         }
     }.cb;
     w.forEach(visit, &ctx);
@@ -6086,6 +6144,7 @@ test "Entities: cross-world handles get distinct debug stamps" {
 // ============================================================================
 // Registry stamp (formerly src/world_stamp.zig)
 // ============================================================================
+
 // Per-world debug stamps catch cross-world handle misuse in debug
 // builds.  Wrapped in `const world_stamp = struct` so callers (the
 // inlined pool and ECS code below) see the same `world_stamp.Stamp`,
@@ -6094,6 +6153,7 @@ test "Entities: cross-world handles get distinct debug stamps" {
 // ============================================================================
 // ECS internals (formerly src/zig)
 // ============================================================================
+
 // Archetype-based ECS storage that backs `Entities`'s secondary
 // components.  Wrapped in `const ecs = struct` so the existing
 // `Registry`, `Entity`, `Node`, etc. references inside
@@ -6141,7 +6201,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         /// separate component) reduces fragmentation: every
         /// node lives in the same archetype regardless of
         /// whether names are populated.
-        name: node_options.Name = std.mem.zeroes(node_options.Name),
+        name: node_options.Name = zeroes(node_options.Name),
         /// Parent in the tree.  `.none` for roots.
         parent: Entity.Optional = .none,
         /// First (leftmost) child, walked via `next_sib`.
@@ -6196,7 +6256,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                 options: SiblingIterator.Options,
             ) usize {
                 var count: usize = 0;
-                var iter = self.childIterator(options);
+                var iter: SiblingIterator = self.childIterator(options);
                 while (iter.next(es)) |_| {
                     count += 1;
                 }
@@ -6212,7 +6272,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                 n: usize,
                 options: SiblingIterator.Options,
             ) bool {
-                var iter = self.childIterator(options);
+                var iter: SiblingIterator = self.childIterator(options);
                 for (0..n) |_| {
                     if (iter.next(es) == null) {
                         return true;
@@ -6228,7 +6288,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                 n: usize,
                 options: SiblingIterator.Options,
             ) bool {
-                var iter = self.childIterator(options);
+                var iter: SiblingIterator = self.childIterator(options);
                 for (0..n) |_| {
                     if (iter.next(es) == null) {
                         return true;
@@ -6292,7 +6352,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         /// Format as a debug-readable struct literal.  Skips
         /// `name` because its type is user-pickable and may
         /// not implement format itself.
-        pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        pub fn format(self: @This(), writer: *Io.Writer) Io.Writer.Error!void {
             // The body enumerates fields by hand - keep it in
             // sync with the actual field count.
             comptime assert(std.meta.fieldNames(@This()).len == 6, @src());
@@ -6332,7 +6392,11 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         /// those three hold, we also assert the symmetrical
         /// expectations (no next_sib, no first_child) - those
         /// are enforced by every mutation path.
-        pub fn uninitialized(self: *const @This(), es: *const Registry, tr: *const Tree) bool {
+        pub fn uninitialized(
+            self: *const @This(),
+            es: *const Registry,
+            tr: *const Tree,
+        ) bool {
             const entity: Entity = es.getEntity(self);
             const looks_uninit: bool =
                 self.parent.unwrap() == null and
@@ -6375,7 +6439,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                 break :b parent.active;
             };
 
-            var nodes = self.preOrderIterator(es, .{});
+            var nodes: PreOrderIterator = self.preOrderIterator(es, .{});
             while (nodes.next(es)) |curr| {
                 const new_active: bool = curr.node.active_self and
                     curr.node.getParent(es).?.active;
@@ -6420,7 +6484,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         /// traversal - "find this child's enclosing Camera",
         /// "find the layout root", etc.
         pub fn getInAncestor(self: *const @This(), es: *const Registry, T: type) ?*T {
-            var ancestors = self.ancestorIterator();
+            var ancestors: AncestorIterator = self.ancestorIterator();
             while (ancestors.next(es)) |ancestor| {
                 if (ancestor.entity.get(es, T)) |result| {
                     return result;
@@ -6433,7 +6497,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         /// `getInAncestor() != null` only marginally - both
         /// short-circuit on the first hit.
         pub fn ancestorHas(self: *const @This(), es: *const Registry, T: type) bool {
-            var ancestors = self.ancestorIterator();
+            var ancestors: AncestorIterator = self.ancestorIterator();
             while (ancestors.next(es)) |ancestor| {
                 if (ancestor.entity.has(es, T)) {
                     return true;
@@ -6445,7 +6509,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
         /// Like `getInAncestor` but materialises a View
         /// (multi-component struct) on the matching ancestor.
         pub fn viewInAncestor(self: *const @This(), es: *const Registry, T: type) ?T {
-            var ancestors = self.ancestorIterator();
+            var ancestors: AncestorIterator = self.ancestorIterator();
             while (ancestors.next(es)) |ancestor| {
                 if (ancestor.entity.view(es, T)) |result| {
                     return result;
@@ -6653,11 +6717,11 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
             // Phase 1: snapshot the child iterator + pluck
             // self, all under the pointer lock (no destroys
             // yet, so unstable_ptr is still valid).
-            var children = b: {
+            var children: PostOrderIterator = b: {
                 defer pointer_lock.check(es.pointer_generation);
                 const self = unstable_ptr;
 
-                const iter = self.postOrderIterator(es, .{});
+                const iter: PostOrderIterator = self.postOrderIterator(es, .{});
                 self.pluckImmediate(es, tr);
                 self.first_child = .none;
 
@@ -6719,7 +6783,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
             options: SiblingIterator.Options,
         ) usize {
             var count: usize = 0;
-            var iter = self.childIterator(options);
+            var iter: SiblingIterator = self.childIterator(options);
             while (iter.next(es)) |_| {
                 count += 1;
             }
@@ -6735,7 +6799,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
             n: usize,
             options: SiblingIterator.Options,
         ) bool {
-            var iter = self.childIterator(options);
+            var iter: SiblingIterator = self.childIterator(options);
             for (0..n) |_| {
                 if (iter.next(es) == null) {
                     return true;
@@ -6752,7 +6816,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
             n: usize,
             options: SiblingIterator.Options,
         ) bool {
-            var iter = self.childIterator(options);
+            var iter: SiblingIterator = self.childIterator(options);
             for (0..n) |_| {
                 if (iter.next(es) == null) {
                     return true;
@@ -6927,7 +6991,11 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
             /// dirty-subtree-skip optimization.  Asserts
             /// `subtree` lives inside this iterator's root
             /// passing an outside node would loop forever.
-            pub fn skipSubtree(self: *@This(), es: *const Registry, subtree: *const Self) void {
+            pub fn skipSubtree(
+                self: *@This(),
+                es: *const Registry,
+                subtree: *const Self,
+            ) void {
                 if (std.debug.runtime_safety) {
                     if (self.root.unwrap()) |start| {
                         assert(start.get(es, Self).?.isAncestorOf(es, subtree), @src());
@@ -7017,7 +7085,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                 const post: View = post_entity.view(es, View).?;
                 if (post.getNextSib(es)) |next_sib| {
                     // Descend: leftmost leaf of right sibling.
-                    const ll = leftmostLeafView(es, next_sib, .{
+                    const ll: ?View = leftmostLeafView(es, next_sib, .{
                         .active_only = self.active_only,
                     });
                     self.curr = if (ll) |some| some.entity.toOptional() else .none;
@@ -7157,7 +7225,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
 
                 es.pointer_generation.increment();
 
-                var batches = cb.iterator();
+                var batches: CmdBuf.Iterator = cb.iterator();
                 while (batches.next()) |batch| {
                     switch (batch) {
                         .arch_change => |arch_change| {
@@ -7168,7 +7236,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                             // arch transition.
                             {
                                 var delta: CmdBuf.Batch.ArchChange.Delta = .{};
-                                var ops = arch_change.iterator();
+                                var ops: CmdBuf.Batch.ArchChange.Iterator = arch_change.iterator();
                                 while (ops.next()) |op| {
                                     beforeArchChangeImmediate(es, tr, arch_change, delta, op);
                                     try delta.updateImmediate(es, gpa, op);
@@ -7177,7 +7245,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                             }
 
                             {
-                                var ops = arch_change.iterator();
+                                var ops: CmdBuf.Batch.ArchChange.Iterator = arch_change.iterator();
                                 while (ops.next()) |op| {
                                     afterArchChangeImmediate(es, tr, arch_change, op);
                                 }
@@ -7224,7 +7292,7 @@ pub fn NodeWithOptions(node_options: NodeOptions) type {
                         }
                     }
 
-                    const parent_node = if (args.parent.unwrap()) |parent|
+                    const parent_node: ?*Self = if (args.parent.unwrap()) |parent|
                         try parent.getOrAddImmediateOrErr(es, gpa, Self, .{})
                     else
                         null;
@@ -7566,16 +7634,16 @@ test "ref" {
     const Line = struct { start: Point, end: Point };
 
     var es: Registry = try .init(.{
-        .gpa = std.testing.allocator,
+        .gpa = testing_allocator,
     });
-    defer es.deinit(std.testing.allocator);
+    defer es.deinit(testing_allocator);
 
     var cb: CmdBuf = try .init(.{
         .name = null,
-        .gpa = std.testing.allocator,
+        .gpa = testing_allocator,
         .es = &es,
     });
-    defer cb.deinit(std.testing.allocator, &es);
+    defer cb.deinit(testing_allocator, &es);
 
     // Build refs against an entity that doesn't have the
     // components yet - they should resolve to null.  This is
@@ -7586,7 +7654,7 @@ test "ref" {
     var rc: Ref(f32) = .copy(123.456);
 
     // Commit the reservation but skip the component adds.
-    try CmdBuf.Exec.immediateOrErr(&es, std.testing.allocator, &cb);
+    try CmdBuf.Exec.immediateOrErr(&es, testing_allocator, &cb);
     cb.clear(&es);
     try expectEqual(null, ry.getConst(&es));
     try expectEqual(null, ry.get(&es));
@@ -7601,7 +7669,7 @@ test "ref" {
         .start = .{ .x = 5.5, .y = 6.5 },
         .end = .{ .x = 7.5, .y = 8.5 },
     });
-    try CmdBuf.Exec.immediateOrErr(&es, std.testing.allocator, &cb);
+    try CmdBuf.Exec.immediateOrErr(&es, testing_allocator, &cb);
     cb.clear(&es);
     try expectEqual(@as(f32, 4.5), ry.getConst(&es).?.*);
     try expectEqual(@as(f32, 4.5), ry.get(&es).?.*);
@@ -7612,5 +7680,5 @@ test "ref" {
 }
 
 test {
-    std.testing.refAllDecls(@This());
+    refAllDecls(@This());
 }

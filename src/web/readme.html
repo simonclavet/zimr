@@ -6,7 +6,7 @@
         <title>zimr</title>
         <meta
             name="description"
-            content="A zig port of raylib, imgui, implot, box2d / jolt physics and MuJoCo-style robot dynamics for wasm/webgpu.
+            content="A zig port of raylib, imgui, implot, box2d / jolt physics and MuJoCo-style robot dynamics for wasm/webgpu and native Windows (Vulkan).
             Reads FBX and BVH for models and animation, retargets motion capture onto robots, and carries a numpy/jax/pandas-shaped
             numerics library that trains neural networks — attention, transformers, PPO and SAC — on the GPU via compute shaders in zig.
             Includes transpilers from zig to wgsl (gpu) and javascript (web) so we can live in a pure zig world."
@@ -18,7 +18,7 @@
             <h1 class="title">zimr</h1>
             <h2 class="subtitle">
                 A zig port of raylib, imgui, implot2d/3d and box2d / jolt
-                physics for wasm/webgpu, with MuJoCo-style robot dynamics, FBX
+                physics for wasm/webgpu and native Windows (Vulkan), with MuJoCo-style robot dynamics, FBX
                 and BVH loading for models and animation, motion-capture
                 retargeting onto those robots, and a numerics library shaped
                 like numpy, jax and pandas that trains neural networks &mdash;
@@ -58,13 +58,16 @@
                 <a href="#walkthroughs">walkthroughs</a>
                 <a href="#examples">examples</a>
                 <a href="#limits">status</a>
+                <a href="cheatsheet.html">cheatsheet</a>
             </nav>
 
             <div class="wip-warning">
                 <strong>Work in progress</strong>
                 The API surface, build steps, and example list change often.
                 This page describes the current state of the repository. It is
-                not a stable contract and not a recommendation.
+                not a stable contract and not a recommendation. The
+                <a href="cheatsheet.html">cheatsheet</a> lists the API as it is
+                today: it is generated from the source on every build.
             </div>
 
             <div class="wip-warning" style="border-left-color: var(--accent-color)">
@@ -88,7 +91,10 @@
                 <a href="https://github.com/erincatto/box2d">Box2D</a>
                 to <a href="https://ziglang.org/">Zig</a>, compiled to
                 <code>wasm32-wasi</code> and rendered through WebGPU in a
-                browser. Zig moves fast so it is difficult to get dependencies to 
+                browser. The same apps also build as native Windows programs
+                (<code>-Dplatform=windows</code>) from the same source, their
+                shaders embedded as SPIR-V and drawn through Vulkan &mdash; see
+                <a href="backends-tutorial.html">graphics backends</a>. Zig moves fast so it is difficult to get dependencies to 
                 agree on which zig version of zig to use, so I prefer a giant monorepo
                 where everything moves to new zig versions at the same time.
                 There are no third-party libraries. The renderer, the
@@ -489,7 +495,7 @@ drawScene(&sw, s);</code></pre>
             </p>
 
             <h3 id="shaders">Shaders in Zig</h3>
-            <p class="tut"><a href="shader-authoring-tutorial.html">Two ways to write a shader</a> &mdash; the Zig-to-WGSL path against hand-written WGSL, and when each is right.</p>
+            <p class="tut"><a href="shader-authoring-tutorial.html">Writing shaders</a> &mdash; a shader's bindings, wired by hand or derived from a typed schema, and when each is right.</p>
 
             <p>
                 A shader is an ordinary Zig function over a typed input/output
@@ -869,7 +875,7 @@ s.ui_host.render(f);                                   // sliders on top</code><
             </p>
 
             <h3 id="compute">GPU compute (kompute)</h3>
-            <p class="tut"><a href="gpu-compute-tutorial.html">One Zig function, two machines</a> &mdash; writing a kernel once and running it on both the CPU and the GPU, and what has to be true for that to work.</p>
+            <p class="tut"><a href="gpu-compute-tutorial.html">GPU compute</a> &mdash; writing a kernel once and running it on the GPU and on the CPU, and a fluid of 20,000 particles built from such kernels.</p>
 
             <p>
                 Compute kernels are also Zig. A kernel file declares a
@@ -941,7 +947,7 @@ const pos_buf = pipe.fieldBuffer(.pos).?;</code></pre>
             </p>
 
             <h3 id="numerics">Numerics, deep learning and RL (zimrnum)</h3>
-            <p class="tut"><a href="zimrnum-tutorial.html">The zimrnum walkthrough</a> &mdash; what exists, what does not, and why each piece is shaped the way it is. Its reference table is checked against <code>src/zimrnum.zig</code> by a test in that file.</p>
+            <p class="tut"><a href="zimrnum-tutorial.html">zimrnum</a> &mdash; what exists, what does not, and why each piece is shaped the way it is. Its reference table is checked against <code>src/zimrnum.zig</code> by a test in that file.</p>
 
             <p>
                 <code>zimrnum</code> is a numerics library in the same Zig, built on
@@ -997,6 +1003,7 @@ const dw = try graph.gradOf(out.weight);      // gradients for anything reachabl
             </p>
 
             <h4>Reinforcement learning</h4>
+            <p class="tut"><a href="zimrrl-tutorial.html">zimrrl</a> &mdash; the reinforcement-learning library built on zimrnum, algorithm by algorithm.</p>
 
             <p>
                 PPO, DQN, TD3, SAC and the modern off-policy extensions. The critic estimates
@@ -1041,7 +1048,7 @@ const y = try zn.sacTarget(f64, transition, next_estimates, next_log_prob,
             <h4>The tutorial</h4>
 
             <p>
-                <a href="notes/tutorials/zimrnum-tutorial.html">The zimrnum tutorial</a> opens
+                <a href="zimrnum-tutorial.html">The zimrnum tutorial</a> opens
                 with a complete program that fits a line to noisy data, and is organised as
                 twenty-one sections ending in Recipes, Gotchas and a reference table of every
                 public declaration. Three things in it are checked by the build rather than by
@@ -1449,8 +1456,8 @@ z.plot_ui.show(u, &s.plot, .{ 520, 320 }, &series, .{
             </p>
 
             <h3 id="physics">The physics engines</h3>
-                        <p class="tut"><a href="robots.html">Robot dynamics, from the ground up</a> &mdash; a course on articulated-body simulation, from <code>M(q)v&#775; + c = &tau; + J<sup>T</sup>f</code> through kinematics, the mass matrix, contact and trajectory optimization. Its code blocks are checked against <code>src/robot.zig</code> by <code>zig build doc-sync</code>, so they cannot quote drifted source.</p>
-            <p class="tut"><a href="mujoco-tutorial.html">MuJoCo, and how it becomes robot.zig</a> &mdash; what MuJoCo's model and data structures contain, and how each part maps onto the Zig port.</p>
+                        <p class="tut"><a href="robots.html">Robot dynamics</a> &mdash; a course on articulated-body simulation, from <code>M(q)v&#775; + c = &tau; + J<sup>T</sup>f</code> through kinematics, the mass matrix, contact and trajectory optimization. Its code blocks are checked against <code>src/robot.zig</code> by <code>zig build doc-sync</code>, so they cannot quote drifted source.</p>
+            <p class="tut"><a href="mujoco-tutorial.html">MuJoCo and robot.zig</a> &mdash; what MuJoCo's model and data structures contain, and how each part maps onto the Zig port.</p>
 
             <p>
                 Three of them, all pure Zig, none with a GPU dependency &mdash;
@@ -1590,6 +1597,7 @@ Go1 standing    nv 18   12313 ns/step  (pgs)   22273 ns/step  (newton)</code></p
             </p>
 
             <h3 id="mocap">Motion capture and retargeting</h3>
+            <p class="tut"><a href="robot-mocap-tutorial.html">Robot motion capture</a> &mdash; from a capture file to a simulated body that performs it: reading the capture, retargeting it, servoing, balance, and learned tracking.</p>
 
             <p>
                 <code>src/codecs.zig</code> reads <strong>BVH</strong> and
@@ -1765,6 +1773,7 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
 
             <h3 id="machinery">Under the hood: host, WebGPU layer, rasterizer</h3>
             <p class="tut"><a href="wgpu-ports-tutorial.html">The WebGPU ports</a> &mdash; what the host layer actually had to provide, one port at a time.</p>
+            <p class="tut"><a href="backends-tutorial.html">Graphics backends</a> &mdash; how zimr reaches the GPU: the browser's WebGPU, and Vulkan on Windows and Linux, each layer with the reasons for its shape.</p>
 
             <p>
                 The entire browser side is one Zig file,
@@ -1810,23 +1819,39 @@ robot.solvePointCloud(&amp;model, &amp;data, samples[0..n], opts);</code></pre>
                 a red build rather than a device-only glitch.
             </p>
 
-            <h3 id="docs">The long-form walkthroughs, in one place</h3>
+            <h3 id="docs">Tutorials</h3>
             <p>
-                Seven standalone pages, each building one subsystem from first
-                principles rather than documenting its API. Each is linked from
-                the section it belongs to above; this is the index.
+                Standalone pages, each teaching one part of zimr from its first
+                principles to its code, which every page shows as it ships. Each is
+                also linked from the section above it belongs to; within each group,
+                the pages are in reading order.
             </p>
+            <h4>Graphics</h4>
             <ul class="tut-index">
-                <li><a href="robots.html">Robot dynamics, from the ground up</a> &mdash; articulated-body simulation, end to end</li>
-                <li><a href="mujoco-tutorial.html">MuJoCo, and how it becomes robot.zig</a></li>
-                <li><a href="gpu-compute-tutorial.html">One Zig function, two machines</a> &mdash; GPU compute</li>
-                <li><a href="shader-authoring-tutorial.html">Two ways to write a shader</a></li>
-                <li><a href="rtt-tutorial.html">Render to texture</a></li>
-                <li><a href="zimrnum-tutorial.html">zimrnum</a> &mdash; numerics, deep learning and RL</li>
-                <li><a href="wgpu-ports-tutorial.html">The WebGPU ports</a></li>
-                <li><a href="tutorial.html">A graphics tutorial, from your first triangle</a></li>
-                <li><a href="files.html">The file atlas</a> &mdash; every file, its size, and what imports it</li>
+                <li><a href="tutorial.html">Graphics from scratch</a> &mdash; from a first triangle to reading a raymarched shader, for a reader new to GPUs</li>
+                <li><a href="shader-authoring-tutorial.html">Writing shaders</a> &mdash; a shader's bindings, wired by hand or derived from a typed schema</li>
+                <li><a href="rtt-tutorial.html">Render to texture</a> &mdash; drawing into an offscreen image, then using it as a texture</li>
+                <li><a href="wgpu-ports-tutorial.html">The WebGPU ports</a> &mdash; the example programs, and what the host layer had to provide for them</li>
+                <li><a href="backends-tutorial.html">Graphics backends</a> &mdash; how zimr reaches the GPU: WebGPU in the browser, Vulkan on Windows and Linux</li>
             </ul>
+            <h4>Compute and learning</h4>
+            <ul class="tut-index">
+                <li><a href="gpu-compute-tutorial.html">GPU compute</a> &mdash; kernels written once in Zig, run on the GPU and on the CPU, and a fluid of 20,000 particles built from them</li>
+                <li><a href="zimrnum-tutorial.html">zimrnum</a> &mdash; numerics, statistics and neural networks, on the CPU and the GPU</li>
+                <li><a href="zimrrl-tutorial.html">zimrrl</a> &mdash; reinforcement learning, built on zimrnum</li>
+            </ul>
+            <h4>Robotics</h4>
+            <ul class="tut-index">
+                <li><a href="robots.html">Robot dynamics</a> &mdash; articulated-body simulation, built up through <code>src/robot.zig</code></li>
+                <li><a href="mujoco-tutorial.html">MuJoCo and robot.zig</a> &mdash; what MuJoCo's model and data contain, and how each part maps onto the Zig port</li>
+                <li><a href="robot-mocap-tutorial.html">Robot motion capture</a> &mdash; from a capture file to a simulated body that performs it</li>
+            </ul>
+            <p>
+                Reference: the <a href="cheatsheet.html">cheatsheet</a> lists the API as
+                it is, generated from the source on every build; the
+                <a href="files.html">file atlas</a> lists every file, its size, and what
+                imports it.
+            </p>
 
             <h3 id="walkthroughs">More walkthroughs: the 2D and UI side</h3>
 

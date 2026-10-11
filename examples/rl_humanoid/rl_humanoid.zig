@@ -14,6 +14,7 @@
 //! Standard wgpu example contract: a `pub const app: z.AppSpec(State)`.
 
 const std = @import("std");
+const copyForwards = std.mem.copyForwards;
 const common = @import("example_common");
 pub const panic = std.debug.FullPanic(common.reportPanic);
 const Allocator = std.mem.Allocator;
@@ -178,7 +179,7 @@ fn train(s: *State) void {
         if (finished) {
             s.last_update_time = @floatCast((z.wgpu.nowMs() - s.update_started_ms) / 1000.0);
             if (s.history_count == history_len) {
-                std.mem.copyForwards(f32, s.history[0 .. history_len - 1], s.history[1..]);
+                copyForwards(f32, s.history[0 .. history_len - 1], s.history[1..]);
                 s.history_count -= 1;
             }
             s.history[s.history_count] = s.trainer.last.mean_length;
@@ -214,86 +215,6 @@ fn watch(f: *z.Frame, s: *State) void {
     }
     if (steps == 4) {
         s.watch_accumulator = 0;
-    }
-}
-
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    // Steer the budget so the whole frame lands near 30 fps.
-    const frame_ms: f64 = @as(f64, f.time.delta_time) * 1000.0;
-    s.budget_ms = clamp(s.budget_ms + 0.2 * (target_frame_ms - frame_ms), min_budget_ms, max_budget_ms);
-    if (!s.paused) {
-        train(s);
-    }
-    watch(f, s);
-    s.window_time += f.time.delta_time;
-    s.window_frames += 1;
-    if (s.window_time >= 1.0) {
-        s.samples_per_second = if (s.total_train_ms > 0)
-            @floatCast(float64(s.total_steps) / (s.total_train_ms / 1000.0))
-        else
-            0;
-        s.fps = float(s.window_frames) / s.window_time;
-        s.window_time = 0;
-        s.window_steps = 0;
-        s.window_frames = 0;
-    }
-
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    z.clearViewport(f, bg);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 12.0 });
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 24, 0.5);
-    const shown: *const gym.HumanoidEnv = if (s.show_training) s.env else s.watch_env;
-    const m: *const rbt.Model = &shown.imported.model;
-    const d: *const rbt.Data = &shown.data;
-    // Follow the character: it walks away from the origin as it learns.
-    const follow: Vec = vec(-d.pos[0], -d.pos[1], 0);
-    for (0..m.ngeom) |g| {
-        const body: u32 = m.geom_body[g];
-        drawGeom(s, gl, g, d.body_xpos[body] + follow, d.body_xrot[body], body_col);
-    }
-    z.endMode3D(gl);
-}
-
-fn drawGeom(
-    s: *State,
-    gl: *z.WgpuGl,
-    g: usize,
-    body_pos: Vec,
-    body_rot: Quat,
-    tint: Color,
-) void {
-    const m: *const rbt.Model = &s.env.imported.model;
-    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_pos[g]);
-    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
-    const place: Mat = mulMat(
-        mulMat(zUpToYUp(), translation(world_pos[0], world_pos[1], world_pos[2])),
-        world_rot,
-    );
-    switch (m.geom_shape[g]) {
-        .sphere => |sph| {
-            s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
-            z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-        },
-        .capsule => |cap| {
-            s.transform[0] = mulMat(
-                mulMat(place, translation(0, -cap.half_height, 0)),
-                scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
-            );
-            z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
-            for ([_]f32{ -1.0, 1.0 }) |end| {
-                s.transform[0] = mulMat(
-                    mulMat(place, translation(0, end * cap.half_height, 0)),
-                    scaling(cap.radius, cap.radius, cap.radius),
-                );
-                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
-            }
-        },
-        else => {},
     }
 }
 
@@ -337,6 +258,86 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
         _ = u.checkbox("pause", &s.paused);
     }
     return captured;
+}
+
+fn drawGeom(
+    s: *State,
+    gl: *z.WgpuGl,
+    g: usize,
+    body_pos: Vec,
+    body_rot: Quat,
+    tint: Color,
+) void {
+    const m: *const rbt.Model = &s.env.imported.model;
+    const world_pos: Vec = body_pos + rotate(body_rot, m.geom_pos[g]);
+    const world_rot: Mat = quatToMat(qmul(body_rot, m.geom_rot[g]));
+    const place: Mat = mulMat(
+        mulMat(zUpToYUp(), translation(world_pos[0], world_pos[1], world_pos[2])),
+        world_rot,
+    );
+    switch (m.geom_shape[g]) {
+        .sphere => |sph| {
+            s.transform[0] = mulMat(place, scaling(sph.radius, sph.radius, sph.radius));
+            z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+        },
+        .capsule => |cap| {
+            s.transform[0] = mulMat(
+                mulMat(place, translation(0, -cap.half_height, 0)),
+                scaling(cap.radius, 2.0 * cap.half_height, cap.radius),
+            );
+            z.drawMeshInstanced(gl, &s.cylinder, &s.transform, tint);
+            for ([_]f32{ -1.0, 1.0 }) |end| {
+                s.transform[0] = mulMat(
+                    mulMat(place, translation(0, end * cap.half_height, 0)),
+                    scaling(cap.radius, cap.radius, cap.radius),
+                );
+                z.drawMeshInstanced(gl, &s.sphere, &s.transform, tint);
+            }
+        },
+        else => {},
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    // Steer the budget so the whole frame lands near 30 fps.
+    const frame_ms: f64 = @as(f64, f.time.delta_time) * 1000.0;
+    s.budget_ms = clamp(s.budget_ms + 0.2 * (target_frame_ms - frame_ms), min_budget_ms, max_budget_ms);
+    if (!s.paused) {
+        train(s);
+    }
+    watch(f, s);
+    s.window_time += f.time.delta_time;
+    s.window_frames += 1;
+    if (s.window_time >= 1.0) {
+        s.samples_per_second = if (s.total_train_ms > 0)
+            @floatCast(float64(s.total_steps) / (s.total_train_ms / 1000.0))
+        else
+            0;
+        s.fps = float(s.window_frames) / s.window_time;
+        s.window_time = 0;
+        s.window_steps = 0;
+        s.window_frames = 0;
+    }
+
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    z.clearViewport(f, bg);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 12.0 });
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 24, 0.5);
+    const shown: *const gym.HumanoidEnv = if (s.show_training) s.env else s.watch_env;
+    const m: *const rbt.Model = &shown.imported.model;
+    const d: *const rbt.Data = &shown.data;
+    // Follow the character: it walks away from the origin as it learns.
+    const follow: Vec = vec(-d.pos[0], -d.pos[1], 0);
+    for (0..m.ngeom) |g| {
+        const body: u32 = m.geom_body[g];
+        drawGeom(s, gl, g, d.body_xpos[body] + follow, d.body_xrot[body], body_col);
+    }
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

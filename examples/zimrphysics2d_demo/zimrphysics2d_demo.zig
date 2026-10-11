@@ -10,6 +10,8 @@
 //! every shape/joint/contact the engine emits, so scenes never write rendering code.
 
 const std = @import("std");
+const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -141,51 +143,6 @@ fn pickCallback(shape: phys.ShapeIndex, cptr: *anyopaque) bool {
     return true; // scan all overlaps, then take the nearest
 }
 
-/// Grab whatever dynamic body sits under `world_pt`, if any.
-fn beginDrag(s: *State, world_pt: Vec2) void {
-    const eps: f32 = 0.01;
-    const box: phys.Aabb2 = .{
-        .lower = .{ world_pt[0] - eps, world_pt[1] - eps },
-        .upper = .{ world_pt[0] + eps, world_pt[1] + eps },
-    };
-    var pc: PickCtx = .{ .world = &s.world, .point = world_pt };
-    phys.overlapAabb(&s.world, box, .{}, pickCallback, &pc);
-    const bi: usize = pc.best orelse return;
-
-    const anchor: phys.BodyHandle = phys.createBody(&s.world, .{
-        .motion_type = .static,
-        .position = world_pt,
-    }) catch return;
-    const b: *const phys.Body = &s.world.bodies.data[bi];
-    const grab_local: Vec2 = invTransformPoint(b.transform, world_pt);
-    const mass: f32 = if (b.mass > 0.0) b.mass else 1.0;
-    // Index-only handle: createJoint consumes body handles via `.index()` and stores
-    // a BodyIndex, so a packed handle is the correct, complete input here.
-    const picked: phys.BodyHandle = phys.BodyHandle.pack(@intCast(bi), 0);
-    _ = phys.createMotorJoint(&s.world, .{
-        .base = .{
-            .body_a = anchor,
-            .body_b = picked,
-            .local_frame_a = Transform2.identity,
-            .local_frame_b = .{ .p = grab_local, .q = Rot2.identity },
-        },
-        .linear_hertz = 6.0,
-        .linear_damping_ratio = 0.7,
-        .max_spring_force = 1000.0 * mass,
-    }) catch {
-        phys.destroyBody(&s.world, anchor);
-        return;
-    };
-    s.drag = .{ .anchor = anchor, .picked = bi, .grab_local = grab_local };
-}
-
-fn endDrag(s: *State) void {
-    if (s.drag) |dg| {
-        phys.destroyBody(&s.world, dg.anchor); // frees the owned motor joint too
-        s.drag = null;
-    }
-}
-
 /// Wraps a child allocator and tracks live bytes of everything allocated through it. Both the
 /// physics world AND the UI host are routed through it, so the "heap" HUD line is the demo's whole
 /// tracked Zig-heap footprint - no per-subsystem blind spot (the UI path being untracked is what
@@ -293,6 +250,51 @@ const State = struct {
     snap: ?phys.WorldSnapshot = null,
 };
 
+/// Grab whatever dynamic body sits under `world_pt`, if any.
+fn beginDrag(s: *State, world_pt: Vec2) void {
+    const eps: f32 = 0.01;
+    const box: phys.Aabb2 = .{
+        .lower = .{ world_pt[0] - eps, world_pt[1] - eps },
+        .upper = .{ world_pt[0] + eps, world_pt[1] + eps },
+    };
+    var pc: PickCtx = .{ .world = &s.world, .point = world_pt };
+    phys.overlapAabb(&s.world, box, .{}, pickCallback, &pc);
+    const bi: usize = pc.best orelse return;
+
+    const anchor: phys.BodyHandle = phys.createBody(&s.world, .{
+        .motion_type = .static,
+        .position = world_pt,
+    }) catch return;
+    const b: *const phys.Body = &s.world.bodies.data[bi];
+    const grab_local: Vec2 = invTransformPoint(b.transform, world_pt);
+    const mass: f32 = if (b.mass > 0.0) b.mass else 1.0;
+    // Index-only handle: createJoint consumes body handles via `.index()` and stores
+    // a BodyIndex, so a packed handle is the correct, complete input here.
+    const picked: phys.BodyHandle = .pack(@intCast(bi), 0);
+    _ = phys.createMotorJoint(&s.world, .{
+        .base = .{
+            .body_a = anchor,
+            .body_b = picked,
+            .local_frame_a = Transform2.identity,
+            .local_frame_b = .{ .p = grab_local, .q = Rot2.identity },
+        },
+        .linear_hertz = 6.0,
+        .linear_damping_ratio = 0.7,
+        .max_spring_force = 1000.0 * mass,
+    }) catch {
+        phys.destroyBody(&s.world, anchor);
+        return;
+    };
+    s.drag = .{ .anchor = anchor, .picked = bi, .grab_local = grab_local };
+}
+
+fn endDrag(s: *State) void {
+    if (s.drag) |dg| {
+        phys.destroyBody(&s.world, dg.anchor); // frees the owned motor joint too
+        s.drag = null;
+    }
+}
+
 fn loadScene(s: *State, idx: usize) !void {
     s.drag = null; // old anchor/joint die with the old world
     if (s.snap) |*sn| {
@@ -327,7 +329,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     const mem: *CountingAllocator = try gpa.create(CountingAllocator);
     mem.* = .{ .child = gpa };
-    var world: phys.World = try phys.World.init(mem.allocator(), world_capacity);
+    var world: phys.World = try .init(mem.allocator(), world_capacity);
     world.settings.gravity = .{ 0, -10 };
     try scenes.list[0].build.?(&world);
     s.* = .{
@@ -496,7 +498,7 @@ fn update(f: *z.Frame, s: *State) void {
                     continue;
                 }
                 const name: []const u8 = z.profiler.srcOf(st.src).name;
-                if (std.mem.startsWith(u8, name, "p2d.") == false) {
+                if (startsWith(u8, name, "p2d.") == false) {
                     continue;
                 }
                 const mean_ms: f64 = st.total_ms / float64(st.count);
@@ -546,7 +548,7 @@ fn update(f: *z.Frame, s: *State) void {
         var local_sel: i32 = 0;
         var si: usize = 0;
         while (si < scenes.list.len) : (si += 1) {
-            if (!std.mem.eql(u8, scenes.list[si].category, scenes.categories[s.cat_index])) {
+            if (!eql(u8, scenes.list[si].category, scenes.categories[s.cat_index])) {
                 continue;
             }
             if (si == s.current_scene) {

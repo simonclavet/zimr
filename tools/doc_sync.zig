@@ -23,6 +23,10 @@
 //! needs the MuJoCo package.
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const splitScalar = std.mem.splitScalar;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const eql = std.mem.eql;
 const indexOf = std.mem.indexOf;
@@ -31,8 +35,9 @@ const startsWith = std.mem.startsWith;
 const endsWith = std.mem.endsWith;
 const trim = std.mem.trim;
 const allocPrint = std.fmt.allocPrint;
+const ArrayList = std.ArrayList;
 
-const File = std.Io.File;
+const File = Io.File;
 
 /// The doc/source pairs this checks. Add a row when a tutorial starts quoting code.
 /// * SEVERAL SOURCES PER DOC, because a tutorial that covers a subsystem quotes the whole
@@ -85,7 +90,7 @@ const pairs = [_]Pair{
 /// Replace the HTML entities a code block can legally contain. Deliberately not a general
 /// un-escaper: if a block needs anything more exotic, that is worth noticing by hand.
 fn unescape(gpa: Allocator, html: []const u8) ![]u8 {
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var i: usize = 0;
     while (i < html.len) {
@@ -121,7 +126,7 @@ fn unescape(gpa: Allocator, html: []const u8) ![]u8 {
 /// granularity is the right unit: it survives reflowing and reordering, and it still
 /// catches every edit to the code itself.
 fn hasLine(haystack: []const u8, needle: []const u8) bool {
-    var it = std.mem.splitScalar(u8, haystack, '\n');
+    var it = splitScalar(u8, haystack, '\n');
     while (it.next()) |line| {
         if (eql(u8, trim(u8, line, " \t\r"), needle)) {
             return true;
@@ -138,11 +143,11 @@ fn isExempt(open_tag: []const u8) bool {
 
 const Report = struct { checked: u32, drifted: u32, exempt: u32 };
 
-fn checkPair(gpa: Allocator, io: std.Io, pair: Pair) !Report {
-    const limit: std.Io.Limit = .limited(64 * 1024 * 1024);
-    const doc: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, pair.doc, gpa, limit);
+fn checkPair(gpa: Allocator, io: Io, pair: Pair) !Report {
+    const limit: Io.Limit = .limited(64 * 1024 * 1024);
+    const doc: []u8 = try Io.Dir.cwd().readFileAlloc(io, pair.doc, gpa, limit);
     defer gpa.free(doc);
-    var sources: std.ArrayList([]u8) = .empty;
+    var sources: ArrayList([]u8) = .empty;
     defer {
         for (sources.items) |text| {
             gpa.free(text);
@@ -150,7 +155,7 @@ fn checkPair(gpa: Allocator, io: std.Io, pair: Pair) !Report {
         sources.deinit(gpa);
     }
     for (pair.srcs) |path| {
-        const text: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, limit);
+        const text: []u8 = try Io.Dir.cwd().readFileAlloc(io, path, gpa, limit);
         try sources.append(gpa, text);
     }
 
@@ -184,7 +189,7 @@ fn checkPair(gpa: Allocator, io: std.Io, pair: Pair) !Report {
         const plain: []u8 = try unescape(gpa, body);
         defer gpa.free(plain);
 
-        var lines = std.mem.splitScalar(u8, plain, '\n');
+        var lines = splitScalar(u8, plain, '\n');
         while (lines.next()) |raw| {
             const line: []const u8 = trim(u8, raw, " \t\r");
             if (line.len == 0 or endsWith(u8, line, "...")) {
@@ -213,8 +218,18 @@ fn checkPair(gpa: Allocator, io: std.Io, pair: Pair) !Report {
     return rep;
 }
 
+/// The command line (std's cli, `src/command_line.zig`): none - but the parser still gives it `--help` and refuses
+/// an argument it would otherwise ignore.
+const NoArgs = struct {};
+
+const doc_sync_cli: cli.Config(NoArgs) = .{
+    .prog = "doc_sync",
+    .description = "Checks that the code a tutorial shows is the code that actually ships.",
+};
+
 pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
+    _ = cli.args(&init, NoArgs, doc_sync_cli);
+    var arena: ArenaAllocator = .init(init.gpa);
     defer arena.deinit();
     const gpa: Allocator = arena.allocator();
 

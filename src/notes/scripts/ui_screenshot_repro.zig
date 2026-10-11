@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const ui = z.ui;
 
@@ -32,7 +33,7 @@ pub fn main() !void {
 
     var ctx: ui.UiContext = .{
         .gpa = gpa,
-        .frame_arena = std.heap.ArenaAllocator.init(gpa),
+        .frame_arena = ArenaAllocator.init(gpa),
         .canvas_w = w,
         .canvas_h = h,
     };

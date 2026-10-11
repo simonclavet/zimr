@@ -7,6 +7,8 @@
 //! Run:   ./transpile_one path/to/shader.spv
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const spv2wgsl = @import("spv2wgsl");
 
 pub fn main() !void {
@@ -15,11 +17,11 @@ pub fn main() !void {
     _ = args.next();
     const path = args.next() orelse return error.NeedPath;
 
-    var threaded = std.Io.Threaded.init(std.heap.page_allocator);
+    var threaded = Io.Threaded.init(std.heap.page_allocator);
     defer threaded.deinit();
     const io = threaded.io();
 
-    var f = try std.Io.Dir.cwd().openFile(io, path, .{});
+    var f = try Io.Dir.cwd().openFile(io, path, .{});
     defer f.close(io);
     const st = try f.stat(io);
     const bytes = try std.heap.page_allocator.alloc(u8, st.size);
@@ -28,7 +30,7 @@ pub fn main() !void {
 
     const words = @as([*]const u32, @ptrCast(@alignCast(bytes.ptr)))[0 .. bytes.len / 4];
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const wgsl = try spv2wgsl.convertSpirvToWgsl(arena.allocator(), words);
     std.log.info("OK: {d} -> {d} WGSL bytes", .{ bytes.len, wgsl.len });

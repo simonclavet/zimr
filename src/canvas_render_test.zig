@@ -2,15 +2,16 @@
 //! PNG so each slice of the drawing-API migration can be viewed in-sandbox with
 //! no device. Excluded from the style gate via build.zig `deletion_skip`.
 const std = @import("std");
+const Io = std.Io;
 const Canvas = @import("Canvas.zig");
 const image = @import("image.zig");
 const Sprite = @import("Sprite.zig");
 
 pub fn main() !void {
     const gpa = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     var canvas = try Canvas.init(gpa, 360, 240, .{});
     defer canvas.deinit();
@@ -44,7 +45,7 @@ pub fn main() !void {
     canvas.circle(.{ 300, 70 }, 34, .{ .color = .{ .r = 80, .g = 200, .b = 140, .a = 255 } }); // unified circle
 
     const png: []u8 = try canvas.writePngToMemory();
-    const out: std.Io.File = std.Io.File.stdout();
+    const out: Io.File = Io.File.stdout();
     try out.writeStreamingAll(io, png);
     // lint:off debug-print: host-only harness, writes status to stdout on native
     std.debug.print("wrote canvas PNG to stdout ({d} bytes)\n", .{png.len});

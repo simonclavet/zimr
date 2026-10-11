@@ -12,12 +12,14 @@
 //! in for, so a robot file that is not imported here stays a `test-fast` member of its own.
 
 const std = @import("std");
+const refAllDecls = std.testing.refAllDecls;
 
 pub const robot = @import("robot.zig");
 pub const robot_scene = @import("robot_scene.zig");
 pub const robot_physics = @import("robot_physics.zig");
 pub const robot_control = @import("robot_control.zig");
 pub const robot_mpc = @import("robot_mpc.zig");
+pub const robot_bmpc = @import("robot_bmpc.zig");
 pub const robot_mjcf = @import("robot_mjcf.zig");
 pub const robot_maximal = @import("robot_maximal.zig");
 pub const robot_dance = @import("robot_dance.zig");
@@ -35,6 +37,10 @@ pub const robot_latent_kit_tests = @import("robot_latent_kit_tests.zig");
 pub const robot_track_resident_tests = @import("robot_track_resident_tests.zig");
 pub const robot_policy = @import("robot_policy.zig");
 pub const robot_ppo_track = @import("robot_ppo_track.zig");
+/// The tracking task as a decision-level environment - every learner of it steps through `TrackEnv` - with its n-step
+/// transitions; and SAC on it.
+pub const robot_track_env = @import("robot_track_env.zig");
+pub const robot_sac_track = @import("robot_sac_track.zig");
 /// Its proofs, outside the zimr module for the same reason as `gpu_learn_tests`.
 pub const robot_ppo_track_tests = @import("robot_ppo_track_tests.zig");
 pub const robot_mocap_tutorial = @import("robot_mocap_tutorial.zig");
@@ -43,5 +49,5 @@ pub const mjcf = @import("mjcf.zig");
 pub const urdf = @import("urdf.zig");
 
 test {
-    std.testing.refAllDecls(@This());
+    refAllDecls(@This());
 }

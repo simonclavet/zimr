@@ -1,0 +1,1561 @@
+# sources: src/zimrnum.zig; lines: 40905
+# public declarations: 439; tests: 333; reference rows: 784
+## public declarations
+Activation
+Adam
+Aggregate
+Attention
+BatchNorm
+BiLSTM
+Binding
+CartpoleOutcome
+CartpoleState
+CartpoleStep
+CartpoleTask
+Categorical
+CategoricalScalar
+Chain
+ClassScore
+CodeOrder
+Column
+Comparison
+CompensatedSum
+ComplexNumber
+Conv2d
+ConvMode
+CriticAggregate
+Ctx
+DType
+DataLoader
+Dataset
+Ddof
+Dense
+DiagGaussian
+DqnKind
+Embedding
+EndPoint
+Error
+Extreme
+Fit
+FitReport
+Fitting
+Frame
+GRU
+Graph
+GroupBy
+GruCell
+InitScheme
+JoinHow
+LSTM
+LatentPlanScorer
+LatentPolicyPlans
+LatentRollout
+LatentValueTargets
+LayerNorm
+LoaderOptions
+LstmCell
+MinibatchOrder
+Mlp
+Mppi
+Named
+NamedTensor
+NoiseSchedule
+NormedDense
+NpyHeader
+ObsNormalizer
+OffPolicyModel
+Optimizer
+OrnsteinUhlenbeck
+Params
+PerClass
+PolicyDistillationLoss
+PpoConfig
+PpoModel
+PpoStats
+Push
+ReplayBuffer
+Rng
+RolloutBuffer
+RolloutStep
+RowPair
+RunningScale
+SequenceReplay
+Series
+SquashedDraw
+SquashedGaussian
+StackedLSTM
+Summary
+TanhMeanGaussian
+Temperature
+Tensor
+TransformerBlock
+Transition
+Triangle
+Var
+Walk
+Walk2
+WorldModelLoss
+abs
+accuracy
+acosRad
+acosh
+adagradStep
+adamStep
+adamWStep
+add
+addGaussianActionNoise
+addNoise
+advantageWeights
+affine
+aggregate
+aggregateCritics
+all
+allNonzero
+alphasCumprod
+any
+anyNonzero
+approxEqAbs
+arange
+argExtreme
+argmaxAll
+argmaxAxis
+argmaxRows
+argminAll
+argminAxis
+argsort
+asinRad
+asinh
+astype
+atan2Rad
+atanRad
+atanh
+avgPool2d
+betaSchedule
+binaryCrossEntropyFromLogits
+bincount
+bitwiseAnd
+bitwiseNot
+bitwiseOr
+bitwiseXor
+bmm
+booleanMask
+boundedIndex
+broadcastShape
+cartpoleContinuousStep
+cartpoleContinuousStepBatch
+cartpoleObserve
+cartpoleOutcome
+cartpoleReset
+cartpoleStep
+cartpoleStepBatch
+cartpoleTaskReset
+cartpoleTaskStep
+cartpole_action_dim
+cartpole_state_dim
+categorical
+categoricalProject
+cbrt
+ceil
+cholesky
+clamp
+classScore
+classifierFreeGuidance
+clipByNorm
+clipByValue
+clipGradNorm
+coefficientOfVariation
+compareScalar
+concat
+conditionNumber
+confusionMatrix
+conv2d
+convolve
+correlate
+correlation
+correlationMatrix
+cosRad
+cosTurns
+cosh
+cosineLearningRate
+cosineSimilarity
+countNonzero
+covariance
+crossEntropyRows
+crossEntropyRowsGrad
+cummax
+cummin
+cumprod
+cumsum
+describe
+determinant
+determinantLu
+dft
+diagonal
+diff
+diffusionReverseStep
+discountedReturns
+discriminatorReward
+div
+divCeil
+divExact
+divFloor
+divTrunc
+dotAll
+dqnTarget
+dtwDistance
+eig
+eigh
+eigvalsSymmetric
+einsum
+elu
+emaUpdate
+entropyRows
+epsilonFromX0
+equal
+exp
+exp2
+explainedVariance
+expm1
+exponentialLearningRate
+eye
+factorize
+fft
+fftFreq
+firstRows
+fit
+flip
+floor
+format_version
+full
+fullLike
+gae
+gatherColumns
+gatherRows
+gelu
+generalizedAdvantage
+geoMean
+gradient
+greater
+greaterEqual
+groupBy
+harmMean
+hessenberg
+hingeLoss
+histogram
+histogramEdges
+huberLoss
+hypot
+ifft
+initHe
+initNormal
+initXavier
+interp
+inverse
+isFloat
+item
+joinRows
+klDivergenceRows
+klGaussianDiag
+klRobustExpectation
+kurtosis
+l2NormalizeRows
+layerNormRows
+layerNormRowsBackward
+leakyRelu
+lerp
+less
+lessEqual
+linearLearningRate
+linearOverFraction
+linearSchedule
+linspace
+loadNpy
+loadParameters
+loadTensors
+log
+log10
+log1p
+log2
+logSoftmaxRows
+logSumExp
+logSumExpAxis
+logicalAnd
+logicalNot
+logicalOr
+logicalXor
+lstsq
+lu
+macroF1
+maeLoss
+magic
+map
+maskedMean
+materialise
+matmul
+matmulNT
+matmulTN
+maxAll
+maxAxis
+maxPool2d
+max_rank
+maximum
+meanAbsDev
+meanAll
+meanAxis
+median
+medianAbsDev
+meshGrid
+minAll
+minAxis
+minMaxScale
+minimum
+mixRewards
+mod
+mode
+moveAxis
+mseLoss
+mul
+namedMatmul
+nanMean
+nanSum
+neg
+nonzero
+norm
+normalizeAdvantages
+notEqual
+numericalGrad
+numericalGradWorst
+offPolicyUpdate
+oneHotRows
+ones
+onesLike
+outer
+pctChange
+perClassMetrics
+pinv
+policyUpdateDue
+polyakUpdate
+pow
+ppoClipObjective
+ppoClipSample
+ppoEpoch
+ppoObjective
+ppoUpdate
+prodAll
+prodAxis
+qr
+quantile
+quantileSorted
+r2Score
+randomSubset
+readNpyHeader
+reciprocal
+relu
+reluGrad
+rem
+repeatEach
+requireFloat
+requireInt
+requireNumeric
+resolveInferredShape
+rfft
+rfftfreq
+rmspropStep
+roll
+rollingMean
+rootMeanSquare
+round
+rsqrt
+sacTarget
+saveNpy
+saveParameters
+saveTensors
+scale
+scatterAddRows
+sgdMomentum
+sgdStep
+shiftLeft
+shiftRight
+shiftRows
+sigmoid
+sigmoidGrad
+sign
+silu
+simNormRows
+simNormRowsGrad
+sinRad
+sinTurns
+sinh
+sinusoidalEmbedding
+skew
+small_normal_deviation
+softCrossEntropyRows
+softCrossEntropyRowsGrad
+softmaxRows
+softplus
+solve
+solveTriangular
+sort
+sqrt
+square
+squashCorrection
+stack
+standardError
+stdDev
+stdDevAxis
+stdErr
+stepLearningRate
+stepParameters
+sub
+sumAll
+sumAllFast
+sumAxis
+svd
+swapaxes
+symexp
+symlog
+take
+takeRows
+tanRad
+tanTurns
+tanh
+tanhGrad
+tensordot
+tile
+trace
+trackingKernel
+trapezoid
+trapz
+trapzCoords
+triangle
+trunc
+unique
+valueCounts
+variance
+varianceAxis
+warmupLearningRate
+where
+x0FromEpsilon
+zeros
+zerosLike
+zip
+zscore
+## tests
+zn Attention: causality, measured by whether the future can change the past
+zn BatchNorm: the trap a mode FIELD allows, and a mode ARGUMENT cannot
+zn BiLSTM: position zero can see the end, and a forward LSTM cannot
+zn Categorical and DiagGaussian: logProb, entropy, and what they must agree on
+zn CategoricalScalar quantileBlend: a distribution blended with itself is itself
+zn CategoricalScalar quantileBlend: the blend's mean is exactly the weighted mean of the two
+zn CategoricalScalar quantileBlend: two point masses blend into ONE point mass between them, not two bumps
+zn CategoricalScalar twinTarget: weight 1 is the lower twin exactly, weight 0 the upper - in either order
+zn CategoricalScalar twinTargetRows: the lower twin is chosen row by row
+zn CategoricalScalar: a two-hot - two neighbouring bins, summing to 1; one-hot on a bin; clamped at the ends
+zn CategoricalScalar: decode(encode(x)) is x - on bins, between bins, tiny and huge, both axes
+zn CategoricalScalar: encode is categoricalProject of a point mass
+zn CategoricalScalar: rows are the single values, one per row; bad settings refused
+zn Chain: the parameter list cannot disagree with the network
+zn DataLoader: whole batches, a permuted order, and the row that sits out
+zn Dense.attachAs: a frozen binding computes exactly what a trained one does, and asks for no gradient
+zn Frame: mixed types in one table, and the two things it refuses
+zn GRU: it learns the same memory task, with nine weights instead of twelve
+zn Graph.activate: each activation is its op
+zn Graph.copyToEveryColumn: an exact copy across the columns; its gradient summed back over them
+zn Graph.detach: its value is its input's, and no gradient passes it
+zn Graph.detach: recompute refreshes the copy
+zn Graph.detach: two paths, one detached - the input gets exactly the other path's gradient
+zn Graph.diagGaussianEntropy: DiagGaussian.entropy row by row; a gradient of exactly 1 for every log std
+zn Graph.gatherColumns: every column in order gives back the input; any choice equals gatherColumns exactly
+zn Graph.gatherColumns: its gradient - checkGradient; zero for the unchosen, doubled for one chosen twice
+zn Graph.preActivationPenalty: (|u| - 1)^2 outside [-1, 1], nothing inside; its gradient passes checkGradient
+zn Graph.simNorm: the gradient through a layer into SimNorm passes checkGradient
+zn Graph.softCrossEntropy: an all-zero target row costs exactly nothing - value and gradient
+zn Graph.softCrossEntropy: composes - through a layer, under a scale, and after its target is refilled
+zn Graph.softCrossEntropy: its value is softCrossEntropyRows', its gradient passes checkGradient
+zn Graph.tanhIntoRange: the midpoint at 0, the ends exactly once tanh rounds to +-1; its gradient
+zn LSTM: binding once is what makes it BPTT
+zn LSTM: it learns to remember the first step, which a feedforward net cannot
+zn LatentPlanScorer: each row's score is the plan's discounted rewards plus its end value, computed by hand
+zn LatentPlanScorer: rewrite one candidate's actions and only its score moves - nothing rebuilt
+zn LatentPolicyPlans: each plan is the policy rolled through the model, bit for bit with a row-by-row reroll
+zn LatentPolicyPlans: only each state's first `plans` rows are written, every action in [-1, 1]
+zn LatentPolicyPlans: refusals - more plans than candidates, mismatched widths, the wrong number of steps
+zn LatentPolicyPlans: the same seed gives the same plans, another seed others
+zn LatentRollout.setFinished: refuses a wrong length and anything but 0 or 1 - and a refusal changes nothing
+zn LatentRollout: a step's consistency is the mean over the windows still counting; none left -> 0, not NaN
+zn LatentRollout: each rolled latent is the dynamics applied to the one before, from the first true encoding
+zn LatentRollout: the batch rollout is each character's rollout, row for row
+zn LatentRollout: the consistency loss is the hand computation - rho^t per step, averaged over the steps
+zn LatentRollout: the encoder learns through the rollout's start only, the dynamics through every step
+zn LatentValueTargets: each target is the policy's lookahead through the model, bit for bit by hand
+zn LatentValueTargets: heads that start at zero (BMPC's zero_last) give targets of zero
+zn LatentValueTargets: refusals - a reward head of the wrong width, no target heads, a short target buffer
+zn LatentValueTargets: the same seed gives the same targets, another seed others (the policy's draws)
+zn LayerNorm: at gain 1 and bias 0 it IS layerNormRows; with a gain and a bias, the hand computation
+zn LayerNorm: checkGradient through its gain and bias, and on into the layer below
+zn LstmCell: the forget bias is worth forty times the memory
+zn Mlp: BMPC's shapes, TD-MPC2's initialisation, a zeroed head, and refused specs
+zn Mlp: a frozen attach computes the trained one's output; a target from params stays put, then follows
+zn Mlp: checkGradient through three layers ending in SimNorm - every parameter connected, every group a simplex
+zn Mlp: dropout only with an rng, and only where the spec has it
+zn Mlp: every byte comes back - after a full life, and when any single allocation fails part way
+zn Mppi: on a planted objective the mean converges to its optimum, and the spread shrinks to its floor
+zn Mppi: plan is begin, the rounds of sample - score - refit, and choose - on the world model's scorer
+zn Mppi: samples stay in [-1, 1], are reproducible from the seed, and differ between iterations
+zn Mppi: the refit is the weighted mean and deviation of the elites, by hand
+zn Mppi: the warm start shifts the plan by one step; a cold start is zero; the spread restarts wide
+zn Mppi: with the policy's candidates only, the best of them is returned exactly and nothing else is written
+zn Named: a two-layer network where every axis says what it is
+zn Named: the axis a name refers to, and what follows it through a transpose
+zn Optimizer: one call per step, and Adam earns its state
+zn Optimizer: survives the frame that built it
+zn Params: a frozen binding reads the live weights - an optimizer step elsewhere is seen at its recompute
+zn Params: a target follows - 0 leaves it, 1 copies the live set bit for bit, 1/2 lands halfway
+zn Params: every byte comes back - after a full life, and when any single allocation fails part way
+zn Params: no gradient ever reaches a frozen binding
+zn PolicyDistillationLoss.updateScale: step 0's divergences move the scale; the gradient follows it
+zn PolicyDistillationLoss: a finished row counts for nothing - change its latent and targets, no bit moves
+zn PolicyDistillationLoss: checkGradient through the policy network, every parameter connected
+zn PolicyDistillationLoss: refuses flags, latents or a horizon that do not fit the window
+zn PolicyDistillationLoss: the hand computation - torch's form, then a finished row counting as 0
+zn ReplayBuffer: chronologicalIndexOf undoes slotOf - filling and full; an unfilled slot is at len or beyond
+zn RunningScale: each batch is floored BEFORE the average - torch's order, not jax's
+zn RunningScale: the EMA of max(1, q95 - q5), by hand
+zn RunningScale: the percentiles interpolate as torch's do; the batch is left alone; bad input refused
+zn SequenceReplay: a window is consecutive steps of ONE environment, across the ring's wrap
+zn SequenceReplay: a write-back is all or nothing - any bad origin, and nothing has been written
+zn SequenceReplay: a write-back lands exactly on the rows named; every other row keeps its N(0, 1) target
+zn SequenceReplay: an inactive environment's insertion writes nothing
+zn SequenceReplay: finished is 0 up to and including the first done, and 1 after it
+zn Series fill and drop: a leading gap has nothing to borrow
+zn Series over a strided view: the buffer is not the column
+zn Series: missing is not NaN, and for integers it cannot be
+zn SquashedGaussian: the correction stays finite where the naive form is -inf
+zn StackedLSTM: the shapes meet, the layers are distinct, and depth trains
+zn TanhMeanGaussian: tanh centres, bounded spreads; zero KL at the target; one distillation step's gradient
+zn TransformerBlock: the residual path is clear, and the block starts near identity
+zn WorldModelLoss: a finished window counts for nothing - change what only it reaches, and no bit moves
+zn WorldModelLoss: checkGradient through the heads and the dynamics, every parameter connected
+zn WorldModelLoss: nothing finished is the loss as it always was, bit for bit - the value and every gradient
+zn WorldModelLoss: refilled targets are read at the next recompute - nothing rebuilt
+zn WorldModelLoss: the reward and value terms are the hand computation, on the ROLLED latents
+zn activations batch: shape, limits and the joins
+zn activations: known values, and each against zm
+zn addGaussianActionNoise: clipped noise, actions kept in [-1, 1], reproducible, no noise is no change
+zn addGaussianActionNoise: draws 65536 apart do not repeat - every draw has its own stream
+zn addGaussianActionNoise: unclipped, the noise has the standard deviation asked for
+zn aggregate: the type survives, and an empty group has no answer
+zn all and any: the empty case is forced, not chosen
+zn and zm: no local variable name has leaked into the prose
+zn and zm: the source is ASCII
+zn arena: the caller owns it, and a reset loop needs no wrapper
+zn argExtreme: flat, not per-axis, and ties go to the first
+zn astype: out of range is an error, because Zig makes it one
+zn autograd: a classifier trains through the graph
+zn autograd: attention composed from tape operations, checked by finite difference
+zn autograd: convolution and embedding on the tape, and a CNN that trains
+zn autograd: every operation checked against a finite difference
+zn autograd: softmax, layer norm, scale and dropout against a finite difference
+zn autograd: the tape reproduces the hand-written gradients exactly
+zn axis reductions and selection: each related to a function already trusted
+zn bitwise: two nots, and a shift that refuses to be undefined
+zn calculus: exact on the basis each rule is built from
+zn cartpole batched: one definition, and the GPU twin comes free
+zn cartpole: the physics, not the plumbing
+zn categorical TD loss: project r + gamma z, then soft cross-entropy - equal to the hand computation
+zn categorical: the empirical distribution IS the softmax
+zn categoricalProject: a point mass on an atom stays exactly there
+zn categoricalProject: between two atoms, split in proportion to closeness
+zn categoricalProject: beyond the support, clamped onto its ends
+zn categoricalProject: discount zero - everything moves to the reward
+zn categoricalProject: mass conserved, and the mean kept - Q still obeys Bellman
+zn categoricalProject: refuses what it cannot project
+zn classification: cross-entropy stays finite where the definition does not
+zn clipGradNorm: the direction survives, which per-tensor clipping loses
+zn constructors: two endpoint conventions, and why both are right
+zn conv2d and pooling: identities a convolution must satisfy
+zn describe: the pandas eight, checked against numpy
+zn diffusion: a perfect denoiser walks the forward process exactly backwards
+zn diffusion: eta chooses the sampler, and the step stays on the trajectory
+zn diffusion: guidance extrapolates, and emaUpdate is polyak's complement
+zn diffusion: noising and the epsilon conversion are exact inverses
+zn diffusion: the schedule destroys the signal monotonically and completely
+zn diffusion: the timestep code separates neighbours and spans the chain
+zn dqnTarget: double DQN picks with one net and values with the other
+zn eig: a rotation has no real eigenvalue, and the pair comes out exact
+zn eigh: every eigenpair, and the scale invariance an absolute threshold destroys
+zn einsum: every form against the function it duplicates
+zn elementwise batch: each checked by the law that defines it
+zn end to end: a two-layer network learns XOR
+zn env: a continuous cartpole episode runs, fails, and is reproducible
+zn env: a continuous force does what a discrete push cannot - nothing, and a little
+zn env: hold and swingup are different problems, not one task with two rewards
+zn env: the batched step matches the scalar one row for row
+zn env: the discrete cartpole is the continuous one at plus or minus ten newtons
+zn env: the observation ordering is fixed, and a wrong width is refused
+zn eval: DTW is zero against itself and against a time-scaled copy of itself
+zn exp, log and softplus on the tape: the leveraged pair and the one it cannot reach
+zn factorize: two orders, and the property each one has
+zn fft: the fast transform against the slow one, and the round trip
+zn fit: XOR in three lines
+zn gae: lambda spans TD error to full return, and two flags do two jobs
+zn gated units: no hand-derived backward, and the tape proves it
+zn gatherColumns: the chosen columns of every row, in order, repeats allowed; a bad column refused first
+zn groupBy: sorted groups, a sentinel, and a group for the gaps
+zn hessenberg: the shape is right AND the eigenvalues survive
+zn index tensors: the position type is the caller's, and f32 has a ceiling
+zn init and Dense: the variance is the claim, and a deep net trains
+zn integer division: four answers, all correct, and the caller picks
+zn integers: comparisons, exact arithmetic and addressing
+zn integers: the reductions, and what exactness buys
+zn integers: the widened operations, run at i32
+zn joinRows: four kinds, duplicate keys, and a null that matches nothing
+zn klRobustExpectation: delta 0 is the mean, delta >= log N exactly the minimum, just below it lies between
+zn klRobustExpectation: delta just below log N stays finite, between the minimum and the mean
+zn klRobustExpectation: f32 values of a huge scale agree with f64 - the midpoint never overflows
+zn klRobustExpectation: for small delta it is the mean less sqrt(2 delta) standard deviations
+zn klRobustExpectation: no reweighting within delta goes lower, the dual never goes higher - and both meet
+zn klRobustExpectation: non-finite values are refused
+zn klRobustExpectation: the tilted weights are its gradient
+zn layer norm: the gradient couples the whole row
+zn learn: AWR improves a cartpole policy - the first end-to-end learning gate
+zn learn: SuperTrack in miniature - a policy trained by backprop through a world model
+zn learn: an MPC-trained world model beats a random-action one where it matters
+zn linalg: reconstruct the input, then check the residual
+zn linalg: the general product against the special ones, and the number behind them
+zn linearSchedule: its end points exactly, the line between, flat after
+zn logSoftmax and the comparisons: what compositions lose
+zn logSumExp and determinant: overflow avoided, and a sign that matters
+zn losses: the joins, the limits, and Gibbs' inequality
+zn lstsq, solveTriangular and the transposed matmuls
+zn manip and index: the conventions, pinned where they could go either way
+zn manip copies: materialise, concat and tile
+zn masks, clamp and lerp: the endpoints are the test
+zn mesh, repeat and move: the three that numpy names confusingly
+zn metrics: the undefined cases, which is where these disagree
+zn npy: a round trip, and the three files that must be refused
+zn optim: decoupling, forgetting, and the schedules at their endpoints
+zn optimisers: degenerate cases, bias correction, and scale invariance
+zn pairs with zm: every unary op in the list, value by value
+zn pairs with zm: the four that are not unary
+zn pairs with zm: the gate checks names, so this checks values
+zn perClassMetrics: precision and recall pull in opposite directions
+zn pinv and inverse: the rank cutoff must be relative
+zn policyUpdateDue: the delay counts critic updates
+zn polyakUpdate: frozen at zero, an exact copy at one
+zn powers, logarithms and the remaining masks: identities
+zn ppoClipLoss: the clip is in the gradient, and that is the algorithm
+zn ppoObjective: a KL that cannot go negative, and a minimum that is pessimistic
+zn qr: reconstruction, orthogonality, and what Gram-Schmidt costs
+zn reinforcement learning end to end: the return must RISE
+zn reshapeInfer, swapaxes, stack: three ways a -1 goes wrong
+zn rfft and convolution: against the full transform, and against each other
+zn rl: AWR weights are capped, and the cap is what stops one sample owning the batch
+zn rl: GAE reduces to discounted returns, the clip is pessimistic, the ring forgets
+zn rl: ONE ppoUpdate drives a discrete policy too - no second function needed
+zn rl: OU dimensions are independent, and reset clears the walk
+zn rl: OU noise is correlated in time, where independent noise is not
+zn rl: a PPO update moves the policy toward the actions that had positive advantage
+zn rl: a rollout refuses to wrap, because GAE is a backward recurrence
+zn rl: a saturated action keeps a finite log-prob, where the direct correction does not
+zn rl: a short final stride is weighted by its size, not counted as a whole batch
+zn rl: a truncated transition bootstraps and a terminal one does not
+zn rl: a weight that would overflow is clamped before the exp, not after
+zn rl: advantages are normalised ONCE over the rollout, not per minibatch
+zn rl: an evaluation action is the mode, not a sample, and not the squashed mean
+zn rl: an off-policy step descends the critic loss and the target follows AFTER
+zn rl: an unchanged policy has zero KL and nothing clipped
+zn rl: apply does not touch the statistics, so evaluation cannot drift
+zn rl: categoricalLogProb agrees with the analytic one and has a gradient
+zn rl: each epoch shuffles differently, and the same seed replays exactly
+zn rl: gae matches a hand-computed backward recurrence
+zn rl: klGaussianDiag reads log_std in either shape, and a rank-2 row is not a batch
+zn rl: l2NormalizeRows makes a dot product a cosine, which is what ASE assumes
+zn rl: maskedMean averages over the kept entries, and refuses an empty mask
+zn rl: min gives the pessimism TD3 and DroQ are built on
+zn rl: min routes the whole gradient to the winner, and ties go left
+zn rl: normalising makes two wildly different scales comparable
+zn rl: terminal AND truncated together is a contradiction, not a preference
+zn rl: the SAC target entropy scales with the action dimension
+zn rl: the discrete evaluation action is the argmax, and ties are decided
+zn rl: the exact KL is zero for identical policies and asymmetric otherwise
+zn rl: the minibatch walk visits every sample exactly once per epoch
+zn rl: the normaliser recovers mean and variance where sum-of-squares would not
+zn rl: the reparameterised sample matches the analytic log-prob and differentiates
+zn rl: the style reward rises as the policy fools the discriminator, and is bounded
+zn rl: the tape KL - a spread shared by every row gives exactly what the same spread repeated per row gives
+zn rl: the tape KL agrees with the CPU one, differentiates, and is zero at the prior
+zn rl: the tape KL with a spread per ROW - the closed form, and a gradient through each row's spread
+zn rl: the tape KL's direction - a narrow policy inside a wide target is cheap, the reverse is not
+zn rl: the tape's Gaussian log-prob agrees with the analytic one, and has a gradient
+zn rl: the tracking kernel decays, saturates, and never grows
+zn rl: truncation keeps the bootstrap where termination drops it
+zn sacTarget and CriticAggregate: one slice covers TD3, DroQ, REDQ and CrossQ
+zn saveParameters: a trained network survives a round trip
+zn scans and per-axis indices: the first position, and where NaN goes
+zn schedule: linear decay is straight, ends where it says, and never goes past
+zn serialisation: a trained model survives a round trip, and a bad file is refused
+zn shiftRows and rollingMean: the edges are missing, not zero
+zn simNormRows: every group is a probability vector
+zn simNormRows: groups are independent - shifting one group's inputs changes nothing
+zn simNormRows: in place - into its own input - gives exactly the out-of-place result, forward and gradient
+zn simNormRows: one group spanning the row is softmaxRows, value and gradient
+zn simNormRows: refuses a width that is not a whole number of groups
+zn slice and concat on the tape: gradients against finite differences
+zn softCrossEntropyRows: a one-hot target gives the hard-label loss and gradient exactly
+zn softCrossEntropyRows: at the minimum - prediction equals target - zero gradient, the target's entropy
+zn softCrossEntropyRows: refuses mismatched shapes
+zn softCrossEntropyRows: the gradient matches finite differences
+zn statistics: against arithmetic done by hand, then against laws
+zn statistics: robustness, ties, and the scales that have no answer
+zn stats: each against a sample whose answer is known in closed form
+zn svd: reconstruction, and the small singular value the AtA route loses
+zn symlog: symexp undoes it, zero stays zero, it is odd, and it is the identity near zero
+zn takeRows: one gather behind filtering, sorting and a join
+zn tape activations: the forward matched the tensor version, and now so does the gradient
+zn tape: a gradient is itself a graph node, checked against an analytic Hessian
+zn tape: a zero conditioning leaves AdaLayerNorm as a plain LayerNorm
+zn tape: an encoder block preserves shape and passes gradient to every weight
+zn tape: attention is a convex mix of the values, and it differentiates
+zn tape: reduceRows folds each row, and the three kinds agree with hand sums
+zn tape: reduceRows gradients - sum broadcasts, max routes to the winner
+zn tape: reduceRows(.max) is permutation invariant
+zn tape: the gradient penalty on a linear discriminator, computable by hand
+zn tape: the max mask survives recompute, and ties go to the lowest column
+zn trapz and rfftfreq: exact on a line, and the endpoints count half
+zn trig and hyperbolic: inverses on their branch, and two domain behaviours
+zn trig and rounding batch: laws again, not tables
+zn.Ctx.scope: a context opens an arena over its own allocator
+zn.Ctx: a derived context shares the allocator and gets its own stream
+zn.Ddof: the divisor is named, and undefined cases say so
+zn.Rng: different KINDS of draw at one index are independent
+zn.Rng: different seeds are different streams, and split() derives more
+zn.Rng: every float width stays inside [0, 1), and uniform inside [low, high)
+zn.Rng: floats land in [0,1), and every draw is finite
+zn.Rng: intBelow is in range and roughly flat, with no modulo bias
+zn.Rng: normal draws have the moments of a standard normal
+zn.Rng: the same (seed, index) is the same value, in any order, from any Rng
+zn.Rng: uniform draws have the moments of a uniform
+zn.Tensor manip views: same elements, different addressing
+zn.Tensor.slice and take: windows and gathers into the same buffer
+zn.Tensor: a dense view knows its shape, size and strides
+zn.Tensor: a tensor allocated in an arena needs no free
+zn.Tensor: broadcastTo agrees with broadcastShape
+zn.Tensor: broadcastTo stretches without copying, and refuses what it cannot stretch
+zn.Tensor: fill walks strides rather than memsetting
+zn.Tensor: fromSlice rejects a slice that is merely large enough
+zn.Tensor: indices address the element the strides say they do
+zn.Tensor: reshape keeps the elements in order
+zn.Tensor: transpose is a view, and it is not contiguous
+zn.approxEqAbs: NaN is equal to nothing, infinities only to themselves
+zn.arena: reset frees the contents and leaves the arena usable
+zn.broadcastShape: the NumPy rule, including the cases that should fail
+zn.exp / abs / neg: known values, and the laws that hold for any input
+zn.fillUniform / fillNormal agree with the per-index draws
+zn.layerNormRows: every row comes out with mean 0 and variance 1
+zn.map: an arbitrary function, and shapes that cannot reach the output
+zn.matmul: against a product worked out by hand, and its rejections
+zn.matmul: identity, transpose law, and a strided operand
+zn.mix32: it is a bijection on the values we exercise, and it avalanches
+zn.mseLoss: against hand arithmetic, and zero against itself
+zn.reluGrad: passes the gradient where the INPUT was positive
+zn.scale: multiplies, and the identity and zero cases are the controls
+zn.sgdStep: one descent step, and it composes in place
+zn.sigmoidGrad / tanhGrad: checked against a finite difference, not against themselves
+zn.softmaxRows: rows sum to one, shifting a row changes nothing, and 1000 does not overflow
+zn.sumAll / meanAll / minAll / maxAll over a strided view
+zn.sumAll: exact where the exact answer is representable
+zn.sumAllFast: agrees on benign data and is DOCUMENTED to differ under cancellation
+zn.sumAxis: collapses one axis and checks the rest
+zn.zip: a strided destination gets the same answer as a dense one
+zn.zip: an aliased destination is refused, not silently collapsed
+zn.zip: broadcasting a row against a column fills the whole grid
+zn: no public name carries a suffix that says nothing
+zn: the elementwise set matches zimrmath's, name for name
+zn: the tutorial's first example is this code, and it holds
+zn: the tutorial's reference table matches this file's public surface
+## reference rows
+Activation
+Adam
+Aggregate
+Attached
+Attached
+Attached
+Attached
+Attached
+Attached
+Attached
+Attached
+Attached
+Attention
+Axis
+BatchNorm
+BiLSTM
+Binding
+Bound
+Bound
+BoundGate
+BoundGate
+CartpoleOutcome
+CartpoleState
+CartpoleStep
+CartpoleTask
+Categorical
+CategoricalScalar
+Chain
+Choice
+ClassScore
+CodeOrder
+Column
+Comparison
+CompensatedSum
+ComplexNumber
+Conv2d
+ConvMode
+CriticAggregate
+Ctx
+DType
+DataLoader
+Dataset
+Ddof
+Dense
+DiagGaussian
+DqnKind
+Embedding
+EncoderWeights
+EndPoint
+Error
+Extreme
+FeedForward
+Fit
+FitReport
+Fitting
+Frame
+GRU
+Gate
+Gate
+Gate
+Graph
+GroupBy
+GruCell
+InitScheme
+JoinHow
+Kind
+LSTM
+Last
+LatentPlanScorer
+LatentPolicyPlans
+LatentRollout
+LatentValueTargets
+LayerNorm
+LoaderOptions
+Look
+LstmCell
+MinibatchOrder
+Mlp
+Mppi
+Named
+NamedTensor
+NoiseSchedule
+NormedDense
+NpyHeader
+ObsNormalizer
+OffPolicyModel
+Optimizer
+Options
+Options
+Options
+Options
+Options
+Options
+Options
+Options
+OrnsteinUhlenbeck
+Pair
+Parameters
+Params
+PerClass
+PolicyDistillationLoss
+PpoConfig
+PpoModel
+PpoStats
+Push
+ReplayBuffer
+Rng
+RolloutBuffer
+RolloutStep
+RowPair
+RowReduction
+Run
+Run
+Run
+Run
+Run
+RunningScale
+SequenceReplay
+Series
+Spec
+SquashedDraw
+SquashedGaussian
+StackedLSTM
+Stepped
+Stepped
+Summary
+TanhMeanGaussian
+Temperature
+Tensor
+TransformerBlock
+Transition
+Triangle
+Use
+ValidSum
+Var
+Walk
+Walk2
+WindowOrigin
+WorldModelLoss
+abs
+accuracy
+acosRad
+acosh
+activate
+adagradStep
+adamStep
+adamWStep
+adaptiveLayerNorm
+add
+add
+add
+add
+addColumn
+addGaussianActionNoise
+addNoise
+advantageWeights
+advantages
+affine
+aggregate
+aggregateCritics
+all
+allNonzero
+alloc
+alpha
+alphasCumprod
+any
+anyNonzero
+apply
+apply
+applyBound
+applyBound
+applyBound
+approxEqAbs
+arange
+argExtreme
+argmaxAll
+argmaxAxis
+argmaxRows
+argminAll
+argminAxis
+argsort
+asinRad
+asinh
+astype
+at
+at1
+at2
+atan2Rad
+atanRad
+atanh
+attach
+attach
+attach
+attach
+attach
+attach
+attach
+attach
+attach
+attach
+attachAs
+attachAs
+attachAs
+attachAs
+avgPool2d
+axis
+axis_names
+backward
+begin
+betaSchedule
+binPosition
+binaryCrossEntropyFromLogits
+bincount
+bind
+bind
+bind
+bind
+bits
+bitwiseAnd
+bitwiseNot
+bitwiseOr
+bitwiseXor
+bmm
+booleanMask
+bootstraps
+boundedIndex
+broadcastShape
+broadcastTo
+build
+build
+build
+build
+build
+build
+build
+byteWidth
+capacity
+cartpoleContinuousStep
+cartpoleContinuousStepBatch
+cartpoleObserve
+cartpoleOutcome
+cartpoleReset
+cartpoleStep
+cartpoleStepBatch
+cartpoleTaskReset
+cartpoleTaskStep
+cartpole_action_dim
+cartpole_state_dim
+categorical
+categoricalLogProb
+categoricalProject
+cbrt
+ceil
+check
+checkGradient
+cholesky
+choose
+chronologicalIndexOf
+clamp
+classScore
+classifierFreeGuidance
+clear
+clipByNorm
+clipByValue
+clipGradNorm
+clone
+coefficientOfVariation
+columnNamed
+compareScalar
+compute
+concat
+concat
+conditionNumber
+confusionMatrix
+constant
+conv2d
+conv2d
+convolve
+copyToEveryColumn
+copyToEveryRow
+correlate
+correlation
+correlationMatrix
+cosRad
+cosTurns
+cosh
+cosineLearningRate
+cosineSimilarity
+countNonzero
+countValid
+countValid
+covariance
+crossEntropy
+crossEntropyRows
+crossEntropyRowsGrad
+cummax
+cummin
+cumprod
+cumsum
+decode
+decodeRows
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinit
+deinitScratch
+derive
+describe
+detach
+determinant
+determinantLu
+deterministic
+dft
+diagGaussianEntropy
+diagGaussianLogProb
+diagonal
+diff
+diffusionReverseStep
+discountedReturns
+discriminatorReward
+div
+divCeil
+divExact
+divFloor
+divTrunc
+divisor
+dotAll
+dqnTarget
+draw
+dropColumn
+dropMissing
+dropout
+dtwDistance
+eig
+eigh
+eigvalsSymmetric
+einsum
+elu
+elu
+emaUpdate
+embedding
+encode
+encodeRows
+encoderBlock
+entropy
+entropy
+entropyRows
+epsilonFromX0
+equal
+exp
+exp
+exp2
+explainedVariance
+explore
+expm1
+exponentialLearningRate
+extent
+eye
+factorize
+fft
+fftFreq
+fill
+fill
+fillBackward
+fillForward
+fillMissing
+fillNormal
+fillUniform
+find
+firstRows
+fit
+flatIndex
+flatten
+flip
+floor
+follow
+forActionDim
+format_version
+fromAxis
+fromSlice
+fromSlice
+fromTensorMarkingNaN
+full
+fullLike
+gae
+gatherColumns
+gatherColumns
+gatherRows
+gelu
+gelu
+generalizedAdvantage
+geoMean
+glu
+gradOf
+gradient
+gradient
+gradientOf
+greater
+greaterEqual
+greedy
+groupBy
+groupCount
+harmMean
+height
+hessenberg
+hingeLoss
+histogram
+histogramEdges
+huberLoss
+hypot
+ifft
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+init
+initHe
+initNormal
+initXavier
+intBelow
+interp
+inverse
+isAliased
+isContiguous
+isFloat
+isFull
+isValid
+item
+joinRows
+klDivergenceRows
+klGaussianDiag
+klGaussianDiag
+klRobustExpectation
+kurtosis
+l2NormalizeRows
+layerNormRows
+layerNormRows
+layerNormRowsBackward
+leakyRelu
+len
+len
+lerp
+less
+lessEqual
+linearLearningRate
+linearOverFraction
+linearSchedule
+linspace
+loadNpy
+loadParameters
+loadTensors
+log
+log
+log10
+log1p
+log2
+logProb
+logProb
+logProb
+logProbs
+logSoftmaxRows
+logSumExp
+logSumExpAxis
+log_std_max
+log_std_min
+logicalAnd
+logicalNot
+logicalOr
+logicalXor
+lstsq
+lu
+macroF1
+maeLoss
+magic
+magnitude
+map
+maskedMean
+materialise
+matmul
+matmul
+matmulNT
+matmulTN
+maxAll
+maxAxis
+maxAxis
+maxPool2d
+max_rank
+maximum
+meanAbsDev
+meanAll
+meanAxis
+meanAxis
+meanValid
+median
+medianAbsDev
+meshGrid
+min
+minAll
+minAxis
+minMaxScale
+minimum
+mish
+mixRewards
+mod
+mode
+moveAxis
+moveAxis
+mseLoss
+mseLoss
+mul
+mul
+mul
+name
+namedMatmul
+nanMean
+nanSum
+needsFloat
+neg
+next
+next
+next
+next
+no_row
+nonzero
+norm
+normal
+normalizeAdvantages
+notEqual
+numBatches
+numericalGrad
+numericalGradWorst
+observe
+observe
+of
+of
+offPolicyUpdate
+offsetOf
+oneHotRows
+ones
+onesLike
+outer
+outputLen
+over
+over
+parameter
+parameterCount
+params
+pctChange
+perClassMetrics
+permute
+pinv
+plan
+policyUpdateDue
+polyakUpdate
+pow
+ppoClipLoss
+ppoClipObjective
+ppoClipSample
+ppoEpoch
+ppoObjective
+ppoUpdate
+preActivationPenalty
+prodAll
+prodAxis
+push
+push
+qr
+quantile
+quantileBlend
+quantileSorted
+r2Score
+randomSubset
+readNpyHeader
+reciprocal
+recompute
+record
+reduceRows
+refit
+relu
+relu
+reluGrad
+rem
+rename
+repeatEach
+requireFloat
+requireInt
+requireNumeric
+resampleDropout
+reset
+reshape
+reshuffle
+reshuffle
+resolveInferredShape
+rfft
+rfftfreq
+rmspropStep
+roll
+rollingMean
+rootMeanSquare
+round
+row
+rowDot
+rows
+rows
+rsqrt
+run
+run
+run
+run
+sacTarget
+sample
+sample
+sample
+sample
+sample
+sample
+sample
+saveNpy
+saveParameters
+saveTensors
+scale
+scale
+scaledDotProductAttention
+scatterAddRows
+score
+setAt
+setAt1
+setAt2
+setFinished
+setPpoClipInputs
+sgdMomentum
+sgdStep
+shiftLeft
+shiftRight
+shiftRows
+sigmoid
+sigmoid
+sigmoidGrad
+sign
+silu
+silu
+simNorm
+simNormRows
+simNormRowsGrad
+sinRad
+sinTurns
+sinh
+sinusoidalEmbedding
+size
+skew
+slice
+slice
+slotOf
+small_normal_deviation
+softCrossEntropy
+softCrossEntropyRows
+softCrossEntropyRowsGrad
+softmaxRows
+softmaxRows
+softplus
+softplus
+solve
+solveTriangular
+sort
+split
+sqrt
+square
+squaredRowNorm
+squashCorrection
+squashedReparameterize
+squeeze
+stack
+standardError
+stdDev
+stdDevAxis
+stdErr
+step
+step
+stepBound
+stepBound
+stepLearningRate
+stepParameters
+strides
+sub
+sub
+sub
+sumAll
+sumAllFast
+sumAxis
+sumAxis
+sumValid
+svd
+swapaxes
+swiglu
+symexp
+symlog
+take
+takeRows
+tanRad
+tanTurns
+tanh
+tanh
+tanhGrad
+tanhIntoRange
+tensorCount
+tensordot
+tensors
+tile
+toAxis
+trace
+trackingKernel
+transpose
+transpose
+transposed
+trapezoid
+trapz
+trapzCoords
+triangle
+trunc
+twinTarget
+twinTargetRows
+uniform
+unique
+unitFloat
+unsqueeze
+update
+updateScale
+useScratchAllocator
+validate
+value
+valueCounts
+valueOf
+variance
+variance
+varianceAxis
+warmupLearningRate
+where
+width
+window
+withParams
+writeBack
+x0FromEpsilon
+zeroState
+zeroState
+zeroState
+zeroState
+zeros
+zerosLike
+zip
+zscore

@@ -5,6 +5,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("decal_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex-buffer attributes: world-space position (@0) + world-space normal
 /// (@1). The receiver mesh is uploaded with its model transform baked in.
@@ -17,7 +19,7 @@ pub const Attributes = struct {
 /// Cube3D's camera block (only the view-projection is used). The host binds
 /// Cube3D's camera bind group here (`self.resources`).
 pub const Ubo = struct {
-    vp: [4]@Vector(4, f32) align(16),
+    vp: [4]Vec align(16),
 };
 
 /// Varyings to the FS - world position + world normal.

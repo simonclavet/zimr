@@ -113,7 +113,7 @@ fn weights() mpc.Weights {
 }
 
 fn makeCrane(gpa: Allocator, planned: bool) !Crane {
-    const plan: mpc.CranePlan = try mpc.CranePlan.init(gpa, horizon_knots);
+    const plan: mpc.CranePlan = try .init(gpa, horizon_knots);
     @memset(plan.ctrl, 0);
     @memset(plan.reference, 0);
     return .{
@@ -127,6 +127,8 @@ fn makeCrane(gpa: Allocator, planned: bool) !Crane {
         .trail_next = 0,
     };
 }
+
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
@@ -206,63 +208,13 @@ fn advance(s: *State, c: *Crane, depth: f32) void {
     c.trail_count = @min(c.trail_count + 1, trail_length);
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    if (s.running) {
-        s.accumulator += @min(f.time.delta_time, 0.1);
-        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            advance(s, &s.pd, 5.0);
-            advance(s, &s.planner, 5.0);
-        }
-    }
-
-    z.clearViewport(f, background);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 6.0, .max_distance = 30.0 });
-    z.beginMode3D(gl, cam);
-    drawCrane(s, gl, &s.pd, -2.2);
-    drawCrane(s, gl, &s.planner, 2.2);
-    z.endMode3D(gl);
-}
-
-fn drawCrane(s: *State, gl: *z.WgpuGl, c: *const Crane, depth: f32) void {
-    const rail_y: f32 = 5.0;
-
-    // The rail, and the flag marking the target.
-    s.transform[0] = mulMat(
-        translation(s.target * 0.5, rail_y + 0.15, depth),
-        scaling(s.target + 6.0, 0.12, 0.3),
-    );
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_colour);
-    z.drawLine3D(gl, vec(s.target, rail_y, depth), vec(s.target, rail_y - body.cable - 0.6, depth), flag_colour);
-
-    // The trolley, and an arrow for the acceleration it is being given.
-    const trolley: Vec = vec(c.state[mpc.crane_pos_offset], rail_y, depth);
-    s.transform[0] = mulMat(translation(trolley[0], trolley[1], trolley[2]), scaling(0.7, 0.35, 0.5));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, trolley_colour);
-    z.drawLine3D(gl, trolley, trolley + vec(c.accel * 1.2, 0, 0), flag_colour);
-
-    // Cable and payload. The load turns green once it has genuinely stopped swinging.
-    const load: Vec = payloadAt(c.state, rail_y);
-    z.drawLine3D(gl, trolley, load, cable_colour);
-    const still: bool = @abs(c.state[mpc.crane_angle_offset]) < 0.02 and
-        @abs(c.state[mpc.crane_rate_offset]) < 0.02;
-    s.transform[0] = mulMat(translation(load[0], load[1], load[2]), scaling(0.45, 0.45, 0.45));
-    z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (still) load_still else load_swinging);
-
-    // * THE PAYLOAD'S PATH, which is the comparison drawn: one arrives and stops, the other
-    // keeps drawing arcs long after the trolley has parked.
-    if (c.trail_count > 1) {
-        const start: usize = if (c.trail_count < trail_length) 0 else c.trail_next;
-        for (1..c.trail_count) |i| {
-            const a: Vec = c.trail[(start + i - 1) % trail_length];
-            const b: Vec = c.trail[(start + i) % trail_length];
-            z.drawLine3D(gl, a, b, trail_colour);
-        }
-    }
+fn report(u: ui.Ui, label: []const u8, c: *const Crane) void {
+    u.text("{s} x {d:>6.2}  swing {d:>7.4} rad", .{
+        label,
+        c.state[mpc.crane_pos_offset],
+        c.state[mpc.crane_angle_offset],
+    });
+    u.text("     peak speed {d:>5.2} m/s   accel {d:>6.2}", .{ c.peak_speed, c.accel });
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -306,16 +258,64 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-fn report(u: ui.Ui, label: []const u8, c: *const Crane) void {
-    u.text("{s} x {d:>6.2}  swing {d:>7.4} rad", .{
-        label,
-        c.state[mpc.crane_pos_offset],
-        c.state[mpc.crane_angle_offset],
-    });
-    u.text("     peak speed {d:>5.2} m/s   accel {d:>6.2}", .{ c.peak_speed, c.accel });
+fn drawCrane(s: *State, gl: *z.WgpuGl, c: *const Crane, depth: f32) void {
+    const rail_y: f32 = 5.0;
+
+    // The rail, and the flag marking the target.
+    s.transform[0] = mulMat(
+        translation(s.target * 0.5, rail_y + 0.15, depth),
+        scaling(s.target + 6.0, 0.12, 0.3),
+    );
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_colour);
+    z.drawLine3D(gl, vec(s.target, rail_y, depth), vec(s.target, rail_y - body.cable - 0.6, depth), flag_colour);
+
+    // The trolley, and an arrow for the acceleration it is being given.
+    const trolley: Vec = vec(c.state[mpc.crane_pos_offset], rail_y, depth);
+    s.transform[0] = mulMat(translation(trolley[0], trolley[1], trolley[2]), scaling(0.7, 0.35, 0.5));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, trolley_colour);
+    z.drawLine3D(gl, trolley, trolley + vec(c.accel * 1.2, 0, 0), flag_colour);
+
+    // Cable and payload. The load turns green once it has genuinely stopped swinging.
+    const load: Vec = payloadAt(c.state, rail_y);
+    z.drawLine3D(gl, trolley, load, cable_colour);
+    const still: bool = @abs(c.state[mpc.crane_angle_offset]) < 0.02 and
+        @abs(c.state[mpc.crane_rate_offset]) < 0.02;
+    s.transform[0] = mulMat(translation(load[0], load[1], load[2]), scaling(0.45, 0.45, 0.45));
+    z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (still) load_still else load_swinging);
+
+    // * THE PAYLOAD'S PATH, which is the comparison drawn: one arrives and stops, the other
+    // keeps drawing arcs long after the trolley has parked.
+    if (c.trail_count > 1) {
+        const start: usize = if (c.trail_count < trail_length) 0 else c.trail_next;
+        for (1..c.trail_count) |i| {
+            const a: Vec = c.trail[(start + i - 1) % trail_length];
+            const b: Vec = c.trail[(start + i) % trail_length];
+            z.drawLine3D(gl, a, b, trail_colour);
+        }
+    }
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    if (s.running) {
+        s.accumulator += @min(f.time.delta_time, 0.1);
+        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
+            advance(s, &s.pd, 5.0);
+            advance(s, &s.planner, 5.0);
+        }
+    }
+
+    z.clearViewport(f, background);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 6.0, .max_distance = 30.0 });
+    z.beginMode3D(gl, cam);
+    drawCrane(s, gl, &s.pd, -2.2);
+    drawCrane(s, gl, &s.planner, 2.2);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

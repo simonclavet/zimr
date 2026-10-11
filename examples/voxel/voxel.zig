@@ -26,6 +26,8 @@ const Vec2 = zm.Vec2;
 const clamp = zm.clamp;
 const float = zm.float;
 const vec = zm.vec;
+const Ray = zm.Ray;
+const RayCollision = zm.RayCollision;
 
 pub var zimr_app: z.App = .{};
 
@@ -115,7 +117,7 @@ fn cameraOf(s: *const State) Camera3D {
 /// closest still-present voxel it hits.
 fn breakVoxel(s: *State, cam: Camera3D, vw: f32, vh: f32) void {
     const center: Vec2 = .{ vw * 0.5, vh * 0.5 };
-    const ray: zm.Ray = z.getScreenToWorldRay(center, cam, vw, vh);
+    const ray: Ray = z.getScreenToWorldRay(center, cam, vw, vh);
 
     var best_dist: f32 = 1.0e30;
     var hit_x: usize = 0;
@@ -129,7 +131,7 @@ fn breakVoxel(s: *State, cam: Camera3D, vw: f32, vh: f32) void {
                     continue;
                 }
                 const ctr: Vec = voxelCenter(x, y, zc);
-                const col: zm.RayCollision = z.getRayCollisionBox(ray, .{
+                const col: RayCollision = z.getRayCollisionBox(ray, .{
                     .min = vec(ctr[0] - 0.5, ctr[1] - 0.5, ctr[2] - 0.5),
                     .max = vec(ctr[0] + 0.5, ctr[1] + 0.5, ctr[2] + 0.5),
                 });

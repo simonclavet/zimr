@@ -13,6 +13,7 @@ const std = @import("std");
 const report = @import("test_report.zig");
 const zn = @import("zn");
 const zm = @import("zm");
+const vec = zm.vec;
 const rbt = @import("robot.zig");
 const track = @import("robot_track.zig");
 const dance = @import("robot_dance.zig");
@@ -22,6 +23,11 @@ const kit_mod = @import("robot_latent_kit.zig");
 const zn_mlp = @import("gpu/zn_mlp.zig");
 
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
 const Tensor = zn.Tensor(f32);
 const Graph = zn.Graph(f32);
 const Var = zn.Var;
@@ -32,12 +38,52 @@ const LatentKit = kit_mod.LatentKit;
 const Resident = kit_mod.Resident;
 const Start = kit_mod.Start;
 
+/// The model's eight parameter tensors, random at a sensible scale - in `packWeights`' order: the
+/// first layer's three blocks (features, reference, action) and its bias, then layers two and three.
+fn randomParams(
+    owned: Allocator,
+    random: Random,
+    f: u32,
+    r: u32,
+    a: u32,
+    h: u32,
+) ![8]Tensor {
+    const shapes = [8][2]usize{
+        .{ f, h }, .{ r, h }, .{ a, h }, .{ 1, h }, // first layer
+        .{ h, h }, .{ 1, h }, .{ h, f }, .{ 1, f }, // second and third
+    };
+    var params: [8]Tensor = undefined;
+    for (&params, shapes) |*p, shape| {
+        p.* = try Tensor.alloc(owned, &shape);
+        const deviation: f32 = @sqrt(1.0 / float(shape[0]));
+        for (p.data) |*w| {
+            w.* = deviation * random.floatNorm(f32);
+        }
+    }
+    return params;
+}
+
+/// Random inputs where the caller stages them: block 0 in full, and every later block's reference
+/// and action columns - the z columns of blocks 1 and on are the kit's to fill.
+fn stageInputs(kit: anytype, staging: []f32, random: Random) void {
+    @memset(staging, 0.0);
+    for (0..kit.steps + 1) |step| {
+        const base: usize = kit.blockX(@intCast(step));
+        for (0..kit.rows) |row| {
+            const start: usize = if (step == 0) 0 else kit.features;
+            for (start..kit.width) |c| {
+                staging[base + row * kit.width + c] = random.floatNorm(f32);
+            }
+        }
+    }
+}
+
 test "robot_latent_kit: the kit's rollout matches the CPU model's own step" {
     // The CPU model's step (`robot_st.stepWith`, the very code it trains with) against the kit's
     // rollout, same weights, same inputs, the real feature sizes, 8 steps - each step feeding the
     // next, so a wrong offset anywhere compounds rather than hides.
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -46,8 +92,8 @@ test "robot_latent_kit: the kit's rollout matches the CPU model's own step" {
     const h: u32 = 32;
     const rows: u32 = 4;
     const steps: u32 = 8;
-    var rng: std.Random.DefaultPrng = .init(11);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(11);
+    const random: Random = rng.random();
 
     const params: [8]Tensor = try randomParams(owned, random, f, r, a, h);
 
@@ -85,15 +131,21 @@ test "robot_latent_kit: the kit's rollout matches the CPU model's own step" {
     try expect(worst <= 1.0e-5);
 }
 
-test "robot_latent_kit: every gradient of the rollout matches zimrnum's autodiff" {
-    try gradientsMatch(0);
-}
-
-test "robot_latent_kit: and with goal columns in front, where the two widths differ" {
-    // With a lead the row's stride and the world model's input width differ, and the backward
-    // pass's input-gradient block is laid out by the narrower one - the mix-up that lead 0 (where
-    // they are equal) cannot catch.
-    try gradientsMatch(291);
+/// `count` columns from `first` of a strided block, as a rows x count tensor.
+fn blockTensor(
+    owned: Allocator,
+    source: []const f32,
+    base: u32,
+    rows: u32,
+    stride: u32,
+    first: u32,
+    count: u32,
+) !Tensor {
+    const t: Tensor = try .alloc(owned, &.{ rows, count });
+    for (0..rows) |row| {
+        @memcpy(t.data[row * count ..][0..count], source[base + row * stride + first ..][0..count]);
+    }
+    return t;
 }
 
 /// The kit's backward pass against zimrnum's graph of the CPU model, for rows with `lead` columns
@@ -102,8 +154,8 @@ fn gradientsMatch(lead: u32) !void {
     // The kit's backward pass against zimrnum's graph of the CPU model - built from the model's own
     // `step`, with its own loss (the mean over steps of each step's MSE). The kit's loss is the SUM,
     // so kit = steps x CPU, weight for weight: the factor is part of what is checked, not waved off.
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -112,8 +164,8 @@ fn gradientsMatch(lead: u32) !void {
     const h: u32 = 32;
     const rows: u32 = 4;
     const steps: u32 = 8;
-    var rng: std.Random.DefaultPrng = .init(23);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(23);
+    const random: Random = rng.random();
     const params: [8]Tensor = try randomParams(owned, random, f, r, a, h);
 
     // The kit: forward, then backward, on staged inputs and targets.
@@ -142,7 +194,7 @@ fn gradientsMatch(lead: u32) !void {
     for (&vars, params) |*v, p| {
         v.* = try g.parameter(p);
     }
-    const ones_t: Tensor = try Tensor.alloc(owned, &.{ rows, 1 });
+    const ones_t: Tensor = try .alloc(owned, &.{ rows, 1 });
     @memset(ones_t.data, 1.0);
     const ones: Var = try g.constant(ones_t);
     var z: Var = try g.constant(try blockTensor(owned, staging, kit.blockX(0), rows, kit.width, kit.lead, f));
@@ -183,61 +235,15 @@ fn gradientsMatch(lead: u32) !void {
     try expect(worst <= 1.0e-4 * largest);
 }
 
-/// The model's eight parameter tensors, random at a sensible scale - in `packWeights`' order: the
-/// first layer's three blocks (features, reference, action) and its bias, then layers two and three.
-fn randomParams(
-    owned: Allocator,
-    random: std.Random,
-    f: u32,
-    r: u32,
-    a: u32,
-    h: u32,
-) ![8]Tensor {
-    const shapes = [8][2]usize{
-        .{ f, h }, .{ r, h }, .{ a, h }, .{ 1, h }, // first layer
-        .{ h, h }, .{ 1, h }, .{ h, f }, .{ 1, f }, // second and third
-    };
-    var params: [8]Tensor = undefined;
-    for (&params, shapes) |*p, shape| {
-        p.* = try Tensor.alloc(owned, &shape);
-        const deviation: f32 = @sqrt(1.0 / float(shape[0]));
-        for (p.data) |*w| {
-            w.* = deviation * random.floatNorm(f32);
-        }
-    }
-    return params;
+test "robot_latent_kit: every gradient of the rollout matches zimrnum's autodiff" {
+    try gradientsMatch(0);
 }
 
-/// Random inputs where the caller stages them: block 0 in full, and every later block's reference
-/// and action columns - the z columns of blocks 1 and on are the kit's to fill.
-fn stageInputs(kit: anytype, staging: []f32, random: std.Random) void {
-    @memset(staging, 0.0);
-    for (0..kit.steps + 1) |step| {
-        const base: usize = kit.blockX(@intCast(step));
-        for (0..kit.rows) |row| {
-            const start: usize = if (step == 0) 0 else kit.features;
-            for (start..kit.width) |c| {
-                staging[base + row * kit.width + c] = random.floatNorm(f32);
-            }
-        }
-    }
-}
-
-/// `count` columns from `first` of a strided block, as a rows x count tensor.
-fn blockTensor(
-    owned: Allocator,
-    source: []const f32,
-    base: u32,
-    rows: u32,
-    stride: u32,
-    first: u32,
-    count: u32,
-) !Tensor {
-    const t: Tensor = try Tensor.alloc(owned, &.{ rows, count });
-    for (0..rows) |row| {
-        @memcpy(t.data[row * count ..][0..count], source[base + row * stride + first ..][0..count]);
-    }
-    return t;
+test "robot_latent_kit: and with goal columns in front, where the two widths differ" {
+    // With a lead the row's stride and the world model's input width differ, and the backward
+    // pass's input-gradient block is laid out by the narrower one - the mix-up that lead 0 (where
+    // they are equal) cannot catch.
+    try gradientsMatch(291);
 }
 
 test "robot_latent_kit: every region is checked against its own buffer - the phone fits, four times it does not" {
@@ -252,6 +258,14 @@ test "robot_latent_kit: every region is checked against its own buffer - the pho
     try expectError(error.KitTooSmall, too_big);
 }
 
+fn randomTensor(owned: Allocator, random: Random, rows: u32, cols: u32) !Tensor {
+    const t: Tensor = try .alloc(owned, &.{ rows, cols });
+    for (t.data) |*x| {
+        x.* = random.floatNorm(f32);
+    }
+    return t;
+}
+
 test "robot_latent_kit: Adam on the kit takes the CPU model's step" {
     // The optimiser alone: the kit and the CPU model's AdamSet given IDENTICAL gradients (the real
     // gradients of the rollout's loss, from zimrnum) for three steps, so the moments and the bias
@@ -259,8 +273,8 @@ test "robot_latent_kit: Adam on the kit takes the CPU model's step" {
     // already checked, and because rounding-level differences in them can flip the SIGN of Adam's
     // first step for a weight whose gradient is near zero - which would test the gradients again,
     // badly, rather than the optimiser.
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -269,8 +283,8 @@ test "robot_latent_kit: Adam on the kit takes the CPU model's step" {
     const h: u32 = 32;
     const rows: u32 = 4;
     const steps: u32 = 4;
-    var rng: std.Random.DefaultPrng = .init(31);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(31);
+    const random: Random = rng.random();
     const params: [8]Tensor = try randomParams(owned, random, f, r, a, h);
     var host: compute_host.Compute(zn_mlp) = .initCpu();
     const kit: LatentKit(zn_mlp) = try .init(&host, f, r, a, h, rows, steps, 0, 0);
@@ -290,7 +304,7 @@ test "robot_latent_kit: Adam on the kit takes the CPU model's step" {
     for (&vars, params) |*v, p| {
         v.* = try g.parameter(p);
     }
-    const ones_t: Tensor = try Tensor.alloc(owned, &.{ rows, 1 });
+    const ones_t: Tensor = try .alloc(owned, &.{ rows, 1 });
     @memset(ones_t.data, 1.0);
     const ones: Var = try g.constant(ones_t);
     var z: Var = try g.constant(try randomTensor(owned, random, rows, f));
@@ -344,24 +358,16 @@ test "robot_latent_kit: Adam on the kit takes the CPU model's step" {
     try expect(worst <= 1.0e-6);
 }
 
-fn randomTensor(owned: Allocator, random: std.Random, rows: u32, cols: u32) !Tensor {
-    const t: Tensor = try Tensor.alloc(owned, &.{ rows, cols });
-    for (t.data) |*x| {
-        x.* = random.floatNorm(f32);
-    }
-    return t;
-}
-
 test "robot_latent_kit: the resident tables and ring hold exactly what the CPU would compute" {
     // A real fleet on the baked get-up clip (no retargeting: fast), stepped 40 times with the ring
     // appended after every step; then the kit's buffer read back and held against features computed
     // independently, by the same functions, for records and frames across the live range. BITWISE:
     // the same code on the same numbers - what this checks is the ADDRESSING (slots, rows, lockstep),
     // which is where a bug in resident data would hide.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const codecs = @import("codecs.zig");
     const mjcf = @import("mjcf.zig");
     const robot_mjcf = @import("robot_mjcf.zig");
@@ -372,7 +378,7 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
     defer robot.deinit();
     var options: rbt.Options = .{
         .timestep = 1.0 / 60.0,
-        .gravity = zm.vec(0, 0, -9.81),
+        .gravity = vec(0, 0, -9.81),
         .max_contacts = 256,
     };
     options.solver.algorithm = .newton;
@@ -380,16 +386,16 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;
     const baked: []u8 = blk: {
-        var file: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/getup_train/getup.zclip", .{}) catch
+        var file: Io.File = Io.Dir.cwd().openFile(io, "examples/getup_train/getup.zclip", .{}) catch
             return error.SkipZigTest;
         defer file.close(io);
-        const info: std.Io.File.Stat = try file.stat(io);
+        const info: Io.File.Stat = try file.stat(io);
         const bytes: []u8 = try gpa.alloc(u8, info.size);
         _ = try file.readPositionalAll(io, bytes, 0);
         break :blk bytes;
     };
     defer gpa.free(baked);
-    var clip: dance.Clip = try dance.Clip.fromBytes(gpa, baked);
+    var clip: dance.Clip = try .fromBytes(gpa, baked);
     defer clip.deinit();
     const fleet: *track.Fleet = try .init(gpa, m, &.{&clip}, .{ .envs = 4, .capacity = 32 });
     defer fleet.deinit();
@@ -410,9 +416,9 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
     }
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
-    var state: track.State = try track.State.init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.nbody);
     defer state.deinit(gpa);
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     const expected: []f32 = try gpa.alloc(f32, resident.row);
     defer gpa.free(expected);
@@ -424,9 +430,9 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
             const at: u32 = resident.recordAt(env, index);
             fleet.stateAt(env, index, &data, &state);
             track.local(state, fleet.root, expected[0..resident.features]);
-            try expect(std.mem.eql(f32, expected[0..resident.features], acts[at..][0..resident.features]));
+            try expect(eql(f32, expected[0..resident.features], acts[at..][0..resident.features]));
             const action: []const f32 = acts[at + resident.features ..][0..resident.actions];
-            try expect(std.mem.eql(f32, fleet.replay.actionAt(env, index), action));
+            try expect(eql(f32, fleet.replay.actionAt(env, index), action));
             const frame: u32 = fleet.replay.frameAt(env, index);
             try expect(acts[at + resident.features + resident.actions] == float(frame));
             checked += 1;
@@ -438,17 +444,101 @@ test "robot_latent_kit: the resident tables and ring hold exactly what the CPU w
         fleet.referenceStateInto(&clip, @intCast(frame), &data, &state);
         track.local(state, fleet.root, expected[0..resident.features]);
         track.encodeTargets(m, clip.pose(frame)[clip.nq - m.nq ..], expected[resident.features..]);
-        try expect(std.mem.eql(f32, expected, acts[at..][0..resident.row]));
+        try expect(eql(f32, expected, acts[at..][0..resident.row]));
     }
     try expect(checked == 4 * 32);
 }
+
+/// A real fleet on the baked get-up clip, for the resident-data tests: no retargeting, so fast.
+pub const FleetSetup = struct {
+    gpa: Allocator,
+    doc: @import("codecs.zig").xml.Document,
+    robot: @import("mjcf.zig").Robot,
+    imported: @import("robot_mjcf.zig").Imported,
+    clip: dance.Clip,
+    fleet: *track.Fleet,
+    features: u32,
+    references: u32,
+    actions: u32,
+    actions_buffer: []f32,
+
+    pub fn init(self: *FleetSetup, gpa: Allocator) !void {
+        return self.initFrom(gpa, "examples/getup_train/getup.zclip");
+    }
+
+    /// Everything built here is released again if a later step fails - including the skip when the
+    /// baked clip is missing, which would otherwise leak the robot and fail the test on leaks
+    /// instead of skipping it.
+    fn initFrom(self: *FleetSetup, gpa: Allocator, clip_path: []const u8) !void {
+        const codecs = @import("codecs.zig");
+        const mjcf = @import("mjcf.zig");
+        const robot_mjcf = @import("robot_mjcf.zig");
+        var threaded: Io.Threaded = .init(gpa, .{});
+        defer threaded.deinit();
+        const io: Io = threaded.io();
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        self.* = .{
+            .gpa = undefined,
+            .doc = undefined,
+            .robot = undefined,
+            .imported = undefined,
+            .clip = undefined,
+            .fleet = undefined,
+            .features = undefined,
+            .references = undefined,
+            .actions = undefined,
+            .actions_buffer = undefined,
+        };
+        self.gpa = gpa;
+        self.doc = try codecs.xml.parse(gpa, @embedFile("tests/fixtures/robot/humanoid_flex2.xml"), null);
+        errdefer self.doc.deinit();
+        self.robot = try mjcf.readRobot(gpa, &self.doc);
+        errdefer self.robot.deinit();
+        var options: rbt.Options = .{
+            .timestep = 1.0 / 60.0,
+            .gravity = vec(0, 0, -9.81),
+            .max_contacts = 256,
+        };
+        options.solver.algorithm = .newton;
+        self.imported = try robot_mjcf.build(gpa, &self.robot, options);
+        errdefer self.imported.deinit();
+        const m: *rbt.Model = &self.imported.model;
+        var file: Io.File = Io.Dir.cwd().openFile(io, clip_path, .{}) catch
+            return error.SkipZigTest;
+        defer file.close(io);
+        const info: Io.File.Stat = try file.stat(io);
+        const baked: []u8 = try gpa.alloc(u8, info.size);
+        defer gpa.free(baked);
+        _ = try file.readPositionalAll(io, baked, 0);
+        self.clip = try dance.Clip.fromBytes(gpa, baked);
+        errdefer self.clip.deinit();
+        self.fleet = try track.Fleet.init(gpa, m, &.{&self.clip}, .{ .envs = 4, .capacity = 32 });
+        errdefer self.fleet.deinit();
+        self.features = @intCast(track.localSize(m.nbody));
+        self.references = @intCast(track.targetSize(m));
+        self.actions = @intCast(track.actionSize(m));
+        self.actions_buffer = try gpa.alloc(f32, 4 * self.actions);
+        for (self.actions_buffer, 0..) |*action, i| {
+            action.* = 0.01 * float(i % 7);
+        }
+    }
+
+    pub fn deinit(self: *FleetSetup) void {
+        self.gpa.free(self.actions_buffer);
+        self.fleet.deinit();
+        self.clip.deinit();
+        self.imported.deinit();
+        self.robot.deinit();
+        self.doc.deinit();
+    }
+};
 
 test "robot_latent_kit: the gather assembles on the GPU exactly the windows the CPU would" {
     // The resident ring and tables of a real fleet (the baked get-up), a normaliser, and windows the
     // CPU replay sampled; the kit's blocks read back and held against the CPU's own code - features
     // by `local`, normalised by `Normalizer.toNormal`, references by `encodeTargets`, actions from the
     // replay. BITWISE: the kernel normalises with the CPU's operations in the CPU's order.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var setup: FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -478,7 +568,7 @@ test "robot_latent_kit: the gather assembles on the GPU exactly the windows the 
     }
     const norm: latent.Normalizer = .{ .mean = mean, .spread = spread };
     resident.uploadNormalizer(norm);
-    var rng: std.Random.DefaultPrng = .init(3);
+    var rng: Random.DefaultPrng = .init(3);
     var starts: [4]Start = undefined;
     for (&starts) |*start| {
         const window: track.Replay.Window = fleet.replay.sampleWindow(rng.random(), steps) orelse return error.NoData;
@@ -488,9 +578,9 @@ test "robot_latent_kit: the gather assembles on the GPU exactly the windows the 
     resident.gather(kit, 0);
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
-    var state: track.State = try track.State.init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.nbody);
     defer state.deinit(gpa);
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     const raw: []f32 = try gpa.alloc(f32, setup.features);
     defer gpa.free(raw);
@@ -506,7 +596,7 @@ test "robot_latent_kit: the gather assembles on the GPU exactly the windows the 
                 kit.blockX(0) + row * kit.width
             else
                 kit.blockT(@intCast(step)) + row * setup.features;
-            try expect(std.mem.eql(f32, expected[0..setup.features], acts[z_at..][0..setup.features]));
+            try expect(eql(f32, expected[0..setup.features], acts[z_at..][0..setup.features]));
             if (step < steps) {
                 const block: usize = kit.blockX(@intCast(step)) + row * kit.width;
                 // The pose the servo aimed at during this step: the next frame, clamped.
@@ -515,97 +605,13 @@ test "robot_latent_kit: the gather assembles on the GPU exactly the windows the 
                 const pose: []const f32 = setup.clip.pose(frame)[setup.clip.nq - m.nq ..];
                 track.encodeTargets(m, pose, expected[0..setup.references]);
                 const ref: []const f32 = acts[block + setup.features ..][0..setup.references];
-                try expect(std.mem.eql(f32, expected[0..setup.references], ref));
+                try expect(eql(f32, expected[0..setup.references], ref));
                 const action: []const f32 = acts[block + setup.features + setup.references ..][0..setup.actions];
-                try expect(std.mem.eql(f32, fleet.replay.actionAt(start.env, index), action));
+                try expect(eql(f32, fleet.replay.actionAt(start.env, index), action));
             }
         }
     }
 }
-
-/// A real fleet on the baked get-up clip, for the resident-data tests: no retargeting, so fast.
-pub const FleetSetup = struct {
-    gpa: Allocator,
-    doc: @import("codecs.zig").xml.Document,
-    robot: @import("mjcf.zig").Robot,
-    imported: @import("robot_mjcf.zig").Imported,
-    clip: dance.Clip,
-    fleet: *track.Fleet,
-    features: u32,
-    references: u32,
-    actions: u32,
-    actions_buffer: []f32,
-
-    pub fn init(self: *FleetSetup, gpa: Allocator) !void {
-        return self.initFrom(gpa, "examples/getup_train/getup.zclip");
-    }
-
-    /// Everything built here is released again if a later step fails - including the skip when the
-    /// baked clip is missing, which would otherwise leak the robot and fail the test on leaks
-    /// instead of skipping it.
-    fn initFrom(self: *FleetSetup, gpa: Allocator, clip_path: []const u8) !void {
-        const codecs = @import("codecs.zig");
-        const mjcf = @import("mjcf.zig");
-        const robot_mjcf = @import("robot_mjcf.zig");
-        var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
-        defer threaded.deinit();
-        const io: std.Io = threaded.io();
-        // whole-init-first: the whole struct first - defaults applied, every field named.
-        self.* = .{
-            .gpa = undefined,
-            .doc = undefined,
-            .robot = undefined,
-            .imported = undefined,
-            .clip = undefined,
-            .fleet = undefined,
-            .features = undefined,
-            .references = undefined,
-            .actions = undefined,
-            .actions_buffer = undefined,
-        };
-        self.gpa = gpa;
-        self.doc = try codecs.xml.parse(gpa, @embedFile("tests/fixtures/robot/humanoid_flex2.xml"), null);
-        errdefer self.doc.deinit();
-        self.robot = try mjcf.readRobot(gpa, &self.doc);
-        errdefer self.robot.deinit();
-        var options: rbt.Options = .{
-            .timestep = 1.0 / 60.0,
-            .gravity = zm.vec(0, 0, -9.81),
-            .max_contacts = 256,
-        };
-        options.solver.algorithm = .newton;
-        self.imported = try robot_mjcf.build(gpa, &self.robot, options);
-        errdefer self.imported.deinit();
-        const m: *rbt.Model = &self.imported.model;
-        var file: std.Io.File = std.Io.Dir.cwd().openFile(io, clip_path, .{}) catch
-            return error.SkipZigTest;
-        defer file.close(io);
-        const info: std.Io.File.Stat = try file.stat(io);
-        const baked: []u8 = try gpa.alloc(u8, info.size);
-        defer gpa.free(baked);
-        _ = try file.readPositionalAll(io, baked, 0);
-        self.clip = try dance.Clip.fromBytes(gpa, baked);
-        errdefer self.clip.deinit();
-        self.fleet = try .init(gpa, m, &.{&self.clip}, .{ .envs = 4, .capacity = 32 });
-        errdefer self.fleet.deinit();
-        self.features = @intCast(track.localSize(m.nbody));
-        self.references = @intCast(track.targetSize(m));
-        self.actions = @intCast(track.actionSize(m));
-        self.actions_buffer = try gpa.alloc(f32, 4 * self.actions);
-        for (self.actions_buffer, 0..) |*action, i| {
-            action.* = 0.01 * float(i % 7);
-        }
-    }
-
-    pub fn deinit(self: *FleetSetup) void {
-        self.gpa.free(self.actions_buffer);
-        self.fleet.deinit();
-        self.clip.deinit();
-        self.imported.deinit();
-        self.robot.deinit();
-        self.doc.deinit();
-    }
-};
 
 test "robot_latent_kit: trained on gathered windows, the kit follows the CPU model step for step" {
     // The whole resident training step - gather, rollout, backward, Adam - against the CPU model's
@@ -616,7 +622,12 @@ test "robot_latent_kit: trained on gathered windows, the kit follows the CPU mod
     // steps against the first ten, because each step's loss is on a different batch of only eight
     // windows, and because a model that starts as "nothing changes" (a near-zero output layer, which
     // Adam's first steps move by more than its own size) rises before it falls.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     var setup: FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -660,7 +671,7 @@ test "robot_latent_kit: trained on gathered windows, the kit follows the CPU mod
     host.upload(.adam_m, packed_weights);
     host.upload(.adam_v, packed_weights);
 
-    var rng: std.Random.DefaultPrng = .init(17);
+    var rng: Random.DefaultPrng = .init(17);
     var windows: [rows]track.Replay.Window = undefined;
     var starts: [rows]Start = undefined;
     var worst: f32 = 0.0;
@@ -681,7 +692,7 @@ test "robot_latent_kit: trained on gathered windows, the kit follows the CPU mod
             const staged: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
             const at: usize = kit.blockX(0) + kit.lead + kit.features + kit.references;
             const taken: []const f32 = fleet.replay.actionAt(starts[0].env, starts[0].index);
-            try expect(std.mem.eql(f32, taken, staged[at..][0..kit.actions]));
+            try expect(eql(f32, taken, staged[at..][0..kit.actions]));
         }
         kit.loss();
         const gpu: f32 = (host.readLatest(.loss) orelse return error.NoReadback)[0];
@@ -713,8 +724,8 @@ test "robot_latent_kit: goal columns in front of every row, and the world model 
     // model must never see. Its rollout must still match the CPU model's step BITWISE - which it can
     // only do if every layer reads exactly its slice of the strided row. (The backward pass, whose
     // input-gradient block is narrower than the row, is checked with a lead in `gradientsMatch`.)
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -723,8 +734,8 @@ test "robot_latent_kit: goal columns in front of every row, and the world model 
     const h: u32 = 32;
     const rows: u32 = 4;
     const steps: u32 = 8;
-    var rng: std.Random.DefaultPrng = .init(41);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(41);
+    const random: Random = rng.random();
     const params: [8]Tensor = try randomParams(owned, random, f, r, a, h);
     var host: compute_host.Compute(zn_mlp) = .initCpu();
     const kit: LatentKit(zn_mlp) = try .init(&host, f, r, a, h, rows, steps, f, 0);
@@ -766,7 +777,7 @@ test "robot_latent_kit: goal columns in front of every row, and the world model 
             // And the join wrote the next row's state columns, not its goal columns.
             const next_goal: []const f32 = acts[kit.blockX(@intCast(step + 1)) + row * kit.width ..][0..kit.lead];
             const staged_goal: []const f32 = staging[kit.blockX(@intCast(step + 1)) + row * kit.width ..][0..kit.lead];
-            try expect(std.mem.eql(f32, staged_goal, next_goal));
+            try expect(eql(f32, staged_goal, next_goal));
         }
     }
     try expect(worst == 0.0);
@@ -777,7 +788,7 @@ test "robot_latent_kit: the gather fills each row's goal, and the goal block, fr
     // and the contiguous goal block holds the same for steps 1..steps - against the CPU learner's
     // own recipe (`referenceStateInto`, `local`, `toNormal`), BITWISE. And the world model's slice
     // must be exactly what it is without a lead.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var setup: FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -807,7 +818,7 @@ test "robot_latent_kit: the gather fills each row's goal, and the goal block, fr
     }
     const norm: latent.Normalizer = .{ .mean = mean, .spread = spread };
     resident.uploadNormalizer(norm);
-    var rng: std.Random.DefaultPrng = .init(9);
+    var rng: Random.DefaultPrng = .init(9);
     var starts: [4]Start = undefined;
     for (&starts) |*start| {
         const window: track.Replay.Window = fleet.replay.sampleWindow(rng.random(), steps) orelse return error.NoData;
@@ -817,9 +828,9 @@ test "robot_latent_kit: the gather fills each row's goal, and the goal block, fr
     resident.gather(kit, 0);
     const acts: []const f32 = host.readLatest(.acts) orelse return error.NoReadback;
 
-    var state: track.State = try track.State.init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.nbody);
     defer state.deinit(gpa);
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     const raw: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(raw);
@@ -835,9 +846,9 @@ test "robot_latent_kit: the gather fills each row's goal, and the goal block, fr
             // A record's goal is where the PREVIOUS step was going: that step's row, and its target.
             if (step > 0) {
                 const in_row: []const f32 = acts[kit.blockX(@intCast(step - 1)) + row * kit.width ..][0..f];
-                try expect(std.mem.eql(f32, expected, in_row));
+                try expect(eql(f32, expected, in_row));
                 const in_block: []const f32 = acts[kit.blockG(@intCast(step)) + row * f ..][0..f];
-                try expect(std.mem.eql(f32, expected, in_block));
+                try expect(eql(f32, expected, in_block));
             }
             // The world model's slice is unmoved by the lead: its state (step 0) and its target.
             fleet.stateAt(start.env, index, &data, &state);
@@ -847,7 +858,7 @@ test "robot_latent_kit: the gather fills each row's goal, and the goal block, fr
                 kit.blockX(0) + row * kit.width + kit.lead
             else
                 kit.blockT(@intCast(step)) + row * f;
-            try expect(std.mem.eql(f32, expected, acts[z_at..][0..f]));
+            try expect(eql(f32, expected, acts[z_at..][0..f]));
         }
     }
 }
@@ -857,7 +868,7 @@ test "robot_latent_kit: a missing baked clip skips the resident tests cleanly, l
     // found. It must come back as a skip with everything released - the testing allocator fails
     // this test on any leak.
     var setup: FleetSetup = undefined;
-    try expectError(error.SkipZigTest, setup.initFrom(std.testing.allocator, "no/such/clip.zclip"));
+    try expectError(error.SkipZigTest, setup.initFrom(testing_allocator, "no/such/clip.zclip"));
 }
 
 test "robot_latent_kit: the exploration noise is centred, has unit spread, and is not correlated" {
@@ -896,8 +907,8 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
     // A policy choosing every step's action, the world model predicting the consequence, 8 steps -
     // against the CPU learner's own `policyWith` feeding the CPU model's `stepWith`. Not bitwise: the
     // CPU sums the policy's state and goal terms interleaved, the kit goal block then state block.
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -907,8 +918,8 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
     const hp: u32 = 32;
     const rows: u32 = 4;
     const steps: u32 = 8;
-    var rng: std.Random.DefaultPrng = .init(53);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(53);
+    const random: Random = rng.random();
     const world: [8]Tensor = try randomParams(owned, random, f, r, a, h);
     const policy_shapes = [7][2]usize{
         .{ f, hp }, .{ f, hp }, .{ 1, hp }, // first layer: state, goal, bias
@@ -963,7 +974,9 @@ test "robot_latent_kit: the policy acts in the rollout, and the kit follows the 
         for (0..steps) |step| {
             const at: usize = kit.blockX(@intCast(step)) + row * kit.width;
             const goal: []const f32 = staging[at..][0..f];
-            latent.policyWith(policy, policy_hidden[0], policy_hidden[1], z, goal, action);
+            // The kit's policy is the seven-tensor one: it does not see what it applies (plan A1; the
+            // kit catches up in Stage G), so the CPU side is handed no applied action either.
+            latent.policyWith(policy, policy_hidden[0], policy_hidden[1], z, goal, null, action);
             // The noise, from the kit's own function (the kernel's), then the scale.
             const step_seed: u32 = zn_mlp.latStepSeed(1234, @intCast(step));
             for (action, 0..) |*x, j| {
@@ -990,8 +1003,8 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     // through a FIXED world model, against zimrnum's graph built from the CPU learner's own
     // `policyOnGraph` and the CPU model's own `step`, the same noise drawn from the kit's hash. The
     // kit's loss is the SUM over steps: every policy gradient must be `steps` times the CPU's.
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -1008,8 +1021,8 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     // is checked against autodiff too.
     const smooth: f32 = 0.3;
     const seed: u32 = 99;
-    var rng: std.Random.DefaultPrng = .init(61);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(61);
+    const random: Random = rng.random();
     const world: [8]Tensor = try randomParams(owned, random, f, r, a, h);
     const policy_shapes = [7][2]usize{
         .{ f, hp }, .{ f, hp }, .{ 1, hp }, // first layer: state, goal, bias
@@ -1080,24 +1093,25 @@ test "robot_latent_kit: the policy's gradients through the frozen world model ma
     for (&world_vars, world) |*v, p| {
         v.* = try g.parameter(p);
     }
-    const ones_t: Tensor = try Tensor.alloc(owned, &.{ rows, 1 });
+    const ones_t: Tensor = try .alloc(owned, &.{ rows, 1 });
     @memset(ones_t.data, 1.0);
     const ones: Var = try g.constant(ones_t);
-    const zeros_t: Tensor = try Tensor.alloc(owned, &.{ rows, a });
+    const zeros_t: Tensor = try .alloc(owned, &.{ rows, a });
     @memset(zeros_t.data, 0.0);
     const no_action: Var = try g.constant(zeros_t);
     var z: Var = try g.constant(start);
     var total: ?Var = null;
     var previous: ?Var = null;
     for (0..steps) |step| {
-        const noise_t: Tensor = try Tensor.alloc(owned, &.{ rows, a });
+        const noise_t: Tensor = try .alloc(owned, &.{ rows, a });
         const step_seed: u32 = zn_mlp.latStepSeed(seed, @intCast(step));
         for (0..rows) |row| {
             for (0..a) |j| {
                 noise_t.data[row * a + j] = zn_mlp.latNoise(step_seed, @intCast(row), @intCast(j));
             }
         }
-        const raw: Var = try latent.Learner.policyOnGraph(g, policy_vars, z, try g.constant(goals[step]), ones);
+        const goal: Var = try g.constant(goals[step]);
+        const raw: Var = try latent.Learner.policyOnGraph(g, policy_vars, z, goal, null, ones);
         const noisy: Var = try g.add(raw, try g.scale(try g.constant(noise_t), sigma));
         const action: Var = try g.scale(noisy, scale);
         z = try latent.LatentWorld.step(g, world_vars, z, try g.constant(refs[step]), action, ones);
@@ -1139,8 +1153,8 @@ test "robot_latent_kit: Adam moves only the policy's weights, and takes zimrnum'
     // and bias corrections at t = 1, 2, 3). And the world model's weights and optimiser state must not
     // move by a bit - its gradient region is filled with NON-zero numbers, so a step that strayed out
     // of the policy's region would change them.
-    const gpa: Allocator = std.testing.allocator;
-    var arena: std.heap.ArenaAllocator = .init(gpa);
+    const gpa: Allocator = testing_allocator;
+    var arena: ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const owned: Allocator = arena.allocator();
     const f: u32 = 291;
@@ -1148,8 +1162,8 @@ test "robot_latent_kit: Adam moves only the policy's weights, and takes zimrnum'
     const a: u32 = 35;
     const h: u32 = 16;
     const hp: u32 = 16;
-    var rng: std.Random.DefaultPrng = .init(71);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(71);
+    const random: Random = rng.random();
     const world: [8]Tensor = try randomParams(owned, random, f, r, a, h);
     const policy_shapes = [7][2]usize{
         .{ f, hp }, .{ f, hp }, .{ 1, hp }, // first layer: state, goal, bias
@@ -1199,7 +1213,7 @@ test "robot_latent_kit: Adam moves only the policy's weights, and takes zimrnum'
         }
     }
     const after: []const f32 = host.readLatest(.params) orelse return error.NoReadback;
-    try expect(std.mem.eql(f32, world_before, after[0..kit.param_count]));
+    try expect(eql(f32, world_before, after[0..kit.param_count]));
     const first_moment: []const f32 = host.readLatest(.adam_m) orelse return error.NoReadback;
     const second_moment: []const f32 = host.readLatest(.adam_v) orelse return error.NoReadback;
     for (first_moment[0..kit.param_count], second_moment[0..kit.param_count]) |m, v| {
@@ -1230,7 +1244,12 @@ test "robot_latent_kit: the policy trained on gathered windows follows the CPU l
     // same weights, normaliser and world model, the SAME windows and the SAME noise (the kit's hash,
     // handed to the learner), 30 updates, compared by the loss each sees before updating. The world
     // model is not trained here, so a mismatch in the policy cannot hide behind the world model's.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     var setup: FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -1271,7 +1290,7 @@ test "robot_latent_kit: the policy trained on gathered windows follows the CPU l
     host.upload(.adam_m, weights);
     host.upload(.adam_v, weights);
 
-    var rng: std.Random.DefaultPrng = .init(29);
+    var rng: Random.DefaultPrng = .init(29);
     var windows: [rows]track.Replay.Window = undefined;
     var starts: [rows]Start = undefined;
     var worst: f32 = 0.0;
@@ -1325,7 +1344,7 @@ test "robot_latent_kit: two updates in one frame keep their own windows" {
     // What the start slots are for. In a frame every upload lands before any of the frame's work runs,
     // so two updates staging their windows to the same place would both gather the second one's. Staged
     // to their own slots - both uploads first, as a frame would - each gather finds its own.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var setup: FleetSetup = undefined;
     try setup.init(gpa);
     defer setup.deinit();
@@ -1351,7 +1370,7 @@ test "robot_latent_kit: two updates in one frame keep their own windows" {
     @memset(mean, 0.0);
     @memset(spread, 1.0);
     resident.uploadNormalizer(.{ .mean = mean, .spread = spread });
-    var rng: std.Random.DefaultPrng = .init(4);
+    var rng: Random.DefaultPrng = .init(4);
     var first_batch: [rows]Start = undefined;
     var second_batch: [rows]Start = undefined;
     for (&first_batch, &second_batch) |*a, *b| {
@@ -1364,9 +1383,9 @@ test "robot_latent_kit: two updates in one frame keep their own windows" {
     resident.stageStarts(&first_batch, 0, steps);
     resident.stageStarts(&second_batch, 1, steps);
 
-    var state: track.State = try track.State.init(gpa, fleet.m.nbody);
+    var state: track.State = try .init(gpa, fleet.m.nbody);
     defer state.deinit(gpa);
-    var data: rbt.Data = try rbt.Data.init(gpa, fleet.m);
+    var data: rbt.Data = try .init(gpa, fleet.m);
     defer data.deinit();
     const expected: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(expected);
@@ -1377,7 +1396,7 @@ test "robot_latent_kit: two updates in one frame keep their own windows" {
             fleet.stateAt(start.env, start.index, &data, &state);
             track.local(state, fleet.root, expected);
             const staged: []const f32 = acts[kit.blockX(0) + row * kit.width ..][0..f];
-            try expect(std.mem.eql(f32, expected, staged));
+            try expect(eql(f32, expected, staged));
         }
     }
 }

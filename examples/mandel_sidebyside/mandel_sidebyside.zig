@@ -152,8 +152,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .label = "mandel_sbs_gpu",
     });
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
-    var sw: z.raster.Context = try z.raster.Context.init(gpa, @intCast(sw_w), @intCast(sw_h));
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    var sw: z.raster.Context = try .init(gpa, @intCast(sw_w), @intCast(sw_h));
+    const sw_fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         sw_w,

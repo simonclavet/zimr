@@ -33,7 +33,13 @@ const clamp = zm.clamp;
 const normalize = zm.normalize;
 const cosRad = zm.cosRad;
 const sinRad = zm.sinRad;
+const Vec = zm.Vec;
+const Vec3 = zm.Vec3;
+const vec = zm.vec;
 const bufPrint = std.fmt.bufPrint;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -102,7 +108,7 @@ const State = struct {
     ///
     /// I wrote a hand-rolled left-drag first. It was worse, and it was worse in the specific
     /// way that phone-only development punishes: it had no pinch, no pan, and a pop.
-    cam: z.OrbitCamera = .init(zm.vec(0.0, 0.15, -1.15), 3.1),
+    cam: z.OrbitCamera = .init(vec(0.0, 0.15, -1.15), 3.1),
 
     /// The camera pose we last RENDERED. A path trace cannot be realtime, so the render is
     /// driven by CHANGE, not by every frame.
@@ -139,7 +145,7 @@ const State = struct {
 };
 
 /// `zm.cross` is Vec4. This is three lines and unambiguous.
-fn cross3(a: zm.Vec3, b: zm.Vec3) zm.Vec3 {
+fn cross3(a: Vec3, b: Vec3) Vec3 {
     return .{
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -148,10 +154,10 @@ fn cross3(a: zm.Vec3, b: zm.Vec3) zm.Vec3 {
 }
 
 const Basis = struct {
-    eye: zm.Vec3,
-    right: zm.Vec3,
-    up: zm.Vec3,
-    fwd: zm.Vec3,
+    eye: Vec3,
+    right: Vec3,
+    up: Vec3,
+    fwd: Vec3,
 };
 
 /// The orbit camera, as an eye plus an orthonormal basis. Computed ONCE per render, on the
@@ -160,21 +166,21 @@ const Basis = struct {
 /// `OrbitCamera` works in `Vec` (4-wide); the tracer works in Vec3. The conversion happens
 /// exactly here, once, rather than being sprinkled through the kernel.
 fn cameraBasis(s: *const State) Basis {
-    const e4: zm.Vec = s.cam.eye();
-    const t4: zm.Vec = s.cam.target;
-    const eye: zm.Vec3 = .{ e4[0], e4[1], e4[2] };
-    const tgt: zm.Vec3 = .{ t4[0], t4[1], t4[2] };
+    const e4: Vec = s.cam.eye();
+    const t4: Vec = s.cam.target;
+    const eye: Vec3 = .{ e4[0], e4[1], e4[2] };
+    const tgt: Vec3 = .{ t4[0], t4[1], t4[2] };
 
-    const fwd: zm.Vec3 = normalize(tgt - eye);
-    const world_up: zm.Vec3 = .{ 0, 1, 0 };
-    const right: zm.Vec3 = normalize(cross3(fwd, world_up));
-    const up: zm.Vec3 = cross3(right, fwd);
+    const fwd: Vec3 = normalize(tgt - eye);
+    const world_up: Vec3 = .{ 0, 1, 0 };
+    const right: Vec3 = normalize(cross3(fwd, world_up));
+    const up: Vec3 = cross3(right, fwd);
     return .{ .eye = eye, .right = right, .up = up, .fwd = fwd };
 }
 
 fn tileHeaders(s: *const State, buf: []Group.H, tiles: u32, spp: u32) []Group.H {
     const cam: Basis = cameraBasis(s);
-    const rows: u32 = (rt_h + tiles - 1) / tiles;
+    const rows: u32 = @divCeil(rt_h, tiles);
     var i: u32 = 0;
     while (i < tiles) : (i += 1) {
         const y0: u32 = i * rows;
@@ -209,7 +215,7 @@ fn tileHeaders(s: *const State, buf: []Group.H, tiles: u32, spp: u32) []Group.H 
 /// Blit a landed band into the framebuffer. `index` is the tile's position in the header
 /// slice we submitted - which is how an out-of-order result still knows where it belongs.
 fn blitTile(s: *State, index: usize, bytes: []const u8) void {
-    const rows: u32 = (rt_h + n_tiles - 1) / n_tiles;
+    const rows: u32 = @divCeil(rt_h, n_tiles);
     const y0: u32 = @as(u32, @intCast(index)) * rows;
     const y1: u32 = @min(y0 + rows, rt_h);
     const want: usize = @as(usize, rt_w) * (y1 - y0) * 4;
@@ -240,7 +246,7 @@ fn startRender(s: *State, use_workers: bool, spp: u32) void {
 
     var hdr_buf: [n_tiles]Group.H = undefined;
     const headers: []Group.H = tileHeaders(s, &hdr_buf, n_tiles, spp);
-    const payload: []const u8 = std.mem.sliceAsBytes(&scene);
+    const payload: []const u8 = sliceAsBytes(&scene);
 
     if (use_workers) {
         // ONE line submits every tile. The pool's `pump()` then hands one to each free worker,
@@ -260,10 +266,10 @@ fn startRender(s: *State, use_workers: bool, spp: u32) void {
     // The bad way, kept on purpose: the SAME kernel, run inline, right here. The image comes
     // out identical - the tracer is deterministic, and there is a test that says so - and the
     // frame simply does not happen while it runs.
-    var arena: std.heap.ArenaAllocator = .init(s.gpa);
+    var arena: ArenaAllocator = .init(s.gpa);
     defer arena.deinit();
     for (headers, 0..) |h, i| {
-        var w: std.Io.Writer = .fixed(s.tile_buf);
+        var w: Io.Writer = .fixed(s.tile_buf);
         tracer.traceTile(arena.allocator(), h, payload, &w) catch |err| {
             s.err_msg = @errorName(err);
             continue;
@@ -494,7 +500,7 @@ fn update(f: *z.Frame, s: *State) void {
             u.text("submitted {d}  max_out {d} KB  band {d} KB", .{
                 s.submitted,
                 kernels.registry.max_output / 1024,
-                (rt_w * ((rt_h + n_tiles - 1) / n_tiles) * 4) / 1024,
+                (rt_w * @divCeil(rt_h, n_tiles) * 4) / 1024,
             });
         }
     }

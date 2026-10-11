@@ -48,6 +48,7 @@ const flagships = [_]z.AppVtable{
     z.eraseApp(@import("ex_plot3d_demo").app), // 3D plotting
     z.eraseApp(@import("ex_sph_fluid_2d").app), // GPU SPH fluid
     z.eraseApp(@import("ex_fluid_sort").app), // GPU SPH fluid (sorted grid)
+    z.eraseApp(@import("ex_zimrnum_field").app), // zimrnum on the CPU and the GPU, and their difference
     z.eraseApp(@import("ex_four_ways").app),
     z.eraseApp(@import("ex_worker_png").app), // PNG encode on a Web Worker (off the main thread)
     z.eraseApp(@import("ex_mandel_julia").app), // fractal explorer
@@ -153,6 +154,18 @@ fn update(f: *z.Frame, s: *State) void {
             drawPill(f, px, py, pill_w, pill_h, s.active);
             return;
         }
+    }
+
+    // Page Down and Page Up switch too - keys no flagship uses - consumed the same way as a tap.
+    if (z.isKeyPressed(f.input, .page_down)) {
+        s.active = (s.active + 1) % n_apps;
+        drawPill(f, px, py, pill_w, pill_h, s.active);
+        return;
+    }
+    if (z.isKeyPressed(f.input, .page_up)) {
+        s.active = (s.active + n_apps - 1) % n_apps;
+        drawPill(f, px, py, pill_w, pill_h, s.active);
+        return;
     }
 
     s.launcher.tickFullscreen(f, s.ids[s.active]);

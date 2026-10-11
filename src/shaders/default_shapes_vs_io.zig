@@ -25,6 +25,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("default_shapes_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex attributes consumed by this stage.  Locations match the
 /// `Vertex2D` layout in `src/gpu_frame.zig` - keep them in sync if
@@ -48,7 +50,7 @@ pub const Attributes = struct {
 /// Zig 0.16 has no `@Matrix` builtin; this is the SPIR-V-compatible
 /// representation that codegen knows how to bind.
 pub const Ubo = struct {
-    view_projection: [4]@Vector(4, f32),
+    view_projection: [4]Vec,
 };
 
 /// Outputs to fragment - aliases `Interp` from common_io so VS

@@ -16,10 +16,14 @@
 //! State lives in a struct (held on the App), not a module global, and the whole
 //! thing compiles to nothing in ship.
 const std = @import("std");
+const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const ArrayList = std.ArrayList;
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const leakwatch = @import("leakwatch.zig");
 
+// lint:off arch-check: wasm's linear memory is what is watched
 const is_wasm: bool = builtin.target.cpu.arch == .wasm32;
 /// On in debug / release-with-asserts; compiled out in ship (matches assertf).
 const active: bool = builtin.mode == .debug or
@@ -100,7 +104,7 @@ pub const MemWatch = struct {
 /// mirror case (a cross-free that does not underflow) - that is what the gate's
 /// "net live bytes grew" on one side and shrank on the other would show.
 pub const CountingAllocator = struct {
-    backing: std.mem.Allocator,
+    backing: Allocator,
     live_bytes: usize = 0,
     /// Which side this counts ("example" / "engine"), for the misuse message.
     label: []const u8 = "",
@@ -111,7 +115,7 @@ pub const CountingAllocator = struct {
     /// side, phase and scope. Null the rest of the time, which costs one branch per call.
     watch: ?*leakwatch.LeakWatch = null,
 
-    const vtable: std.mem.Allocator.VTable = .{
+    const vtable: Allocator.VTable = .{
         .alloc = alloc,
         .resize = resize,
         .remap = remap,
@@ -137,7 +141,7 @@ pub const CountingAllocator = struct {
         self.live_bytes -= n;
     }
 
-    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
+    pub fn allocator(self: *CountingAllocator) Allocator {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
@@ -212,29 +216,9 @@ pub const CountingAllocator = struct {
     }
 };
 
-/// Label everything allocated through `gpa` until the matching `popScope` - for the
-/// `--leak-trace` report, so a surviving block says WHICH subsystem made it
-/// ("frame: glyph_cache"). Engine code calls it at subsystem entry points with the
-/// allocator it already holds; no global is involved.
-///
-/// A no-op unless `gpa` is a `CountingAllocator` with a tracer attached - i.e. everywhere
-/// except a smoke run with `--leak-trace` - so it is safe to leave in hot-ish paths.
-pub fn pushScope(gpa: std.mem.Allocator, label: []const u8) void {
-    if (tracerOf(gpa)) |w| {
-        w.push(label);
-    }
-}
-
-/// End the scope `pushScope` began. Same no-op rule.
-pub fn popScope(gpa: std.mem.Allocator) void {
-    if (tracerOf(gpa)) |w| {
-        w.pop();
-    }
-}
-
 /// The tracer under `gpa`, when `gpa` is a `CountingAllocator` that has one. Recognised by
 /// its vtable - the one thing an `Allocator` value says about what it is.
-fn tracerOf(gpa: std.mem.Allocator) ?*leakwatch.LeakWatch {
+fn tracerOf(gpa: Allocator) ?*leakwatch.LeakWatch {
     if (gpa.vtable != &CountingAllocator.vtable) {
         return null;
     }
@@ -242,13 +226,33 @@ fn tracerOf(gpa: std.mem.Allocator) ?*leakwatch.LeakWatch {
     return counting.watch;
 }
 
+/// Label everything allocated through `gpa` until the matching `popScope` - for the
+/// `--leak-trace` report, so a surviving block says WHICH subsystem made it
+/// ("frame: glyph_cache"). Engine code calls it at subsystem entry points with the
+/// allocator it already holds; no global is involved.
+///
+/// A no-op unless `gpa` is a `CountingAllocator` with a tracer attached - i.e. everywhere
+/// except a smoke run with `--leak-trace` - so it is safe to leave in hot-ish paths.
+pub fn pushScope(gpa: Allocator, label: []const u8) void {
+    if (tracerOf(gpa)) |w| {
+        w.push(label);
+    }
+}
+
+/// End the scope `pushScope` began. Same no-op rule.
+pub fn popScope(gpa: Allocator) void {
+    if (tracerOf(gpa)) |w| {
+        w.pop();
+    }
+}
+
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 
 test "CountingAllocator: net live bytes follow alloc, grow, shrink and free" {
-    var counting: CountingAllocator = .{ .backing = std.testing.allocator, .label = "example" };
-    const gpa: std.mem.Allocator = counting.allocator();
-    var list: std.ArrayList(u8) = .empty;
+    var counting: CountingAllocator = .{ .backing = testing_allocator, .label = "example" };
+    const gpa: Allocator = counting.allocator();
+    var list: ArrayList(u8) = .empty;
     try list.appendNTimes(gpa, 7, 100);
     try expectEqual(list.capacity, counting.live_bytes);
     list.shrinkAndFree(gpa, 10);
@@ -262,8 +266,8 @@ test "CountingAllocator: a free through the wrong counter is caught, not wrapped
     // Two counters over one backing allocator, as the app runs them. The example
     // allocates; the ENGINE frees it. The engine never handed those bytes out, so its
     // tally would underflow - instead it counts the mix-up and clamps.
-    var example: CountingAllocator = .{ .backing = std.testing.allocator, .label = "example" };
-    var engine: CountingAllocator = .{ .backing = std.testing.allocator, .label = "engine" };
+    var example: CountingAllocator = .{ .backing = testing_allocator, .label = "example" };
+    var engine: CountingAllocator = .{ .backing = testing_allocator, .label = "engine" };
     const saved_log_level: std.log.Level = std.testing.log_level;
     std.testing.log_level = .err; // the warning IS the behaviour under test; keep a pass silent
     defer std.testing.log_level = saved_log_level;
@@ -280,11 +284,11 @@ test "pushScope: engine code labels its allocations through the allocator it hol
     // The `--leak-trace` wiring: a tracer UNDER a counter, and engine code that only holds
     // the counter's `Allocator`. `pushScope` must find the tracer through it, and each entry
     // must record which side it came through.
-    var watch: leakwatch.LeakWatch = .init(std.testing.allocator, std.testing.allocator);
+    var watch: leakwatch.LeakWatch = .init(testing_allocator, testing_allocator);
     defer watch.deinit();
     var engine: CountingAllocator = .{ .backing = watch.allocator(), .label = "engine" };
     engine.watch = &watch;
-    const engine_gpa: std.mem.Allocator = engine.allocator();
+    const engine_gpa: Allocator = engine.allocator();
 
     pushScope(engine_gpa, "glyph_cache");
     const block: []u8 = try engine_gpa.alloc(u8, 32);
@@ -297,7 +301,7 @@ test "pushScope: engine code labels its allocations through the allocator it hol
     try expectEqualStrings("engine", entry.side);
 
     // Any other allocator: a no-op, not a crash.
-    pushScope(std.testing.allocator, "ignored");
-    popScope(std.testing.allocator);
+    pushScope(testing_allocator, "ignored");
+    popScope(testing_allocator);
     try expectEqual(@as(usize, 0), watch.scopes.items.len);
 }

@@ -28,6 +28,9 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const ArrayList = std.ArrayList;
 const zm = @import("zm");
 const rbt = @import("robot.zig");
 const zimrphysics = @import("zimrphysics.zig");
@@ -452,30 +455,24 @@ pub const Ragdoll = struct {
     }
 };
 
-/// Rebuild `m` in `world` as rigid bodies and joints, posed as `d` holds (`d` current).
-///
-/// -- *** ANY POSE: THE RAGDOLL IS MADE AT qpos0, THEN POSED --
-///
-/// A zimrphysics joint measures from its orientation AT CREATION: a revolute joint's zero angle is
-/// the pose it was built in, and so are a swing-twist joint's frames - while `driveToPose` hands a
-/// hinge motor the raw MJCF angle and the limits are MJCF ranges, both measured from `qpos0`.
-/// Built in any other pose, every hinge would be driven - and limited - off by its angle at
-/// creation. So the parts and joints are always made at `qpos0` (`buildAtRest`), where the
-/// engine's zeros are MJCF's, and the finished ragdoll is moved to `d`: any pose is valid.
-pub fn build(
-    gpa: Allocator,
-    world: *zimrphysics.World,
-    m: *const rbt.Model,
-    d: *const rbt.Data,
-    opts: Options,
-) !Ragdoll {
-    // Only the ragdoll's own deinit is in scope here: `buildAtRest`'s errdefers ended with it, so
-    // a failed `setPose` frees each slice exactly once (they were live alongside it at first -
-    // a double free on this path, caught in review).
-    var ragdoll: Ragdoll = try buildAtRest(gpa, world, m, opts);
-    errdefer ragdoll.deinit();
-    try ragdoll.setPose(gpa, world, d);
-    return ragdoll;
+/// A symmetric half-cone wide enough for a hinge's whole range: the swing-twist joint cannot
+/// hold an asymmetric one, so the side the hinge could not reach becomes reachable. Measured,
+/// not hidden, by the plan's limit-mismatch test.
+fn halfCone(m: *const rbt.Model, joint: u32, limits: bool) f32 {
+    if (!limits) {
+        return pi;
+    }
+    const range: [2]f32 = m.jnt_range[joint] orelse return 0.5 * pi;
+    return @max(@abs(range[0]), @abs(range[1]));
+}
+
+fn localPivot(
+    world: *const zimrphysics.World,
+    handle: zimrphysics.BodyHandle,
+    anchor: Vec,
+) Vec {
+    const body: *const zimrphysics.Body = &world.bodies.data[handle.index()];
+    return rotate(conjugate(body.rot), anchor - body.com_pos);
 }
 
 /// `build`'s body: every part and joint made at `qpos0` (a private rest pose), unposed.
@@ -485,7 +482,7 @@ fn buildAtRest(
     m: *const rbt.Model,
     opts: Options,
 ) !Ragdoll {
-    var rest: rbt.Data = try rbt.Data.init(gpa, m);
+    var rest: rbt.Data = try .init(gpa, m);
     defer rest.deinit();
     @memcpy(rest.pos, m.qpos0);
     rest.stage = .stale;
@@ -508,7 +505,7 @@ fn buildAtRest(
 
     const part_of_body: []u32 = try gpa.alloc(u32, body_count);
     errdefer gpa.free(part_of_body);
-    var robot_body_list: std.ArrayList(u32) = .empty;
+    var robot_body_list: ArrayList(u32) = .empty;
     defer robot_body_list.deinit(gpa);
     part_of_body[0] = no_part;
     for (1..body_count) |b| {
@@ -536,7 +533,7 @@ fn buildAtRest(
     errdefer gpa.free(com_local);
 
     // -- One compound per part, from every geom of the bodies that make it up. --
-    var children: std.ArrayList(zimrphysics.CompoundChild) = .empty;
+    var children: ArrayList(zimrphysics.CompoundChild) = .empty;
     defer children.deinit(gpa);
     for (0..part_count) |part| {
         const home: u32 = robot_body[part];
@@ -587,7 +584,7 @@ fn buildAtRest(
     }
 
     // -- One joint per part below the root, from the hinges its robot body carries. --
-    var joint_list: std.ArrayList(Joint) = .empty;
+    var joint_list: ArrayList(Joint) = .empty;
     defer joint_list.deinit(gpa);
     for (0..part_count) |part| {
         const child_body: u32 = robot_body[part];
@@ -711,24 +708,30 @@ fn buildAtRest(
     };
 }
 
-/// A symmetric half-cone wide enough for a hinge's whole range: the swing-twist joint cannot
-/// hold an asymmetric one, so the side the hinge could not reach becomes reachable. Measured,
-/// not hidden, by the plan's limit-mismatch test.
-fn halfCone(m: *const rbt.Model, joint: u32, limits: bool) f32 {
-    if (!limits) {
-        return pi;
-    }
-    const range: [2]f32 = m.jnt_range[joint] orelse return 0.5 * pi;
-    return @max(@abs(range[0]), @abs(range[1]));
-}
-
-fn localPivot(
-    world: *const zimrphysics.World,
-    handle: zimrphysics.BodyHandle,
-    anchor: Vec,
-) Vec {
-    const body: *const zimrphysics.Body = &world.bodies.data[handle.index()];
-    return rotate(conjugate(body.rot), anchor - body.com_pos);
+/// Rebuild `m` in `world` as rigid bodies and joints, posed as `d` holds (`d` current).
+///
+/// -- *** ANY POSE: THE RAGDOLL IS MADE AT qpos0, THEN POSED --
+///
+/// A zimrphysics joint measures from its orientation AT CREATION: a revolute joint's zero angle is
+/// the pose it was built in, and so are a swing-twist joint's frames - while `driveToPose` hands a
+/// hinge motor the raw MJCF angle and the limits are MJCF ranges, both measured from `qpos0`.
+/// Built in any other pose, every hinge would be driven - and limited - off by its angle at
+/// creation. So the parts and joints are always made at `qpos0` (`buildAtRest`), where the
+/// engine's zeros are MJCF's, and the finished ragdoll is moved to `d`: any pose is valid.
+pub fn build(
+    gpa: Allocator,
+    world: *zimrphysics.World,
+    m: *const rbt.Model,
+    d: *const rbt.Data,
+    opts: Options,
+) !Ragdoll {
+    // Only the ragdoll's own deinit is in scope here: `buildAtRest`'s errdefers ended with it, so
+    // a failed `setPose` frees each slice exactly once (they were live alongside it at first -
+    // a double free on this path, caught in review).
+    var ragdoll: Ragdoll = try buildAtRest(gpa, world, m, opts);
+    errdefer ragdoll.deinit();
+    try ragdoll.setPose(gpa, world, d);
+    return ragdoll;
 }
 
 /// The plan's "limp" baseline on the REDUCED side: no joint stiffness, damping or armature and
@@ -776,7 +779,7 @@ const Humanoid = struct {
         h.source = &.{};
         if (fixed_base) {
             const free_joint: []const u8 = "<freejoint name=\"root\"/>";
-            const at: usize = std.mem.indexOf(u8, embedded, free_joint) orelse return error.NoFreeJoint;
+            const at: usize = indexOf(u8, embedded, free_joint) orelse return error.NoFreeJoint;
             h.source = try gpa.alloc(u8, embedded.len - free_joint.len);
             @memcpy(h.source[0..at], embedded[0..at]);
             @memcpy(h.source[at..], embedded[at + free_joint.len ..]);
@@ -808,7 +811,7 @@ const Humanoid = struct {
         h.imported.deinit();
         h.robot.deinit();
         h.doc.deinit();
-        std.testing.allocator.free(h.source);
+        testing_allocator.free(h.source);
     }
 
     /// The whole reduced model's centre of mass.
@@ -856,7 +859,7 @@ test "robot_maximal: the maximal humanoid has the reduced one's mass, centre of 
     // the same geoms at the same density, but by different code: robot_mjcf's inertia-from-geoms
     // and zimrphysics' compound builder. If they disagreed, every later comparison would be
     // comparing two different humanoids.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var h: Humanoid = undefined;
     try Humanoid.load(gpa, &h);
     defer h.deinit();
@@ -940,10 +943,20 @@ test "robot_maximal: the maximal humanoid has the reduced one's mass, centre of 
     try expect(worst_inertia < 1.0e-2);
 }
 
+fn relativeRotation(
+    world: *const zimrphysics.World,
+    ragdoll: *const Ragdoll,
+    joint: Joint,
+) Quat {
+    const a: Quat = world.bodies.data[ragdoll.bodyIndex(joint.parent)].rot;
+    const b: Quat = world.bodies.data[ragdoll.bodyIndex(joint.child)].rot;
+    return qmul(conjugate(a), b);
+}
+
 test "robot_maximal: every part's frame reads back as the reduced forward kinematics" {
     // The bookkeeping test: `com_local` is what maps a recentred compound back to a robot body
     // frame, and a mistake there would put every drawn limb and every comparison off by the COM.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var h: Humanoid = undefined;
     try Humanoid.load(gpa, &h);
     defer h.deinit();
@@ -1017,7 +1030,7 @@ test "robot_maximal: both humanoids fall like one point mass" {
     // Gravity, timestep and integrator conventions, checked where the answer is known exactly:
     // with no floor, internal forces cancel and the centre of mass follows the discrete law of
     // semi-implicit Euler, z_n = z_0 - g dt^2 n(n+1)/2. Both engines should, to rounding.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var h: Humanoid = undefined;
     try Humanoid.load(gpa, &h);
     defer h.deinit();
@@ -1088,7 +1101,12 @@ test "robot_maximal: the drop - both humanoids land, and the maximal joints stay
     // a few configurations, because its first run did not come to rest and a single number
     // would not say why. The asserts are the sanity bar; the printed table is what the plan's
     // journal records.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
 
     // -- The reduced side, once. --
     var reduced_height: f32 = 0.0;
@@ -1195,16 +1213,6 @@ test "robot_maximal: the drop - both humanoids land, and the maximal joints stay
     }
 }
 
-fn relativeRotation(
-    world: *const zimrphysics.World,
-    ragdoll: *const Ragdoll,
-    joint: Joint,
-) Quat {
-    const a: Quat = world.bodies.data[ragdoll.bodyIndex(joint.parent)].rot;
-    const b: Quat = world.bodies.data[ragdoll.bodyIndex(joint.child)].rot;
-    return qmul(conjugate(a), b);
-}
-
 test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit inside the maximal limit?" {
     // ** ONE HINGE AT A TIME, so a push can only come from that hinge's own joint. Everything
     // else stays at qpos0 (where the ankles' two pivots coincide too), gravity is off, nothing
@@ -1218,7 +1226,7 @@ test "robot_maximal: one hinge at a time - does an in-range MJCF angle sit insid
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const pushed_threshold: f32 = 1.0e-4; // rad in one step
     for ([_]TwistHinge{ .first, .last }) |choice| {
         var h: Humanoid = undefined;
@@ -1412,7 +1420,7 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const at_500 = [_]PoseRun{
         .{
             .label = "reduced PD kp400 kv20 (the ladder's)",
@@ -1468,7 +1476,7 @@ test "robot_maximal: reaching a pose - root pinned, gravity on, both engines, th
                 defer h.deinit();
                 const m: *rbt.Model = &h.imported.model;
                 limpReduced(m);
-                var target: rbt.Data = try rbt.Data.init(gpa, m);
+                var target: rbt.Data = try .init(gpa, m);
                 defer target.deinit();
                 @memcpy(target.pos, m.qpos0);
                 if (reach_squat) {
@@ -1565,7 +1573,7 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const dt: f32 = 1.0 / 60.0;
     const steps: u32 = 180; // 3 s
     const configs = [_]FallingHold{
@@ -1601,7 +1609,7 @@ test "robot_maximal: holding the squat while falling onto the floor, at 60 Hz, b
         defer h.deinit();
         const m: *rbt.Model = &h.imported.model;
         limpReduced(m);
-        var target: rbt.Data = try rbt.Data.init(gpa, m);
+        var target: rbt.Data = try .init(gpa, m);
         defer target.deinit();
         @memcpy(target.pos, m.qpos0);
         _ = robot_mjcf.applyKeyframe(m, &target, h.robot.keyframes[0]);
@@ -1732,7 +1740,7 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const dt: f32 = 1.0 / 60.0;
     const steps: u32 = 120; // 2 s
     const scenarios = [_]FreeScenario{
@@ -1751,7 +1759,7 @@ test "robot_maximal: driving a FREE body to the squat at 60 Hz - zero gravity, t
             if (!scenario.gravity) {
                 m.opt.gravity = vec_zero;
             }
-            var target: rbt.Data = try rbt.Data.init(gpa, m);
+            var target: rbt.Data = try .init(gpa, m);
             defer target.deinit();
             @memcpy(target.pos, m.qpos0);
             _ = robot_mjcf.applyKeyframe(m, &target, h.robot.keyframes[0]);
@@ -1868,7 +1876,7 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const frame_dt: f32 = 1.0 / 60.0;
     const frames: u32 = 180;
     const drives = [_]FloorDrive{
@@ -1889,7 +1897,7 @@ test "robot_maximal: maximal motors on the floor at a 60 Hz frame rate - what ma
         try Humanoid.loadWith(gpa, &h, false, frame_dt);
         defer h.deinit();
         const m: *rbt.Model = &h.imported.model;
-        var target: rbt.Data = try rbt.Data.init(gpa, m);
+        var target: rbt.Data = try .init(gpa, m);
         defer target.deinit();
         @memcpy(target.pos, m.qpos0);
         _ = robot_mjcf.applyKeyframe(m, &target, h.robot.keyframes[0]);
@@ -1944,7 +1952,7 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const dt: f32 = 1.0 / 60.0;
     const frames: u32 = 600; // 10 s
     for ([_]f32{ 0.0, 0.5, 1.0 }) |shove| {
@@ -1953,7 +1961,7 @@ test "robot_maximal: standing - can each engine hold the standing pose on the fl
         defer h.deinit();
         const m: *rbt.Model = &h.imported.model;
         limpReduced(m);
-        var target: rbt.Data = try rbt.Data.init(gpa, m);
+        var target: rbt.Data = try .init(gpa, m);
         defer target.deinit();
         @memcpy(target.pos, m.qpos0);
         target.stage = .stale;
@@ -2047,7 +2055,7 @@ test "robot_maximal: massDiagonal against the mass matrix measured through inver
     // and moved normally with M_ii measured as (M e_i)_i = ID(e_i)_i - c_i. This compares the
     // two on both humanoids (floating and fixed-base), prints every DOF that disagrees, and fails
     // if any does - it printed "0 of 27" and "0 of 21" for a long time without asserting it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     for ([_]bool{ false, true }) |fixed_base| {
         var h: Humanoid = undefined;
         try Humanoid.loadWith(gpa, &h, fixed_base, test_timestep);

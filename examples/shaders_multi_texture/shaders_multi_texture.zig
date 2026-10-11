@@ -26,6 +26,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -89,7 +90,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     });
 
     // THREE sources - the reason effects2d grew a texture count.
-    var fx_host: z.effects2d.Host = try z.effects2d.Host.init(
+    var fx_host: z.effects2d.Host = try .init(
         gpa,
         f.gl,
         shading_vs_wgsl,
@@ -103,8 +104,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         "fx_mask",
     );
 
-    var prng: std.Random.DefaultPrng = .init(0xB14D_E5A1);
-    const rnd: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0xB14D_E5A1);
+    const rnd: Random = prng.random();
     var discs: [disc_count]Disc = undefined;
     const palette = [disc_count]Color{
         .{ .r = 245, .g = 120, .b = 90, .a = 255 },

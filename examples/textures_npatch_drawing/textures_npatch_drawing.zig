@@ -18,6 +18,7 @@ const float = zm.float;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const Color = zm.Color;
+const Vec2 = zm.Vec2;
 const c = Color;
 const clamp = zm.clamp;
 
@@ -83,7 +84,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const img: z.Image = try makeNinePatch(gpa);
     // A Sprite owns a copy of the pixels; sink.image uploads + caches the GPU
     // texture lazily on first draw and binds it by id for the 9-patch.
-    const sprite: z.Sprite = try z.Sprite.fromImage(gpa, img);
+    const sprite: z.Sprite = try .fromImage(gpa, img);
     z.unloadImage(gpa, img);
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
     s.* = .{ .sprite = sprite, .font = font };
@@ -95,7 +96,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    const mouse: zm.Vec2 = z.getMousePosition(f.input);
+    const mouse: Vec2 = z.getMousePosition(f.input);
     const ox: f32 = 120.0;
     const oy: f32 = 110.0;
     const dw: f32 = clamp(mouse[0] - ox, 40.0, 560.0);
@@ -103,10 +104,10 @@ fn update(f: *z.Frame, s: *State) void {
 
     const info: z.NPatchInfo = .{
         .source = .{ .x = 0, .y = 0, .width = @floatFromInt(patch_px), .height = @floatFromInt(patch_px) },
-        .left = @intFromFloat(border_px),
-        .top = @intFromFloat(border_px),
-        .right = @intFromFloat(border_px),
-        .bottom = @intFromFloat(border_px),
+        .left = @round(border_px),
+        .top = @round(border_px),
+        .right = @round(border_px),
+        .bottom = @round(border_px),
         .layout = 0, // NPATCH_NINE_PATCH
     };
     const dest: z.Rectangle = .{ .x = ox, .y = oy, .width = dw, .height = dh };

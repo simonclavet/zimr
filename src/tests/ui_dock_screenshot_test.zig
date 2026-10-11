@@ -5,6 +5,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
 const ui = @import("../ui.zig");
 const shapes2d = @import("../shapes2d.zig");
 const text2d = @import("../text2d.zig");
@@ -13,7 +15,7 @@ const width: u32 = 720;
 const height: u32 = 480;
 
 test "ui: dockspace with 3 docked windows -> PNG" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
         // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
@@ -63,9 +65,9 @@ test "ui: dockspace with 3 docked windows -> PNG" {
         u.text("Console (inactive tab)", .{});
     }
 
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
     ui.renderToPng(
         gpa,
         io,
@@ -83,7 +85,7 @@ test "ui: dockspace with 3 docked windows -> PNG" {
 // captures the drop-target preview without needing a real input loop.
 
 test "ui: dock drag overlay -> PNG" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = .{
         .gpa = gpa,
         // * `ui.UiContext` moved from a bare arena to `FrameArena` (an arena plus a
@@ -147,9 +149,9 @@ test "ui: dock drag overlay -> PNG" {
     // `dragging_window`'s id, only checks for non-null.
     ctx.dock.dragging_window = 0x1234;
 
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
     ui.renderToPng(
         gpa,
         io,

@@ -1,7 +1,8 @@
 const zm = @import("zm");
 const float = zm.float;
 const spirv = @import("std").spirv;
-const col_out = @extern(*addrspace(.output) @Vector(4, f32), .{ .name = "col", .decoration = .{ .location = 0 } });
+const Vec = zm.Vec;
+const col_out = @extern(*addrspace(.output) Vec, .{ .name = "col", .decoration = .{ .location = 0 } });
 
 export fn main() callconv(.spirv_vertex) void {
     const vi: u32 = spirv.vertex_index;

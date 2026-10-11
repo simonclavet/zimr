@@ -21,7 +21,7 @@ pub const Params = extern struct {
 pub const g = k.Globals(@This());
 const b_data = g.bind(.data);
 
-/// The kernel. Identical on CPU and GPU; buffers reached via module-level `b`.
+/// The kernel, the same on CPU and GPU: the array is reached through the module-level `b_data`.
 pub fn double(c: k.Ctx(@This())) void {
     if (c.id >= c.params.count) {
         return;

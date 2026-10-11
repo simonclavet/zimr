@@ -37,6 +37,7 @@ const Quat = zm.Quat;
 const d3 = z.draw3d;
 const bufPrint = std.fmt.bufPrint;
 const Color = zm.Color;
+const Vec2 = zm.Vec2;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 /// The default clip, so the viewer is never blank: 10 seconds of `dance1_subject2`, frames
@@ -258,30 +259,30 @@ fn addClip(s: *State, gpa: Allocator, bytes: []const u8, name: []const u8) !void
 /// `web.userfile` exposes that instead of hiding it behind a virtual filesystem the way
 /// emscripten does. See its doc comment.
 fn pollUserFiles(s: *State, gpa: Allocator) void {
-    while (z.web.userfile.pendingCount() > 0) {
-        const size: usize = z.web.userfile.nextSize();
+    while (z.userfile.pendingCount() > 0) {
+        const size: usize = z.userfile.nextSize();
         if (size == 0 or size > max_file_bytes) {
             setStatus(s, "file too large ({d} bytes); skipped", .{size});
-            z.web.userfile.discardNext();
+            z.userfile.discardNext();
             continue;
         }
 
         var name_buf: [64]u8 = @splat(0);
-        const name_len: usize = z.web.userfile.nextName(&name_buf);
+        const name_len: usize = z.userfile.nextName(&name_buf);
 
         const buf: []u8 = gpa.alloc(u8, size) catch {
             setStatus(s, "out of memory for {d} bytes", .{size});
-            z.web.userfile.discardNext();
+            z.userfile.discardNext();
             continue;
         };
         defer gpa.free(buf);
 
-        const got: usize = z.web.userfile.readNext(buf);
+        const got: usize = z.userfile.readNext(buf);
         if (got == 0) {
             // The buffer was refused, so the file is still queued. Discard it explicitly or
             // this loop spins forever on the same entry.
             setStatus(s, "could not read {d} bytes", .{size});
-            z.web.userfile.discardNext();
+            z.userfile.discardNext();
             continue;
         }
 
@@ -357,6 +358,86 @@ fn drawSkeleton(
     }
 }
 
+fn drawPanel(s: *State, u: ui.Ui) void {
+    if (u.window("mocap viewer", .{
+        .initial_pos = .{ 12, 12 },
+        .initial_size = .{ 330, 470 },
+    })) |w| {
+        defer w.close();
+
+        u.text("Drop .bvh or .fbx files anywhere, or tap Load.", .{});
+
+        // The Load button's rectangle is handed to the host every frame so the invisible
+        // <input type="file"> tracks it. A stale overlay would swallow taps meant elsewhere.
+        _ = u.button("Load .bvh / .fbx", .{});
+        const rmin: Vec2 = u.getItemRectMin();
+        const rmax: Vec2 = u.getItemRectMax();
+        s.picker_rect = .{ rmin[0], rmin[1], rmax[0] - rmin[0], rmax[1] - rmin[1] };
+        z.userfile.setPickerRect(
+            s.picker_rect[0],
+            s.picker_rect[1],
+            s.picker_rect[2],
+            s.picker_rect[3],
+            ".bvh,.fbx",
+        );
+
+        if (s.status_len > 0) {
+            u.text("{s}", .{s.status[0..s.status_len]});
+        }
+        u.separator();
+
+        if (s.clip_count == 0) {
+            u.text("no clips loaded", .{});
+            return;
+        }
+
+        const a: *Clip = &s.clips[s.active];
+        const frames: f32 = float(@max(a.clip.animation.keyframeCount, 0));
+        const duration: f32 = frames * a.clip.frame_time;
+
+        _ = u.checkbox("play", &s.playing);
+        u.sameLine(.{});
+        _ = u.checkbox("loop", &s.looping);
+        u.sameLine(.{});
+        _ = u.checkbox("in place", &s.in_place);
+        _ = u.checkbox("end sites", &s.show_end_sites);
+        u.sameLine(.{});
+        _ = u.checkbox("axes", &s.show_axes);
+
+        _ = u.slider("time", &s.play_time, .{ .min = 0.0, .max = duration, .fmt = "{d:.2}s" });
+        const current_frame: usize = @floor(@max(s.play_time / a.clip.frame_time, 0));
+        // The count straight from the integer, not back out of its f32 copy.
+        const frame_count: usize = @intCast(@max(a.clip.animation.keyframeCount, 0));
+        u.text("frame {d} / {d}   {d:.0} fps", .{
+            current_frame,
+            frame_count,
+            1.0 / a.clip.frame_time,
+        });
+
+        u.separator();
+        u.text("units ({s})", .{a.units.label()});
+        inline for (@typeInfo(Units).@"enum".field_names, 0..) |_, i| {
+            const unit: Units = @fromBackingInt(@intCast(i));
+            if (i > 0) {
+                u.sameLine(.{});
+            }
+            if (u.button(unit.label(), .{})) {
+                a.units = unit;
+            }
+        }
+
+        u.separator();
+        u.text("clips", .{});
+        for (s.clips[0..s.clip_count], 0..) |*c, i| {
+            _ = u.checkbox(c.label(), &c.visible);
+            u.sameLine(.{});
+            if (u.button("select", .{})) {
+                s.active = i;
+            }
+        }
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const gl: *z.WgpuGl = f.gl;
     pollUserFiles(s, s.gpa);
@@ -411,83 +492,6 @@ fn update(f: *z.Frame, s: *State) void {
     z.endMode3D(gl);
 
     drawPanel(s, u);
-}
-
-fn drawPanel(s: *State, u: ui.Ui) void {
-    if (u.window("mocap viewer", .{
-        .initial_pos = .{ 12, 12 },
-        .initial_size = .{ 330, 470 },
-    })) |w| {
-        defer w.close();
-
-        u.text("Drop .bvh or .fbx files anywhere, or tap Load.", .{});
-
-        // The Load button's rectangle is handed to the host every frame so the invisible
-        // <input type="file"> tracks it. A stale overlay would swallow taps meant elsewhere.
-        _ = u.button("Load .bvh / .fbx", .{});
-        const rmin: zm.Vec2 = u.getItemRectMin();
-        const rmax: zm.Vec2 = u.getItemRectMax();
-        s.picker_rect = .{ rmin[0], rmin[1], rmax[0] - rmin[0], rmax[1] - rmin[1] };
-        z.web.userfile.setPickerRect(
-            s.picker_rect[0],
-            s.picker_rect[1],
-            s.picker_rect[2],
-            s.picker_rect[3],
-            ".bvh,.fbx",
-        );
-
-        if (s.status_len > 0) {
-            u.text("{s}", .{s.status[0..s.status_len]});
-        }
-        u.separator();
-
-        if (s.clip_count == 0) {
-            u.text("no clips loaded", .{});
-            return;
-        }
-
-        const a: *Clip = &s.clips[s.active];
-        const frames: f32 = float(@max(a.clip.animation.keyframeCount, 0));
-        const duration: f32 = frames * a.clip.frame_time;
-
-        _ = u.checkbox("play", &s.playing);
-        u.sameLine(.{});
-        _ = u.checkbox("loop", &s.looping);
-        u.sameLine(.{});
-        _ = u.checkbox("in place", &s.in_place);
-        _ = u.checkbox("end sites", &s.show_end_sites);
-        u.sameLine(.{});
-        _ = u.checkbox("axes", &s.show_axes);
-
-        _ = u.slider("time", &s.play_time, .{ .min = 0.0, .max = duration, .fmt = "{d:.2}s" });
-        u.text("frame {d} / {d}   {d:.0} fps", .{
-            @as(usize, @trunc(@max(s.play_time / a.clip.frame_time, 0))),
-            @as(usize, @trunc(frames)),
-            1.0 / a.clip.frame_time,
-        });
-
-        u.separator();
-        u.text("units ({s})", .{a.units.label()});
-        inline for (@typeInfo(Units).@"enum".field_names, 0..) |_, i| {
-            const unit: Units = @fromBackingInt(@intCast(i));
-            if (i > 0) {
-                u.sameLine(.{});
-            }
-            if (u.button(unit.label(), .{})) {
-                a.units = unit;
-            }
-        }
-
-        u.separator();
-        u.text("clips", .{});
-        for (s.clips[0..s.clip_count], 0..) |*c, i| {
-            _ = u.checkbox(c.label(), &c.visible);
-            u.sameLine(.{});
-            if (u.button("select", .{})) {
-                s.active = i;
-            }
-        }
-    }
 }
 
 pub const app: z.AppSpec(State) = .{

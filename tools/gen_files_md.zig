@@ -8,12 +8,25 @@
 //! Usage: `gen_files_md`  (run from repo root; writes src/notes/files.md).
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const endsWith = std.mem.endsWith;
+const splitScalar = std.mem.splitScalar;
+const trim = std.mem.trim;
+const sortSlice = std.mem.sort;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
-const Writer = std.Io.Writer;
+const Writer = Io.Writer;
 const allocPrint = std.fmt.allocPrint;
 const bufPrint = std.fmt.bufPrint;
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
+const indexOfPos = std.mem.indexOfPos;
+const indexOfScalar = std.mem.indexOfScalar;
+const startsWith = std.mem.startsWith;
 const fd = @import("file_descriptions.zig");
 const ig = @import("import_graph.zig");
 
@@ -111,13 +124,13 @@ fn stemOf(name: []const u8) []const u8 {
 /// Normalize a "/"-path: collapse "." and "a/.." segments (os.path.normpath).
 fn normpath(gpa: Allocator, path: []const u8) ![]const u8 {
     var stack: ArrayList([]const u8) = .empty;
-    var it: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, path, '/');
+    var it: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, path, '/');
     while (it.next()) |comp| {
-        if (comp.len == 0 or std.mem.eql(u8, comp, ".")) {
+        if (comp.len == 0 or eql(u8, comp, ".")) {
             continue;
         }
-        if (std.mem.eql(u8, comp, "..")) {
-            if (stack.items.len > 0 and !std.mem.eql(u8, stack.items[stack.items.len - 1], "..")) {
+        if (eql(u8, comp, "..")) {
+            if (stack.items.len > 0 and !eql(u8, stack.items[stack.items.len - 1], "..")) {
                 _ = stack.pop();
             } else {
                 try stack.append(gpa, comp);
@@ -132,6 +145,22 @@ fn normpath(gpa: Allocator, path: []const u8) ![]const u8 {
     return try std.mem.join(gpa, "/", stack.items);
 }
 
+/// Consume `kw` + at least one following space/tab if present at `i`.
+fn tryKw(line: []const u8, i: usize, kw: []const u8) usize {
+    if (!startsWith(u8, line[i..], kw)) {
+        return i;
+    }
+    const after: usize = i + kw.len;
+    if (after >= line.len or !(line[after] == ' ' or line[after] == '\t')) {
+        return i;
+    }
+    var j: usize = after;
+    while (j < line.len and (line[j] == ' ' or line[j] == '\t')) {
+        j += 1;
+    }
+    return j;
+}
+
 /// `^\s*(?:pub\s+)?(?:inline\s+)?(?:extern\s+)?fn\s+\w+\s*\(` on one line.
 fn fnLineMatch(line: []const u8) bool {
     var i: usize = 0;
@@ -141,7 +170,7 @@ fn fnLineMatch(line: []const u8) bool {
     i = tryKw(line, i, "pub");
     i = tryKw(line, i, "inline");
     i = tryKw(line, i, "extern");
-    if (!std.mem.startsWith(u8, line[i..], "fn")) {
+    if (!startsWith(u8, line[i..], "fn")) {
         return false;
     }
     i += 2;
@@ -165,25 +194,9 @@ fn fnLineMatch(line: []const u8) bool {
     return i < line.len and line[i] == '(';
 }
 
-/// Consume `kw` + at least one following space/tab if present at `i`.
-fn tryKw(line: []const u8, i: usize, kw: []const u8) usize {
-    if (!std.mem.startsWith(u8, line[i..], kw)) {
-        return i;
-    }
-    const after: usize = i + kw.len;
-    if (after >= line.len or !(line[after] == ' ' or line[after] == '\t')) {
-        return i;
-    }
-    var j: usize = after;
-    while (j < line.len and (line[j] == ' ' or line[j] == '\t')) {
-        j += 1;
-    }
-    return j;
-}
-
 /// `^test\b` on one line (no leading whitespace).
 fn testLineMatch(line: []const u8) bool {
-    if (!std.mem.startsWith(u8, line, "test")) {
+    if (!startsWith(u8, line, "test")) {
         return false;
     }
     return line.len == 4 or !isWordChar(line[4]);
@@ -228,17 +241,17 @@ fn bytePosOfCodepoint(s: []const u8, cp: usize) usize {
 /// Leading `//!` header joined to one string, truncated to 420 codepoints.
 fn headerDesc(gpa: Allocator, src: []const u8) ![]const u8 {
     var parts: ArrayList([]const u8) = .empty;
-    var it: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, src, '\n');
+    var it: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, src, '\n');
     while (it.next()) |ln| {
-        if (std.mem.startsWith(u8, ln, "//!")) {
-            const t: []const u8 = std.mem.trim(u8, ln[3..], " \t\r");
+        if (startsWith(u8, ln, "//!")) {
+            const t: []const u8 = trim(u8, ln[3..], " \t\r");
             if (t.len == 0 and parts.items.len > 0) {
                 break;
             }
             if (t.len > 0) {
                 try parts.append(gpa, t);
             }
-        } else if (parts.items.len > 0 or std.mem.trim(u8, ln, " \t\r").len == 0) {
+        } else if (parts.items.len > 0 or trim(u8, ln, " \t\r").len == 0) {
             break;
         } else {
             break;
@@ -258,11 +271,11 @@ fn headerDesc(gpa: Allocator, src: []const u8) ![]const u8 {
 
 fn sortedKeys(gpa: Allocator, set: *StringHashMap(void)) ![][]const u8 {
     var keys: ArrayList([]const u8) = .empty;
-    var it: std.StringHashMap(void).KeyIterator = set.keyIterator();
+    var it: StringHashMap(void).KeyIterator = set.keyIterator();
     while (it.next()) |k| {
         try keys.append(gpa, k.*);
     }
-    std.mem.sort([]const u8, keys.items, {}, lessStr);
+    sortSlice([]const u8, keys.items, {}, lessStr);
     return keys.items;
 }
 
@@ -276,9 +289,9 @@ fn scanImports(
 ) !void {
     const needle: []const u8 = "@import(\"";
     var i: usize = 0;
-    while (std.mem.indexOfPos(u8, src, i, needle)) |pos| {
+    while (indexOfPos(u8, src, i, needle)) |pos| {
         const start: usize = pos + needle.len;
-        const q: usize = std.mem.indexOfScalarPos(u8, src, start, '"') orelse {
+        const q: usize = indexOfScalarPos(u8, src, start, '"') orelse {
             i = start;
             continue;
         };
@@ -287,15 +300,15 @@ fn scanImports(
             continue;
         }
         const target: []const u8 = src[start..q];
-        if (std.mem.endsWith(u8, target, ".zig")) {
+        if (endsWith(u8, target, ".zig")) {
             const joined: []const u8 = if (dirOf(path).len == 0)
                 target
             else
                 try allocPrint(gpa, "{s}/{s}", .{ dirOf(path), target });
             try fdeps.put(try normpath(gpa, joined), {});
-        } else if (!std.mem.eql(u8, target, "std") and
-            !std.mem.eql(u8, target, "builtin") and
-            !std.mem.eql(u8, target, "root"))
+        } else if (!eql(u8, target, "std") and
+            !eql(u8, target, "builtin") and
+            !eql(u8, target, "root"))
         {
             try mdeps.put(try gpa.dupe(u8, target), {});
         }
@@ -305,7 +318,7 @@ fn scanImports(
 
 fn lookup(table: []const fd.Entry, path: []const u8) ?[]const u8 {
     for (table) |e| {
-        if (std.mem.eql(u8, e.path, path)) {
+        if (eql(u8, e.path, path)) {
             return e.text;
         }
     }
@@ -313,7 +326,7 @@ fn lookup(table: []const fd.Entry, path: []const u8) ?[]const u8 {
 }
 
 fn nameDerived(gpa: Allocator, name: []const u8) ![]const u8 {
-    const base: []const u8 = if (std.mem.startsWith(u8, name, "wgpu_"))
+    const base: []const u8 = if (startsWith(u8, name, "wgpu_"))
         name["wgpu_".len..]
     else
         name;
@@ -323,11 +336,11 @@ fn nameDerived(gpa: Allocator, name: []const u8) ![]const u8 {
             c.* = ' ';
         }
     }
-    if (std.mem.startsWith(u8, base, "ui_")) {
+    if (startsWith(u8, base, "ui_")) {
         return try allocPrint(gpa, "UI example: {s} — runs through UiHost " ++
             "(beginFrameRaw/uiRenderNow) on the wgpu backend.", .{words[3..]});
     }
-    if (std.mem.startsWith(u8, base, "input_")) {
+    if (startsWith(u8, base, "input_")) {
         return try allocPrint(gpa, "Input example: {s} — exercises " ++
             "runtime.input through the wgpu app loop.", .{words[6..]});
     }
@@ -345,65 +358,65 @@ fn descFor(gpa: Allocator, info: Info) ![]const u8 {
     const stem: []const u8 = stemOf(base);
     const d: []const u8 = dirOf(info.path);
 
-    if (std.mem.startsWith(u8, d, "examples/wgpu_") and std.mem.endsWith(u8, base, ".zig")) {
-        var parts: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, d, '/');
+    if (startsWith(u8, d, "examples/wgpu_") and endsWith(u8, base, ".zig")) {
+        var parts: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, d, '/');
         _ = parts.next();
         const ex: []const u8 = parts.next() orelse "";
-        if (std.mem.eql(u8, stem, ex)) {
+        if (eql(u8, stem, ex)) {
             if (lookup(&fd.example_notes, ex)) |note| {
                 return note;
             }
             return try nameDerived(gpa, ex);
         }
-        if (std.mem.endsWith(u8, base, "_fs.zig") or std.mem.endsWith(u8, base, "_vs.zig")) {
+        if (endsWith(u8, base, "_fs.zig") or endsWith(u8, base, "_vs.zig")) {
             return "Shader source (shadermath DSL) compiled via the " ++
                 "SPIR-V→WGSL pipeline for this example.";
         }
-        if (std.mem.endsWith(u8, base, "_io.zig")) {
+        if (endsWith(u8, base, "_io.zig")) {
             return "Typed IO schema for the sibling shader source.";
         }
     }
-    if (std.mem.eql(u8, d, "examples")) {
-        if (std.mem.endsWith(u8, base, "_fs.zig") or std.mem.endsWith(u8, base, "_vs.zig")) {
+    if (eql(u8, d, "examples")) {
+        if (endsWith(u8, base, "_fs.zig") or endsWith(u8, base, "_vs.zig")) {
             return "Top-level shader source (shadermath DSL), " ++
                 "SPIR-V→WGSL compiled, consumed by wgpu examples.";
         }
-        if (std.mem.endsWith(u8, base, "_io.zig")) {
+        if (endsWith(u8, base, "_io.zig")) {
             return "Typed IO schema for the sibling top-level shader.";
         }
-        if (std.mem.endsWith(u8, base, "_bundle.zig")) {
+        if (endsWith(u8, base, "_bundle.zig")) {
             return "Native bundle wrapper exposing the sibling shader " ++
                 "pair to host-side consumers.";
         }
     }
-    if (std.mem.eql(u8, d, "src/shaders")) {
-        if (std.mem.endsWith(u8, base, "_fs.zig") or std.mem.endsWith(u8, base, "_vs.zig")) {
+    if (eql(u8, d, "src/shaders")) {
+        if (endsWith(u8, base, "_fs.zig") or endsWith(u8, base, "_vs.zig")) {
             return "Engine shader source (shadermath DSL) in the " ++
                 "SPIR-V→WGSL pipeline.";
         }
-        if (std.mem.endsWith(u8, base, "_io.zig")) {
+        if (endsWith(u8, base, "_io.zig")) {
             return "Typed IO schema for the sibling engine shader.";
         }
     }
-    if (std.mem.eql(u8, d, "src/tests")) {
+    if (eql(u8, d, "src/tests")) {
         return "Cross-cutting host test suite (see file for scope).";
     }
-    if (std.mem.endsWith(u8, base, ".html") and std.mem.startsWith(u8, d, "examples/")) {
+    if (endsWith(u8, base, ".html") and startsWith(u8, d, "examples/")) {
         return "Per-example page that loads the wasm + bundled runtime.";
     }
-    if (std.mem.endsWith(u8, base, ".md")) {
-        var it: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, info.src, '\n');
+    if (endsWith(u8, base, ".md")) {
+        var it: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, info.src, '\n');
         var seen: usize = 0;
         while (it.next()) |ln| {
             if (seen >= 30) {
                 break;
             }
             seen += 1;
-            var t: []const u8 = std.mem.trim(u8, ln, " \t\r");
+            var t: []const u8 = trim(u8, ln, " \t\r");
             while (t.len > 0 and t[0] == '#') {
                 t = t[1..];
             }
-            t = std.mem.trim(u8, t, " \t\r");
+            t = trim(u8, t, " \t\r");
             if (t.len > 0) {
                 return try allocPrint(gpa, "Note: {s}", .{t});
             }
@@ -414,30 +427,30 @@ fn descFor(gpa: Allocator, info: Info) ![]const u8 {
 }
 
 fn areaOf(path: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, path, "examples/wgpu_") or
-        std.mem.startsWith(u8, path, "examples/shared"))
+    if (startsWith(u8, path, "examples/wgpu_") or
+        startsWith(u8, path, "examples/shared"))
     {
         return "examples (wgpu + shared)";
     }
-    if (std.mem.startsWith(u8, path, "examples/")) {
+    if (startsWith(u8, path, "examples/")) {
         return "examples (top-level)";
     }
-    if (std.mem.startsWith(u8, path, "src/shaders/")) {
+    if (startsWith(u8, path, "src/shaders/")) {
         return "src/shaders";
     }
-    if (std.mem.startsWith(u8, path, "src/spv2wgsl/")) {
+    if (startsWith(u8, path, "src/spv2wgsl/")) {
         return "src/spv2wgsl";
     }
-    if (std.mem.startsWith(u8, path, "src/tests/")) {
+    if (startsWith(u8, path, "src/tests/")) {
         return "src/tests";
     }
-    if (std.mem.startsWith(u8, path, "src/web/")) {
+    if (startsWith(u8, path, "src/web/")) {
         return "src/web";
     }
-    if (std.mem.startsWith(u8, path, "src/")) {
+    if (startsWith(u8, path, "src/")) {
         return "src (core)";
     }
-    if (std.mem.indexOfScalar(u8, path, '/')) |i| {
+    if (indexOfScalar(u8, path, '/')) |i| {
         return path[0..i];
     }
     return "(root)";
@@ -445,12 +458,12 @@ fn areaOf(path: []const u8) []const u8 {
 
 fn isExcludedDir(name: []const u8) bool {
     for (exclude_dirs) |d| {
-        if (std.mem.eql(u8, name, d)) {
+        if (eql(u8, name, d)) {
             return true;
         }
     }
     for (exclude_dir_prefixes) |p| {
-        if (std.mem.startsWith(u8, name, p)) {
+        if (startsWith(u8, name, p)) {
             return true;
         }
     }
@@ -460,7 +473,7 @@ fn isExcludedDir(name: []const u8) bool {
 fn isBinary(name: []const u8) bool {
     const ext: []const u8 = extOf(name);
     for (binary_exts) |b| {
-        if (std.mem.eql(u8, ext, b)) {
+        if (eql(u8, ext, b)) {
             return true;
         }
     }
@@ -471,15 +484,15 @@ fn isBinary(name: []const u8) bool {
 /// honoring the dir/ext exclusions and skipping the root-level tests/ corpus.
 fn walk(
     gpa: Allocator,
-    io: std.Io,
-    cwd: std.Io.Dir,
+    io: Io,
+    cwd: Io.Dir,
     rel: []const u8,
     out: *ArrayList([]const u8),
 ) !void {
     const open_path: []const u8 = if (rel.len == 0) "." else rel;
-    var dir: std.Io.Dir = try cwd.openDir(io, open_path, .{ .iterate = true });
+    var dir: Io.Dir = try cwd.openDir(io, open_path, .{ .iterate = true });
     defer dir.close(io);
-    var it: std.Io.Dir.Iterator = dir.iterate();
+    var it: Io.Dir.Iterator = dir.iterate();
     while (try it.next(io)) |entry| {
         const child: []const u8 = if (rel.len == 0)
             try gpa.dupe(u8, entry.name)
@@ -489,7 +502,7 @@ fn walk(
             if (isExcludedDir(entry.name)) {
                 continue;
             }
-            if (rel.len == 0 and std.mem.eql(u8, entry.name, "tests")) {
+            if (rel.len == 0 and eql(u8, entry.name, "tests")) {
                 continue; // root corpus: grouped entry, not per-file
             }
             try walk(gpa, io, cwd, child, out);
@@ -502,16 +515,26 @@ fn walk(
     }
 }
 
+/// The command line (std's cli, `src/command_line.zig`): none - but the parser still gives it `--help` and refuses
+/// an argument it would otherwise ignore.
+const NoArgs = struct {};
+
+const gen_files_md_cli: cli.Config(NoArgs) = .{
+    .prog = "zig build files-md",
+    .description = "Generates src/notes/files.md, the per-file atlas.",
+};
+
 pub fn main(init: std.process.Init) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(init.gpa);
+    _ = cli.args(&init, NoArgs, gen_files_md_cli);
+    var arena_state: ArenaAllocator = .init(init.gpa);
     defer arena_state.deinit();
     const gpa: Allocator = arena_state.allocator();
-    const io: std.Io = init.io;
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+    const io: Io = init.io;
+    const cwd: Io.Dir = .cwd();
 
     var files: ArrayList([]const u8) = .empty;
     try walk(gpa, io, cwd, "", &files);
-    std.mem.sort([]const u8, files.items, {}, lessStr);
+    sortSlice([]const u8, files.items, {}, lessStr);
 
     var info_map: StringHashMap(Info) = .init(gpa);
     var dependents: StringHashMap(*ArrayList([]const u8)) = .init(gpa);
@@ -523,7 +546,7 @@ pub fn main(init: std.process.Init) !void {
         const lines: usize = std.mem.count(u8, src, "\r") +
             std.mem.count(u8, src, "\n") -
             std.mem.count(u8, src, "\r\n") + 1;
-        const is_zig: bool = std.mem.endsWith(u8, p, ".zig");
+        const is_zig: bool = endsWith(u8, p, ".zig");
         var inf: Info = .{
             .path = p,
             .src = src,
@@ -538,7 +561,7 @@ pub fn main(init: std.process.Init) !void {
         if (is_zig) {
             var nfns: usize = 0;
             var ntests: usize = 0;
-            var lit: std.mem.SplitIterator(u8, .scalar) = std.mem.splitScalar(u8, src, '\n');
+            var lit: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, src, '\n');
             while (lit.next()) |ln| {
                 if (fnLineMatch(ln)) {
                     nfns += 1;
@@ -556,7 +579,7 @@ pub fn main(init: std.process.Init) !void {
             inf.mdeps = try sortedKeys(gpa, &mset);
             inf.hdr = try headerDesc(gpa, src);
             for (inf.fdeps) |dep| {
-                const gop: std.StringHashMap(*ArrayList([]const u8)).GetOrPutResult = try dependents.getOrPut(dep);
+                const gop: StringHashMap(*ArrayList([]const u8)).GetOrPutResult = try dependents.getOrPut(dep);
                 if (!gop.found_existing) {
                     const list: *ArrayList([]const u8) = try gpa.create(ArrayList([]const u8));
                     list.* = .empty;
@@ -571,8 +594,8 @@ pub fn main(init: std.process.Init) !void {
     // build.zig path references count as wiring-dependents.
     const bz: []const u8 = cwd.readFileAlloc(io, "build.zig", gpa, .unlimited) catch "";
     for (files.items) |p| {
-        if (!std.mem.eql(u8, p, "build.zig") and std.mem.indexOf(u8, bz, p) != null) {
-            const gop: std.StringHashMap(*ArrayList([]const u8)).GetOrPutResult = try dependents.getOrPut(p);
+        if (!eql(u8, p, "build.zig") and indexOf(u8, bz, p) != null) {
+            const gop: StringHashMap(*ArrayList([]const u8)).GetOrPutResult = try dependents.getOrPut(p);
             if (!gop.found_existing) {
                 const list: *ArrayList([]const u8) = try gpa.create(ArrayList([]const u8));
                 list.* = .empty;
@@ -600,7 +623,7 @@ pub fn main(init: std.process.Init) !void {
     for (graph.names, 0..) |nm, idx| {
         try hubs.append(gpa, .{ .name = nm, .deg = graph.outDegree(idx) });
     }
-    std.mem.sort(Hub, hubs.items, {}, hubMore);
+    sortSlice(Hub, hubs.items, {}, hubMore);
 
     const comps: ArrayList(ArrayList(u32)) = try ig.sccs(gpa, graph);
     var n_cycles: usize = 0;
@@ -618,7 +641,7 @@ pub fn main(init: std.process.Init) !void {
     var area_map: StringHashMap(*ArrayList([]const u8)) = .init(gpa);
     for (files.items) |p| {
         const a: []const u8 = areaOf(p);
-        const gop: std.StringHashMap(*ArrayList([]const u8)).GetOrPutResult = try area_map.getOrPut(a);
+        const gop: StringHashMap(*ArrayList([]const u8)).GetOrPutResult = try area_map.getOrPut(a);
         if (!gop.found_existing) {
             const list: *ArrayList([]const u8) = try gpa.create(ArrayList([]const u8));
             list.* = .empty;
@@ -638,11 +661,11 @@ pub fn main(init: std.process.Init) !void {
     for (fixed_order) |a| {
         try order.append(gpa, a);
     }
-    std.mem.sort([]const u8, area_names.items, {}, lessStr);
+    sortSlice([]const u8, area_names.items, {}, lessStr);
     for (area_names.items) |a| {
         var present: bool = false;
         for (fixed_order) |f| {
-            if (std.mem.eql(u8, a, f)) {
+            if (eql(u8, a, f)) {
                 present = true;
                 break;
             }
@@ -655,22 +678,21 @@ pub fn main(init: std.process.Init) !void {
     // Order the "src (core)" section bottom-up by DAG level (then name) - the
     // suggested reading order from the topography block.
     if (area_map.get("src (core)")) |core_list| {
-        std.mem.sort([]const u8, core_list.items, LvlCtx{ .map = &level_of }, lvlLess);
+        sortSlice([]const u8, core_list.items, LvlCtx{ .map = &level_of }, lvlLess);
     }
 
     var total_zig: usize = 0;
     var total_lines: usize = 0;
     for (files.items) |p| {
-        if (std.mem.endsWith(u8, p, ".zig")) {
+        if (endsWith(u8, p, ".zig")) {
             total_zig += 1;
             total_lines += info_map.get(p).?.lines;
         }
     }
 
     // Today's date (UTC), ISO yyyy-mm-dd.
-    var ts: std.posix.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-    const es: std.time.epoch.EpochSeconds = .{ .secs = @intCast(ts.sec) };
+    const now: Io.Timestamp = Io.Clock.real.now(io);
+    const es: std.time.epoch.EpochSeconds = .{ .secs = @intCast(now.toSeconds()) };
     const ed: std.time.epoch.EpochDay = es.getEpochDay();
     const yd: std.time.epoch.YearAndDay = ed.calculateYearDay();
     const md: std.time.epoch.MonthAndDay = yd.calculateMonthDay();
@@ -711,7 +733,7 @@ pub fn main(init: std.process.Init) !void {
                     try row.append(gpa, nm);
                 }
             }
-            std.mem.sort([]const u8, row.items, {}, lessStr);
+            sortSlice([]const u8, row.items, {}, lessStr);
             var cells: ArrayList([]const u8) = .empty;
             for (row.items) |nm| {
                 try cells.append(gpa, try allocPrint(gpa, "`{s}`", .{nm}));
@@ -787,8 +809,8 @@ pub fn main(init: std.process.Init) !void {
             try stats.append(gpa, try allocPrint(gpa, "{s} lines", .{try commaInt(gpa, i.lines)}));
             if (i.is_zig) {
                 const head: []const u8 = if (i.src.len >= 64) i.src[0..64] else i.src;
-                if (std.mem.startsWith(u8, head, "//! SHADER-SAFE") or
-                    std.mem.endsWith(u8, p, "_io.zig"))
+                if (startsWith(u8, head, "//! SHADER-SAFE") or
+                    endsWith(u8, p, "_io.zig"))
                 {
                     try stats.insert(gpa, 0, "[shader-safe]");
                 }
@@ -819,7 +841,7 @@ pub fn main(init: std.process.Init) !void {
 
             var dd_s: []const u8 = "—";
             if (dependents.get(p)) |dlist| {
-                std.mem.sort([]const u8, dlist.items, {}, lessStr);
+                sortSlice([]const u8, dlist.items, {}, lessStr);
                 var dd: ArrayList([]const u8) = .empty;
                 for (dlist.items) |x| {
                     try dd.append(gpa, try allocPrint(gpa, "`{s}`", .{x}));
@@ -835,7 +857,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    var aw: std.Io.Writer.Allocating = .init(gpa);
+    var aw: Io.Writer.Allocating = .init(gpa);
     const w: *Writer = &aw.writer;
     for (chunks.items, 0..) |c, i| {
         if (i > 0) {
@@ -847,7 +869,7 @@ pub fn main(init: std.process.Init) !void {
     try cwd.writeFile(io, .{ .sub_path = "src/notes/files.md", .data = aw.written() });
 
     var out_buf: [256]u8 = undefined;
-    var ow: std.Io.File.Writer = std.Io.File.stdout().writer(io, &out_buf);
+    var ow: Io.File.Writer = Io.File.stdout().writer(io, &out_buf);
     try ow.interface.print("wrote src/notes/files.md: {d} zig files, {d} entries, {s} zig lines\n", .{
         total_zig, files.items.len, try commaInt(gpa, total_lines),
     });

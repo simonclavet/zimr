@@ -39,6 +39,47 @@ pub fn init(ctx: *raster.Context) SwAdapter {
     return .{ .ctx = ctx };
 }
 
+// The matrix stack, clipping and the transform read-back: raster supports them all, so these
+// forward 1:1 like the rest (they were simply missing, which made every rotated or clipped
+// 2D draw a compile error on the software backend).
+
+pub fn pushMatrix(self: *SwAdapter) void {
+    self.ctx.pushMatrix();
+}
+
+pub fn popMatrix(self: *SwAdapter) void {
+    self.ctx.popMatrix();
+}
+
+pub fn translate(self: *SwAdapter, x: f32, y: f32, z: f32) void {
+    self.ctx.translate(x, y, z);
+}
+
+/// `angle_turns`: turns, like both backends' `rotate` (1 = a full circle).
+pub fn rotate(
+    self: *SwAdapter,
+    angle_turns: f32,
+    x: f32,
+    y: f32,
+    z: f32,
+) void {
+    self.ctx.rotate(angle_turns, x, y, z);
+}
+
+pub fn scissor(
+    self: *SwAdapter,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) void {
+    self.ctx.scissor(x, y, w, h);
+}
+
+pub fn getMatrixTransform(self: *SwAdapter) Matrix {
+    return self.ctx.getMatrixTransform();
+}
+
 pub fn begin(self: *SwAdapter, mode: raster.DrawMode) void {
     self.ctx.begin(mode);
 }

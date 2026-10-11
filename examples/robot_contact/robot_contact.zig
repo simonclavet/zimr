@@ -219,7 +219,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .model = try Arm.build(gpa),
         .data = undefined,
-        .world = try .init(gpa, 32),
+        .world = try zp.World.init(gpa, 32),
         .bridge = undefined,
         .crate = undefined,
         .accumulator = 0,
@@ -265,7 +265,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // The bridge must be created AFTER the arm's kinematics have run once, or the proxies
     // are all born at the origin and the first step sees a huge spurious sweep.
-    s.bridge = try .init(gpa, &s.world, &s.model, &s.data, 32);
+    s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.model, &s.data, 32);
     s.bridge.listen(&s.world);
 }
 
@@ -275,6 +275,10 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.data.deinit();
     s.model.deinit();
     z.unloadFont(gpa, s.font);
+}
+
+fn inside(p: Vec2, r: z.Rectangle) bool {
+    return p[0] >= r.x and p[0] <= r.x + r.width and p[1] >= r.y and p[1] <= r.y + r.height;
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -452,10 +456,6 @@ fn update(f: *z.Frame, s: *State) void {
             s.elapsed = 0;
         }
     }
-}
-
-fn inside(p: Vec2, r: z.Rectangle) bool {
-    return p[0] >= r.x and p[0] <= r.x + r.width and p[1] >= r.y and p[1] <= r.y + r.height;
 }
 
 pub const app: z.AppSpec(State) = .{

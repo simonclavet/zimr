@@ -12,10 +12,13 @@ const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
 const float64 = zm.float64;
+const vec = zm.vec;
 const rbt = @import("robot.zig");
 const track = @import("robot_track.zig");
 const dance = @import("robot_dance.zig");
 const ppo_track = @import("robot_ppo_track.zig");
+const track_env = @import("robot_track_env.zig");
+const sac_track = @import("robot_sac_track.zig");
 const compute_host = @import("compute_host.zig");
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
@@ -25,6 +28,12 @@ const zn_mlp = @import("gpu/zn_mlp.zig");
 const geno = @import("robot_geno.zig");
 
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const ArrayList = std.ArrayList;
 const Host = compute_host.Compute(zn_mlp);
 const Trainer = ppo_track.Trainer;
 const Options = ppo_track.Options;
@@ -34,10 +43,43 @@ const walk_first = ppo_track.walk_first;
 const window_frames = ppo_track.window_frames;
 const float = zm.float;
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 const bufPrint = std.fmt.bufPrint;
 
 const flex2_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex2.xml");
+
+fn readAll(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const info: Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    errdefer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    return bytes;
+}
+
+/// A clip retargeted onto this model and filtered.
+fn loadClip(
+    gpa: Allocator,
+    io: Io,
+    m: *rbt.Model,
+    names: []const []const u8,
+    path: []const u8,
+    seconds: f32,
+) !dance.Clip {
+    const capture_bytes: []u8 = try readAll(gpa, io, path);
+    defer gpa.free(capture_bytes);
+    const rest_bytes: []u8 = try readAll(gpa, io, "assets/lafan1/Geno_stance.bvh");
+    defer gpa.free(rest_bytes);
+    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, capture_bytes, null);
+    defer capture.deinit();
+    var rest: codecs.bvh.Data = try codecs.bvh.parse(gpa, rest_bytes, null);
+    defer rest.deinit();
+    var raw: dance.Clip = try dance.retargetClip(gpa, m, names, &capture, &rest, .{ .seconds = seconds });
+    defer raw.deinit();
+    return raw.smoothed(m, 5.0);
+}
 
 /// Everything a training run needs, built once.
 const Setup = struct {
@@ -49,7 +91,7 @@ const Setup = struct {
     fn init(
         setup: *Setup,
         gpa: Allocator,
-        io: std.Io,
+        io: Io,
         path: []const u8,
         first: usize,
     ) !void {
@@ -64,7 +106,7 @@ const Setup = struct {
         errdefer setup.doc.deinit();
         setup.robot = try mjcf.readRobot(gpa, &setup.doc);
         errdefer setup.robot.deinit();
-        var options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = zm.vec(0, 0, -9.81), .max_contacts = 256 };
+        var options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
         options.solver.algorithm = .newton;
         setup.imported = try robot_mjcf.build(gpa, &setup.robot, options);
         errdefer setup.imported.deinit();
@@ -73,7 +115,7 @@ const Setup = struct {
         defer whole.deinit();
         setup.clip = try whole.window(first, window_frames);
         errdefer setup.clip.deinit();
-        var scratch: rbt.Data = try rbt.Data.init(gpa, m);
+        var scratch: rbt.Data = try .init(gpa, m);
         defer scratch.deinit();
         _ = try track.liftPerFrame(gpa, m, &setup.clip, &scratch, 3.0);
     }
@@ -86,6 +128,225 @@ const Setup = struct {
     }
 };
 
+test "robot_sac_track: every row of SAC's replay is exactly the task's transition" {
+    // SAC learns from each stored transition many times over, so the mapping from a decision to (observation, action,
+    // reward, next observation, done) is held against a TWIN environment driven by the actions the replay recorded:
+    // each row's observation is the twin's before the decision, its reward the twin's credited one, done is set
+    // exactly on a stop, and the next observation is the twin's terminal capture on a cut and its next decision's
+    // observation otherwise. A 30-step cap and bootstrapped clip ends make cuts; a full radian per unit of action,
+    // during SAC's uniform warm-up (no updates yet), knocks characters over - stops.
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    const envs: usize = 4;
+    const decisions: usize = 40;
+    const env_options: track_env.Options = .{
+        .envs = envs,
+        .max_episode_steps = 30,
+        .clip_end = .bootstrap,
+        .action_scale = 1.0,
+    };
+    const sac: *sac_track.SacTrack = try .init(gpa, m, setup.imported.names, &clips, .{
+        .env = env_options,
+        .sac = .{ .warmup = 100_000, .replay_capacity = 1024 },
+    });
+    defer sac.deinit();
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena: Allocator = arena_state.allocator();
+    var twin: track_env.TrackEnv = try .init(arena, m, setup.imported.names, &clips, env_options);
+    defer twin.deinit();
+    const n_obs: usize = twin.n_obs;
+    const dofs: usize = twin.subset.dofs;
+    const width: usize = 2 * n_obs + dofs + 2;
+    const before: []f32 = try arena.alloc(f32, envs * n_obs);
+    const actions: []f32 = try arena.alloc(f32, envs * dofs);
+    const outcomes: []track_env.Outcome = try arena.alloc(track_env.Outcome, envs);
+    const terminal: []f32 = try arena.alloc(f32, envs * n_obs);
+    const after: []f32 = try arena.alloc(f32, n_obs);
+    var cuts: usize = 0;
+    var stops: usize = 0;
+    for (0..decisions) |t| {
+        for (0..envs) |e| {
+            twin.observe(e, before[e * n_obs ..][0..n_obs]);
+        }
+        _ = try sac.step();
+        // This decision's rows (the ring has room for all of them, so row k sits at k * width).
+        const rows: []const f32 = sac.agent.replay.data[t * envs * width ..][0 .. envs * width];
+        for (0..envs) |e| {
+            @memcpy(actions[e * dofs ..][0..dofs], rows[e * width + n_obs ..][0..dofs]);
+        }
+        twin.decide(actions, outcomes, terminal);
+        for (0..envs) |e| {
+            const row: []const f32 = rows[e * width ..][0..width];
+            try expect(eql(f32, row[0..n_obs], before[e * n_obs ..][0..n_obs]));
+            try expectEqual(outcomes[e].reward, row[n_obs + dofs]);
+            // The row's last column is the bootstrap's discount: gamma, or zero on a stop.
+            const discount: f32 = if (outcomes[e].end == .stop) 0.0 else sac.agent.options.gamma;
+            try expectEqual(discount, row[2 * n_obs + dofs + 1]);
+            const next: []const f32 = row[n_obs + dofs + 1 ..][0..n_obs];
+            switch (outcomes[e].end) {
+                .cut => {
+                    try expect(eql(f32, next, terminal[e * n_obs ..][0..n_obs]));
+                    cuts += 1;
+                },
+                .none => {
+                    twin.observe(e, after);
+                    try expect(eql(f32, next, after));
+                },
+                .stop => stops += 1,
+            }
+        }
+    }
+    try expect(cuts > 0 and stops > 0);
+}
+
+fn expectSacLearns(n_step: usize, normalize: bool) !void {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    const sac: *sac_track.SacTrack = try .init(gpa, m, setup.imported.names, &clips, .{
+        .env = .{ .envs = 4 },
+        .sac = .{
+            .hidden = 32,
+            .batch = 32,
+            .warmup = 64,
+            .replay_capacity = 4096,
+            .normalize_observations = normalize,
+        },
+        .n_step = n_step,
+    });
+    defer sac.deinit();
+    const first_weights: []f32 = try gpa.dupe(f32, sac.agent.actor.l1.w.data);
+    defer gpa.free(first_weights);
+    for (0..30) |_| {
+        _ = try sac.step();
+    }
+    try expect(sac.agent.updates > 0);
+    try expect(!eql(f32, first_weights, sac.agent.actor.l1.w.data));
+    const critic_loss: f32 = sac.agent.critic_graph.valueOf(sac.agent.critic_loss).data[0];
+    try expect(zm.isFinite(critic_loss));
+}
+
+test "robot_sac_track: SAC learns on the dance without breaking" {
+    // Not a benchmark - the plumbing under load: past a short warm-up every decision triggers an update, the actor's
+    // weights move, and the critic's loss stays finite. One-step rows, TD4's five-step ones, and those normalised at
+    // sample time.
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    try expectSacLearns(1, false);
+    try expectSacLearns(5, false);
+    try expectSacLearns(5, true);
+}
+
+test "robot_track_env: PPO through TrackEnv matches a bare TrackEnv, decision for decision" {
+    // PPO's bookkeeping AROUND the environment, held against the environment alone: two identical fleets - one inside
+    // a PPO trainer, one inside a bare TrackEnv - driven by the same actions (the ones PPO draws) must give the same
+    // observations in PPO's batch, the same credited rewards, the same ends, and for every episode cut short the same
+    // bootstrap: PPO's critic on the bare TrackEnv's terminal observation is exactly what PPO recorded. (It was also
+    // TrackEnv's first known answer, when it was held against PPO's own, older copy of this logic.)
+    // A 40-step cap and the clip's end as a cut make cut ends happen inside the test; exploration
+    // at 1.6 pushes actions past the clamp and knocks characters over, so stops happen too.
+    const build_options = @import("build_options");
+    const slow: bool = comptime @hasDecl(build_options, "slow_tests") and build_options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: Setup = undefined;
+    setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const m: *rbt.Model = &setup.imported.model;
+    const clips = [_]*const dance.Clip{&setup.clip};
+    const envs: usize = 4;
+    const horizon: usize = 48;
+    const options: Options = .{
+        .envs = envs,
+        .horizon = horizon,
+        .max_episode_steps = 40,
+        .clip_end = .bootstrap,
+        .initial_log_std = 0.5,
+    };
+    var host: Host = .initCpu();
+    const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, options);
+    defer trainer.deinit();
+    var arena_state: ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    var env: track_env.TrackEnv = try .init(arena_state.allocator(), m, setup.imported.names, &clips, .{
+        .envs = envs,
+        .decimation = options.decimation,
+        .beta = options.beta,
+        .clip_end = options.clip_end,
+        .max_episode_steps = options.max_episode_steps,
+        .action_scale = options.action_scale,
+        .task = options.task,
+        .bodies = options.bodies,
+        .seed = options.seed,
+    });
+    defer env.deinit();
+    const n_obs: usize = env.n_obs;
+    const dofs: usize = env.subset.dofs;
+    try expect(n_obs == trainer.n_obs);
+    const arena: Allocator = arena_state.allocator();
+    const seen: []f32 = try arena.alloc(f32, n_obs);
+    const outcomes: []track_env.Outcome = try arena.alloc(track_env.Outcome, envs);
+    const terminal: []f32 = try arena.alloc(f32, envs * n_obs);
+    var cuts: usize = 0;
+    var stops: usize = 0;
+    for (0..horizon) |t| {
+        // What each character looks like before the decision - the environment's own look, taken first.
+        const before: []f32 = try arena.alloc(f32, envs * n_obs);
+        for (0..envs) |e| {
+            env.observe(e, before[e * n_obs ..][0..n_obs]);
+        }
+        _ = trainer.collect(1);
+        env.decide(trainer.raw[t * envs * dofs ..][0 .. envs * dofs], outcomes, terminal);
+        for (0..envs) |e| {
+            const at: usize = t * envs + e;
+            try expect(eql(f32, trainer.observations[at * n_obs ..][0..n_obs], before[e * n_obs ..][0..n_obs]));
+            try expectEqual(trainer.rewards[at], outcomes[e].reward);
+            try expect(trainer.ends[at] == outcomes[e].end);
+            try expect(trainer.dones[at] == (outcomes[e].ended > 0));
+            switch (outcomes[e].end) {
+                .cut => {
+                    @memcpy(seen, terminal[e * n_obs ..][0..n_obs]);
+                    try expectEqual(trainer.bootstrap[at], trainer.ppo.value(seen));
+                    cuts += 1;
+                },
+                .stop => stops += 1,
+                .none => {},
+            }
+        }
+    }
+    report.print("\n  TrackEnv against PPO's collection: {d} decisions x {d} characters, {d} cut, {d} stopped\n", .{
+        horizon,
+        envs,
+        cuts,
+        stops,
+    });
+    try expect(cuts > 0);
+}
+
 test "robot_ppo_track: an untrained policy is the servo, and the wiring says so" {
     // THE WIRING'S KNOWN ANSWER. A policy with no exploration whose output layer starts near zero
     // asks for almost nothing, so the trainer's rollout must look like the servo alone: episodes of
@@ -97,8 +358,8 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: Setup = undefined;
     setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
@@ -113,7 +374,7 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
         .initial_log_std = -20.0, // no exploration: the policy's mean, which starts near zero
     });
     defer trainer.deinit();
-    const first: Stats = try trainer.iterate();
+    const first: Stats = trainer.iterate();
 
     // The same fleet with the action left at exactly zero, for the same number of physics steps.
     const servo: *track.Fleet = try .init(gpa, m, &clips, .{ .envs = 8, .capacity = 16, .seed = 1 });
@@ -137,7 +398,7 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
     try expect(first.mean_reward > 0.3 and first.mean_reward <= 1.0);
     try expect(trainer_mean > 0.7 * servo_mean and trainer_mean < 1.4 * servo_mean);
     // And a second iteration runs on the updated weights without anything going non-finite.
-    const second: Stats = try trainer.iterate();
+    const second: Stats = trainer.iterate();
     try expect(zm.isFinite(second.mean_reward));
 
     // THE CONTROL. Matching the servo exactly is also what a policy DISCONNECTED from the character
@@ -149,7 +410,7 @@ test "robot_ppo_track: an untrained policy is the servo, and the wiring says so"
         .initial_log_std = 0.5, // exp(0.5) = 1.6: far more than a policy would ever want
     });
     defer noisy.deinit();
-    const shaken: Stats = try noisy.iterate();
+    const shaken: Stats = noisy.iterate();
     report.print("  control: with exploration at 1.6, reward {d:.3} against {d:.3} untrained\n", .{
         shaken.mean_reward,
         first.mean_reward,
@@ -166,17 +427,18 @@ test "robot_ppo_track: a checkpoint carries a run on exactly" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var setup: Setup = undefined;
     setup.init(gpa, io, "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
     defer setup.deinit();
     const m: *rbt.Model = &setup.imported.model;
     const clips = [_]*const dance.Clip{&setup.clip};
     const path: []const u8 = "train/test_roundtrip.ckpt";
-    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    // lint:off catch-suppression: best-effort cleanup - a file already gone must not fail the test
+    defer Io.Dir.cwd().deleteFile(io, path) catch {};
 
     var host_a: Host = .initCpu();
     const original: *Trainer(zn_mlp) = try .init(gpa, &host_a, m, setup.imported.names, &clips, .{
@@ -184,7 +446,7 @@ test "robot_ppo_track: a checkpoint carries a run on exactly" {
         .horizon = 64,
     });
     defer original.deinit();
-    _ = try original.iterate();
+    _ = original.iterate();
     try original.save(io, path);
 
     var host_b: Host = .initCpu();
@@ -231,8 +493,8 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: Setup = undefined;
     setup.init(gpa, threaded.io(), "assets/lafan1/walk1_subject2.bvh", walk_first) catch return error.SkipZigTest;
@@ -247,7 +509,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
         const whole: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, small);
         defer whole.deinit();
         for (0..2) |_| {
-            _ = try whole.iterate();
+            _ = whole.iterate();
         }
         break :blk try gpa.dupe(f32, whole.ppo.cpu_params);
     };
@@ -258,7 +520,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     defer sliced.deinit();
     for (0..2) |_| {
         while (!sliced.collect(3)) {}
-        _ = try sliced.learn();
+        _ = sliced.learn();
     }
     for (whole_params, sliced.ppo.cpu_params) |a, b| {
         try expect(a == b);
@@ -274,7 +536,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     for (probe, 0..) |*x, k| {
         x.* = @cos(float(k) * 0.37);
     }
-    const mean_saved: []f32 = try gpa.alloc(f32, sliced.subset.dofs);
+    const mean_saved: []f32 = try gpa.alloc(f32, sliced.env.subset.dofs);
     defer gpa.free(mean_saved);
     sliced.ppo.actMean(probe, mean_saved);
     const value_saved: f32 = sliced.ppo.value(probe);
@@ -289,7 +551,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     for (acting, other.ppo.cpu_params) |a, b| {
         try expect(a == b);
     }
-    const mean_loaded: []f32 = try gpa.alloc(f32, other.subset.dofs);
+    const mean_loaded: []f32 = try gpa.alloc(f32, other.env.subset.dofs);
     defer gpa.free(mean_loaded);
     other.ppo.actMean(probe, mean_loaded);
     for (mean_saved, mean_loaded) |a, b| {
@@ -302,7 +564,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     const header_size: usize = bytes.len - 3 * count * @sizeOf(f32);
     const moment_bytes: []const u8 = bytes[header_size + count * @sizeOf(f32) ..][0 .. count * @sizeOf(f32)];
     const device_moment: []const f32 = host.readLatest(.adam_m).?;
-    try expect(std.mem.eql(u8, moment_bytes, std.mem.sliceAsBytes(device_moment[0..count])));
+    try expect(eql(u8, moment_bytes, sliceAsBytes(device_moment[0..count])));
 
     // Refused, by name: bytes that are not weights, and weights for a network of another width.
     try expectError(error.NotAWeightsFile, other.importWeights("not weights at all"));
@@ -321,7 +583,7 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
     const normed_bytes: []u8 = blk: {
         const normed: *Trainer(zn_mlp) = try .init(gpa, &host, m, setup.imported.names, &clips, normed_options);
         defer normed.deinit();
-        _ = try normed.iterate();
+        _ = normed.iterate();
         try expect(normed.obs_count > 0);
         break :blk try normed.exportWeights(gpa);
     };
@@ -342,10 +604,10 @@ test "robot_ppo_track: a sliced batch, and weights that travel as bytes" {
 /// One chunk of a long training run: resume, learn for `seconds`, save, and append the learning
 /// curve to a CSV beside the checkpoint so the run's history survives every restart.
 fn trainChunk(clip_path: []const u8, first: usize, name: []const u8, seconds: f32) !void {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     var setup: Setup = undefined;
     try setup.init(gpa, io, clip_path, first);
     defer setup.deinit();
@@ -361,26 +623,26 @@ fn trainChunk(clip_path: []const u8, first: usize, name: []const u8, seconds: f3
     const curve_path: []const u8 = try bufPrint(&curve_buffer, "train/{s}.csv", .{name});
     const resumed: bool = try trainer.load(io, checkpoint);
 
-    var curve: std.ArrayList(u8) = .empty;
+    var curve: ArrayList(u8) = .empty;
     defer curve.deinit(gpa);
-    if (std.Io.Dir.cwd().openFile(io, curve_path, .{})) |file| {
+    if (Io.Dir.cwd().openFile(io, curve_path, .{})) |file| {
         defer file.close(io);
-        const info: std.Io.File.Stat = try file.stat(io);
+        const info: Io.File.Stat = try file.stat(io);
         try curve.resize(gpa, info.size);
         _ = try file.readPositionalAll(io, curve.items, 0);
     } else |_| {
         try curve.appendSlice(gpa, "iteration,decisions,steps,mean_reward,episodes,mean_episode\n");
     }
 
-    const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const started: Io.Timestamp = Io.Clock.now(.awake, io);
     var last: Stats = undefined;
     var ran: usize = 0;
     while (true) {
-        const elapsed: i96 = std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
-        if (@as(f32, @floatFromInt(@divTrunc(elapsed, 1_000_000))) > seconds * 1000.0) {
+        const elapsed: i96 = Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
+        if (float(@divTrunc(elapsed, 1_000_000)) > seconds * 1000.0) {
             break;
         }
-        last = try trainer.iterate();
+        last = trainer.iterate();
         ran += 1;
         var line: [160]u8 = undefined;
         try curve.appendSlice(gpa, try bufPrint(&line, "{d},{d},{d},{d:.4},{d},{d:.2}\n", .{
@@ -409,7 +671,7 @@ fn trainChunk(clip_path: []const u8, first: usize, name: []const u8, seconds: f3
         servo.mean_reward,
     });
     {
-        const file: std.Io.File = try std.Io.Dir.cwd().createFile(io, curve_path, .{});
+        const file: Io.File = try Io.Dir.cwd().createFile(io, curve_path, .{});
         defer file.close(io);
         try file.writeStreamingAll(io, curve.items);
     }
@@ -445,38 +707,6 @@ test "robot_ppo_track: train chunk - the walk control" {
     try trainChunk("assets/lafan1/walk1_subject2.bvh", walk_first, "ppo_walk", 180.0);
 }
 
-/// A clip retargeted onto this model and filtered.
-fn loadClip(
-    gpa: Allocator,
-    io: std.Io,
-    m: *rbt.Model,
-    names: []const []const u8,
-    path: []const u8,
-    seconds: f32,
-) !dance.Clip {
-    const capture_bytes: []u8 = try readAll(gpa, io, path);
-    defer gpa.free(capture_bytes);
-    const rest_bytes: []u8 = try readAll(gpa, io, "assets/lafan1/Geno_stance.bvh");
-    defer gpa.free(rest_bytes);
-    var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, capture_bytes, null);
-    defer capture.deinit();
-    var rest: codecs.bvh.Data = try codecs.bvh.parse(gpa, rest_bytes, null);
-    defer rest.deinit();
-    var raw: dance.Clip = try dance.retargetClip(gpa, m, names, &capture, &rest, .{ .seconds = seconds });
-    defer raw.deinit();
-    return raw.smoothed(m, 5.0);
-}
-
-fn readAll(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
-    const bytes: []u8 = try gpa.alloc(u8, info.size);
-    errdefer gpa.free(bytes);
-    _ = try file.readPositionalAll(io, bytes, 0);
-    return bytes;
-}
-
 test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     // Model-free learning on Geno, with no world model anywhere: the existing PPO trainer, unchanged, on the
     // held T-pose, with Geno's servo and floor. If early training cannot trust a world model, something
@@ -487,10 +717,16 @@ test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const model_text: []u8 = readAll(gpa, io, geno.model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
     const bind_text: []u8 = try readAll(gpa, io, "src/tests/fixtures/robot/geno_bind.bvh");
@@ -501,7 +737,7 @@ test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     defer doc.deinit();
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
     defer robot.deinit();
-    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = zm.vec(0, 0, -9.81), .max_contacts = 256 };
+    var build_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
     build_options.solver.algorithm = .newton;
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, build_options);
     defer imported.deinit();
@@ -523,15 +759,15 @@ test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     const trainer: *Trainer(zn_mlp) = try .init(gpa, &host, &imported.model, imported.names, &clips, geno_options);
     defer trainer.deinit();
     const budget_seconds: f32 = 100.0;
-    const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const started: Io.Timestamp = Io.Clock.now(.awake, io);
     var iterations: usize = 0;
     var last: Stats = undefined;
     while (true) {
-        const elapsed: i96 = std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
-        if (@as(f32, @floatFromInt(@divTrunc(elapsed, 1_000_000))) > budget_seconds * 1000.0) {
+        const elapsed: i96 = Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
+        if (float(@divTrunc(elapsed, 1_000_000)) > budget_seconds * 1000.0) {
             break;
         }
-        last = try trainer.iterate();
+        last = trainer.iterate();
         iterations += 1;
     }
     const judged: Stats = try trainer.evaluate(1200, false);
@@ -550,6 +786,17 @@ test "robot_ppo_track: Geno holds the T-pose - the model-free baseline (S2b)" {
     try expect(judged.mean_episode == judged.mean_episode);
 }
 
+const demo_cap: usize = 60;
+
+/// D5 step 3's budget: a teacher recording every `demo_stride` frames, up to `demo_cap` frames each; the clone's
+/// minibatches; and how many decisions the judge watches (per character).
+/// 10x the data (Sep 25): a start every 5 frames (was 20), each recorded clean AND perturbed.
+const demo_stride: usize = 5;
+
+const judged_decisions: usize = 600;
+
+const clone_updates: usize = 2000;
+
 test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged in the real simulator" {
     // D5.3 step 3, end to end: the teacher (sharp MPPI on DReCon's clock and filter) dances across the task's clip
     // and every decision it makes becomes a demonstration - DReCon's observation (the trainer's OWN fleet supplies
@@ -560,8 +807,8 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *geno.GenoTask = (try geno.GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse
         return error.SkipZigTest;
@@ -593,7 +840,7 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     defer demo.deinit(gpa);
     var kept: usize = 0;
     var starts: usize = 0;
-    var first_rows: std.ArrayList(usize) = .empty;
+    var first_rows: ArrayList(usize) = .empty;
     defer first_rows.deinit(gpa);
     var from: usize = 0;
     // Every start twice: clean, and perturbed at D5.5's calibrated level (the teacher then demonstrates RECOVERIES).
@@ -601,7 +848,7 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
         for ([_]track.StartNoise{ .{}, geno.d5_start_noise }) |noise| {
             try first_rows.append(gpa, demo.rows());
             const seed: u64 = 1000 + starts;
-            kept += try recorder.record(&planner, trainer.fleet, &task.clip, from, demo_cap, noise, seed, &demo);
+            kept += try recorder.record(&planner, trainer.env.fleet, &task.clip, from, demo_cap, noise, seed, &demo);
             starts += 1;
         }
     }
@@ -609,20 +856,20 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     // HELD OUT: every fifth start's demonstrations are never cloned on - its error separates "the observation
     // cannot predict the teacher" (held-out error far above training's: lookahead is missing) from "it can, and
     // the clone drifts off the teacher's states" (held-out near training's: distribution shift - DAgger).
-    var train_obs: std.ArrayList(f32) = .empty;
+    var train_obs: ArrayList(f32) = .empty;
     defer train_obs.deinit(gpa);
-    var train_labels: std.ArrayList(f32) = .empty;
+    var train_labels: ArrayList(f32) = .empty;
     defer train_labels.deinit(gpa);
-    var held_obs: std.ArrayList(f32) = .empty;
+    var held_obs: ArrayList(f32) = .empty;
     defer held_obs.deinit(gpa);
-    var held_labels: std.ArrayList(f32) = .empty;
+    var held_labels: ArrayList(f32) = .empty;
     defer held_labels.deinit(gpa);
     for (0..starts) |start| {
         const lo: usize = first_rows.items[start];
         const hi: usize = first_rows.items[start + 1];
         const held: bool = start % 5 == 4;
-        const obs_into: *std.ArrayList(f32) = if (held) &held_obs else &train_obs;
-        const labels_into: *std.ArrayList(f32) = if (held) &held_labels else &train_labels;
+        const obs_into: *ArrayList(f32) = if (held) &held_obs else &train_obs;
+        const labels_into: *ArrayList(f32) = if (held) &held_labels else &train_labels;
         try obs_into.appendSlice(gpa, demo.observations.items[lo * demo.width .. hi * demo.width]);
         try labels_into.appendSlice(gpa, demo.labels.items[lo * demo.dofs .. hi * demo.dofs]);
     }
@@ -745,14 +992,6 @@ test "robot_ppo_track: D5 step 3 - PPO's policy cloned from the teacher, judged 
     try expect(result.after < result.before);
 }
 
-/// D5 step 3's budget: a teacher recording every `demo_stride` frames, up to `demo_cap` frames each; the clone's
-/// minibatches; and how many decisions the judge watches (per character).
-/// 10x the data (Sep 25): a start every 5 frames (was 20), each recorded clean AND perturbed.
-const demo_stride: usize = 5;
-const demo_cap: usize = 60;
-const clone_updates: usize = 2000;
-const judged_decisions: usize = 600;
-
 test "robot_ppo_track: GAE - an episode CUT short is bootstrapped from where it ended; a lost one is not" {
     // Known answer: reward 1 a step, gamma 0.9, and a critic that is RIGHT - every value the worth of an endless
     // stream of 1s, 1 / (1 - 0.9) = 10 - so every TD error is zero. An episode cut short at its last step and
@@ -788,8 +1027,8 @@ test "robot_ppo_track: episodes CUT by the step cap are bootstrapped from where 
     // step cap of 6 physics steps (3 decisions), so every episode is cut short inside one batch. The decisions
     // that ended must say CUT and carry a finite, non-zero value of the state they ended in - valued from the
     // fleet's capture, before the restart - and `learn` must run on them.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *geno.GenoTask = (try geno.GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse
         return error.SkipZigTest;
@@ -818,8 +1057,8 @@ test "robot_ppo_track: episodes CUT by the step cap are bootstrapped from where 
     // whole - the trainer hands it over in one assignment instead of copying it field by field. (Equal here
     // because `assist_start` is 0: the trainer writes its root assist into the fleet's `task.gains.assist`, so
     // with assist on, the TRAINING fleet's task differs by that one field on purpose; the judge's never does.)
-    try expect(std.meta.eql(trainer.fleet.options.task, geno.tracking_task));
-    try expect(trainer.fleet.options.action_scale == geno.student_scale);
+    try expect(std.meta.eql(trainer.env.fleet.options.task, geno.tracking_task));
+    try expect(trainer.env.fleet.options.action_scale == geno.student_scale);
     while (!trainer.collect(4)) {}
     var cut: usize = 0;
     var stopped: usize = 0;
@@ -839,5 +1078,5 @@ test "robot_ppo_track: episodes CUT by the step cap are bootstrapped from where 
         trainer.ends.len,
     });
     try expect(cut >= 2);
-    _ = try trainer.learn();
+    _ = trainer.learn();
 }

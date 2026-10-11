@@ -126,68 +126,6 @@ fn Chain(comptime n: usize, comptime armature: f32) type {
     };
 }
 
-/// A two-link arm with a site at its tip.
-///
-/// TWO models, not one, and the difference matters: an arm with motors is a different
-/// machine from an arm without. A position servo is ALWAYS acting - leave its control at
-/// zero and it drives the joint to zero with all its gain, which silently overrules any
-/// other controller you layer on top. So the Kinematics scenes get an unactuated arm and
-/// drive it with joint forces, and the Actuators scenes get the servos.
-fn ArmSpec(comptime actuated: bool) rbt.ModelSpec {
-    const servos: []const rbt.ActuatorSpec = if (actuated) &.{
-        .{
-            .name = "shoulder_servo",
-            .on = .{ .joint = .{ .name = "shoulder" } },
-            .kind = .{ .position = .{ .kp = 24, .kv = 2.4 } },
-            .ctrl_range = .{ -pi, pi },
-        },
-        .{
-            .name = "elbow_servo",
-            .on = .{ .joint = .{ .name = "elbow" } },
-            .kind = .{ .position = .{ .kp = 14, .kv = 1.4 } },
-            .ctrl_range = .{ -pi, pi },
-        },
-    } else &.{};
-
-    return .{
-        .bodies = &.{
-            .{
-                .name = "upper",
-                .joints = &.{.{
-                    .name = "shoulder",
-                    .kind = .hinge,
-                    .axis = vec(0, 0, 1),
-                    .armature = 0.002,
-                    .damping = 0.02,
-                }},
-                .geoms = &.{.{
-                    .shape = .{ .capsule = .{ .half_height = Arm.upper, .radius = 0.045 } },
-                    .pos = vec(0, -Arm.upper, 0),
-                }},
-            },
-            .{
-                .name = "lower",
-                .parent = "upper",
-                .pos = vec(0, -2.0 * Arm.upper, 0),
-                .joints = &.{.{
-                    .name = "elbow",
-                    .kind = .hinge,
-                    .axis = vec(0, 0, 1),
-                    .armature = 0.002,
-                    .damping = 0.02,
-                }},
-                .geoms = &.{.{
-                    .shape = .{ .capsule = .{ .half_height = Arm.lower, .radius = 0.035 } },
-                    .pos = vec(0, -Arm.lower, 0),
-                }},
-                .sites = &.{.{ .name = "tip", .pos = vec(0, -2.0 * Arm.lower, 0) }},
-            },
-        },
-        .actuators = servos,
-        .options = .{ .timestep = 1.0 / 240.0 },
-    };
-}
-
 const Arm = struct {
     const upper: f32 = 0.26;
     const lower: f32 = 0.22;
@@ -195,8 +133,70 @@ const Arm = struct {
     const tip_local: Vec = vec(0, -2.0 * lower, 0);
     const tip_body: u32 = 2;
 
-    const Free = rbt.Spec(ArmSpec(false));
-    const Servo = rbt.Spec(ArmSpec(true));
+    /// The arm's model: two links, with a site at the tip.
+    ///
+    /// TWO models, not one, and the difference matters: an arm with motors is a different
+    /// machine from an arm without. A position servo is ALWAYS acting - leave its control at
+    /// zero and it drives the joint to zero with all its gain, which silently overrules any
+    /// other controller you layer on top. So the Kinematics scenes get an unactuated arm and
+    /// drive it with joint forces, and the Actuators scenes get the servos.
+    fn modelSpec(comptime actuated: bool) rbt.ModelSpec {
+        const servos: []const rbt.ActuatorSpec = if (actuated) &.{
+            .{
+                .name = "shoulder_servo",
+                .on = .{ .joint = .{ .name = "shoulder" } },
+                .kind = .{ .position = .{ .kp = 24, .kv = 2.4 } },
+                .ctrl_range = .{ -pi, pi },
+            },
+            .{
+                .name = "elbow_servo",
+                .on = .{ .joint = .{ .name = "elbow" } },
+                .kind = .{ .position = .{ .kp = 14, .kv = 1.4 } },
+                .ctrl_range = .{ -pi, pi },
+            },
+        } else &.{};
+
+        return .{
+            .bodies = &.{
+                .{
+                    .name = "upper",
+                    .joints = &.{.{
+                        .name = "shoulder",
+                        .kind = .hinge,
+                        .axis = vec(0, 0, 1),
+                        .armature = 0.002,
+                        .damping = 0.02,
+                    }},
+                    .geoms = &.{.{
+                        .shape = .{ .capsule = .{ .half_height = upper, .radius = 0.045 } },
+                        .pos = vec(0, -upper, 0),
+                    }},
+                },
+                .{
+                    .name = "lower",
+                    .parent = "upper",
+                    .pos = vec(0, -2.0 * upper, 0),
+                    .joints = &.{.{
+                        .name = "elbow",
+                        .kind = .hinge,
+                        .axis = vec(0, 0, 1),
+                        .armature = 0.002,
+                        .damping = 0.02,
+                    }},
+                    .geoms = &.{.{
+                        .shape = .{ .capsule = .{ .half_height = lower, .radius = 0.035 } },
+                        .pos = vec(0, -lower, 0),
+                    }},
+                    .sites = &.{.{ .name = "tip", .pos = vec(0, -2.0 * lower, 0) }},
+                },
+            },
+            .actuators = servos,
+            .options = .{ .timestep = 1.0 / 240.0 },
+        };
+    }
+
+    const Free = rbt.Spec(modelSpec(false));
+    const Servo = rbt.Spec(modelSpec(true));
 
     fn make(comptime M: type, gpa: Allocator) anyerror!Live {
         var live: Live = .{

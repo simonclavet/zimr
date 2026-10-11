@@ -10,6 +10,7 @@
 //! time. One ray-box intersector, three targets, pixel-for-pixel the same.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -143,8 +144,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .fs_wgsl_source = fs_wgsl,
         .label = "raycube_sbs_gpu",
     });
-    var sw: z.raster.Context = try z.raster.Context.init(gpa, @intCast(sw_w), @intCast(sw_h));
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    var sw: z.raster.Context = try .init(gpa, @intCast(sw_w), @intCast(sw_h));
+    const sw_fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         sw_w,
@@ -171,7 +172,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
             f.gpu.queue,
             corner_cols,
             corner_rows,
-            std.mem.sliceAsBytes(&corner_image),
+            sliceAsBytes(&corner_image),
             "raycube_sbs_corner",
         ),
     };

@@ -48,6 +48,7 @@ const identity = zm.identity;
 const translation = zm.translation;
 const scaling = zm.scaling;
 const mulMat = zm.mulMat;
+const pi = zm.pi;
 
 const sim_timestep: f32 = 1.0 / 100.0;
 const horizon_knots: u32 = 60;
@@ -114,7 +115,7 @@ fn weights() mpc.Weights {
 const foot_half = [2]f32{ 0.10, 0.03 };
 
 fn makePendulum(gpa: Allocator, momentum_rate: f32) !Pendulum {
-    const plan: mpc.BalancePlan = try mpc.BalancePlan.init(gpa, horizon_knots);
+    const plan: mpc.BalancePlan = try .init(gpa, horizon_knots);
     @memset(plan.ctrl, 0);
     @memset(plan.reference, 0);
     return .{
@@ -127,6 +128,8 @@ fn makePendulum(gpa: Allocator, momentum_rate: f32) !Pendulum {
         .pinned = false,
     };
 }
+
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
@@ -197,80 +200,21 @@ fn advance(p: *Pendulum) void {
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    if (s.running) {
-        s.accumulator += @min(f.time.delta_time, 0.1);
-        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            advance(&s.foot_only);
-            advance(&s.with_arms);
-            s.since_push += sim_timestep;
-        }
+fn report(u: ui.Ui, label: []const u8, p: *const Pendulum) void {
+    if (p.fallen) {
+        u.text("{s} FELL", .{label});
+        return;
     }
-
-    z.clearViewport(f, background);
-    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    s.cam.distance = clamp(2.4 / @max(0.35, aspect), 1.8, 5.5);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 12, 0.25);
-    drawPendulum(s, gl, &s.foot_only, -0.55);
-    drawPendulum(s, gl, &s.with_arms, 0.55);
-    z.endMode3D(gl);
-}
-
-/// Draw one pendulum at render depth `offset`. The model plane is (x, y) with the mass at
-/// height `h`; the render is Y-up, so model x is render x and model height is render y.
-fn drawPendulum(s: *State, gl: *z.WgpuGl, p: *const Pendulum, offset: f32) void {
-    const com_x: f32 = p.state[mpc.lipm_com_offset];
-    const mass_at: Vec = vec(com_x, body.height, offset);
-
-    // The foot: the box the centre of pressure is allowed to live in.
-    s.transform[0] = mulMat(
-        translation(0, 0.005, offset),
-        scaling(2.0 * foot_half[0], 0.01, 0.16),
-    );
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, foot_colour);
-
-    // Where the pressure actually is, and whether it has run out of room.
-    const cop: Vec = vec(p.pressure[0], 0.02, offset);
-    s.transform[0] = mulMat(translation(cop[0], cop[1], cop[2]), scaling(0.03, 0.03, 0.03));
-    z.drawMeshInstanced(
-        gl,
-        &s.sphere,
-        &s.transform,
-        if (p.pinned) pressure_pinned else pressure_free,
-    );
-
-    // The body: a rod from the support to the mass.
-    z.drawLine3D(gl, vec(0, 0, offset), mass_at, rod_colour);
-    s.transform[0] = mulMat(
-        translation(mass_at[0], mass_at[1], mass_at[2]),
-        scaling(0.09, 0.09, 0.09),
-    );
-    z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (p.fallen) mass_lost else mass_ok);
-
-    // * THE ARMS. Their angle is the integral of the angular momentum, so a pendulum with no
-    // momentum authority simply never moves them - which is the comparison, drawn.
-    const arm_length: f32 = 0.34;
-    inline for ([_]f32{ 0.0, zm.pi }) |side| {
-        const angle: f32 = p.arm_angle + side;
-        const tip: Vec = vec(
-            mass_at[0] + arm_length * @cos(angle),
-            mass_at[1] + arm_length * @sin(angle),
-            offset,
-        );
-        z.drawLine3D(gl, mass_at, tip, arm_colour);
-        s.transform[0] = mulMat(
-            translation(tip[0], tip[1], tip[2]),
-            scaling(0.045, 0.045, 0.045),
-        );
-        z.drawMeshInstanced(gl, &s.sphere, &s.transform, arm_colour);
-    }
+    u.text("{s} lean {d:>6.3} m  speed {d:>6.3}", .{
+        label,
+        p.state[mpc.lipm_com_offset],
+        p.state[mpc.lipm_vel_offset],
+    });
+    u.text("           momentum {d:>7.2}  cop {d:>6.3}{s}", .{
+        p.state[mpc.lipm_momentum_offset + 1],
+        p.pressure[0],
+        if (p.pinned) " PINNED" else "",
+    });
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -315,24 +259,81 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-fn report(u: ui.Ui, label: []const u8, p: *const Pendulum) void {
-    if (p.fallen) {
-        u.text("{s} FELL", .{label});
-        return;
+/// Draw one pendulum at render depth `offset`. The model plane is (x, y) with the mass at
+/// height `h`; the render is Y-up, so model x is render x and model height is render y.
+fn drawPendulum(s: *State, gl: *z.WgpuGl, p: *const Pendulum, offset: f32) void {
+    const com_x: f32 = p.state[mpc.lipm_com_offset];
+    const mass_at: Vec = vec(com_x, body.height, offset);
+
+    // The foot: the box the centre of pressure is allowed to live in.
+    s.transform[0] = mulMat(
+        translation(0, 0.005, offset),
+        scaling(2.0 * foot_half[0], 0.01, 0.16),
+    );
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, foot_colour);
+
+    // Where the pressure actually is, and whether it has run out of room.
+    const cop: Vec = vec(p.pressure[0], 0.02, offset);
+    s.transform[0] = mulMat(translation(cop[0], cop[1], cop[2]), scaling(0.03, 0.03, 0.03));
+    z.drawMeshInstanced(
+        gl,
+        &s.sphere,
+        &s.transform,
+        if (p.pinned) pressure_pinned else pressure_free,
+    );
+
+    // The body: a rod from the support to the mass.
+    z.drawLine3D(gl, vec(0, 0, offset), mass_at, rod_colour);
+    s.transform[0] = mulMat(
+        translation(mass_at[0], mass_at[1], mass_at[2]),
+        scaling(0.09, 0.09, 0.09),
+    );
+    z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (p.fallen) mass_lost else mass_ok);
+
+    // * THE ARMS. Their angle is the integral of the angular momentum, so a pendulum with no
+    // momentum authority simply never moves them - which is the comparison, drawn.
+    const arm_length: f32 = 0.34;
+    inline for ([_]f32{ 0.0, pi }) |side| {
+        const angle: f32 = p.arm_angle + side;
+        const tip: Vec = vec(
+            mass_at[0] + arm_length * @cos(angle),
+            mass_at[1] + arm_length * @sin(angle),
+            offset,
+        );
+        z.drawLine3D(gl, mass_at, tip, arm_colour);
+        s.transform[0] = mulMat(
+            translation(tip[0], tip[1], tip[2]),
+            scaling(0.045, 0.045, 0.045),
+        );
+        z.drawMeshInstanced(gl, &s.sphere, &s.transform, arm_colour);
     }
-    u.text("{s} lean {d:>6.3} m  speed {d:>6.3}", .{
-        label,
-        p.state[mpc.lipm_com_offset],
-        p.state[mpc.lipm_vel_offset],
-    });
-    u.text("           momentum {d:>7.2}  cop {d:>6.3}{s}", .{
-        p.state[mpc.lipm_momentum_offset + 1],
-        p.pressure[0],
-        if (p.pinned) " PINNED" else "",
-    });
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    if (s.running) {
+        s.accumulator += @min(f.time.delta_time, 0.1);
+        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
+            advance(&s.foot_only);
+            advance(&s.with_arms);
+            s.since_push += sim_timestep;
+        }
+    }
+
+    z.clearViewport(f, background);
+    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
+    s.cam.distance = clamp(2.4 / @max(0.35, aspect), 1.8, 5.5);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 12, 0.25);
+    drawPendulum(s, gl, &s.foot_only, -0.55);
+    drawPendulum(s, gl, &s.with_arms, 0.55);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

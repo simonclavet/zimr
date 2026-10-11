@@ -22,7 +22,7 @@
 //!     from uniform control flow", the barrier having landed five blocks deep inside the merge.
 const k = @import("kompute");
 
-/// 16x16 tiles: 256 threads, the workgroup size znum measured as portable.
+/// 16x16 tiles: 256 threads, the largest workgroup every WebGPU device must support.
 pub const tile: u32 = 16;
 pub const config = k.Config{ .max = 1 << 16, .workgroup = tile * tile };
 
@@ -93,6 +93,7 @@ pub fn matmul_tiled(id: u32) void {
     const lid: u32 = id % lanes;
     const local_row: u32 = lid / tile;
     const local_col: u32 = lid % tile;
+    // Ceilings written out, here and below: Zig's SPIR-V backend does not lower `@divCeil` yet.
     const tiles_per_row: u32 = (params.n + tile - 1) / tile;
     const row: u32 = (cell / tiles_per_row) * tile + local_row;
     const col: u32 = (cell % tiles_per_row) * tile + local_col;

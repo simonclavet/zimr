@@ -36,7 +36,7 @@ different ownership stories:
 
 The material types were creation-only. Added during the hunt:
 - `material.Pipeline.deinit` — frees handle + layout + module. Managed
-  `z.Pipeline` examples (forward_kinematics, pipeline_constants, wgpu_bringup)
+  `z.Pipeline` examples (wgpu_bringup)
   were doing this by hand; they can now call `.deinit()`.
 - `material.StorageTexture.deinit` — frees texture + view.
 

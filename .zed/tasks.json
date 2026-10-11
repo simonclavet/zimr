@@ -15,17 +15,42 @@
         "command": "zig",
         "args": [
             "build",
-            "3d-probe"
+            "3d-probe",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone 3d-probe",
+        "label": "zig: release 3d-probe",
         "command": "zig",
         "args": [
             "build",
-            "3d-probe-standalone",
+            "3d-probe",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build audio-amp-envelope",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-amp-envelope",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release audio-amp-envelope",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-amp-envelope",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -36,17 +61,88 @@
         "command": "zig",
         "args": [
             "build",
-            "audio-basic"
+            "audio-basic",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone audio-basic",
+        "label": "zig: release audio-basic",
         "command": "zig",
         "args": [
             "build",
-            "audio-basic-standalone",
+            "audio-basic",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build audio-mixer",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-mixer",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release audio-mixer",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-mixer",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build audio-sound-lab",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-sound-lab",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release audio-sound-lab",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-sound-lab",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build audio-spectrum-visualizer",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-spectrum-visualizer",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release audio-spectrum-visualizer",
+        "command": "zig",
+        "args": [
+            "build",
+            "audio-spectrum-visualizer",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -57,17 +153,42 @@
         "command": "zig",
         "args": [
             "build",
-            "audio-stream-synth"
+            "audio-stream-synth",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone audio-stream-synth",
+        "label": "zig: release audio-stream-synth",
         "command": "zig",
         "args": [
             "build",
-            "audio-stream-synth-standalone",
+            "audio-stream-synth",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build balance-flywheel",
+        "command": "zig",
+        "args": [
+            "build",
+            "balance-flywheel",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release balance-flywheel",
+        "command": "zig",
+        "args": [
+            "build",
+            "balance-flywheel",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -78,17 +199,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ball-physics"
+            "ball-physics",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ball-physics",
+        "label": "zig: release ball-physics",
         "command": "zig",
         "args": [
             "build",
-            "ball-physics-standalone",
+            "ball-physics",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -99,17 +222,19 @@
         "command": "zig",
         "args": [
             "build",
-            "basic"
+            "basic",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone basic",
+        "label": "zig: release basic",
         "command": "zig",
         "args": [
             "build",
-            "basic-standalone",
+            "basic",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -120,17 +245,19 @@
         "command": "zig",
         "args": [
             "build",
-            "billboards"
+            "billboards",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone billboards",
+        "label": "zig: release billboards",
         "command": "zig",
         "args": [
             "build",
-            "billboards-standalone",
+            "billboards",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -141,38 +268,19 @@
         "command": "zig",
         "args": [
             "build",
-            "bone-socket"
+            "bone-socket",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone bone-socket",
+        "label": "zig: release bone-socket",
         "command": "zig",
         "args": [
             "build",
-            "bone-socket-standalone",
-            "-Dmode=release"
-        ],
-        "reveal": "always",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: build bouncing-ball",
-        "command": "zig",
-        "args": [
-            "build",
-            "bouncing-ball"
-        ],
-        "reveal": "no_focus",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: standalone bouncing-ball",
-        "command": "zig",
-        "args": [
-            "build",
-            "bouncing-ball-standalone",
+            "bone-socket",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -183,59 +291,65 @@
         "command": "zig",
         "args": [
             "build",
-            "box-collisions"
+            "box-collisions",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone box-collisions",
+        "label": "zig: release box-collisions",
         "command": "zig",
         "args": [
             "build",
-            "box-collisions-standalone",
+            "box-collisions",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
         "use_new_terminal": false
     },
     {
-        "label": "zig: build bridge-classic-probe",
+        "label": "zig: build bullet-hell",
         "command": "zig",
         "args": [
             "build",
-            "bridge-classic-probe"
+            "bullet-hell",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone bridge-classic-probe",
+        "label": "zig: release bullet-hell",
         "command": "zig",
         "args": [
             "build",
-            "bridge-classic-probe-standalone",
+            "bullet-hell",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
         "use_new_terminal": false
     },
     {
-        "label": "zig: build bridge-slice",
+        "label": "zig: build camera-controls",
         "command": "zig",
         "args": [
             "build",
-            "bridge-slice"
+            "camera-controls",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone bridge-slice",
+        "label": "zig: release camera-controls",
         "command": "zig",
         "args": [
             "build",
-            "bridge-slice-standalone",
+            "camera-controls",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -246,17 +360,157 @@
         "command": "zig",
         "args": [
             "build",
-            "camera2d"
+            "camera2d",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone camera2d",
+        "label": "zig: release camera2d",
         "command": "zig",
         "args": [
             "build",
-            "camera2d-standalone",
+            "camera2d",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build cartpole",
+        "command": "zig",
+        "args": [
+            "build",
+            "cartpole",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release cartpole",
+        "command": "zig",
+        "args": [
+            "build",
+            "cartpole",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build cartpole-duel",
+        "command": "zig",
+        "args": [
+            "build",
+            "cartpole-duel",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release cartpole-duel",
+        "command": "zig",
+        "args": [
+            "build",
+            "cartpole-duel",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build catch",
+        "command": "zig",
+        "args": [
+            "build",
+            "catch",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release catch",
+        "command": "zig",
+        "args": [
+            "build",
+            "catch",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build cel-shading",
+        "command": "zig",
+        "args": [
+            "build",
+            "cel-shading",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release cel-shading",
+        "command": "zig",
+        "args": [
+            "build",
+            "cel-shading",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build cellular-automata",
+        "command": "zig",
+        "args": [
+            "build",
+            "cellular-automata",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release cellular-automata",
+        "command": "zig",
+        "args": [
+            "build",
+            "cellular-automata",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build chain-ik",
+        "command": "zig",
+        "args": [
+            "build",
+            "chain-ik",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release chain-ik",
+        "command": "zig",
+        "args": [
+            "build",
+            "chain-ik",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -267,17 +521,19 @@
         "command": "zig",
         "args": [
             "build",
-            "circle-sector-drawing"
+            "circle-sector-drawing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone circle-sector-drawing",
+        "label": "zig: release circle-sector-drawing",
         "command": "zig",
         "args": [
             "build",
-            "circle-sector-drawing-standalone",
+            "circle-sector-drawing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -288,17 +544,19 @@
         "command": "zig",
         "args": [
             "build",
-            "clock-of-clocks"
+            "clock-of-clocks",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone clock-of-clocks",
+        "label": "zig: release clock-of-clocks",
         "command": "zig",
         "args": [
             "build",
-            "clock-of-clocks-standalone",
+            "clock-of-clocks",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -309,17 +567,19 @@
         "command": "zig",
         "args": [
             "build",
-            "collision-area"
+            "collision-area",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone collision-area",
+        "label": "zig: release collision-area",
         "command": "zig",
         "args": [
             "build",
-            "collision-area-standalone",
+            "collision-area",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -330,17 +590,19 @@
         "command": "zig",
         "args": [
             "build",
-            "color-wheel"
+            "color-wheel",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone color-wheel",
+        "label": "zig: release color-wheel",
         "command": "zig",
         "args": [
             "build",
-            "color-wheel-standalone",
+            "color-wheel",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -351,17 +613,19 @@
         "command": "zig",
         "args": [
             "build",
-            "colors-palette"
+            "colors-palette",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone colors-palette",
+        "label": "zig: release colors-palette",
         "command": "zig",
         "args": [
             "build",
-            "colors-palette-standalone",
+            "colors-palette",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -372,17 +636,19 @@
         "command": "zig",
         "args": [
             "build",
-            "composer-drum"
+            "composer-drum",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone composer-drum",
+        "label": "zig: release composer-drum",
         "command": "zig",
         "args": [
             "build",
-            "composer-drum-standalone",
+            "composer-drum",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -393,17 +659,19 @@
         "command": "zig",
         "args": [
             "build",
-            "comptime-julia"
+            "comptime-julia",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone comptime-julia",
+        "label": "zig: release comptime-julia",
         "command": "zig",
         "args": [
             "build",
-            "comptime-julia-standalone",
+            "comptime-julia",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -414,17 +682,19 @@
         "command": "zig",
         "args": [
             "build",
-            "comptime-mandelbrot"
+            "comptime-mandelbrot",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone comptime-mandelbrot",
+        "label": "zig: release comptime-mandelbrot",
         "command": "zig",
         "args": [
             "build",
-            "comptime-mandelbrot-standalone",
+            "comptime-mandelbrot",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -435,17 +705,19 @@
         "command": "zig",
         "args": [
             "build",
-            "compute-particles"
+            "compute-particles",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone compute-particles",
+        "label": "zig: release compute-particles",
         "command": "zig",
         "args": [
             "build",
-            "compute-particles-standalone",
+            "compute-particles",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -456,17 +728,42 @@
         "command": "zig",
         "args": [
             "build",
-            "compute-smoke"
+            "compute-smoke",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone compute-smoke",
+        "label": "zig: release compute-smoke",
         "command": "zig",
         "args": [
             "build",
-            "compute-smoke-standalone",
+            "compute-smoke",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build crane",
+        "command": "zig",
+        "args": [
+            "build",
+            "crane",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release crane",
+        "command": "zig",
+        "args": [
+            "build",
+            "crane",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -477,17 +774,19 @@
         "command": "zig",
         "args": [
             "build",
-            "cube-demo"
+            "cube-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone cube-demo",
+        "label": "zig: release cube-demo",
         "command": "zig",
         "args": [
             "build",
-            "cube-demo-standalone",
+            "cube-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -498,17 +797,19 @@
         "command": "zig",
         "args": [
             "build",
-            "cube-sidebyside"
+            "cube-sidebyside",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone cube-sidebyside",
+        "label": "zig: release cube-sidebyside",
         "command": "zig",
         "args": [
             "build",
-            "cube-sidebyside-standalone",
+            "cube-sidebyside",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -519,17 +820,19 @@
         "command": "zig",
         "args": [
             "build",
-            "cube3d"
+            "cube3d",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone cube3d",
+        "label": "zig: release cube3d",
         "command": "zig",
         "args": [
             "build",
-            "cube3d-standalone",
+            "cube3d",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -540,17 +843,19 @@
         "command": "zig",
         "args": [
             "build",
-            "cubicmap"
+            "cubicmap",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone cubicmap",
+        "label": "zig: release cubicmap",
         "command": "zig",
         "args": [
             "build",
-            "cubicmap-standalone",
+            "cubicmap",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -561,17 +866,19 @@
         "command": "zig",
         "args": [
             "build",
-            "damaged-helmet"
+            "damaged-helmet",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone damaged-helmet",
+        "label": "zig: release damaged-helmet",
         "command": "zig",
         "args": [
             "build",
-            "damaged-helmet-standalone",
+            "damaged-helmet",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -582,17 +889,19 @@
         "command": "zig",
         "args": [
             "build",
-            "dance-track"
+            "dance-track",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone dance-track",
+        "label": "zig: release dance-track",
         "command": "zig",
         "args": [
             "build",
-            "dance-track-standalone",
+            "dance-track",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -603,17 +912,19 @@
         "command": "zig",
         "args": [
             "build",
-            "dashed-line"
+            "dashed-line",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone dashed-line",
+        "label": "zig: release dashed-line",
         "command": "zig",
         "args": [
             "build",
-            "dashed-line-standalone",
+            "dashed-line",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -624,17 +935,42 @@
         "command": "zig",
         "args": [
             "build",
-            "decal-sw"
+            "decal-sw",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone decal-sw",
+        "label": "zig: release decal-sw",
         "command": "zig",
         "args": [
             "build",
-            "decal-sw-standalone",
+            "decal-sw",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build decals",
+        "command": "zig",
+        "args": [
+            "build",
+            "decals",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release decals",
+        "command": "zig",
+        "args": [
+            "build",
+            "decals",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -645,17 +981,42 @@
         "command": "zig",
         "args": [
             "build",
-            "deferred-render"
+            "deferred-render",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone deferred-render",
+        "label": "zig: release deferred-render",
         "command": "zig",
         "args": [
             "build",
-            "deferred-render-standalone",
+            "deferred-render",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build delta-time",
+        "command": "zig",
+        "args": [
+            "build",
+            "delta-time",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release delta-time",
+        "command": "zig",
+        "args": [
+            "build",
+            "delta-time",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -666,17 +1027,19 @@
         "command": "zig",
         "args": [
             "build",
-            "depth-cue"
+            "depth-cue",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone depth-cue",
+        "label": "zig: release depth-cue",
         "command": "zig",
         "args": [
             "build",
-            "depth-cue-standalone",
+            "depth-cue",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -687,17 +1050,19 @@
         "command": "zig",
         "args": [
             "build",
-            "depth-rendering"
+            "depth-rendering",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone depth-rendering",
+        "label": "zig: release depth-rendering",
         "command": "zig",
         "args": [
             "build",
-            "depth-rendering-standalone",
+            "depth-rendering",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -708,17 +1073,19 @@
         "command": "zig",
         "args": [
             "build",
-            "depth-writing"
+            "depth-writing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone depth-writing",
+        "label": "zig: release depth-writing",
         "command": "zig",
         "args": [
             "build",
-            "depth-writing-standalone",
+            "depth-writing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -729,17 +1096,42 @@
         "command": "zig",
         "args": [
             "build",
-            "digital-clock"
+            "digital-clock",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone digital-clock",
+        "label": "zig: release digital-clock",
         "command": "zig",
         "args": [
             "build",
-            "digital-clock-standalone",
+            "digital-clock",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build directional-billboard",
+        "command": "zig",
+        "args": [
+            "build",
+            "directional-billboard",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release directional-billboard",
+        "command": "zig",
+        "args": [
+            "build",
+            "directional-billboard",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -750,17 +1142,42 @@
         "command": "zig",
         "args": [
             "build",
-            "double-pendulum"
+            "double-pendulum",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone double-pendulum",
+        "label": "zig: release double-pendulum",
         "command": "zig",
         "args": [
             "build",
-            "double-pendulum-standalone",
+            "double-pendulum",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build draw2d-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "draw2d-demo",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release draw2d-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "draw2d-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -771,17 +1188,19 @@
         "command": "zig",
         "args": [
             "build",
-            "dynamic-mesh"
+            "dynamic-mesh",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone dynamic-mesh",
+        "label": "zig: release dynamic-mesh",
         "command": "zig",
         "args": [
             "build",
-            "dynamic-mesh-standalone",
+            "dynamic-mesh",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -792,17 +1211,19 @@
         "command": "zig",
         "args": [
             "build",
-            "easings-ball"
+            "easings-ball",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone easings-ball",
+        "label": "zig: release easings-ball",
         "command": "zig",
         "args": [
             "build",
-            "easings-ball-standalone",
+            "easings-ball",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -813,17 +1234,19 @@
         "command": "zig",
         "args": [
             "build",
-            "easings-box"
+            "easings-box",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone easings-box",
+        "label": "zig: release easings-box",
         "command": "zig",
         "args": [
             "build",
-            "easings-box-standalone",
+            "easings-box",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -834,17 +1257,19 @@
         "command": "zig",
         "args": [
             "build",
-            "easings-rectangles"
+            "easings-rectangles",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone easings-rectangles",
+        "label": "zig: release easings-rectangles",
         "command": "zig",
         "args": [
             "build",
-            "easings-rectangles-standalone",
+            "easings-rectangles",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -855,17 +1280,19 @@
         "command": "zig",
         "args": [
             "build",
-            "easings-testbed"
+            "easings-testbed",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone easings-testbed",
+        "label": "zig: release easings-testbed",
         "command": "zig",
         "args": [
             "build",
-            "easings-testbed-standalone",
+            "easings-testbed",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -876,17 +1303,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ecs-boids"
+            "ecs-boids",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ecs-boids",
+        "label": "zig: release ecs-boids",
         "command": "zig",
         "args": [
             "build",
-            "ecs-boids-standalone",
+            "ecs-boids",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -897,17 +1326,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ecs-solar-system"
+            "ecs-solar-system",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ecs-solar-system",
+        "label": "zig: release ecs-solar-system",
         "command": "zig",
         "args": [
             "build",
-            "ecs-solar-system-standalone",
+            "ecs-solar-system",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -918,17 +1349,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ellipse-collision"
+            "ellipse-collision",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ellipse-collision",
+        "label": "zig: release ellipse-collision",
         "command": "zig",
         "args": [
             "build",
-            "ellipse-collision-standalone",
+            "ellipse-collision",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -939,38 +1372,42 @@
         "command": "zig",
         "args": [
             "build",
-            "first-person-camera"
+            "first-person-camera",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone first-person-camera",
+        "label": "zig: release first-person-camera",
         "command": "zig",
         "args": [
             "build",
-            "first-person-camera-standalone",
+            "first-person-camera",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
         "use_new_terminal": false
     },
     {
-        "label": "zig: build fluid-gpu",
+        "label": "zig: build first-person-maze",
         "command": "zig",
         "args": [
             "build",
-            "fluid-gpu"
+            "first-person-maze",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone fluid-gpu",
+        "label": "zig: release first-person-maze",
         "command": "zig",
         "args": [
             "build",
-            "fluid-gpu-standalone",
+            "first-person-maze",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -981,17 +1418,19 @@
         "command": "zig",
         "args": [
             "build",
-            "fluid-sort"
+            "fluid-sort",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone fluid-sort",
+        "label": "zig: release fluid-sort",
         "command": "zig",
         "args": [
             "build",
-            "fluid-sort-standalone",
+            "fluid-sort",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1002,17 +1441,19 @@
         "command": "zig",
         "args": [
             "build",
-            "fog-rendering"
+            "fog-rendering",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone fog-rendering",
+        "label": "zig: release fog-rendering",
         "command": "zig",
         "args": [
             "build",
-            "fog-rendering-standalone",
+            "fog-rendering",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1023,38 +1464,65 @@
         "command": "zig",
         "args": [
             "build",
-            "following-eyes"
+            "following-eyes",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone following-eyes",
+        "label": "zig: release following-eyes",
         "command": "zig",
         "args": [
             "build",
-            "following-eyes-standalone",
+            "following-eyes",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
         "use_new_terminal": false
     },
     {
-        "label": "zig: build forward-kinematics",
+        "label": "zig: build four-ways",
         "command": "zig",
         "args": [
             "build",
-            "forward-kinematics"
+            "four-ways",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone forward-kinematics",
+        "label": "zig: release four-ways",
         "command": "zig",
         "args": [
             "build",
-            "forward-kinematics-standalone",
+            "four-ways",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build fps-playground",
+        "command": "zig",
+        "args": [
+            "build",
+            "fps-playground",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release fps-playground",
+        "command": "zig",
+        "args": [
+            "build",
+            "fps-playground",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1065,17 +1533,42 @@
         "command": "zig",
         "args": [
             "build",
-            "fractal-tree"
+            "fractal-tree",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone fractal-tree",
+        "label": "zig: release fractal-tree",
         "command": "zig",
         "args": [
             "build",
-            "fractal-tree-standalone",
+            "fractal-tree",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build friction-slope",
+        "command": "zig",
+        "args": [
+            "build",
+            "friction-slope",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release friction-slope",
+        "command": "zig",
+        "args": [
+            "build",
+            "friction-slope",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1086,17 +1579,19 @@
         "command": "zig",
         "args": [
             "build",
-            "gallery"
+            "gallery",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone gallery",
+        "label": "zig: release gallery",
         "command": "zig",
         "args": [
             "build",
-            "gallery-standalone",
+            "gallery",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1107,17 +1602,42 @@
         "command": "zig",
         "args": [
             "build",
-            "gallery-all"
+            "gallery-all",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone gallery-all",
+        "label": "zig: release gallery-all",
         "command": "zig",
         "args": [
             "build",
-            "gallery-all-standalone",
+            "gallery-all",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build geno-dance",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-dance",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release geno-dance",
+        "command": "zig",
+        "args": [
+            "build",
+            "geno-dance",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1128,17 +1648,19 @@
         "command": "zig",
         "args": [
             "build",
-            "geno-fit"
+            "geno-fit",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone geno-fit",
+        "label": "zig: release geno-fit",
         "command": "zig",
         "args": [
             "build",
-            "geno-fit-standalone",
+            "geno-fit",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1149,17 +1671,19 @@
         "command": "zig",
         "args": [
             "build",
-            "geno-ppo"
+            "geno-ppo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone geno-ppo",
+        "label": "zig: release geno-ppo",
         "command": "zig",
         "args": [
             "build",
-            "geno-ppo-standalone",
+            "geno-ppo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1170,17 +1694,19 @@
         "command": "zig",
         "args": [
             "build",
-            "geno-track"
+            "geno-track",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone geno-track",
+        "label": "zig: release geno-track",
         "command": "zig",
         "args": [
             "build",
-            "geno-track-standalone",
+            "geno-track",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1191,17 +1717,19 @@
         "command": "zig",
         "args": [
             "build",
-            "geno-train"
+            "geno-train",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone geno-train",
+        "label": "zig: release geno-train",
         "command": "zig",
         "args": [
             "build",
-            "geno-train-standalone",
+            "geno-train",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1212,17 +1740,19 @@
         "command": "zig",
         "args": [
             "build",
-            "gestures-demo"
+            "gestures-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone gestures-demo",
+        "label": "zig: release gestures-demo",
         "command": "zig",
         "args": [
             "build",
-            "gestures-demo-standalone",
+            "gestures-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1233,17 +1763,19 @@
         "command": "zig",
         "args": [
             "build",
-            "gestures-testbed"
+            "gestures-testbed",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone gestures-testbed",
+        "label": "zig: release gestures-testbed",
         "command": "zig",
         "args": [
             "build",
-            "gestures-testbed-standalone",
+            "gestures-testbed",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1254,17 +1786,19 @@
         "command": "zig",
         "args": [
             "build",
-            "getup-frames"
+            "getup-frames",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone getup-frames",
+        "label": "zig: release getup-frames",
         "command": "zig",
         "args": [
             "build",
-            "getup-frames-standalone",
+            "getup-frames",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1275,17 +1809,19 @@
         "command": "zig",
         "args": [
             "build",
-            "getup-train"
+            "getup-train",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone getup-train",
+        "label": "zig: release getup-train",
         "command": "zig",
         "args": [
             "build",
-            "getup-train-standalone",
+            "getup-train",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1296,17 +1832,19 @@
         "command": "zig",
         "args": [
             "build",
-            "gltf-simple"
+            "gltf-simple",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone gltf-simple",
+        "label": "zig: release gltf-simple",
         "command": "zig",
         "args": [
             "build",
-            "gltf-simple-standalone",
+            "gltf-simple",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1317,17 +1855,42 @@
         "command": "zig",
         "args": [
             "build",
-            "gltf-textured"
+            "gltf-textured",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone gltf-textured",
+        "label": "zig: release gltf-textured",
         "command": "zig",
         "args": [
             "build",
-            "gltf-textured-standalone",
+            "gltf-textured",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build gripper",
+        "command": "zig",
+        "args": [
+            "build",
+            "gripper",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release gripper",
+        "command": "zig",
+        "args": [
+            "build",
+            "gripper",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1338,17 +1901,19 @@
         "command": "zig",
         "args": [
             "build",
-            "heightmap"
+            "heightmap",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone heightmap",
+        "label": "zig: release heightmap",
         "command": "zig",
         "args": [
             "build",
-            "heightmap-standalone",
+            "heightmap",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1359,17 +1924,19 @@
         "command": "zig",
         "args": [
             "build",
-            "hello-world"
+            "hello-world",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone hello-world",
+        "label": "zig: release hello-world",
         "command": "zig",
         "args": [
             "build",
-            "hello-world-standalone",
+            "hello-world",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1380,17 +1947,19 @@
         "command": "zig",
         "args": [
             "build",
-            "helmet-sw"
+            "helmet-sw",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone helmet-sw",
+        "label": "zig: release helmet-sw",
         "command": "zig",
         "args": [
             "build",
-            "helmet-sw-standalone",
+            "helmet-sw",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1401,17 +1970,42 @@
         "command": "zig",
         "args": [
             "build",
-            "hilbert-curve"
+            "hilbert-curve",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone hilbert-curve",
+        "label": "zig: release hilbert-curve",
         "command": "zig",
         "args": [
             "build",
-            "hilbert-curve-standalone",
+            "hilbert-curve",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build humanoid",
+        "command": "zig",
+        "args": [
+            "build",
+            "humanoid",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release humanoid",
+        "command": "zig",
+        "args": [
+            "build",
+            "humanoid",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1422,17 +2016,42 @@
         "command": "zig",
         "args": [
             "build",
-            "hybrid-render"
+            "hybrid-render",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone hybrid-render",
+        "label": "zig: release hybrid-render",
         "command": "zig",
         "args": [
             "build",
-            "hybrid-render-standalone",
+            "hybrid-render",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build icosphere-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "icosphere-demo",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release icosphere-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "icosphere-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1443,17 +2062,19 @@
         "command": "zig",
         "args": [
             "build",
-            "image-editor"
+            "image-editor",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone image-editor",
+        "label": "zig: release image-editor",
         "command": "zig",
         "args": [
             "build",
-            "image-editor-standalone",
+            "image-editor",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1464,17 +2085,88 @@
         "command": "zig",
         "args": [
             "build",
-            "imgui-phone-demo"
+            "imgui-phone-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone imgui-phone-demo",
+        "label": "zig: release imgui-phone-demo",
         "command": "zig",
         "args": [
             "build",
-            "imgui-phone-demo-standalone",
+            "imgui-phone-demo",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build input-actions",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-actions",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release input-actions",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-actions",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build input-cursor-shapes",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-cursor-shapes",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release input-cursor-shapes",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-cursor-shapes",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build input-gamepad",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-gamepad",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release input-gamepad",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-gamepad",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1485,17 +2177,19 @@
         "command": "zig",
         "args": [
             "build",
-            "input-keys"
+            "input-keys",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone input-keys",
+        "label": "zig: release input-keys",
         "command": "zig",
         "args": [
             "build",
-            "input-keys-standalone",
+            "input-keys",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1506,17 +2200,19 @@
         "command": "zig",
         "args": [
             "build",
-            "input-mouse"
+            "input-mouse",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone input-mouse",
+        "label": "zig: release input-mouse",
         "command": "zig",
         "args": [
             "build",
-            "input-mouse-standalone",
+            "input-mouse",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1527,17 +2223,19 @@
         "command": "zig",
         "args": [
             "build",
-            "input-mouse-wheel"
+            "input-mouse-wheel",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone input-mouse-wheel",
+        "label": "zig: release input-mouse-wheel",
         "command": "zig",
         "args": [
             "build",
-            "input-mouse-wheel-standalone",
+            "input-mouse-wheel",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1548,17 +2246,42 @@
         "command": "zig",
         "args": [
             "build",
-            "input-multitouch"
+            "input-multitouch",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone input-multitouch",
+        "label": "zig: release input-multitouch",
         "command": "zig",
         "args": [
             "build",
-            "input-multitouch-standalone",
+            "input-multitouch",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build input-pointer-lock",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-pointer-lock",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release input-pointer-lock",
+        "command": "zig",
+        "args": [
+            "build",
+            "input-pointer-lock",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1569,17 +2292,19 @@
         "command": "zig",
         "args": [
             "build",
-            "input-virtual-controls"
+            "input-virtual-controls",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone input-virtual-controls",
+        "label": "zig: release input-virtual-controls",
         "command": "zig",
         "args": [
             "build",
-            "input-virtual-controls-standalone",
+            "input-virtual-controls",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1590,17 +2315,19 @@
         "command": "zig",
         "args": [
             "build",
-            "instancing"
+            "instancing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone instancing",
+        "label": "zig: release instancing",
         "command": "zig",
         "args": [
             "build",
-            "instancing-standalone",
+            "instancing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1611,17 +2338,19 @@
         "command": "zig",
         "args": [
             "build",
-            "julia"
+            "julia",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone julia",
+        "label": "zig: release julia",
         "command": "zig",
         "args": [
             "build",
-            "julia-standalone",
+            "julia",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1632,17 +2361,42 @@
         "command": "zig",
         "args": [
             "build",
-            "julia-gallery"
+            "julia-gallery",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone julia-gallery",
+        "label": "zig: release julia-gallery",
         "command": "zig",
         "args": [
             "build",
-            "julia-gallery-standalone",
+            "julia-gallery",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build kaleidoscope",
+        "command": "zig",
+        "args": [
+            "build",
+            "kaleidoscope",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release kaleidoscope",
+        "command": "zig",
+        "args": [
+            "build",
+            "kaleidoscope",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1653,17 +2407,19 @@
         "command": "zig",
         "args": [
             "build",
-            "keys"
+            "keys",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone keys",
+        "label": "zig: release keys",
         "command": "zig",
         "args": [
             "build",
-            "keys-standalone",
+            "keys",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1674,17 +2430,42 @@
         "command": "zig",
         "args": [
             "build",
-            "lambert-demo"
+            "lambert-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone lambert-demo",
+        "label": "zig: release lambert-demo",
         "command": "zig",
         "args": [
             "build",
-            "lambert-demo-standalone",
+            "lambert-demo",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build langton-ant",
+        "command": "zig",
+        "args": [
+            "build",
+            "langton-ant",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release langton-ant",
+        "command": "zig",
+        "args": [
+            "build",
+            "langton-ant",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1695,17 +2476,19 @@
         "command": "zig",
         "args": [
             "build",
-            "launcher"
+            "launcher",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone launcher",
+        "label": "zig: release launcher",
         "command": "zig",
         "args": [
             "build",
-            "launcher-standalone",
+            "launcher",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1716,17 +2499,19 @@
         "command": "zig",
         "args": [
             "build",
-            "life"
+            "life",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone life",
+        "label": "zig: release life",
         "command": "zig",
         "args": [
             "build",
-            "life-standalone",
+            "life",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1737,17 +2522,19 @@
         "command": "zig",
         "args": [
             "build",
-            "lines-bezier"
+            "lines-bezier",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone lines-bezier",
+        "label": "zig: release lines-bezier",
         "command": "zig",
         "args": [
             "build",
-            "lines-bezier-standalone",
+            "lines-bezier",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1758,17 +2545,19 @@
         "command": "zig",
         "args": [
             "build",
-            "lines-drawing"
+            "lines-drawing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone lines-drawing",
+        "label": "zig: release lines-drawing",
         "command": "zig",
         "args": [
             "build",
-            "lines-drawing-standalone",
+            "lines-drawing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1779,17 +2568,19 @@
         "command": "zig",
         "args": [
             "build",
-            "logo-raylib"
+            "logo-raylib",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone logo-raylib",
+        "label": "zig: release logo-raylib",
         "command": "zig",
         "args": [
             "build",
-            "logo-raylib-standalone",
+            "logo-raylib",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1800,17 +2591,19 @@
         "command": "zig",
         "args": [
             "build",
-            "logo-raylib-anim"
+            "logo-raylib-anim",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone logo-raylib-anim",
+        "label": "zig: release logo-raylib-anim",
         "command": "zig",
         "args": [
             "build",
-            "logo-raylib-anim-standalone",
+            "logo-raylib-anim",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1821,17 +2614,19 @@
         "command": "zig",
         "args": [
             "build",
-            "mandel-julia"
+            "mandel-julia",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone mandel-julia",
+        "label": "zig: release mandel-julia",
         "command": "zig",
         "args": [
             "build",
-            "mandel-julia-standalone",
+            "mandel-julia",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1842,17 +2637,19 @@
         "command": "zig",
         "args": [
             "build",
-            "mandel-sidebyside"
+            "mandel-sidebyside",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone mandel-sidebyside",
+        "label": "zig: release mandel-sidebyside",
         "command": "zig",
         "args": [
             "build",
-            "mandel-sidebyside-standalone",
+            "mandel-sidebyside",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1863,17 +2660,19 @@
         "command": "zig",
         "args": [
             "build",
-            "math-angle-rotation"
+            "math-angle-rotation",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone math-angle-rotation",
+        "label": "zig: release math-angle-rotation",
         "command": "zig",
         "args": [
             "build",
-            "math-angle-rotation-standalone",
+            "math-angle-rotation",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1884,17 +2683,88 @@
         "command": "zig",
         "args": [
             "build",
-            "math-sine-cosine"
+            "math-sine-cosine",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone math-sine-cosine",
+        "label": "zig: release math-sine-cosine",
         "command": "zig",
         "args": [
             "build",
-            "math-sine-cosine-standalone",
+            "math-sine-cosine",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build mesh-builder",
+        "command": "zig",
+        "args": [
+            "build",
+            "mesh-builder",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release mesh-builder",
+        "command": "zig",
+        "args": [
+            "build",
+            "mesh-builder",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build mesh-picking",
+        "command": "zig",
+        "args": [
+            "build",
+            "mesh-picking",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release mesh-picking",
+        "command": "zig",
+        "args": [
+            "build",
+            "mesh-picking",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build mocap-viewer",
+        "command": "zig",
+        "args": [
+            "build",
+            "mocap-viewer",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release mocap-viewer",
+        "command": "zig",
+        "args": [
+            "build",
+            "mocap-viewer",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1905,17 +2775,42 @@
         "command": "zig",
         "args": [
             "build",
-            "models-animation-blend-custom"
+            "models-animation-blend-custom",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone models-animation-blend-custom",
+        "label": "zig: release models-animation-blend-custom",
         "command": "zig",
         "args": [
             "build",
-            "models-animation-blend-custom-standalone",
+            "models-animation-blend-custom",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build models-geometric-shapes",
+        "command": "zig",
+        "args": [
+            "build",
+            "models-geometric-shapes",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release models-geometric-shapes",
+        "command": "zig",
+        "args": [
+            "build",
+            "models-geometric-shapes",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1926,17 +2821,88 @@
         "command": "zig",
         "args": [
             "build",
-            "models3d"
+            "models3d",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone models3d",
+        "label": "zig: release models3d",
         "command": "zig",
         "args": [
             "build",
-            "models3d-standalone",
+            "models3d",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build monitors",
+        "command": "zig",
+        "args": [
+            "build",
+            "monitors",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release monitors",
+        "command": "zig",
+        "args": [
+            "build",
+            "monitors",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build mpc-cartpole",
+        "command": "zig",
+        "args": [
+            "build",
+            "mpc-cartpole",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release mpc-cartpole",
+        "command": "zig",
+        "args": [
+            "build",
+            "mpc-cartpole",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build mpc-quadruped",
+        "command": "zig",
+        "args": [
+            "build",
+            "mpc-quadruped",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release mpc-quadruped",
+        "command": "zig",
+        "args": [
+            "build",
+            "mpc-quadruped",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1947,17 +2913,88 @@
         "command": "zig",
         "args": [
             "build",
-            "music-streaming"
+            "music-streaming",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone music-streaming",
+        "label": "zig: release music-streaming",
         "command": "zig",
         "args": [
             "build",
-            "music-streaming-standalone",
+            "music-streaming",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build net-cursors",
+        "command": "zig",
+        "args": [
+            "build",
+            "net-cursors",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release net-cursors",
+        "command": "zig",
+        "args": [
+            "build",
+            "net-cursors",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build net-rtc-smoke",
+        "command": "zig",
+        "args": [
+            "build",
+            "net-rtc-smoke",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release net-rtc-smoke",
+        "command": "zig",
+        "args": [
+            "build",
+            "net-rtc-smoke",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build net-ws-smoke",
+        "command": "zig",
+        "args": [
+            "build",
+            "net-ws-smoke",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release net-ws-smoke",
+        "command": "zig",
+        "args": [
+            "build",
+            "net-ws-smoke",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1968,17 +3005,19 @@
         "command": "zig",
         "args": [
             "build",
-            "obj-bunny"
+            "obj-bunny",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone obj-bunny",
+        "label": "zig: release obj-bunny",
         "command": "zig",
         "args": [
             "build",
-            "obj-bunny-standalone",
+            "obj-bunny",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -1989,17 +3028,42 @@
         "command": "zig",
         "args": [
             "build",
-            "obj-simple"
+            "obj-simple",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone obj-simple",
+        "label": "zig: release obj-simple",
         "command": "zig",
         "args": [
             "build",
-            "obj-simple-standalone",
+            "obj-simple",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build orthographic-projection",
+        "command": "zig",
+        "args": [
+            "build",
+            "orthographic-projection",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release orthographic-projection",
+        "command": "zig",
+        "args": [
+            "build",
+            "orthographic-projection",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2010,17 +3074,19 @@
         "command": "zig",
         "args": [
             "build",
-            "particles"
+            "particles",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone particles",
+        "label": "zig: release particles",
         "command": "zig",
         "args": [
             "build",
-            "particles-standalone",
+            "particles",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2031,17 +3097,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pbr-demo"
+            "pbr-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pbr-demo",
+        "label": "zig: release pbr-demo",
         "command": "zig",
         "args": [
             "build",
-            "pbr-demo-standalone",
+            "pbr-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2052,17 +3120,19 @@
         "command": "zig",
         "args": [
             "build",
-            "penrose-tile"
+            "penrose-tile",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone penrose-tile",
+        "label": "zig: release penrose-tile",
         "command": "zig",
         "args": [
             "build",
-            "penrose-tile-standalone",
+            "penrose-tile",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2073,17 +3143,19 @@
         "command": "zig",
         "args": [
             "build",
-            "physics-sidebyside"
+            "physics-sidebyside",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone physics-sidebyside",
+        "label": "zig: release physics-sidebyside",
         "command": "zig",
         "args": [
             "build",
-            "physics-sidebyside-standalone",
+            "physics-sidebyside",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2094,38 +3166,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pie-chart"
+            "pie-chart",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pie-chart",
+        "label": "zig: release pie-chart",
         "command": "zig",
         "args": [
             "build",
-            "pie-chart-standalone",
-            "-Dmode=release"
-        ],
-        "reveal": "always",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: build pipeline-array",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-array"
-        ],
-        "reveal": "no_focus",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: standalone pipeline-array",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-array-standalone",
+            "pie-chart",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2136,17 +3189,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-basic"
+            "pipeline-basic",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-basic",
+        "label": "zig: release pipeline-basic",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-basic-standalone",
+            "pipeline-basic",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2157,38 +3212,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-bloom"
+            "pipeline-bloom",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-bloom",
+        "label": "zig: release pipeline-bloom",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-bloom-standalone",
-            "-Dmode=release"
-        ],
-        "reveal": "always",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: build pipeline-constants",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-constants"
-        ],
-        "reveal": "no_focus",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: standalone pipeline-constants",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-constants-standalone",
+            "pipeline-bloom",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2199,38 +3235,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-instancing"
+            "pipeline-instancing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-instancing",
+        "label": "zig: release pipeline-instancing",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-instancing-standalone",
-            "-Dmode=release"
-        ],
-        "reveal": "always",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: build pipeline-mipmap",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-mipmap"
-        ],
-        "reveal": "no_focus",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: standalone pipeline-mipmap",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-mipmap-standalone",
+            "pipeline-instancing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2241,17 +3258,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-msaa"
+            "pipeline-msaa",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-msaa",
+        "label": "zig: release pipeline-msaa",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-msaa-standalone",
+            "pipeline-msaa",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2262,17 +3281,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-postprocess"
+            "pipeline-postprocess",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-postprocess",
+        "label": "zig: release pipeline-postprocess",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-postprocess-standalone",
+            "pipeline-postprocess",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2283,17 +3304,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-rendertarget"
+            "pipeline-rendertarget",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-rendertarget",
+        "label": "zig: release pipeline-rendertarget",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-rendertarget-standalone",
+            "pipeline-rendertarget",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2304,17 +3327,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-sampler"
+            "pipeline-sampler",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-sampler",
+        "label": "zig: release pipeline-sampler",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-sampler-standalone",
+            "pipeline-sampler",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2325,38 +3350,19 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-settings"
+            "pipeline-settings",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-settings",
+        "label": "zig: release pipeline-settings",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-settings-standalone",
-            "-Dmode=release"
-        ],
-        "reveal": "always",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: build pipeline-storage",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-storage"
-        ],
-        "reveal": "no_focus",
-        "use_new_terminal": false
-    },
-    {
-        "label": "zig: standalone pipeline-storage",
-        "command": "zig",
-        "args": [
-            "build",
-            "pipeline-storage-standalone",
+            "pipeline-settings",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2367,17 +3373,42 @@
         "command": "zig",
         "args": [
             "build",
-            "pipeline-uniforms"
+            "pipeline-uniforms",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone pipeline-uniforms",
+        "label": "zig: release pipeline-uniforms",
         "command": "zig",
         "args": [
             "build",
-            "pipeline-uniforms-standalone",
+            "pipeline-uniforms",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build platonic-solids",
+        "command": "zig",
+        "args": [
+            "build",
+            "platonic-solids",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release platonic-solids",
+        "command": "zig",
+        "args": [
+            "build",
+            "platonic-solids",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2388,17 +3419,19 @@
         "command": "zig",
         "args": [
             "build",
-            "plot-demo"
+            "plot-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone plot-demo",
+        "label": "zig: release plot-demo",
         "command": "zig",
         "args": [
             "build",
-            "plot-demo-standalone",
+            "plot-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2409,17 +3442,19 @@
         "command": "zig",
         "args": [
             "build",
-            "plot3d-demo"
+            "plot3d-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone plot3d-demo",
+        "label": "zig: release plot3d-demo",
         "command": "zig",
         "args": [
             "build",
-            "plot3d-demo-standalone",
+            "plot3d-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2430,17 +3465,19 @@
         "command": "zig",
         "args": [
             "build",
-            "plot3d-gallery"
+            "plot3d-gallery",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone plot3d-gallery",
+        "label": "zig: release plot3d-gallery",
         "command": "zig",
         "args": [
             "build",
-            "plot3d-gallery-standalone",
+            "plot3d-gallery",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2451,17 +3488,19 @@
         "command": "zig",
         "args": [
             "build",
-            "png-demo"
+            "png-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone png-demo",
+        "label": "zig: release png-demo",
         "command": "zig",
         "args": [
             "build",
-            "png-demo-standalone",
+            "png-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2472,17 +3511,19 @@
         "command": "zig",
         "args": [
             "build",
-            "point-rendering"
+            "point-rendering",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone point-rendering",
+        "label": "zig: release point-rendering",
         "command": "zig",
         "args": [
             "build",
-            "point-rendering-standalone",
+            "point-rendering",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2493,17 +3534,111 @@
         "command": "zig",
         "args": [
             "build",
-            "procgen-noise"
+            "procgen-noise",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone procgen-noise",
+        "label": "zig: release procgen-noise",
         "command": "zig",
         "args": [
             "build",
-            "procgen-noise-standalone",
+            "procgen-noise",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build quadruped",
+        "command": "zig",
+        "args": [
+            "build",
+            "quadruped",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release quadruped",
+        "command": "zig",
+        "args": [
+            "build",
+            "quadruped",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build ragdoll-compare",
+        "command": "zig",
+        "args": [
+            "build",
+            "ragdoll-compare",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release ragdoll-compare",
+        "command": "zig",
+        "args": [
+            "build",
+            "ragdoll-compare",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build random-sequence",
+        "command": "zig",
+        "args": [
+            "build",
+            "random-sequence",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release random-sequence",
+        "command": "zig",
+        "args": [
+            "build",
+            "random-sequence",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build random-values",
+        "command": "zig",
+        "args": [
+            "build",
+            "random-values",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release random-values",
+        "command": "zig",
+        "args": [
+            "build",
+            "random-values",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2514,17 +3649,19 @@
         "command": "zig",
         "args": [
             "build",
-            "raytracer"
+            "raytracer",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone raytracer",
+        "label": "zig: release raytracer",
         "command": "zig",
         "args": [
             "build",
-            "raytracer-standalone",
+            "raytracer",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2535,17 +3672,19 @@
         "command": "zig",
         "args": [
             "build",
-            "rectangle-advanced"
+            "rectangle-advanced",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone rectangle-advanced",
+        "label": "zig: release rectangle-advanced",
         "command": "zig",
         "args": [
             "build",
-            "rectangle-advanced-standalone",
+            "rectangle-advanced",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2556,17 +3695,19 @@
         "command": "zig",
         "args": [
             "build",
-            "rectangle-scaling"
+            "rectangle-scaling",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone rectangle-scaling",
+        "label": "zig: release rectangle-scaling",
         "command": "zig",
         "args": [
             "build",
-            "rectangle-scaling-standalone",
+            "rectangle-scaling",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2577,17 +3718,19 @@
         "command": "zig",
         "args": [
             "build",
-            "recursive-hud"
+            "recursive-hud",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone recursive-hud",
+        "label": "zig: release recursive-hud",
         "command": "zig",
         "args": [
             "build",
-            "recursive-hud-standalone",
+            "recursive-hud",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2598,17 +3741,19 @@
         "command": "zig",
         "args": [
             "build",
-            "render-texture"
+            "render-texture",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone render-texture",
+        "label": "zig: release render-texture",
         "command": "zig",
         "args": [
             "build",
-            "render-texture-standalone",
+            "render-texture",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2619,17 +3764,203 @@
         "command": "zig",
         "args": [
             "build",
-            "ring-drawing"
+            "ring-drawing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ring-drawing",
+        "label": "zig: release ring-drawing",
         "command": "zig",
         "args": [
             "build",
-            "ring-drawing-standalone",
+            "ring-drawing",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build rl-humanoid",
+        "command": "zig",
+        "args": [
+            "build",
+            "rl-humanoid",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release rl-humanoid",
+        "command": "zig",
+        "args": [
+            "build",
+            "rl-humanoid",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robot-3d",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-3d",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robot-3d",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-3d",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robot-contact",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-contact",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robot-contact",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-contact",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robot-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-demo",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robot-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-demo",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robot-pendulum",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-pendulum",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robot-pendulum",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-pendulum",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build robot-sidebyside",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-sidebyside",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release robot-sidebyside",
+        "command": "zig",
+        "args": [
+            "build",
+            "robot-sidebyside",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build rock-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "rock-demo",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release rock-demo",
+        "command": "zig",
+        "args": [
+            "build",
+            "rock-demo",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build rocket",
+        "command": "zig",
+        "args": [
+            "build",
+            "rocket",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release rocket",
+        "command": "zig",
+        "args": [
+            "build",
+            "rocket",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2640,17 +3971,19 @@
         "command": "zig",
         "args": [
             "build",
-            "rounded-rectangle"
+            "rounded-rectangle",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone rounded-rectangle",
+        "label": "zig: release rounded-rectangle",
         "command": "zig",
         "args": [
             "build",
-            "rounded-rectangle-standalone",
+            "rounded-rectangle",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2661,17 +3994,19 @@
         "command": "zig",
         "args": [
             "build",
-            "rt-shader"
+            "rt-shader",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone rt-shader",
+        "label": "zig: release rt-shader",
         "command": "zig",
         "args": [
             "build",
-            "rt-shader-standalone",
+            "rt-shader",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2682,38 +4017,203 @@
         "command": "zig",
         "args": [
             "build",
-            "rt-sidebyside"
+            "rt-sidebyside",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone rt-sidebyside",
+        "label": "zig: release rt-sidebyside",
         "command": "zig",
         "args": [
             "build",
-            "rt-sidebyside-standalone",
+            "rt-sidebyside",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
         "use_new_terminal": false
     },
     {
-        "label": "zig: build shader-inspection",
+        "label": "zig: build rt-workers",
         "command": "zig",
         "args": [
             "build",
-            "shader-inspection"
+            "rt-workers",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shader-inspection",
+        "label": "zig: release rt-workers",
         "command": "zig",
         "args": [
             "build",
-            "shader-inspection-standalone",
+            "rt-workers",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build scissor-test",
+        "command": "zig",
+        "args": [
+            "build",
+            "scissor-test",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release scissor-test",
+        "command": "zig",
+        "args": [
+            "build",
+            "scissor-test",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shader-effects",
+        "command": "zig",
+        "args": [
+            "build",
+            "shader-effects",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shader-effects",
+        "command": "zig",
+        "args": [
+            "build",
+            "shader-effects",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shaders-lightmap-rendering",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-lightmap-rendering",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shaders-lightmap-rendering",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-lightmap-rendering",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shaders-multi-texture",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-multi-texture",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shaders-multi-texture",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-multi-texture",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shaders-normalmap-rendering",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-normalmap-rendering",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shaders-normalmap-rendering",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-normalmap-rendering",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shaders-shapes-textures",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-shapes-textures",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shaders-shapes-textures",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-shapes-textures",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shaders-vertex-displacement",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-vertex-displacement",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shaders-vertex-displacement",
+        "command": "zig",
+        "args": [
+            "build",
+            "shaders-vertex-displacement",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2724,17 +4224,19 @@
         "command": "zig",
         "args": [
             "build",
-            "shadow-sidebyside"
+            "shadow-sidebyside",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shadow-sidebyside",
+        "label": "zig: release shadow-sidebyside",
         "command": "zig",
         "args": [
             "build",
-            "shadow-sidebyside-standalone",
+            "shadow-sidebyside",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2745,17 +4247,19 @@
         "command": "zig",
         "args": [
             "build",
-            "shadowmap"
+            "shadowmap",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shadowmap",
+        "label": "zig: release shadowmap",
         "command": "zig",
         "args": [
             "build",
-            "shadowmap-standalone",
+            "shadowmap",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2766,17 +4270,19 @@
         "command": "zig",
         "args": [
             "build",
-            "shadowmap-sw"
+            "shadowmap-sw",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shadowmap-sw",
+        "label": "zig: release shadowmap-sw",
         "command": "zig",
         "args": [
             "build",
-            "shadowmap-sw-standalone",
+            "shadowmap-sw",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2787,17 +4293,65 @@
         "command": "zig",
         "args": [
             "build",
-            "shapes-demo"
+            "shapes-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shapes-demo",
+        "label": "zig: release shapes-demo",
         "command": "zig",
         "args": [
             "build",
-            "shapes-demo-standalone",
+            "shapes-demo",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shapes-gallery",
+        "command": "zig",
+        "args": [
+            "build",
+            "shapes-gallery",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shapes-gallery",
+        "command": "zig",
+        "args": [
+            "build",
+            "shapes-gallery",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shapes-procedural",
+        "command": "zig",
+        "args": [
+            "build",
+            "shapes-procedural",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shapes-procedural",
+        "command": "zig",
+        "args": [
+            "build",
+            "shapes-procedural",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2808,17 +4362,42 @@
         "command": "zig",
         "args": [
             "build",
-            "shapes-showcase"
+            "shapes-showcase",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shapes-showcase",
+        "label": "zig: release shapes-showcase",
         "command": "zig",
         "args": [
             "build",
-            "shapes-showcase-standalone",
+            "shapes-showcase",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build shapes-top-down-lights",
+        "command": "zig",
+        "args": [
+            "build",
+            "shapes-top-down-lights",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release shapes-top-down-lights",
+        "command": "zig",
+        "args": [
+            "build",
+            "shapes-top-down-lights",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2829,17 +4408,19 @@
         "command": "zig",
         "args": [
             "build",
-            "shared-smoke"
+            "shared-smoke",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone shared-smoke",
+        "label": "zig: release shared-smoke",
         "command": "zig",
         "args": [
             "build",
-            "shared-smoke-standalone",
+            "shared-smoke",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2850,17 +4431,19 @@
         "command": "zig",
         "args": [
             "build",
-            "sidebyside"
+            "sidebyside",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone sidebyside",
+        "label": "zig: release sidebyside",
         "command": "zig",
         "args": [
             "build",
-            "sidebyside-standalone",
+            "sidebyside",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2871,17 +4454,19 @@
         "command": "zig",
         "args": [
             "build",
-            "simple-particles"
+            "simple-particles",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone simple-particles",
+        "label": "zig: release simple-particles",
         "command": "zig",
         "args": [
             "build",
-            "simple-particles-standalone",
+            "simple-particles",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2892,17 +4477,19 @@
         "command": "zig",
         "args": [
             "build",
-            "skinned-mesh"
+            "skinned-mesh",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone skinned-mesh",
+        "label": "zig: release skinned-mesh",
         "command": "zig",
         "args": [
             "build",
-            "skinned-mesh-standalone",
+            "skinned-mesh",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2913,17 +4500,88 @@
         "command": "zig",
         "args": [
             "build",
-            "skybox"
+            "skybox",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone skybox",
+        "label": "zig: release skybox",
         "command": "zig",
         "args": [
             "build",
-            "skybox-standalone",
+            "skybox",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build smooth-pixelperfect",
+        "command": "zig",
+        "args": [
+            "build",
+            "smooth-pixelperfect",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release smooth-pixelperfect",
+        "command": "zig",
+        "args": [
+            "build",
+            "smooth-pixelperfect",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build snake",
+        "command": "zig",
+        "args": [
+            "build",
+            "snake",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release snake",
+        "command": "zig",
+        "args": [
+            "build",
+            "snake",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build sort-smoke",
+        "command": "zig",
+        "args": [
+            "build",
+            "sort-smoke",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release sort-smoke",
+        "command": "zig",
+        "args": [
+            "build",
+            "sort-smoke",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2934,17 +4592,19 @@
         "command": "zig",
         "args": [
             "build",
-            "sph-fluid-2d"
+            "sph-fluid-2d",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone sph-fluid-2d",
+        "label": "zig: release sph-fluid-2d",
         "command": "zig",
         "args": [
             "build",
-            "sph-fluid-2d-standalone",
+            "sph-fluid-2d",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2955,17 +4615,19 @@
         "command": "zig",
         "args": [
             "build",
-            "splines-drawing"
+            "splines-drawing",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone splines-drawing",
+        "label": "zig: release splines-drawing",
         "command": "zig",
         "args": [
             "build",
-            "splines-drawing-standalone",
+            "splines-drawing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2976,17 +4638,42 @@
         "command": "zig",
         "args": [
             "build",
-            "split-screen"
+            "split-screen",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone split-screen",
+        "label": "zig: release split-screen",
         "command": "zig",
         "args": [
             "build",
-            "split-screen-standalone",
+            "split-screen",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build srcrec-dstrec",
+        "command": "zig",
+        "args": [
+            "build",
+            "srcrec-dstrec",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release srcrec-dstrec",
+        "command": "zig",
+        "args": [
+            "build",
+            "srcrec-dstrec",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -2997,17 +4684,19 @@
         "command": "zig",
         "args": [
             "build",
-            "starfield"
+            "starfield",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone starfield",
+        "label": "zig: release starfield",
         "command": "zig",
         "args": [
             "build",
-            "starfield-standalone",
+            "starfield",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3018,17 +4707,88 @@
         "command": "zig",
         "args": [
             "build",
-            "starfield-effect"
+            "starfield-effect",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone starfield-effect",
+        "label": "zig: release starfield-effect",
         "command": "zig",
         "args": [
             "build",
-            "starfield-effect-standalone",
+            "starfield-effect",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build state-persistence",
+        "command": "zig",
+        "args": [
+            "build",
+            "state-persistence",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release state-persistence",
+        "command": "zig",
+        "args": [
+            "build",
+            "state-persistence",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build tesseract-view",
+        "command": "zig",
+        "args": [
+            "build",
+            "tesseract-view",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release tesseract-view",
+        "command": "zig",
+        "args": [
+            "build",
+            "tesseract-view",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-codepoints-loading",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-codepoints-loading",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-codepoints-loading",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-codepoints-loading",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3039,17 +4799,111 @@
         "command": "zig",
         "args": [
             "build",
-            "text-field"
+            "text-field",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone text-field",
+        "label": "zig: release text-field",
         "command": "zig",
         "args": [
             "build",
-            "text-field-standalone",
+            "text-field",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-font-filters",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-font-filters",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-font-filters",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-font-filters",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-font-loading",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-font-loading",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-font-loading",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-font-loading",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-font-sdf",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-font-sdf",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-font-sdf",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-font-sdf",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-inline-styling",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-inline-styling",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-inline-styling",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-inline-styling",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3060,17 +4914,19 @@
         "command": "zig",
         "args": [
             "build",
-            "text-layout"
+            "text-layout",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone text-layout",
+        "label": "zig: release text-layout",
         "command": "zig",
         "args": [
             "build",
-            "text-layout-standalone",
+            "text-layout",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3081,17 +4937,88 @@
         "command": "zig",
         "args": [
             "build",
-            "text-on-texture"
+            "text-on-texture",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone text-on-texture",
+        "label": "zig: release text-on-texture",
         "command": "zig",
         "args": [
             "build",
-            "text-on-texture-standalone",
+            "text-on-texture",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-sprite-fonts",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-sprite-fonts",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-sprite-fonts",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-sprite-fonts",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-strings-management",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-strings-management",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-strings-management",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-strings-management",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build text-unicode-ranges",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-unicode-ranges",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release text-unicode-ranges",
+        "command": "zig",
+        "args": [
+            "build",
+            "text-unicode-ranges",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3102,17 +5029,42 @@
         "command": "zig",
         "args": [
             "build",
-            "texture-readback"
+            "texture-readback",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone texture-readback",
+        "label": "zig: release texture-readback",
         "command": "zig",
         "args": [
             "build",
-            "texture-readback-standalone",
+            "texture-readback",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build texture-views",
+        "command": "zig",
+        "args": [
+            "build",
+            "texture-views",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release texture-views",
+        "command": "zig",
+        "args": [
+            "build",
+            "texture-views",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3123,17 +5075,19 @@
         "command": "zig",
         "args": [
             "build",
-            "textured-cube"
+            "textured-cube",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone textured-cube",
+        "label": "zig: release textured-cube",
         "command": "zig",
         "args": [
             "build",
-            "textured-cube-standalone",
+            "textured-cube",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3144,17 +5098,19 @@
         "command": "zig",
         "args": [
             "build",
-            "textured-curve"
+            "textured-curve",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone textured-curve",
+        "label": "zig: release textured-curve",
         "command": "zig",
         "args": [
             "build",
-            "textured-curve-standalone",
+            "textured-curve",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3165,17 +5121,479 @@
         "command": "zig",
         "args": [
             "build",
-            "textures-background-scrolling"
+            "textures-background-scrolling",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone textures-background-scrolling",
+        "label": "zig: release textures-background-scrolling",
         "command": "zig",
         "args": [
             "build",
-            "textures-background-scrolling-standalone",
+            "textures-background-scrolling",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-blend-modes",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-blend-modes",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-blend-modes",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-blend-modes",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-bunnymark",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-bunnymark",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-bunnymark",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-bunnymark",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-fog-of-war",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-fog-of-war",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-fog-of-war",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-fog-of-war",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-framebuffer-rendering",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-framebuffer-rendering",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-framebuffer-rendering",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-framebuffer-rendering",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-gif-player",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-gif-player",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-gif-player",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-gif-player",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-image-channel",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-image-channel",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-image-channel",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-image-channel",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-image-rotate",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-image-rotate",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-image-rotate",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-image-rotate",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-image-text",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-image-text",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-image-text",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-image-text",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-magnifying-glass",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-magnifying-glass",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-magnifying-glass",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-magnifying-glass",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-mouse-painting",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-mouse-painting",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-mouse-painting",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-mouse-painting",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-npatch-drawing",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-npatch-drawing",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-npatch-drawing",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-npatch-drawing",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-polygon-drawing",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-polygon-drawing",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-polygon-drawing",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-polygon-drawing",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-raw-data",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-raw-data",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-raw-data",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-raw-data",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-screen-buffer",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-screen-buffer",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-screen-buffer",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-screen-buffer",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-sprite-animation",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-animation",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-sprite-animation",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-animation",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-sprite-button",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-button",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-sprite-button",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-button",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-sprite-explosion",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-explosion",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-sprite-explosion",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-explosion",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-sprite-stacking",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-stacking",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-sprite-stacking",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-sprite-stacking",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build textures-tiled-drawing",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-tiled-drawing",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release textures-tiled-drawing",
+        "command": "zig",
+        "args": [
+            "build",
+            "textures-tiled-drawing",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build three-leg",
+        "command": "zig",
+        "args": [
+            "build",
+            "three-leg",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release three-leg",
+        "command": "zig",
+        "args": [
+            "build",
+            "three-leg",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3186,17 +5604,19 @@
         "command": "zig",
         "args": [
             "build",
-            "tic-tac-toe"
+            "tic-tac-toe",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone tic-tac-toe",
+        "label": "zig: release tic-tac-toe",
         "command": "zig",
         "args": [
             "build",
-            "tic-tac-toe-standalone",
+            "tic-tac-toe",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3207,17 +5627,19 @@
         "command": "zig",
         "args": [
             "build",
-            "tile-smoke"
+            "tile-smoke",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone tile-smoke",
+        "label": "zig: release tile-smoke",
         "command": "zig",
         "args": [
             "build",
-            "tile-smoke-standalone",
+            "tile-smoke",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3228,17 +5650,19 @@
         "command": "zig",
         "args": [
             "build",
-            "touch-paint"
+            "touch-paint",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone touch-paint",
+        "label": "zig: release touch-paint",
         "command": "zig",
         "args": [
             "build",
-            "touch-paint-standalone",
+            "touch-paint",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3249,17 +5673,42 @@
         "command": "zig",
         "args": [
             "build",
-            "track-train"
+            "track-train",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone track-train",
+        "label": "zig: release track-train",
         "command": "zig",
         "args": [
             "build",
-            "track-train-standalone",
+            "track-train",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build tracking",
+        "command": "zig",
+        "args": [
+            "build",
+            "tracking",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release tracking",
+        "command": "zig",
+        "args": [
+            "build",
+            "tracking",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3270,17 +5719,19 @@
         "command": "zig",
         "args": [
             "build",
-            "trails"
+            "trails",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone trails",
+        "label": "zig: release trails",
         "command": "zig",
         "args": [
             "build",
-            "trails-standalone",
+            "trails",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3291,17 +5742,19 @@
         "command": "zig",
         "args": [
             "build",
-            "triangle-gradient"
+            "triangle-gradient",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone triangle-gradient",
+        "label": "zig: release triangle-gradient",
         "command": "zig",
         "args": [
             "build",
-            "triangle-gradient-standalone",
+            "triangle-gradient",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3312,17 +5765,19 @@
         "command": "zig",
         "args": [
             "build",
-            "triangle-strip"
+            "triangle-strip",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone triangle-strip",
+        "label": "zig: release triangle-strip",
         "command": "zig",
         "args": [
             "build",
-            "triangle-strip-standalone",
+            "triangle-strip",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3333,17 +5788,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-animation-gallery"
+            "ui-animation-gallery",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-animation-gallery",
+        "label": "zig: release ui-animation-gallery",
         "command": "zig",
         "args": [
             "build",
-            "ui-animation-gallery-standalone",
+            "ui-animation-gallery",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3354,17 +5811,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-canvas-demo"
+            "ui-canvas-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-canvas-demo",
+        "label": "zig: release ui-canvas-demo",
         "command": "zig",
         "args": [
             "build",
-            "ui-canvas-demo-standalone",
+            "ui-canvas-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3375,17 +5834,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-clipper"
+            "ui-clipper",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-clipper",
+        "label": "zig: release ui-clipper",
         "command": "zig",
         "args": [
             "build",
-            "ui-clipper-standalone",
+            "ui-clipper",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3396,17 +5857,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-code-editor"
+            "ui-code-editor",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-code-editor",
+        "label": "zig: release ui-code-editor",
         "command": "zig",
         "args": [
             "build",
-            "ui-code-editor-standalone",
+            "ui-code-editor",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3417,17 +5880,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-color-picker"
+            "ui-color-picker",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-color-picker",
+        "label": "zig: release ui-color-picker",
         "command": "zig",
         "args": [
             "build",
-            "ui-color-picker-standalone",
+            "ui-color-picker",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3438,17 +5903,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-combo-custom"
+            "ui-combo-custom",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-combo-custom",
+        "label": "zig: release ui-combo-custom",
         "command": "zig",
         "args": [
             "build",
-            "ui-combo-custom-standalone",
+            "ui-combo-custom",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3459,17 +5926,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-custom-rendering"
+            "ui-custom-rendering",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-custom-rendering",
+        "label": "zig: release ui-custom-rendering",
         "command": "zig",
         "args": [
             "build",
-            "ui-custom-rendering-standalone",
+            "ui-custom-rendering",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3480,17 +5949,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-custom-widget"
+            "ui-custom-widget",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-custom-widget",
+        "label": "zig: release ui-custom-widget",
         "command": "zig",
         "args": [
             "build",
-            "ui-custom-widget-standalone",
+            "ui-custom-widget",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3501,17 +5972,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-data-grid-phone"
+            "ui-data-grid-phone",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-data-grid-phone",
+        "label": "zig: release ui-data-grid-phone",
         "command": "zig",
         "args": [
             "build",
-            "ui-data-grid-phone-standalone",
+            "ui-data-grid-phone",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3522,17 +5995,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-demo"
+            "ui-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-demo",
+        "label": "zig: release ui-demo",
         "command": "zig",
         "args": [
             "build",
-            "ui-demo-standalone",
+            "ui-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3543,17 +6018,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-dev-tools"
+            "ui-dev-tools",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-dev-tools",
+        "label": "zig: release ui-dev-tools",
         "command": "zig",
         "args": [
             "build",
-            "ui-dev-tools-standalone",
+            "ui-dev-tools",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3564,17 +6041,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-dock-basic"
+            "ui-dock-basic",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-dock-basic",
+        "label": "zig: release ui-dock-basic",
         "command": "zig",
         "args": [
             "build",
-            "ui-dock-basic-standalone",
+            "ui-dock-basic",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3585,17 +6064,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-dock-persistence"
+            "ui-dock-persistence",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-dock-persistence",
+        "label": "zig: release ui-dock-persistence",
         "command": "zig",
         "args": [
             "build",
-            "ui-dock-persistence-standalone",
+            "ui-dock-persistence",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3606,17 +6087,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-dock-simple"
+            "ui-dock-simple",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-dock-simple",
+        "label": "zig: release ui-dock-simple",
         "command": "zig",
         "args": [
             "build",
-            "ui-dock-simple-standalone",
+            "ui-dock-simple",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3627,17 +6110,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-drag-drop-demo"
+            "ui-drag-drop-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-drag-drop-demo",
+        "label": "zig: release ui-drag-drop-demo",
         "command": "zig",
         "args": [
             "build",
-            "ui-drag-drop-demo-standalone",
+            "ui-drag-drop-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3648,17 +6133,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-drag-drop-flags-tour"
+            "ui-drag-drop-flags-tour",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-drag-drop-flags-tour",
+        "label": "zig: release ui-drag-drop-flags-tour",
         "command": "zig",
         "args": [
             "build",
-            "ui-drag-drop-flags-tour-standalone",
+            "ui-drag-drop-flags-tour",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3669,17 +6156,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-drag-drop-source"
+            "ui-drag-drop-source",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-drag-drop-source",
+        "label": "zig: release ui-drag-drop-source",
         "command": "zig",
         "args": [
             "build",
-            "ui-drag-drop-source-standalone",
+            "ui-drag-drop-source",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3690,17 +6179,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-drawlists"
+            "ui-drawlists",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-drawlists",
+        "label": "zig: release ui-drawlists",
         "command": "zig",
         "args": [
             "build",
-            "ui-drawlists-standalone",
+            "ui-drawlists",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3711,17 +6202,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-full-showcase"
+            "ui-full-showcase",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-full-showcase",
+        "label": "zig: release ui-full-showcase",
         "command": "zig",
         "args": [
             "build",
-            "ui-full-showcase-standalone",
+            "ui-full-showcase",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3732,17 +6225,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-imgui-extras"
+            "ui-imgui-extras",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-imgui-extras",
+        "label": "zig: release ui-imgui-extras",
         "command": "zig",
         "args": [
             "build",
-            "ui-imgui-extras-standalone",
+            "ui-imgui-extras",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3753,17 +6248,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-input-callbacks"
+            "ui-input-callbacks",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-input-callbacks",
+        "label": "zig: release ui-input-callbacks",
         "command": "zig",
         "args": [
             "build",
-            "ui-input-callbacks-standalone",
+            "ui-input-callbacks",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3774,17 +6271,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-input-flags-zoo-phone"
+            "ui-input-flags-zoo-phone",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-input-flags-zoo-phone",
+        "label": "zig: release ui-input-flags-zoo-phone",
         "command": "zig",
         "args": [
             "build",
-            "ui-input-flags-zoo-phone-standalone",
+            "ui-input-flags-zoo-phone",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3795,17 +6294,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-input-query-demo"
+            "ui-input-query-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-input-query-demo",
+        "label": "zig: release ui-input-query-demo",
         "command": "zig",
         "args": [
             "build",
-            "ui-input-query-demo-standalone",
+            "ui-input-query-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3816,17 +6317,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-kanban-board"
+            "ui-kanban-board",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-kanban-board",
+        "label": "zig: release ui-kanban-board",
         "command": "zig",
         "args": [
             "build",
-            "ui-kanban-board-standalone",
+            "ui-kanban-board",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3837,17 +6340,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-log-skeleton"
+            "ui-log-skeleton",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-log-skeleton",
+        "label": "zig: release ui-log-skeleton",
         "command": "zig",
         "args": [
             "build",
-            "ui-log-skeleton-standalone",
+            "ui-log-skeleton",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3858,17 +6363,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-log-viewer"
+            "ui-log-viewer",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-log-viewer",
+        "label": "zig: release ui-log-viewer",
         "command": "zig",
         "args": [
             "build",
-            "ui-log-viewer-standalone",
+            "ui-log-viewer",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3879,17 +6386,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-mini-plot-smoke"
+            "ui-mini-plot-smoke",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-mini-plot-smoke",
+        "label": "zig: release ui-mini-plot-smoke",
         "command": "zig",
         "args": [
             "build",
-            "ui-mini-plot-smoke-standalone",
+            "ui-mini-plot-smoke",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3900,17 +6409,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-minimal-button"
+            "ui-minimal-button",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-minimal-button",
+        "label": "zig: release ui-minimal-button",
         "command": "zig",
         "args": [
             "build",
-            "ui-minimal-button-standalone",
+            "ui-minimal-button",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3921,17 +6432,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-minimal-one-context"
+            "ui-minimal-one-context",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-minimal-one-context",
+        "label": "zig: release ui-minimal-one-context",
         "command": "zig",
         "args": [
             "build",
-            "ui-minimal-one-context-standalone",
+            "ui-minimal-one-context",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3942,17 +6455,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-mouse-drag"
+            "ui-mouse-drag",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-mouse-drag",
+        "label": "zig: release ui-mouse-drag",
         "command": "zig",
         "args": [
             "build",
-            "ui-mouse-drag-standalone",
+            "ui-mouse-drag",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3963,17 +6478,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-multiselect-finder"
+            "ui-multiselect-finder",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-multiselect-finder",
+        "label": "zig: release ui-multiselect-finder",
         "command": "zig",
         "args": [
             "build",
-            "ui-multiselect-finder-standalone",
+            "ui-multiselect-finder",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -3984,17 +6501,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-notes-phone"
+            "ui-notes-phone",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-notes-phone",
+        "label": "zig: release ui-notes-phone",
         "command": "zig",
         "args": [
             "build",
-            "ui-notes-phone-standalone",
+            "ui-notes-phone",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4005,17 +6524,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-panes"
+            "ui-panes",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-panes",
+        "label": "zig: release ui-panes",
         "command": "zig",
         "args": [
             "build",
-            "ui-panes-standalone",
+            "ui-panes",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4026,17 +6547,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-persistence"
+            "ui-persistence",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-persistence",
+        "label": "zig: release ui-persistence",
         "command": "zig",
         "args": [
             "build",
-            "ui-persistence-standalone",
+            "ui-persistence",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4047,17 +6570,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-phone-gestures"
+            "ui-phone-gestures",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-phone-gestures",
+        "label": "zig: release ui-phone-gestures",
         "command": "zig",
         "args": [
             "build",
-            "ui-phone-gestures-standalone",
+            "ui-phone-gestures",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4068,17 +6593,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-plot"
+            "ui-plot",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-plot",
+        "label": "zig: release ui-plot",
         "command": "zig",
         "args": [
             "build",
-            "ui-plot-standalone",
+            "ui-plot",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4089,17 +6616,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-plotting-basic"
+            "ui-plotting-basic",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-plotting-basic",
+        "label": "zig: release ui-plotting-basic",
         "command": "zig",
         "args": [
             "build",
-            "ui-plotting-basic-standalone",
+            "ui-plotting-basic",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4110,17 +6639,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-polish"
+            "ui-polish",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-polish",
+        "label": "zig: release ui-polish",
         "command": "zig",
         "args": [
             "build",
-            "ui-polish-standalone",
+            "ui-polish",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4131,17 +6662,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-pomodoro-phone"
+            "ui-pomodoro-phone",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-pomodoro-phone",
+        "label": "zig: release ui-pomodoro-phone",
         "command": "zig",
         "args": [
             "build",
-            "ui-pomodoro-phone-standalone",
+            "ui-pomodoro-phone",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4152,17 +6685,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-primitives-zoo-phone"
+            "ui-primitives-zoo-phone",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-primitives-zoo-phone",
+        "label": "zig: release ui-primitives-zoo-phone",
         "command": "zig",
         "args": [
             "build",
-            "ui-primitives-zoo-phone-standalone",
+            "ui-primitives-zoo-phone",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4173,17 +6708,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-shortcuts"
+            "ui-shortcuts",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-shortcuts",
+        "label": "zig: release ui-shortcuts",
         "command": "zig",
         "args": [
             "build",
-            "ui-shortcuts-standalone",
+            "ui-shortcuts",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4194,17 +6731,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-smoke-button"
+            "ui-smoke-button",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-smoke-button",
+        "label": "zig: release ui-smoke-button",
         "command": "zig",
         "args": [
             "build",
-            "ui-smoke-button-standalone",
+            "ui-smoke-button",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4215,17 +6754,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-tabbar-tour"
+            "ui-tabbar-tour",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-tabbar-tour",
+        "label": "zig: release ui-tabbar-tour",
         "command": "zig",
         "args": [
             "build",
-            "ui-tabbar-tour-standalone",
+            "ui-tabbar-tour",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4236,17 +6777,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-tables-basic"
+            "ui-tables-basic",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-tables-basic",
+        "label": "zig: release ui-tables-basic",
         "command": "zig",
         "args": [
             "build",
-            "ui-tables-basic-standalone",
+            "ui-tables-basic",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4257,17 +6800,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-tables-demo"
+            "ui-tables-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-tables-demo",
+        "label": "zig: release ui-tables-demo",
         "command": "zig",
         "args": [
             "build",
-            "ui-tables-demo-standalone",
+            "ui-tables-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4278,17 +6823,42 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-tables-scroll"
+            "ui-tables-scroll",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-tables-scroll",
+        "label": "zig: release ui-tables-scroll",
         "command": "zig",
         "args": [
             "build",
-            "ui-tables-scroll-standalone",
+            "ui-tables-scroll",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build ui-text-editing",
+        "command": "zig",
+        "args": [
+            "build",
+            "ui-text-editing",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release ui-text-editing",
+        "command": "zig",
+        "args": [
+            "build",
+            "ui-text-editing",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4299,17 +6869,19 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-widgets-data-types"
+            "ui-widgets-data-types",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-widgets-data-types",
+        "label": "zig: release ui-widgets-data-types",
         "command": "zig",
         "args": [
             "build",
-            "ui-widgets-data-types-standalone",
+            "ui-widgets-data-types",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4320,17 +6892,42 @@
         "command": "zig",
         "args": [
             "build",
-            "ui-window-menubar"
+            "ui-window-menubar",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone ui-window-menubar",
+        "label": "zig: release ui-window-menubar",
         "command": "zig",
         "args": [
             "build",
-            "ui-window-menubar-standalone",
+            "ui-window-menubar",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build undo-redo",
+        "command": "zig",
+        "args": [
+            "build",
+            "undo-redo",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release undo-redo",
+        "command": "zig",
+        "args": [
+            "build",
+            "undo-redo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4341,17 +6938,19 @@
         "command": "zig",
         "args": [
             "build",
-            "vao-multibuffer"
+            "vao-multibuffer",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone vao-multibuffer",
+        "label": "zig: release vao-multibuffer",
         "command": "zig",
         "args": [
             "build",
-            "vao-multibuffer-standalone",
+            "vao-multibuffer",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4362,38 +6961,134 @@
         "command": "zig",
         "args": [
             "build",
-            "vector-angle"
+            "vector-angle",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone vector-angle",
+        "label": "zig: release vector-angle",
         "command": "zig",
         "args": [
             "build",
-            "vector-angle-standalone",
+            "vector-angle",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
         "use_new_terminal": false
     },
     {
-        "label": "zig: build weight-store",
+        "label": "zig: build vertex-texture-test",
         "command": "zig",
         "args": [
             "build",
-            "weight-store"
+            "vertex-texture-test",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone weight-store",
+        "label": "zig: release vertex-texture-test",
         "command": "zig",
         "args": [
             "build",
-            "weight-store-standalone",
+            "vertex-texture-test",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build viewport-scaling",
+        "command": "zig",
+        "args": [
+            "build",
+            "viewport-scaling",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release viewport-scaling",
+        "command": "zig",
+        "args": [
+            "build",
+            "viewport-scaling",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build voxel",
+        "command": "zig",
+        "args": [
+            "build",
+            "voxel",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release voxel",
+        "command": "zig",
+        "args": [
+            "build",
+            "voxel",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build waving-cubes",
+        "command": "zig",
+        "args": [
+            "build",
+            "waving-cubes",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release waving-cubes",
+        "command": "zig",
+        "args": [
+            "build",
+            "waving-cubes",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build window-requests",
+        "command": "zig",
+        "args": [
+            "build",
+            "window-requests",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release window-requests",
+        "command": "zig",
+        "args": [
+            "build",
+            "window-requests",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4404,17 +7099,42 @@
         "command": "zig",
         "args": [
             "build",
-            "wireframe"
+            "wireframe",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone wireframe",
+        "label": "zig: release wireframe",
         "command": "zig",
         "args": [
             "build",
-            "wireframe-standalone",
+            "wireframe",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build worker-png",
+        "command": "zig",
+        "args": [
+            "build",
+            "worker-png",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release worker-png",
+        "command": "zig",
+        "args": [
+            "build",
+            "worker-png",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4425,17 +7145,88 @@
         "command": "zig",
         "args": [
             "build",
-            "writing-anim"
+            "writing-anim",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone writing-anim",
+        "label": "zig: release writing-anim",
         "command": "zig",
         "args": [
             "build",
-            "writing-anim-standalone",
+            "writing-anim",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build yaw-pitch-roll",
+        "command": "zig",
+        "args": [
+            "build",
+            "yaw-pitch-roll",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release yaw-pitch-roll",
+        "command": "zig",
+        "args": [
+            "build",
+            "yaw-pitch-roll",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build zimrnum-field",
+        "command": "zig",
+        "args": [
+            "build",
+            "zimrnum-field",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release zimrnum-field",
+        "command": "zig",
+        "args": [
+            "build",
+            "zimrnum-field",
+            "-Dplatform=web",
+            "-Dmode=release"
+        ],
+        "reveal": "always",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: build zimrnum-train",
+        "command": "zig",
+        "args": [
+            "build",
+            "zimrnum-train",
+            "-Dplatform=web"
+        ],
+        "reveal": "no_focus",
+        "use_new_terminal": false
+    },
+    {
+        "label": "zig: release zimrnum-train",
+        "command": "zig",
+        "args": [
+            "build",
+            "zimrnum-train",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4446,17 +7237,19 @@
         "command": "zig",
         "args": [
             "build",
-            "zimrphysics-demo"
+            "zimrphysics-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone zimrphysics-demo",
+        "label": "zig: release zimrphysics-demo",
         "command": "zig",
         "args": [
             "build",
-            "zimrphysics-demo-standalone",
+            "zimrphysics-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",
@@ -4467,17 +7260,19 @@
         "command": "zig",
         "args": [
             "build",
-            "zimrphysics2d-demo"
+            "zimrphysics2d-demo",
+            "-Dplatform=web"
         ],
         "reveal": "no_focus",
         "use_new_terminal": false
     },
     {
-        "label": "zig: standalone zimrphysics2d-demo",
+        "label": "zig: release zimrphysics2d-demo",
         "command": "zig",
         "args": [
             "build",
-            "zimrphysics2d-demo-standalone",
+            "zimrphysics2d-demo",
+            "-Dplatform=web",
             "-Dmode=release"
         ],
         "reveal": "always",

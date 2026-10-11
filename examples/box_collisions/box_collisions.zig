@@ -16,6 +16,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const asBytes = std.mem.asBytes;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -31,6 +33,9 @@ const pi = zm.pi;
 const scaling = zm.scaling;
 const translation = zm.translation;
 const vec = zm.vec;
+const Camera3D = zm.Camera3D;
+const Ray = zm.Ray;
+const RayCollision = zm.RayCollision;
 
 const mat_vs = z.deferred_shaders.gbuffer_vs;
 const mat_fs = z.fog_shader; // density 0 = plain lambert+blinn
@@ -147,14 +152,14 @@ fn uploadMesh(
         .vbo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(verts),
+            sliceAsBytes(verts),
             .{ .vertex = true, .copy_dst = true },
             label,
         ),
         .ibo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(indices),
+            sliceAsBytes(indices),
             .{ .index = true, .copy_dst = true },
             label,
         ),
@@ -249,14 +254,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .vbo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(ground_verts[0..]),
+            sliceAsBytes(ground_verts[0..]),
             .{ .vertex = true, .copy_dst = true },
             "bc_ground_vbo",
         ),
         .ibo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(ground_indices[0..]),
+            sliceAsBytes(ground_indices[0..]),
             .{ .index = true, .copy_dst = true },
             "bc_ground_ibo",
         ),
@@ -268,14 +273,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .vbo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(cube_verts[0..]),
+            sliceAsBytes(cube_verts[0..]),
             .{ .vertex = true, .copy_dst = true },
             "bc_cube_vbo",
         ),
         .ibo = z.wgpu.createBufferInit(
             device,
             queue,
-            std.mem.sliceAsBytes(cube_indices[0..]),
+            sliceAsBytes(cube_indices[0..]),
             .{ .index = true, .copy_dst = true },
             "bc_cube_ibo",
         ),
@@ -308,7 +313,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, fog_fs_wgsl, "fog_fs");
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -395,7 +400,7 @@ fn handleInput(
     f: *z.Frame,
     s: *State,
     ui_wants_mouse: bool,
-    cam: zm.Camera3D,
+    cam: Camera3D,
     vw: f32,
     vh: f32,
 ) void {
@@ -415,8 +420,8 @@ fn handleInput(
     s.prev_pinch = 0;
     if (z.isMouseButtonDown(f.input, .left) and !ui_wants_mouse) {
         const mp: Vec2 = z.getMousePosition(f.input);
-        const ray: zm.Ray = z.getScreenToWorldRay(mp, cam, vw, vh);
-        const hit: zm.RayCollision = z.getRayCollisionQuad(
+        const ray: Ray = z.getScreenToWorldRay(mp, cam, vw, vh);
+        const hit: RayCollision = z.getRayCollisionQuad(
             ray,
             vec(-100, 0, -100),
             vec(-100, 0, 100),
@@ -440,7 +445,7 @@ fn writeObj(
 ) void {
     var vs_io: mat_vs.Io = undefined;
     vs_io.u = .{ .mvp = mulMat(cam_vp, model), .model = model, .normal_matrix = zm.identity() };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, asBytes(&vs_io.u));
     var fs_io: mat_fs.Io = undefined;
     fs_io.u = .{
         .base_color = color,
@@ -449,7 +454,7 @@ fn writeObj(
         .fog_color = .{ 0, 0, 0, 1 },
         .params = .{ 0, 0, 0, 0 },
     };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, asBytes(&fs_io.u));
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -465,7 +470,7 @@ fn update(f: *z.Frame, s: *State) void {
     const cam_view: Mat = lookAtRh(cam_eye, cam_target, vec(0, 1, 0));
     const cam_proj: Mat = perspectiveFovRh(fovy_rad, vw / vh, 0.1, 100.0);
     const cam_vp: Mat = mulMat(cam_proj, cam_view);
-    const cam3d: zm.Camera3D = .{
+    const cam3d: Camera3D = .{
         .position = cam_eye,
         .target = cam_target,
         .up = vec(0, 1, 0),

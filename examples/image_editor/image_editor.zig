@@ -11,6 +11,7 @@ const zm = @import("zm");
 const clamp = zm.clamp;
 const float = zm.float;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 
 const common = @import("example_common");
@@ -24,7 +25,7 @@ const panel_pad: f32 = 16;
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     gpa: Allocator,
     tex_original: z.WgpuTexture,
     tex_blurred: z.WgpuTexture,
@@ -71,7 +72,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     s.* = .{
         .font = font,
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .gpa = gpa,
         .tex_original = try variant(f, gpa, source, editNone),
         .tex_blurred = try variant(f, gpa, source, editBlur),

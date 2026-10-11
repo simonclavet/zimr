@@ -38,7 +38,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // Upload a checkerboard texture to exercise the textured-2D path (N5e).
-    const checker: z.WgpuTexture = try z.WgpuTexture.createCheckerboard(
+    const checker: z.WgpuTexture = try .createCheckerboard(
         f.gpu.device,
         f.gpu.queue,
         gpa,

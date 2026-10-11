@@ -230,8 +230,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .fs_wgsl_source = fs_wgsl,
         .label = "rt_sbs_gpu",
     });
-    var sw: z.raster.Context = try z.raster.Context.init(gpa, @intCast(sw_w), @intCast(sw_h));
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    var sw: z.raster.Context = try .init(gpa, @intCast(sw_w), @intCast(sw_h));
+    const sw_fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         sw_w,
@@ -249,7 +249,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .font = font,
         .frame = 0,
         .cam = blk: {
-            var c: z.OrbitCamera = z.OrbitCamera.init(cam_target, initial_dist);
+            var c: z.OrbitCamera = .init(cam_target, initial_dist);
             c.yaw = initial_yaw;
             c.pitch = initial_pitch;
             break :blk c;

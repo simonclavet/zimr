@@ -17,35 +17,50 @@
 //! prints the resulting duration so the arithmetic is checkable.
 
 const std = @import("std");
+const cli = @import("cli");
 const codecs = @import("codecs");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const ArrayList = std.ArrayList;
+const allocPrint = std.fmt.allocPrint;
+const indexOf = std.mem.indexOf;
 const bvh = codecs.bvh;
 
+/// The command line (std's cli, `src/command_line.zig`).
+const TrimArgs = struct {
+    input: []const u8,
+    output: []const u8,
+    @"first-frame": usize,
+    @"frame-count": usize,
+    drop: []const []const u8 = &.{},
+};
+
+const trim_cli: cli.Config(TrimArgs) = .{
+    .prog = "zig build bvh-trim --",
+    .description = "Cuts a frame range out of a BVH file.",
+    .args = .{
+        .input = .{ .description = "the .bvh to read" },
+        .output = .{ .description = "the .bvh to write" },
+        .drop = .{ .description = "joints to leave out: any whose name contains one of these, and their children" },
+    },
+};
+
 pub fn main(init: std.process.Init) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena_state: ArenaAllocator = .init(init.gpa);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    var args_list: std.ArrayList([]u8) = .empty;
-    var arg_it: std.process.Args.Iterator =
-        try std.process.Args.Iterator.initAllocator(init.minimal.args, arena);
-    while (arg_it.next()) |arg| {
-        try args_list.append(arena, try arena.dupe(u8, arg));
-    }
-    const args: [][]u8 = args_list.items;
-    if (args.len < 5) {
-        std.log.err("usage: bvh_trim <in.bvh> <out.bvh> <first_frame> <frame_count> [drop ...]", .{});
-        return error.BadArgs;
-    }
-    const in_path: []const u8 = args[1];
-    const out_path: []const u8 = args[2];
-    const first: usize = try std.fmt.parseInt(usize, args[3], 10);
-    const count: usize = try std.fmt.parseInt(usize, args[4], 10);
+    const args: TrimArgs = cli.args(&init, TrimArgs, trim_cli);
+    const in_path: []const u8 = args.input;
+    const out_path: []const u8 = args.output;
+    const first: usize = args.@"first-frame";
+    const count: usize = args.@"frame-count";
 
-    var in_file: std.Io.File = try std.Io.Dir.cwd().openFile(io, in_path, .{});
+    var in_file: Io.File = try Io.Dir.cwd().openFile(io, in_path, .{});
     defer in_file.close(io);
-    const stat: std.Io.File.Stat = try in_file.stat(io);
+    const stat: Io.File.Stat = try in_file.stat(io);
     const source: []u8 = try arena.alloc(u8, stat.size);
     _ = try in_file.readPositionalAll(io, source, 0);
 
@@ -68,13 +83,13 @@ pub fn main(init: std.process.Init) !void {
     // extra arguments goes, and its whole subtree with it - the Geno skeleton's forty finger
     // joints are two thirds of a capture's size, and no robot here has fingers. Their channels
     // leave the motion rows too, so what's left is a smaller but perfectly ordinary BVH.
-    const drop: [][]u8 = args[5..];
+    const drop: []const []const u8 = args.drop;
     const keep: []bool = try arena.alloc(bool, data.joints.len);
     @memset(keep, true);
     for (data.joints, 0..) |joint, j| {
         const parent_dropped: bool = joint.parent >= 0 and !keep[@intCast(joint.parent)];
         const named: bool = for (drop) |fragment| {
-            if (std.mem.indexOf(u8, joint.name, fragment) != null) {
+            if (indexOf(u8, joint.name, fragment) != null) {
                 break true;
             }
         } else false;
@@ -103,9 +118,9 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // The kept joints, renumbered, and the kept channels gathered out of every row.
-    var kept_joints: std.ArrayList(bvh.Joint) = .empty;
+    var kept_joints: ArrayList(bvh.Joint) = .empty;
     var new_index: []i32 = try arena.alloc(i32, data.joints.len);
-    var kept_channels: std.ArrayList(usize) = .empty;
+    var kept_channels: ArrayList(usize) = .empty;
     var at: usize = 0;
     for (data.joints, 0..) |joint, j| {
         const channels: usize = joint.channels.len;
@@ -119,7 +134,7 @@ pub fn main(init: std.process.Init) !void {
             }
             if (!has_kept_child[j] and !joint.end_site) {
                 try kept_joints.append(arena, .{
-                    .name = try std.fmt.allocPrint(arena, "{s}End", .{joint.name}),
+                    .name = try allocPrint(arena, "{s}End", .{joint.name}),
                     .parent = new_index[j],
                     .offset = stub_offset[j],
                     .channels = &.{},
@@ -165,8 +180,10 @@ pub fn main(init: std.process.Init) !void {
             return error.RoundTripFailed;
         }
     }
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = text });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = text });
 
+    const take_frames: f32 = @floatFromInt(take);
+    const text_bytes: f32 = @floatFromInt(text.len);
     std.log.info(
         "{s}: frames {d}..{d} of {d} -> {s} ({d} joints, {d:.2}s at {d:.0} fps, {d:.2} MB)",
         .{
@@ -176,9 +193,9 @@ pub fn main(init: std.process.Init) !void {
             data.frame_count,
             out_path,
             trimmed.joints.len,
-            @as(f32, @floatFromInt(take)) * data.frame_time,
+            take_frames * data.frame_time,
             1.0 / data.frame_time,
-            @as(f32, @floatFromInt(text.len)) / (1024.0 * 1024.0),
+            text_bytes / (1024.0 * 1024.0),
         },
     );
 }

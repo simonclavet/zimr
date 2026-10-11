@@ -13,6 +13,10 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const sortSlice = std.mem.sort;
+const endsWith = std.mem.endsWith;
+const eql = std.mem.eql;
 
 /// Ascending string order, for std.mem.sort.
 pub fn lessStr(_: void, a: []const u8, b: []const u8) bool {
@@ -43,7 +47,7 @@ pub fn collectImports(
         if (t.tag != .builtin) {
             continue;
         }
-        if (!std.mem.eql(u8, source[t.loc.start..t.loc.end], "@import")) {
+        if (!eql(u8, source[t.loc.start..t.loc.end], "@import")) {
             continue;
         }
         const lp: std.zig.Token = tk.next();
@@ -64,11 +68,11 @@ pub fn collectImports(
         // graph reflects real dependencies (e.g. `@import("zm")` is zimrmath,
         // imported almost everywhere - it is the engine's true foundation).
         var target: []const u8 = inner;
-        if (std.mem.endsWith(u8, inner, ".zig")) {
+        if (endsWith(u8, inner, ".zig")) {
             target = inner[0 .. inner.len - ".zig".len];
-        } else if (std.mem.eql(u8, inner, "zm")) {
+        } else if (eql(u8, inner, "zm")) {
             target = "zimrmath";
-        } else if (std.mem.eql(u8, inner, "shader_interface")) {
+        } else if (eql(u8, inner, "shader_interface")) {
             target = "shader_interface";
         } else {
             continue; // std / builtin / build_options / external modules
@@ -99,26 +103,26 @@ pub const Graph = struct {
 };
 
 /// Parse every `*.zig` in `src_dir` and build the deduplicated import graph.
-pub fn build(gpa: Allocator, io: std.Io, src_dir: []const u8) !Graph {
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+pub fn build(gpa: Allocator, io: Io, src_dir: []const u8) !Graph {
+    const cwd: Io.Dir = .cwd();
 
     var names: ArrayList([]const u8) = .empty;
     {
-        var dir: std.Io.Dir = try cwd.openDir(io, src_dir, .{ .iterate = true });
+        var dir: Io.Dir = try cwd.openDir(io, src_dir, .{ .iterate = true });
         defer dir.close(io);
-        var it: std.Io.Dir.Iterator = dir.iterate();
+        var it: Io.Dir.Iterator = dir.iterate();
         while (try it.next(io)) |entry| {
             if (entry.kind != .file) {
                 continue;
             }
-            if (!std.mem.endsWith(u8, entry.name, ".zig")) {
+            if (!endsWith(u8, entry.name, ".zig")) {
                 continue;
             }
             const bare: []const u8 = entry.name[0 .. entry.name.len - ".zig".len];
             try names.append(gpa, try gpa.dupe(u8, bare));
         }
     }
-    std.mem.sort([]const u8, names.items, {}, lessStr);
+    sortSlice([]const u8, names.items, {}, lessStr);
     const n: usize = names.items.len;
 
     var id_of: StringHashMap(u32) = .init(gpa);
@@ -282,6 +286,10 @@ pub fn maxLevel(level: []const u32) u32 {
     return m;
 }
 
+fn lessU32(_: void, a: u32, b: u32) bool {
+    return a < b;
+}
+
 /// Transitive reduction of the (acyclic) graph: the unique minimal edge set
 /// with the same reachability.  Drops every edge u->v that is already implied
 /// by a longer path u->...->v.  Returned as adjacency parallel to `g.adj`
@@ -333,13 +341,9 @@ pub fn transitiveReduction(gpa: Allocator, g: Graph) ![]ArrayList(u32) {
                 try red[u].append(gpa, v);
             }
         }
-        std.mem.sort(u32, red[u].items, {}, lessU32);
+        sortSlice(u32, red[u].items, {}, lessU32);
     }
     return red;
-}
-
-fn lessU32(_: void, a: u32, b: u32) bool {
-    return a < b;
 }
 
 /// Count edges in an adjacency slice (e.g. a transitive-reduction result).

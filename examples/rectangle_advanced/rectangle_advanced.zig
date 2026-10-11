@@ -45,6 +45,21 @@ fn arcPoint(center: Vec2, deg: f32, radius: f32) Vec2 {
     return .{ center[0] + cosRad(r) * radius, center[1] + sinRad(r) * radius };
 }
 
+fn gradQuad(
+    gl: *z.WgpuGl,
+    a: Vec2,
+    b: Vec2,
+    c: Vec2,
+    d: Vec2,
+    ca: Color,
+    cb: Color,
+    cc: Color,
+    cd: Color,
+) void {
+    gl.triangleGradient(a, b, c, ca, cb, cc);
+    gl.triangleGradient(a, c, d, ca, cc, cd);
+}
+
 /// Rounded rect with per-side corner radius and a left->right colour gradient.
 /// Ported from raylib's DrawRectangleRoundedGradientH (RL_TRIANGLES path).
 fn roundedGradientH(
@@ -95,21 +110,6 @@ fn roundedGradientH(
     gradQuad(gl, p[0], p[1], p[9], p[8], left, right, right, left); // [2] top
     gradQuad(gl, p[11], p[10], p[4], p[5], left, right, right, left); // [6] bottom
     gradQuad(gl, p[9], p[2], p[3], p[10], right, right, right, right); // [4] right block
-}
-
-fn gradQuad(
-    gl: *z.WgpuGl,
-    a: Vec2,
-    b: Vec2,
-    c: Vec2,
-    d: Vec2,
-    ca: Color,
-    cb: Color,
-    cc: Color,
-    cd: Color,
-) void {
-    gl.triangleGradient(a, b, c, ca, cb, cc);
-    gl.triangleGradient(a, c, d, ca, cc, cd);
 }
 
 fn update(f: *z.Frame, s: *State) void {

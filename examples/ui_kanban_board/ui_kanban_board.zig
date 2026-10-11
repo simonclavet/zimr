@@ -37,6 +37,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sortSlice = std.mem.sort;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -183,7 +184,7 @@ fn update(f: *z.Frame, s: *State) void {
             u.tableHeadersRow();
 
             if (u.tableGetSortSpecs()) |specs| {
-                std.mem.sort(Card, &s.cards, specs, sortCards);
+                sortSlice(Card, &s.cards, specs, sortCards);
             }
 
             for (s.cards) |c| {

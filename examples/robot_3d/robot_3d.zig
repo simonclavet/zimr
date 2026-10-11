@@ -76,6 +76,7 @@ const acosRad = zm.acosRad;
 const length3 = zm.length3;
 const clamp = zm.clamp;
 const float = zm.float;
+const Mat = zm.Mat;
 
 const timestep: f32 = 1.0 / 240.0;
 
@@ -156,6 +157,8 @@ const mesh_sources = [_][]const u8{
     @embedFile("meshes/link_7.obj"),
 };
 
+const crate_names = [_][]const u8{ "crate0", "crate1", "crate2", "crate3", "crate4" };
+
 /// ** THE CRATES LIVE IN THE ROBOT'S OWN TREE (section 4k).
 ///
 /// Not in zimrphysics as dynamic bodies with contacts handed across a seam - as free-jointed
@@ -187,8 +190,6 @@ fn sceneCrates() [crate_count]scene_mod.FreeBody {
     return crates;
 }
 
-const crate_names = [_][]const u8{ "crate0", "crate1", "crate2", "crate3", "crate4" };
-
 const State = struct {
     gpa: Allocator,
     model: rbt.Model,
@@ -204,7 +205,7 @@ const State = struct {
     /// thing the scene exists to show, and quietly implying the crates only ever slide.
     /// `drawMeshInstanced` takes a full transform, so a tumble reads as a tumble.
     crate_mesh: z.Mesh,
-    transform: [1]zm.Mat,
+    transform: [1]Mat,
     ui_host: z.UiHost,
     /// Show the skeleton the meshes hang on, and the meshes themselves.
     show_frames: bool,
@@ -276,6 +277,60 @@ const State = struct {
     kv: f32,
 };
 
+/// Turn an OBJ into the `Mesh` the renderer wants.
+///
+/// A shim rather than a parser: `codecs.obj` does the reading and hands back a de-indexed
+/// CPU mesh, and this only rearranges it into the renderer's C-compatible layout. The one
+/// substantive conversion is 32-bit indices down to 16, which is what `types.Mesh` carries -
+/// asserted rather than truncated, because a mesh silently losing its high indices renders
+/// as an unrecognisable tangle and looks like a broken loader.
+fn loadObjMesh(gpa: Allocator, source: []const u8) !z.Mesh {
+    const parsed: z.codecs.obj.Data = try z.codecs.obj.parse(gpa, source);
+    defer parsed.deinit(gpa);
+    const cpu: z.codecs.obj.Mesh = try parsed.toMesh(gpa);
+    defer cpu.deinit(gpa);
+
+    const vertex_count: usize = cpu.vertexCount();
+    zm.assertf(
+        vertex_count <= 65535,
+        @src(),
+        "mesh has {d} vertices, more than 16-bit indices can address",
+        .{vertex_count},
+    );
+
+    // The renderer owns these for the life of the mesh; `unloadMesh` frees them.
+    const vertices: []f32 = try gpa.dupe(f32, cpu.positions);
+    const normals: []f32 = try gpa.dupe(f32, cpu.normals);
+    const indices: []u16 = try gpa.alloc(u16, cpu.indices.len);
+    for (cpu.indices, 0..) |index, k| {
+        indices[k] = @intCast(index);
+    }
+
+    return .{
+        .vertexCount = @intCast(vertex_count),
+        .triangleCount = @intCast(cpu.indices.len / 3),
+        .vertices = vertices.ptr,
+        .normals = if (cpu.had_normals) normals.ptr else null,
+        .indices = indices.ptr,
+    };
+}
+
+/// Put the crate back where it started, at rest.
+///
+/// Worth having as a button rather than a restart: the interesting thing about this scene is
+/// what happens when the arm meets the crate, and that is worth being able to repeat without
+/// losing the camera angle you found.
+/// Default crate mass, and the arm's default per-joint torque ceiling.
+///
+/// * THE CEILING IS WHAT MAKES MASS MATTER, and without it the demo would show nothing.
+/// Computed torque asks the mass matrix for whatever acceleration it wants and gets it, so an
+/// unlimited arm pushes a 200 kg block exactly as easily as a 1 kg one. A real motor has a
+/// rating it cannot exceed to win an argument. 25 N*m is deliberately feeble for a KUKA -
+/// enough to hold itself up and shove a light box, not enough to move a heavy one.
+const crate_mass_default: f32 = 0.8;
+
+const motor_limit_default: f32 = 25.0;
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
     var vertices_loaded: u32 = 0;
@@ -316,7 +371,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .mesh_vertices = vertices_loaded,
         // The iiwa is about 1.3 m tall; frame it from a little above and back.
         .cam = z.OrbitCamera.init(vec(0, 0.5, 0), 2.6),
-        .world = try .init(gpa, 32),
+        .world = try zp.World.init(gpa, 32),
         .bridge = undefined, // needs the arm's kinematics; see below
         .peak_force = 0,
         .physics_on = true,
@@ -396,46 +451,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // Built earlier, every proxy would be born at the origin and the first world step would
     // see a spurious sweep from there to the arm's real pose - eight hulls scything through
     // the scene on frame one.
-    s.bridge = try .init(gpa, &s.world, &s.model, &s.data, 32);
+    s.bridge = try bridge_mod.Bridge.init(gpa, &s.world, &s.model, &s.data, 32);
     s.bridge.listen(&s.world);
-}
-
-/// Turn an OBJ into the `Mesh` the renderer wants.
-///
-/// A shim rather than a parser: `codecs.obj` does the reading and hands back a de-indexed
-/// CPU mesh, and this only rearranges it into the renderer's C-compatible layout. The one
-/// substantive conversion is 32-bit indices down to 16, which is what `types.Mesh` carries -
-/// asserted rather than truncated, because a mesh silently losing its high indices renders
-/// as an unrecognisable tangle and looks like a broken loader.
-fn loadObjMesh(gpa: Allocator, source: []const u8) !z.Mesh {
-    const parsed: z.codecs.obj.Data = try z.codecs.obj.parse(gpa, source);
-    defer parsed.deinit(gpa);
-    const cpu: z.codecs.obj.Mesh = try parsed.toMesh(gpa);
-    defer cpu.deinit(gpa);
-
-    const vertex_count: usize = cpu.vertexCount();
-    zm.assertf(
-        vertex_count <= 65535,
-        @src(),
-        "mesh has {d} vertices, more than 16-bit indices can address",
-        .{vertex_count},
-    );
-
-    // The renderer owns these for the life of the mesh; `unloadMesh` frees them.
-    const vertices: []f32 = try gpa.dupe(f32, cpu.positions);
-    const normals: []f32 = try gpa.dupe(f32, cpu.normals);
-    const indices: []u16 = try gpa.alloc(u16, cpu.indices.len);
-    for (cpu.indices, 0..) |index, k| {
-        indices[k] = @intCast(index);
-    }
-
-    return .{
-        .vertexCount = @intCast(vertex_count),
-        .triangleCount = @intCast(cpu.indices.len / 3),
-        .vertices = vertices.ptr,
-        .normals = if (cpu.had_normals) normals.ptr else null,
-        .indices = indices.ptr,
-    };
 }
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -576,6 +593,111 @@ fn control(s: *State) void {
             s.data.applied_force[i] = 0;
         }
     }
+}
+
+/// Tree index of crate `i`. The arm's bodies come first and keep their numbering, so the
+/// crates follow - see `Scene.freeBodyIndex`.
+fn crateBody(i: usize) u32 {
+    return @intCast(1 + kuka.spec.bodies.len + i);
+}
+
+fn totalMass(m: *const rbt.Model) f32 {
+    var total: f32 = 0;
+    for (1..m.nbody) |bi| {
+        total += m.body_mass[bi];
+    }
+    return total;
+}
+
+/// Restack the crates by writing the TREE's own coordinates.
+///
+/// * A free body's state lives in `qpos` and `vel` like every other joint's - seven position
+/// coordinates (three for the translation, four for the quaternion) and six velocities. There
+/// is no separate rigid-body store to keep in step, which is one of the quieter benefits of
+/// the unified tree: resetting a crate is the same operation as resetting a joint angle.
+fn resetCrate(s: *State) void {
+    for (0..crate_count) |i| {
+        const body: u32 = crateBody(i);
+        const joint: u32 = s.model.body_jnt_adr[body];
+        const q: u32 = s.model.jnt_qpos_adr[joint];
+        const v: u32 = s.model.jnt_dof_adr[joint];
+        const at: Vec = cratePosition(i);
+        s.data.pos[q + 0] = at[0];
+        s.data.pos[q + 1] = at[1];
+        s.data.pos[q + 2] = at[2];
+        // Identity quaternion, in the engine's (x, y, z, w) order.
+        s.data.pos[q + 3] = 0;
+        s.data.pos[q + 4] = 0;
+        s.data.pos[q + 5] = 0;
+        s.data.pos[q + 6] = 1;
+        @memset(s.data.vel[v..][0..6], 0);
+    }
+    s.data.stage = .stale;
+    s.peak_force = 0;
+}
+
+/// Push the slider's mass into the model, live.
+///
+/// * NO REBUILD NEEDED. `body_inertia` is read by `crb` every step to form the mass matrix,
+/// so scaling it here changes the physics from the next step on - the crate genuinely becomes
+/// heavier rather than being re-created heavier. Rotational inertia scales with mass for a
+/// box of fixed size, so the whole tensor takes the same factor.
+fn applyCrateMass(s: *State) void {
+    for (0..crate_count) |i| {
+        const body: u32 = crateBody(i);
+        // ** A RATIO NEEDS ITS DENOMINATOR CHECKED, and this one reaches the mass matrix.
+        //
+        // Scaling by `target / current` is the right operation - it keeps the inertia tensor
+        // consistent with the mass without re-deriving it - but a zero or non-finite `current`
+        // turns the factor into `inf`, and `0 * inf` is NaN. That NaN then propagates into
+        // `body_inertia`, into `M`, and surfaces as `factorM: pivot N is nan`, which names the
+        // place it became VISIBLE rather than where it came from.
+        //
+        // A device report of exactly that assert could not be reproduced here, so this is a
+        // guard rather than a fix: if the ratio is ever unusable, the mass is set directly and
+        // the model stays finite. Cheap, and it removes one candidate from the next hunt.
+        const current: f32 = s.model.body_mass[body];
+        const scale: f32 = if (current > 1.0e-9) s.crate_mass / current else 0.0;
+        if (scale == 0.0 or !isFinite(scale)) {
+            std.log.warn("crate {d}: mass {d} cannot be scaled to {d}; leaving it alone", .{
+                i,
+                current,
+                s.crate_mass,
+            });
+            continue;
+        }
+        s.model.body_mass[body] *= scale;
+        s.model.body_inertia[body].mass *= scale;
+        s.model.body_inertia[body].diag *= splat(scale);
+        s.model.body_inertia[body].off *= splat(scale);
+        s.model.body_inertia[body].h *= splat(scale);
+    }
+    // ** AND THE SUBTREE MASSES, which are NOT recomputed each step. Miss this and the
+    // model is internally inconsistent - 100 kg bodies inside a subtree that still believes
+    // it weighs 0.8 - and the mass matrix is assembled from two different systems. It cost
+    // over a meganewton and a negative pivot to find. See `refreshSubtreeMass`.
+    rbt.refreshSubtreeMass(&s.model);
+
+    // -- ** AND THE SCENE IS RE-POSED, which is not a cop-out but the honest operation --
+    //
+    // Changing mass by 100x on bodies that are ACTIVELY IN CONTACT is violent. The stack is
+    // resting at an equilibrium penetration that matched the old weight; multiply the weight
+    // and every contact is suddenly wrong by that factor, all at once, while touching.
+    // Measured: peak row force **1.16 MN** and velocities past 1e24 - a numerical runaway,
+    // not physics.
+    //
+    // Two things were tried and neither was enough on its own. Clearing the warm start helps
+    // - it holds forces computed for the old inertias, and seeding those into a system a
+    // hundred times heavier is an enormous impulse - but only halved the peak. Ramping the
+    // change over thirty frames did not help either; the contacts are wrong throughout the
+    // ramp rather than only at its end.
+    //
+    // The fix is to stop pretending it is a small change. A body's mass is not a runtime
+    // knob in any physics engine; changing it is closer to rebuilding the scene. So the
+    // crates are put back at rest, which is also what a user dragging a mass slider
+    // expects - heavier boxes, freshly stacked.
+    resetCrate(s);
+    s.data.forgetWarmStart();
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -960,126 +1082,6 @@ fn update(f: *z.Frame, s: *State) void {
         });
     }
     z.endMode3D(gl);
-}
-
-/// Put the crate back where it started, at rest.
-///
-/// Worth having as a button rather than a restart: the interesting thing about this scene is
-/// what happens when the arm meets the crate, and that is worth being able to repeat without
-/// losing the camera angle you found.
-/// Default crate mass, and the arm's default per-joint torque ceiling.
-///
-/// * THE CEILING IS WHAT MAKES MASS MATTER, and without it the demo would show nothing.
-/// Computed torque asks the mass matrix for whatever acceleration it wants and gets it, so an
-/// unlimited arm pushes a 200 kg block exactly as easily as a 1 kg one. A real motor has a
-/// rating it cannot exceed to win an argument. 25 N*m is deliberately feeble for a KUKA -
-/// enough to hold itself up and shove a light box, not enough to move a heavy one.
-const crate_mass_default: f32 = 0.8;
-const motor_limit_default: f32 = 25.0;
-
-/// Push the slider's mass into the model, live.
-///
-/// * NO REBUILD NEEDED. `body_inertia` is read by `crb` every step to form the mass matrix,
-/// so scaling it here changes the physics from the next step on - the crate genuinely becomes
-/// heavier rather than being re-created heavier. Rotational inertia scales with mass for a
-/// box of fixed size, so the whole tensor takes the same factor.
-fn applyCrateMass(s: *State) void {
-    for (0..crate_count) |i| {
-        const body: u32 = crateBody(i);
-        // ** A RATIO NEEDS ITS DENOMINATOR CHECKED, and this one reaches the mass matrix.
-        //
-        // Scaling by `target / current` is the right operation - it keeps the inertia tensor
-        // consistent with the mass without re-deriving it - but a zero or non-finite `current`
-        // turns the factor into `inf`, and `0 * inf` is NaN. That NaN then propagates into
-        // `body_inertia`, into `M`, and surfaces as `factorM: pivot N is nan`, which names the
-        // place it became VISIBLE rather than where it came from.
-        //
-        // A device report of exactly that assert could not be reproduced here, so this is a
-        // guard rather than a fix: if the ratio is ever unusable, the mass is set directly and
-        // the model stays finite. Cheap, and it removes one candidate from the next hunt.
-        const current: f32 = s.model.body_mass[body];
-        const scale: f32 = if (current > 1.0e-9) s.crate_mass / current else 0.0;
-        if (scale == 0.0 or !isFinite(scale)) {
-            std.log.warn("crate {d}: mass {d} cannot be scaled to {d}; leaving it alone", .{
-                i,
-                current,
-                s.crate_mass,
-            });
-            continue;
-        }
-        s.model.body_mass[body] *= scale;
-        s.model.body_inertia[body].mass *= scale;
-        s.model.body_inertia[body].diag *= splat(scale);
-        s.model.body_inertia[body].off *= splat(scale);
-        s.model.body_inertia[body].h *= splat(scale);
-    }
-    // ** AND THE SUBTREE MASSES, which are NOT recomputed each step. Miss this and the
-    // model is internally inconsistent - 100 kg bodies inside a subtree that still believes
-    // it weighs 0.8 - and the mass matrix is assembled from two different systems. It cost
-    // over a meganewton and a negative pivot to find. See `refreshSubtreeMass`.
-    rbt.refreshSubtreeMass(&s.model);
-
-    // -- ** AND THE SCENE IS RE-POSED, which is not a cop-out but the honest operation --
-    //
-    // Changing mass by 100x on bodies that are ACTIVELY IN CONTACT is violent. The stack is
-    // resting at an equilibrium penetration that matched the old weight; multiply the weight
-    // and every contact is suddenly wrong by that factor, all at once, while touching.
-    // Measured: peak row force **1.16 MN** and velocities past 1e24 - a numerical runaway,
-    // not physics.
-    //
-    // Two things were tried and neither was enough on its own. Clearing the warm start helps
-    // - it holds forces computed for the old inertias, and seeding those into a system a
-    // hundred times heavier is an enormous impulse - but only halved the peak. Ramping the
-    // change over thirty frames did not help either; the contacts are wrong throughout the
-    // ramp rather than only at its end.
-    //
-    // The fix is to stop pretending it is a small change. A body's mass is not a runtime
-    // knob in any physics engine; changing it is closer to rebuilding the scene. So the
-    // crates are put back at rest, which is also what a user dragging a mass slider
-    // expects - heavier boxes, freshly stacked.
-    resetCrate(s);
-    s.data.forgetWarmStart();
-}
-
-/// Restack the crates by writing the TREE's own coordinates.
-///
-/// * A free body's state lives in `qpos` and `vel` like every other joint's - seven position
-/// coordinates (three for the translation, four for the quaternion) and six velocities. There
-/// is no separate rigid-body store to keep in step, which is one of the quieter benefits of
-/// the unified tree: resetting a crate is the same operation as resetting a joint angle.
-fn resetCrate(s: *State) void {
-    for (0..crate_count) |i| {
-        const body: u32 = crateBody(i);
-        const joint: u32 = s.model.body_jnt_adr[body];
-        const q: u32 = s.model.jnt_qpos_adr[joint];
-        const v: u32 = s.model.jnt_dof_adr[joint];
-        const at: Vec = cratePosition(i);
-        s.data.pos[q + 0] = at[0];
-        s.data.pos[q + 1] = at[1];
-        s.data.pos[q + 2] = at[2];
-        // Identity quaternion, in the engine's (x, y, z, w) order.
-        s.data.pos[q + 3] = 0;
-        s.data.pos[q + 4] = 0;
-        s.data.pos[q + 5] = 0;
-        s.data.pos[q + 6] = 1;
-        @memset(s.data.vel[v..][0..6], 0);
-    }
-    s.data.stage = .stale;
-    s.peak_force = 0;
-}
-
-/// Tree index of crate `i`. The arm's bodies come first and keep their numbering, so the
-/// crates follow - see `Scene.freeBodyIndex`.
-fn crateBody(i: usize) u32 {
-    return @intCast(1 + kuka.spec.bodies.len + i);
-}
-
-fn totalMass(m: *const rbt.Model) f32 {
-    var total: f32 = 0;
-    for (1..m.nbody) |bi| {
-        total += m.body_mass[bi];
-    }
-    return total;
 }
 
 pub const app: z.AppSpec(State) = .{

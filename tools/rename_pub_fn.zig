@@ -1,6 +1,6 @@
 //! rename_pub_fn - rename a top-level function within its defining file.
 //!
-//! Usage: rename_pub_fn <file> <old_name> <new_name>
+//! Usage: zig build rename-pub-fn -- <file> <old_name> <new_name>   (`--help` for more)
 //!
 //! Renames the `fn <old_name>` definition AND every bare identifier reference to
 //! it within <file>, on the AST. Field accesses `x.old`, enum literals `.old`,
@@ -11,32 +11,42 @@
 //! sites (`zm.old`) are updated separately. The compiler is the backstop: a
 //! missed reference becomes an "undeclared identifier" error.
 const std = @import("std");
+const cli = @import("cli");
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const Allocator = std.mem.Allocator;
 const Ast = std.zig.Ast;
+const Io = std.Io;
+const sortSlice = std.mem.sort;
+
+/// The command line (std's cli, `src/command_line.zig`): `zig build rename-pub-fn -- <file> <old> <new>`.
+const RenameArgs = struct {
+    file: []const u8,
+    @"old-name": []const u8,
+    @"new-name": []const u8,
+};
+
+const rename_cli: cli.Config(RenameArgs) = .{
+    .prog = "zig build rename-pub-fn --",
+    .description = "Renames a top-level function within its defining file.",
+};
 
 pub fn main(init: std.process.Init) !void {
     const gpa: Allocator = init.gpa;
-    const arena: Allocator = init.arena.allocator();
-    const io: std.Io = init.io;
+    const io: Io = init.io;
 
-    const argv: []const [:0]const u8 = try init.minimal.args.toSlice(arena);
-    if (argv.len != 4) {
-        std.debug.print("usage: rename_pub_fn <file> <old_name> <new_name>\n", .{});
-        return error.BadArgs;
-    }
-    const path: []const u8 = argv[1];
-    const old_name: []const u8 = argv[2];
-    const new_name: []const u8 = argv[3];
+    const args: RenameArgs = cli.args(&init, RenameArgs, rename_cli);
+    const path: []const u8 = args.file;
+    const old_name: []const u8 = args.@"old-name";
+    const new_name: []const u8 = args.@"new-name";
 
-    const raw: []u8 = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
+    const raw: []u8 = try Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
     defer gpa.free(raw);
     const buf: [:0]u8 = try gpa.allocSentinel(u8, raw.len, 0);
     defer gpa.free(buf);
     @memcpy(buf, raw);
 
-    var ast: Ast = try Ast.parse(gpa, buf, .{ .mode = .zig });
+    var ast: Ast = try .parse(gpa, buf, .{ .mode = .zig });
     defer ast.deinit(gpa);
     if (ast.errors.len != 0) {
         std.debug.print("{s}: parse errors, skipping\n", .{path});
@@ -82,7 +92,7 @@ pub fn main(init: std.process.Init) !void {
         return error.NotFound;
     }
 
-    std.mem.sort(u32, toks.items, {}, comptime std.sort.asc(u32));
+    sortSlice(u32, toks.items, {}, comptime std.sort.asc(u32));
     var uniq: ArrayList(u32) = .empty;
     defer uniq.deinit(gpa);
     for (toks.items) |tk| {
@@ -107,7 +117,7 @@ pub fn main(init: std.process.Init) !void {
     }
     try out.appendSlice(gpa, buf[cursor..buf.len]);
 
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = out.items });
     std.debug.print(
         "{s}: {s} -> {s}  (def={}, {d} sites)\n",
         .{ path, old_name, new_name, found_def, uniq.items.len },

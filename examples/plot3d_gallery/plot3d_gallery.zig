@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -200,8 +201,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         }
     }
 
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x9E3779B97F4A7C15);
-    const rnd: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0x9E3779B97F4A7C15);
+    const rnd: Random = prng.random();
     // Data 1: a noisy main-diagonal cloud.
     for (0..cloud1_n) |i| {
         const t: f32 = float(i) / float(cloud1_n - 1);

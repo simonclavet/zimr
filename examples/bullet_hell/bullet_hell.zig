@@ -90,6 +90,35 @@ fn spawnRing(s: *State, center: Vec2, scale: f32) void {
     }
 }
 
+fn drawScene(
+    f: *z.Frame,
+    s: *State,
+    center: Vec2,
+    scale: f32,
+    radius: f32,
+) void {
+    const gl = f.gl;
+    // magic circle (under the bullets)
+    s.magic_rot += clamp(f.time.delta_time * 60.0, 0.0, 3.0);
+    const sq: f32 = 120.0 * scale;
+    const half: f32 = sq * 0.5;
+    const rec: z.Rectangle = .{ .x = center[0], .y = center[1], .width = sq, .height = sq };
+    gl.rectRotated(rec, .{ half, half }, radFromDeg(s.magic_rot), .{ .color = purple });
+    gl.rectRotated(rec, .{ half, half }, radFromDeg(s.magic_rot + 45.0), .{ .color = purple });
+    gl.circle(center, 70.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
+    gl.circle(center, 50.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
+    gl.circle(center, 30.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
+
+    // bullets
+    var i: usize = 0;
+    while (i < max_bullets) : (i += 1) {
+        if (!s.bullets[i].active) {
+            continue;
+        }
+        gl.circle(s.bullets[i].pos, radius, .{ .color = s.bullets[i].color, .segments = 16 });
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
@@ -137,35 +166,6 @@ fn update(f: *z.Frame, s: *State) void {
     drawScene(f, s, center, scale, radius);
     common.caption(f.gl, s.font, "bullet hell - tap to change the spiral pattern");
     z.endDrawing(f.gl);
-}
-
-fn drawScene(
-    f: *z.Frame,
-    s: *State,
-    center: Vec2,
-    scale: f32,
-    radius: f32,
-) void {
-    const gl = f.gl;
-    // magic circle (under the bullets)
-    s.magic_rot += clamp(f.time.delta_time * 60.0, 0.0, 3.0);
-    const sq: f32 = 120.0 * scale;
-    const half: f32 = sq * 0.5;
-    const rec: z.Rectangle = .{ .x = center[0], .y = center[1], .width = sq, .height = sq };
-    gl.rectRotated(rec, .{ half, half }, radFromDeg(s.magic_rot), .{ .color = purple });
-    gl.rectRotated(rec, .{ half, half }, radFromDeg(s.magic_rot + 45.0), .{ .color = purple });
-    gl.circle(center, 70.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
-    gl.circle(center, 50.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
-    gl.circle(center, 30.0 * scale, .{ .color = common.palette.ink_dim, .outline = 1 });
-
-    // bullets
-    var i: usize = 0;
-    while (i < max_bullets) : (i += 1) {
-        if (!s.bullets[i].active) {
-            continue;
-        }
-        gl.circle(s.bullets[i].pos, radius, .{ .color = s.bullets[i].color, .segments = 16 });
-    }
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

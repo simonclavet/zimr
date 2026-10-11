@@ -25,7 +25,14 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const swap = std.mem.swap;
+const indexOf = std.mem.indexOf;
 const zm = @import("zm");
+const build_options = @import("build_options");
 const rbt = @import("robot.zig");
 const codecs = @import("codecs.zig");
 const mjcf = @import("mjcf.zig");
@@ -45,6 +52,7 @@ const clamp = zm.clamp;
 const atan2Rad = zm.atan2Rad;
 const quatFromAxisAngle = zm.quatFromAxisAngle;
 const assertf = zm.assertf;
+const assertUnreachable = zm.assertUnreachable;
 const tanh = zm.tanh;
 const pi = zm.pi;
 const length3 = zm.length3;
@@ -78,6 +86,25 @@ pub const StepResult = struct {
     truncated: bool,
 };
 
+/// A static floor whose top face is z = 0, and a world that never sleeps.
+fn floorWorld(gpa: Allocator) !zimrphysics.World {
+    var world: zimrphysics.World = try .init(gpa, 64);
+    errdefer world.deinit(gpa);
+    world.gravity = vec(0, 0, -9.81);
+    world.settings.allow_sleeping = false;
+    world.settings.penetration_slop = 0.005;
+    const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(200, 200, 0.5), .convex_radius = 0.01 },
+    });
+    _ = try world.createBody(.{
+        .shape = ground,
+        .position = vec(0, 0, -0.5),
+        .motion_type = .static,
+        .friction = 0.9,
+    });
+    return world;
+}
+
 pub const HumanoidEnv = struct {
     gpa: Allocator,
     options: Options,
@@ -99,7 +126,7 @@ pub const HumanoidEnv = struct {
     torque: []f32,
     full: []f32,
     dense: []f32,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     steps: u32,
 
     /// Build the environment from MJCF text (a floating humanoid made of hinges). Call `reset`
@@ -159,7 +186,7 @@ pub const HumanoidEnv = struct {
 
         env.data = try rbt.Data.init(gpa, m);
         errdefer env.data.deinit();
-        env.tracker = try .init(gpa, m.nv);
+        env.tracker = try dance.Tracker.init(gpa, m.nv);
         errdefer env.tracker.deinit();
 
         var hinges: usize = 0;
@@ -192,9 +219,9 @@ pub const HumanoidEnv = struct {
         env.base[2] -= dance.lowestFootPoint(m, &env.data, env.imported.names);
 
         env.world = try floorWorld(gpa);
-        env.bridge = try .init(gpa, &env.world, m, &env.data, 256);
+        env.bridge = try robot_physics.Bridge.init(gpa, &env.world, m, &env.data, 256);
         env.bridge.listen(&env.world);
-        env.rng = .init(0);
+        env.rng = Random.DefaultPrng.init(0);
         env.steps = 0;
         return env;
     }
@@ -245,10 +272,10 @@ pub const HumanoidEnv = struct {
         env.world.deinit(env.gpa);
         env.data.reset(m);
         env.world = try floorWorld(env.gpa);
-        env.bridge = try .init(env.gpa, &env.world, m, &env.data, 256);
+        env.bridge = try robot_physics.Bridge.init(env.gpa, &env.world, m, &env.data, 256);
         env.bridge.listen(&env.world);
-        env.rng = .init(seed);
-        const random: std.Random = env.rng.random();
+        env.rng = Random.DefaultPrng.init(seed);
+        const random: Random = env.rng.random();
         @memcpy(env.data.pos, env.base);
         @memset(env.data.vel, 0.0);
         for (env.hinge_qpos, env.hinge_dof) |q, v| {
@@ -340,30 +367,12 @@ pub const HumanoidEnv = struct {
     }
 };
 
-/// A static floor whose top face is z = 0, and a world that never sleeps.
-fn floorWorld(gpa: Allocator) !zimrphysics.World {
-    var world: zimrphysics.World = try .init(gpa, 64);
-    errdefer world.deinit(gpa);
-    world.gravity = vec(0, 0, -9.81);
-    world.settings.allow_sleeping = false;
-    world.settings.penetration_slop = 0.005;
-    const ground: zimrphysics.ShapeId = try world.shapes.add(gpa, .{
-        .box = .{ .half_extent = vec(200, 200, 0.5), .convex_radius = 0.01 },
-    });
-    _ = try world.createBody(.{
-        .shape = ground,
-        .position = vec(0, 0, -0.5),
-        .motion_type = .static,
-        .friction = 0.9,
-    });
-    return world;
-}
-
 // ============================================================================
 // Tests: the environment before any learner - baselines, determinism, cost.
 // ============================================================================
 
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
 const humanoid_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
 
 /// A fixed action rule for the baselines.
@@ -384,7 +393,7 @@ fn episode(
     act: []f32,
 ) !EpisodeResult {
     try env.reset(seed, obs);
-    var rng: std.Random.DefaultPrng = .init(seed +% 1);
+    var rng: Random.DefaultPrng = .init(seed +% 1);
     var total: f32 = 0.0;
     var steps: u32 = 0;
     while (true) {
@@ -410,7 +419,7 @@ test "robot_gym: the humanoid environment - baselines before any learner" {
     // floors a learning curve must rise from. Also: the sizes, and determinism under a seed -
     // two resets with the same seed must give the same episode to the bit, or no learning curve
     // can be compared with another.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const env: *HumanoidEnv = try .init(gpa, humanoid_xml, .{});
     defer env.deinit();
     const obs: []f32 = try gpa.alloc(f32, env.observationSize());
@@ -449,6 +458,8 @@ test "robot_gym: the humanoid environment - baselines before any learner" {
 
 const zn = @import("zn");
 
+const zrl = @import("zrl");
+
 /// A dense layer's weights and biases, as graph parameters and as the tensors that hold them.
 pub const Layer = struct {
     w: zn.Tensor(f32),
@@ -458,13 +469,13 @@ pub const Layer = struct {
 
     pub fn init(
         arena: Allocator,
-        random: std.Random,
+        random: Random,
         in: usize,
         out: usize,
         gain: f32,
     ) !Layer {
-        const w: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ in, out });
-        const b: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ 1, out });
+        const w: zn.Tensor(f32) = try .alloc(arena, &.{ in, out });
+        const b: zn.Tensor(f32) = try .alloc(arena, &.{ 1, out });
         const limit: f32 = gain * @sqrt(6.0 / float(in + out));
         for (w.data) |*x| {
             x.* = limit * (2.0 * random.float(f32) - 1.0);
@@ -567,7 +578,7 @@ pub const TrainerStats = struct {
 /// zimrnum's `ppoUpdate`, `gae` and `RolloutBuffer` underneath; a 64-64 tanh Gaussian policy and
 /// value net built on its graph; observations normalised by running statistics.
 pub const PpoTrainer = struct {
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: ArenaAllocator,
     gpa: Allocator,
     env: *HumanoidEnv,
     options: TrainerOptions,
@@ -579,7 +590,7 @@ pub const PpoTrainer = struct {
     v3: Layer,
     log_std: zn.Tensor(f32),
     graph: zn.Graph(f32),
-    model: zn.PpoModel(f32),
+    model: zrl.PpoModel(f32),
     norm: Normalizer,
     raw: []f32,
     normed: []f32,
@@ -592,8 +603,8 @@ pub const PpoTrainer = struct {
     actions: zn.Tensor(f32),
     advantages: []f64,
     returns: []f64,
-    rollout: zn.RolloutBuffer,
-    rng: std.Random.DefaultPrng,
+    rollout: zrl.RolloutBuffer,
+    rng: Random.DefaultPrng,
     episode_seed: u64,
     episode_length: u32 = 0,
     episode_return: f32 = 0,
@@ -651,7 +662,7 @@ pub const PpoTrainer = struct {
             .moments = undefined,
             .velocities = undefined,
         };
-        t.arena_state = .init(gpa);
+        t.arena_state = ArenaAllocator.init(gpa);
         errdefer t.arena_state.deinit();
         const arena: Allocator = t.arena_state.allocator();
         t.gpa = gpa;
@@ -671,29 +682,29 @@ pub const PpoTrainer = struct {
         const n_act: usize = env.actionSize();
         const hidden: usize = options.hidden;
         const batch: usize = options.minibatch;
-        t.rng = .init(options.seed);
-        const random: std.Random = t.rng.random();
-        t.p1 = try .init(arena, random, n_obs, hidden, 1.0);
-        t.p2 = try .init(arena, random, hidden, hidden, 1.0);
-        t.p3 = try .init(arena, random, hidden, n_act, 0.01);
-        t.v1 = try .init(arena, random, n_obs, hidden, 1.0);
-        t.v2 = try .init(arena, random, hidden, hidden, 1.0);
-        t.v3 = try .init(arena, random, hidden, 1, 1.0);
+        t.rng = Random.DefaultPrng.init(options.seed);
+        const random: Random = t.rng.random();
+        t.p1 = try Layer.init(arena, random, n_obs, hidden, 1.0);
+        t.p2 = try Layer.init(arena, random, hidden, hidden, 1.0);
+        t.p3 = try Layer.init(arena, random, hidden, n_act, 0.01);
+        t.v1 = try Layer.init(arena, random, n_obs, hidden, 1.0);
+        t.v2 = try Layer.init(arena, random, hidden, hidden, 1.0);
+        t.v3 = try Layer.init(arena, random, hidden, 1, 1.0);
         t.log_std = try zn.Tensor(f32).alloc(arena, &.{ 1, n_act });
         @memset(t.log_std.data, options.initial_log_std);
 
         // -- The update's graph, built once at minibatch size. --
-        t.graph = .init(arena);
+        t.graph = zn.Graph(f32).init(arena);
         // The graph lives as long as the trainer and runs thousands of passes: its backward
         // temporaries need an allocator that can free (zimrnum's `Graph.scratch`).
         t.graph.useScratchAllocator(gpa);
         const g: *zn.Graph(f32) = &t.graph;
-        const obs_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ batch, n_obs });
-        const act_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ batch, n_act });
-        const adv_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ batch, 1 });
-        const old_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ batch, 1 });
-        const ret_leaf: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ batch, 1 });
-        const ones_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ batch, 1 });
+        const obs_leaf: zn.Tensor(f32) = try .alloc(arena, &.{ batch, n_obs });
+        const act_leaf: zn.Tensor(f32) = try .alloc(arena, &.{ batch, n_act });
+        const adv_leaf: zn.Tensor(f32) = try .alloc(arena, &.{ batch, 1 });
+        const old_leaf: zn.Tensor(f32) = try .alloc(arena, &.{ batch, 1 });
+        const ret_leaf: zn.Tensor(f32) = try .alloc(arena, &.{ batch, 1 });
+        const ones_t: zn.Tensor(f32) = try .alloc(arena, &.{ batch, 1 });
         for ([_]zn.Tensor(f32){ obs_leaf, act_leaf, adv_leaf, old_leaf, ret_leaf }) |leaf| {
             @memset(leaf.data, 0.0);
         }
@@ -709,12 +720,12 @@ pub const PpoTrainer = struct {
         const mean: zn.Var = try t.p3.apply(g, h2, ones);
         const log_std_var: zn.Var = try g.parameter(t.log_std);
         const log_prob_new: zn.Var = try g.diagGaussianLogProb(mean, log_std_var, act_leaf);
-        const clip_loss: zn.Var = try g.ppoClipLoss(log_prob_new, old_leaf.data, adv_leaf.data, 0.2);
+        const clip_loss: zrl.PpoClipLoss(f32) = try .build(g, log_prob_new, old_leaf.data, adv_leaf.data, 0.2);
         const k1: zn.Var = try g.tanh(try t.v1.apply(g, obs_var, ones));
         const k2: zn.Var = try g.tanh(try t.v2.apply(g, k1, ones));
         const value: zn.Var = try t.v3.apply(g, k2, ones);
         const value_loss: zn.Var = try g.mseLoss(value, ret_var);
-        const loss: zn.Var = try g.add(clip_loss, try g.scale(value_loss, 0.5));
+        const loss: zn.Var = try g.add(clip_loss.loss, try g.scale(value_loss, 0.5));
         const weights: []zn.Tensor(f32) = try arena.dupe(zn.Tensor(f32), &.{
             t.p1.w, t.p1.b, t.p2.w, t.p2.b, t.p3.w, t.p3.b, t.log_std,
             t.v1.w, t.v1.b, t.v2.w, t.v2.b, t.v3.w, t.v3.b,
@@ -761,7 +772,7 @@ pub const PpoTrainer = struct {
         t.actions = try zn.Tensor(f32).alloc(arena, &.{ options.horizon, n_act });
         t.advantages = try arena.alloc(f64, options.horizon);
         t.returns = try arena.alloc(f64, options.horizon);
-        t.rollout = try zn.RolloutBuffer.init(arena, options.horizon);
+        t.rollout = try zrl.RolloutBuffer.init(arena, options.horizon);
         t.episode_seed = options.seed;
         try env.reset(t.episode_seed, t.raw);
         return t;
@@ -846,7 +857,7 @@ pub const PpoTrainer = struct {
     fn shuffleRollout(t: *PpoTrainer) void {
         const n_obs: usize = t.raw.len;
         const n_act: usize = t.act.len;
-        const random: std.Random = t.rng.random();
+        const random: Random = t.rng.random();
         var i: usize = t.rollout.len;
         while (i > 1) {
             i -= 1;
@@ -855,15 +866,15 @@ pub const PpoTrainer = struct {
                 continue;
             }
             for (0..n_obs) |k| {
-                std.mem.swap(f32, &t.observations.data[i * n_obs + k], &t.observations.data[j * n_obs + k]);
+                swap(f32, &t.observations.data[i * n_obs + k], &t.observations.data[j * n_obs + k]);
             }
             for (0..n_act) |k| {
-                std.mem.swap(f32, &t.actions.data[i * n_act + k], &t.actions.data[j * n_act + k]);
+                swap(f32, &t.actions.data[i * n_act + k], &t.actions.data[j * n_act + k]);
             }
-            std.mem.swap(f64, &t.advantages[i], &t.advantages[j]);
-            std.mem.swap(f64, &t.returns[i], &t.returns[j]);
-            std.mem.swap(zn.RolloutStep, &t.rollout.steps[i], &t.rollout.steps[j]);
-            std.mem.swap(f64, &t.rollout.log_prob[i], &t.rollout.log_prob[j]);
+            swap(f64, &t.advantages[i], &t.advantages[j]);
+            swap(f64, &t.returns[i], &t.returns[j]);
+            swap(zrl.RolloutStep, &t.rollout.steps[i], &t.rollout.steps[j]);
+            swap(f64, &t.rollout.log_prob[i], &t.rollout.log_prob[j]);
         }
     }
 
@@ -875,8 +886,8 @@ pub const PpoTrainer = struct {
     pub fn updateSlice(t: *PpoTrainer) !bool {
         assertf(t.rolloutFull(), @src(), "updateSlice before the rollout is full", .{});
         if (t.epoch == 0 and t.minibatch_index == 0) {
-            try zn.gae(t.rollout.steps[0..t.rollout.len], 0.99, 0.95, t.advantages, t.returns);
-            try zn.normalizeAdvantages(f64, t.advantages, 1.0e-8);
+            try zrl.gae(t.rollout.steps[0..t.rollout.len], 0.99, 0.95, t.advantages, t.returns);
+            try zrl.normalizeAdvantages(f64, t.advantages, 1.0e-8);
         }
         if (t.minibatch_index == 0) {
             t.shuffleRollout();
@@ -899,7 +910,7 @@ pub const PpoTrainer = struct {
             old_leaf[i] = @floatCast(t.rollout.log_prob[at + i]);
             ret_leaf[i] = @floatCast(t.returns[at + i]);
         }
-        try g.setPpoClipInputs(t.model.clip_loss, old_leaf, adv_leaf);
+        try t.model.clip_loss.setInputs(old_leaf, adv_leaf);
         try g.recompute();
         try g.backward(t.model.loss);
         t.adam_step += 1;
@@ -952,7 +963,11 @@ test "robot_gym: P1 - PPO learns to stay up and move on HumanoidEnv" {
     // *** P1 OF rl_track_journal.md: does zimrnum's PPO learn on OUR physics? The number: mean
     // episode length per iteration, against the statue's 37.6 steps (zero actions) and random's
     // 15. `PpoTrainer` with its defaults: the policy starts near the statue.
-    const gpa: Allocator = std.testing.allocator;
+    const slow: bool = comptime @hasDecl(build_options, "slow_tests") and build_options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const env: *HumanoidEnv = try .init(gpa, humanoid_xml, .{});
     defer env.deinit();
     const trainer: *PpoTrainer = try .init(gpa, env, .{});
@@ -995,7 +1010,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Rate = struct { hz: f32, substeps: u32 };
     const rates = [_]Rate{ .{ .hz = 60, .substeps = 2 }, .{ .hz = 120, .substeps = 4 }, .{ .hz = 240, .substeps = 8 } };
     report.print("\n  foot slip, the statue (zero actions), first 0.5 s:\n", .{});
@@ -1012,7 +1027,7 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
         var feet: [4]u32 = undefined;
         var foot_count: usize = 0;
         for (1..m.nbody) |b| {
-            if (std.mem.indexOf(u8, env.imported.names[b], "foot") != null and foot_count < feet.len) {
+            if (indexOf(u8, env.imported.names[b], "foot") != null and foot_count < feet.len) {
                 feet[foot_count] = @intCast(b);
                 foot_count += 1;
             }
@@ -1046,18 +1061,22 @@ test "robot_gym: FOOT SLIP - how far a statue's feet slide while it still stands
     }
 }
 
-const build_options = @import("build_options");
-
 test "robot_gym: P1 LONG - does PPO learn to stand past the statue, given 300k samples?" {
     // ** THE PHONE RAN ~30k SAMPLES, FLAT AT ~30 STEPS; humanoid PPO usually needs hundreds of
     // thousands. This runs 150 iterations (307k samples) natively and prints the curve every ten.
-    // Gated on `-Dslow-tests` (several minutes): zig build zn-robot_gym -Dslow-tests
+    // Gated on `-Dslow-tests` (several minutes): zig build zn-robot_gym -Dslow-tests -Dtest-report
     // -Dtest-filter="P1 LONG".
     const slow: bool = comptime @hasDecl(build_options, "slow_tests") and build_options.slow_tests;
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const env: *HumanoidEnv = try .init(gpa, humanoid_xml, .{});
     defer env.deinit();
     const trainer: *PpoTrainer = try .init(gpa, env, .{});
@@ -1096,6 +1115,15 @@ pub const SacOptions = struct {
     /// Uniformly random actions before learning starts.
     warmup: usize = 1000,
     seed: u64 = 1,
+    /// OBSERVATIONS NORMALISED AT SAMPLE TIME: running statistics (`zrl.ObsNormalizer`,
+    /// f64 Welford) fed from every observation the agent acts on in training; the replay keeps RAW rows, and each
+    /// sampled batch's observations and next observations are normalised on the batch's copy with the statistics of
+    /// that moment - so a stored row never goes stale as the statistics move. Acting normalises its input the same
+    /// way; a deterministic (evaluation) action reads the statistics without feeding them. Off: raw observations
+    /// everywhere, the agent exactly as before.
+    normalize_observations: bool = false,
+    /// With the normaliser on: normalised values are clamped to this many standard deviations.
+    obs_clip: f64 = 5.0,
 };
 
 /// The bounds a log-std is squashed into (tanh, then affine): SAC's usual [-5, 2].
@@ -1110,16 +1138,16 @@ const Mlp3 = struct {
 
     fn init(
         arena: Allocator,
-        random: std.Random,
+        random: Random,
         in: usize,
         hidden: usize,
         out: usize,
         last_gain: f32,
     ) !Mlp3 {
         return .{
-            .l1 = try .init(arena, random, in, hidden, 1.0),
-            .l2 = try .init(arena, random, hidden, hidden, 1.0),
-            .l3 = try .init(arena, random, hidden, out, last_gain),
+            .l1 = try Layer.init(arena, random, in, hidden, 1.0),
+            .l2 = try Layer.init(arena, random, hidden, hidden, 1.0),
+            .l3 = try Layer.init(arena, random, hidden, out, last_gain),
         };
     }
 
@@ -1191,11 +1219,11 @@ pub const AdamSet = struct {
 /// Soft Actor-Critic (Haarnoja et al. 2018), assembled from zimrnum's parts: a tanh-squashed
 /// Gaussian actor (`squashedReparameterize`), twin critics on `concat(s, a)` with polyak targets,
 /// the target y = r + gamma (1 - done)(min Q' - alpha log pi), and a tuned temperature
-/// (`zn.Temperature`). Every network steps ADAM: zimrnum's `offPolicyUpdate` steps plain SGD,
+/// (`zrl.Temperature`). Every network steps ADAM: zimrnum's `offPolicyUpdate` steps plain SGD,
 /// the trap `ppoUpdate` already sprang (rl_track_journal.md section 6). Env-agnostic: flat observations
 /// and actions in [-1, 1].
 pub const SacAgent = struct {
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: ArenaAllocator,
     gpa: Allocator,
     options: SacOptions,
     n_obs: usize,
@@ -1227,11 +1255,11 @@ pub const SacAgent = struct {
     actor_loss: zn.Var,
     critic_adam: AdamSet,
     actor_adam: AdamSet,
-    temperature: zn.Temperature,
+    temperature: zrl.Temperature,
     alpha_moment: f64 = 0,
     alpha_velocity: f64 = 0,
-    replay: zn.ReplayBuffer(f32),
-    rng: std.Random.DefaultPrng,
+    replay: zrl.ReplayBuffer(f32),
+    rng: Random.DefaultPrng,
     updates: usize = 0,
     // plain-forward scratch
     row: []f32,
@@ -1244,6 +1272,13 @@ pub const SacAgent = struct {
     /// hands them to `updateWith`, which a check can call with its own.
     batch_rows: []f32,
     next_noise: []f32,
+    /// The observation normaliser (`normalize_observations`), or null when it is off. It works in f64 (its running
+    /// mean over millions of observations would stall in f32), so `normalizer_in` / `normalizer_out` carry one
+    /// observation across; `normalized_obs` is the normalised observation acting hands the policy.
+    obs_normalizer: ?zrl.ObsNormalizer,
+    normalizer_in: []f64,
+    normalizer_out: []f64,
+    normalized_obs: []f32,
     /// One action's noise, for `policy`.
     noise_row: []f32,
 
@@ -1294,8 +1329,12 @@ pub const SacAgent = struct {
             .batch_rows = undefined,
             .next_noise = undefined,
             .noise_row = undefined,
+            .obs_normalizer = null,
+            .normalizer_in = undefined,
+            .normalizer_out = undefined,
+            .normalized_obs = undefined,
         };
-        a.arena_state = .init(gpa);
+        a.arena_state = ArenaAllocator.init(gpa);
         errdefer a.arena_state.deinit();
         const arena: Allocator = a.arena_state.allocator();
         a.gpa = gpa;
@@ -1305,16 +1344,16 @@ pub const SacAgent = struct {
         a.alpha_moment = 0;
         a.alpha_velocity = 0;
         a.updates = 0;
-        a.rng = .init(options.seed);
-        const random: std.Random = a.rng.random();
+        a.rng = Random.DefaultPrng.init(options.seed);
+        const random: Random = a.rng.random();
         const h: usize = options.hidden;
         const b: usize = options.batch;
-        a.actor = try .init(arena, random, n_obs, h, n_act, 0.01);
+        a.actor = try Mlp3.init(arena, random, n_obs, h, n_act, 0.01);
         a.raw_log_std = try zeros(arena, &.{ 1, n_act });
-        a.q1 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
-        a.q2 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
-        a.target1 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
-        a.target2 = try .init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.q1 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.q2 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.target1 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
+        a.target2 = try Mlp3.init(arena, random, n_obs + n_act, h, 1, 1.0);
         for (a.target1.tensors(), a.q1.tensors()) |t, o| {
             @memcpy(t.data, o.data);
         }
@@ -1325,15 +1364,15 @@ pub const SacAgent = struct {
         // passed +1.0 at first: a target entropy of +1, which a tanh-squashed 1-D action cannot
         // reach (its maximum is the uniform's, log 2 ~ 0.69) - so alpha rose from the first update
         // and ran away, doubling every 2k steps, and the cartpole policy collapsed after 8k.
-        a.temperature = try zn.Temperature.forActionDim(n_act, -1.0);
+        a.temperature = try zrl.Temperature.forActionDim(n_act, -1.0);
 
-        const ones_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ b, 1 });
+        const ones_t: zn.Tensor(f32) = try .alloc(arena, &.{ b, 1 });
         @memset(ones_t.data, 1.0);
-        const mean_row_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ 1, b });
+        const mean_row_t: zn.Tensor(f32) = try .alloc(arena, &.{ 1, b });
         @memset(mean_row_t.data, 1.0 / float(b));
 
         // -- The critic graph: both critics against one target column. --
-        a.critic_graph = .init(arena);
+        a.critic_graph = zn.Graph(f32).init(arena);
         a.critic_graph.useScratchAllocator(gpa);
         const cg: *zn.Graph(f32) = &a.critic_graph;
         a.critic_obs = try cg.constant(try zeros(arena, &.{ b, n_obs }));
@@ -1347,7 +1386,7 @@ pub const SacAgent = struct {
         a.critic_vars = concatVars(a.q1.vars(), a.q2.vars());
 
         // -- The actor graph: a reparameterised draw through the (shared) critics. --
-        a.actor_graph = .init(arena);
+        a.actor_graph = zn.Graph(f32).init(arena);
         a.actor_graph.useScratchAllocator(gpa);
         const ag: *zn.Graph(f32) = &a.actor_graph;
         a.actor_obs = try ag.constant(try zeros(arena, &.{ b, n_obs }));
@@ -1356,7 +1395,7 @@ pub const SacAgent = struct {
         a.raw_log_std_var = try ag.parameter(a.raw_log_std);
         const raw_log_std: zn.Var = a.raw_log_std_var;
         const half_span: f32 = 0.5 * (log_std_max - log_std_min);
-        const offset_t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, &.{ 1, n_act });
+        const offset_t: zn.Tensor(f32) = try .alloc(arena, &.{ 1, n_act });
         @memset(offset_t.data, log_std_min + half_span);
         const log_std_span: zn.Var = try ag.scale(try ag.tanh(raw_log_std), half_span);
         const log_std: zn.Var = try ag.add(log_std_span, try ag.constant(offset_t));
@@ -1370,9 +1409,9 @@ pub const SacAgent = struct {
         const per_sample: zn.Var = try ag.sub(try ag.mul(a.actor_alpha, draw.log_prob), try ag.min(w1, w2));
         a.actor_loss = try ag.matmul(try ag.constant(mean_row_t), per_sample);
 
-        a.critic_adam = try .init(arena, &concatTensors(a.q1.tensors(), a.q2.tensors()));
-        a.actor_adam = try .init(arena, &(a.actor.tensors() ++ [1]zn.Tensor(f32){a.raw_log_std}));
-        a.replay = try zn.ReplayBuffer(f32).init(arena, options.replay_capacity, 2 * n_obs + n_act + 2);
+        a.critic_adam = try AdamSet.init(arena, &concatTensors(a.q1.tensors(), a.q2.tensors()));
+        a.actor_adam = try AdamSet.init(arena, &(a.actor.tensors() ++ [1]zn.Tensor(f32){a.raw_log_std}));
+        a.replay = try zrl.ReplayBuffer(f32).init(arena, options.replay_capacity, 2 * n_obs + n_act + 2);
         a.row = try arena.alloc(f32, 2 * n_obs + n_act + 2);
         a.t1 = try arena.alloc(f32, h);
         a.t2 = try arena.alloc(f32, h);
@@ -1382,6 +1421,15 @@ pub const SacAgent = struct {
         a.batch_rows = try arena.alloc(f32, b * (2 * n_obs + n_act + 2));
         a.next_noise = try arena.alloc(f32, b * n_act);
         a.noise_row = try arena.alloc(f32, n_act);
+        a.normalizer_in = try arena.alloc(f64, n_obs);
+        a.normalizer_out = try arena.alloc(f64, n_obs);
+        a.normalized_obs = try arena.alloc(f32, n_obs);
+        if (options.normalize_observations) {
+            // In the agent's arena, freed with it. Its clip is ours (5 deviations), not its own default (10).
+            var normalizer: zrl.ObsNormalizer = try .init(arena, n_obs);
+            normalizer.clip = options.obs_clip;
+            a.obs_normalizer = normalizer;
+        }
         return a;
     }
 
@@ -1393,7 +1441,7 @@ pub const SacAgent = struct {
     }
 
     fn zeros(arena: Allocator, shape: []const usize) !zn.Tensor(f32) {
-        const t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(arena, shape);
+        const t: zn.Tensor(f32) = try .alloc(arena, shape);
         @memset(t.data, 0.0);
         return t;
     }
@@ -1437,22 +1485,72 @@ pub const SacAgent = struct {
         return a.policyWithNoise(obs, action, a.noise_row);
     }
 
+    /// The action for `obs`, into `action`. In training (`deterministic` false): a uniform random action while the
+    /// replay is still inside its warm-up, the policy's draw after that. In an evaluation (`deterministic`): the
+    /// policy's mean, never random. With the normaliser on, every TRAINING observation also feeds its statistics -
+    /// warm-up ones too, they are the start of the data - and the policy always sees the observation normalised with
+    /// the statistics as they stand. An evaluation only reads them: judging a policy must not change what it sees next.
     pub fn act(
         a: *SacAgent,
         obs: []const f32,
         action: []f32,
         deterministic: bool,
     ) void {
+        if (!deterministic) {
+            a.feedNormalizer(obs);
+        }
         if (!deterministic and a.replay.len < a.options.warmup) {
             for (action) |*x| {
                 x.* = 2.0 * a.rng.random().float(f32) - 1.0;
             }
             return;
         }
-        _ = a.policy(obs, action, deterministic);
+        const policy_input: []const f32 = a.normalized(obs);
+        _ = a.policy(policy_input, action, deterministic);
     }
 
-    /// Store one transition. `done` is a TERMINATION (no bootstrap), not a truncation.
+    /// With the normaliser on: `obs` into its running statistics. Off: nothing.
+    fn feedNormalizer(a: *SacAgent, obs: []const f32) void {
+        if (a.obs_normalizer) |*normalizer| {
+            widen(obs, a.normalizer_in);
+            // The lengths match by construction; a mismatch here is a bug, not an input.
+            normalizer.observe(a.normalizer_in) catch |err| {
+                assertUnreachable(@src(), "observation normaliser: {s}", .{@errorName(err)});
+            };
+        }
+    }
+
+    /// `obs` as the policy should see it: normalised with the statistics as they stand (into `normalized_obs`), or
+    /// `obs` itself when the normaliser is off.
+    fn normalized(a: *SacAgent, obs: []const f32) []const f32 {
+        if (a.obs_normalizer == null) {
+            return obs;
+        }
+        a.normalizeInto(obs, a.normalized_obs);
+        return a.normalized_obs;
+    }
+
+    /// `obs` normalised into `out` with the statistics as they stand - in place is fine (`out` may be `obs`): the
+    /// values cross into f64 scratch first, because `ObsNormalizer` works in f64.
+    fn normalizeInto(a: *SacAgent, obs: []const f32, out: []f32) void {
+        widen(obs, a.normalizer_in);
+        a.obs_normalizer.?.apply(a.normalizer_in, a.normalizer_out) catch |err| {
+            assertUnreachable(@src(), "observation normaliser: {s}", .{@errorName(err)});
+        };
+        for (out, a.normalizer_out) |*to, x| {
+            to.* = @floatCast(x);
+        }
+    }
+
+    /// An f32 observation into f64 scratch of the same length.
+    fn widen(from: []const f32, into: []f64) void {
+        for (into, from) |*to, x| {
+            to.* = x;
+        }
+    }
+
+    /// Store one transition. `done` is a TERMINATION (no bootstrap), not a truncation. The row keeps the DISCOUNT
+    /// that multiplies the bootstrap - for a one-step row, `gamma * (1 - done)`: gamma, or zero after a termination.
     pub fn remember(
         a: *SacAgent,
         obs: []const f32,
@@ -1461,12 +1559,27 @@ pub const SacAgent = struct {
         next: []const f32,
         done: bool,
     ) !void {
+        const done_f: f32 = if (done) 1.0 else 0.0;
+        try a.rememberDiscounted(obs, action, reward, next, a.options.gamma * (1.0 - done_f));
+    }
+
+    /// Store one transition whose bootstrap discount is given - an n-step row: `reward` is the window's discounted
+    /// return, `next` where it bootstraps from, `discount` gamma^k (zero when the window ended in a termination).
+    /// The target is `reward + discount * (min Q' - alpha log pi')`.
+    pub fn rememberDiscounted(
+        a: *SacAgent,
+        obs: []const f32,
+        action: []const f32,
+        reward: f32,
+        next: []const f32,
+        discount: f32,
+    ) !void {
         const n_obs: usize = a.n_obs;
         @memcpy(a.row[0..n_obs], obs);
         @memcpy(a.row[n_obs..][0..a.n_act], action);
         a.row[n_obs + a.n_act] = reward;
         @memcpy(a.row[n_obs + a.n_act + 1 ..][0..n_obs], next);
-        a.row[2 * n_obs + a.n_act + 1] = if (done) 1.0 else 0.0;
+        a.row[2 * n_obs + a.n_act + 1] = discount;
         try a.replay.push(a.row);
     }
 
@@ -1486,11 +1599,7 @@ pub const SacAgent = struct {
         if (a.replay.len < @max(a.options.warmup, a.options.batch)) {
             return;
         }
-        const width: usize = 2 * a.n_obs + a.n_act + 2;
-        const sample_rng: zn.Rng = .init(@truncate(a.updates *% 2654435761));
-        for (0..a.options.batch) |i| {
-            try a.replay.sample(sample_rng, @intCast(i), a.batch_rows[i * width ..][0..width]);
-        }
+        try a.sampleBatch();
         for (a.next_noise) |*x| {
             x.* = a.rng.random().floatNorm(f32);
         }
@@ -1500,7 +1609,28 @@ pub const SacAgent = struct {
         try a.updateWith(a.batch_rows, a.next_noise, a.actor_noise.data);
     }
 
-    /// One SAC update from the given batch (replay rows: obs, action, reward, next obs, done)
+    /// Draw this update's batch into `batch_rows` - and, with the normaliser on, normalise the batch's observations
+    /// and next observations THERE, with the statistics of this moment: the replay's rows stay raw, so none of them
+    /// goes stale as the statistics move. Normaliser off: exactly the draw `update` always made.
+    pub fn sampleBatch(a: *SacAgent) !void {
+        const n_obs: usize = a.n_obs;
+        const width: usize = 2 * n_obs + a.n_act + 2;
+        const sample_rng: zn.Rng = .init(@truncate(a.updates *% 2654435761));
+        for (0..a.options.batch) |i| {
+            try a.replay.sample(sample_rng, @intCast(i), a.batch_rows[i * width ..][0..width]);
+        }
+        if (a.obs_normalizer == null) {
+            return;
+        }
+        for (0..a.options.batch) |i| {
+            const row: []f32 = a.batch_rows[i * width ..][0..width];
+            a.normalizeInto(row[0..n_obs], row[0..n_obs]);
+            const next: []f32 = row[n_obs + a.n_act + 1 ..][0..n_obs];
+            a.normalizeInto(next, next);
+        }
+    }
+
+    /// One SAC update from the given batch (replay rows: obs, action, reward, next obs, discount)
     /// and noise (next actions', then the actor's; [batch, n_act] each).
     pub fn updateWith(
         a: *SacAgent,
@@ -1526,7 +1656,7 @@ pub const SacAgent = struct {
             const action: []const f32 = row[n_obs..][0..n_act];
             const reward: f32 = row[n_obs + n_act];
             const next: []const f32 = row[n_obs + n_act + 1 ..][0..n_obs];
-            const done: f32 = row[2 * n_obs + n_act + 1];
+            const discount: f32 = row[2 * n_obs + n_act + 1];
             @memcpy(obs_c[i * n_obs ..][0..n_obs], obs);
             @memcpy(obs_a[i * n_obs ..][0..n_obs], obs);
             @memcpy(act_c[i * n_act ..][0..n_act], action);
@@ -1537,7 +1667,7 @@ pub const SacAgent = struct {
             @memcpy(a.qin[0..n_obs], next);
             @memcpy(a.qin[n_obs..][0..n_act], action_buf[0..n_act]);
             const q_next: f32 = criticMin(&a.target1, &a.target2, a);
-            y[i] = reward + a.options.gamma * (1.0 - done) * (q_next - alpha * next_log_prob);
+            y[i] = reward + discount * (q_next - alpha * next_log_prob);
         }
         _ = next_action;
         try cg.recompute();
@@ -1592,6 +1722,101 @@ pub const SacAgent = struct {
     }
 };
 
+/// One value normalised by hand, from the normaliser's own statistics - the formula `ObsNormalizer.apply` uses.
+fn normalisedByHand(normalizer: zrl.ObsNormalizer, feature: usize, x: f32) f32 {
+    const sigma: f64 = @sqrt(normalizer.m2[feature] / normalizer.count + normalizer.epsilon);
+    const z: f64 = (@as(f64, x) - normalizer.mean[feature]) / sigma;
+    return @floatCast(clamp(z, -normalizer.clip, normalizer.clip));
+}
+
+test "robot_gym: SAC normalises each sampled batch with the statistics of the moment - never the stored rows" {
+    // Plan I5 T2's known answers. Rows with DISTINCT actions (the action is the row's number), so every sampled row
+    // can be traced back to its stored original.
+    const gpa: Allocator = testing_allocator;
+    const n_obs: usize = 3;
+    const width: usize = 2 * n_obs + 1 + 2;
+    const agent: *SacAgent = try .init(gpa, n_obs, 1, .{
+        .hidden = 8,
+        .batch = 4,
+        .warmup = 1_000_000,
+        .replay_capacity = 64,
+        .normalize_observations = true,
+    });
+    defer agent.deinit();
+    // The statistics: training actions on a spread of observations (warm-up actions are random, but each is seen).
+    var action: [1]f32 = undefined;
+    for (0..20) |k| {
+        const x: f32 = float(k);
+        const obs = [3]f32{ x, 10.0 + 2.0 * x, -3.0 + 0.5 * x * x };
+        agent.act(&obs, &action, false);
+    }
+    try expectEqual(@as(f64, 20), agent.obs_normalizer.?.count);
+    for (0..16) |k| {
+        const x: f32 = float(k);
+        const obs = [3]f32{ x + 0.25, 30.0 - x, 7.0 * x };
+        const next = [3]f32{ x + 1.25, 29.0 - x, 7.0 * x + 1.0 };
+        action[0] = x;
+        try agent.remember(&obs, &action, 0.1 * x, &next, k % 5 == 0);
+    }
+    // 0. The replay keeps exactly what it was given: every stored observation and next observation is RAW, never
+    //    normalised on the way in (rows normalised at storage would carry the statistics of that moment forever).
+    for (0..16) |k| {
+        const x: f32 = float(k);
+        const row: []const f32 = agent.replay.data[k * width ..][0..width];
+        const raw_obs = [3]f32{ x + 0.25, 30.0 - x, 7.0 * x };
+        const raw_next = [3]f32{ x + 1.25, 29.0 - x, 7.0 * x + 1.0 };
+        try expect(eql(f32, &raw_obs, row[0..n_obs]));
+        try expect(eql(f32, &raw_next, row[n_obs + 2 ..][0..n_obs]));
+    }
+    const stored: []f32 = try gpa.dupe(f32, agent.replay.data[0 .. 16 * width]);
+    defer gpa.free(stored);
+    // 1. Each sampled row is its original, normalised by hand from the statistics as they stand - its observation and
+    //    next observation, and nothing else.
+    try agent.sampleBatch();
+    for (0..agent.options.batch) |i| {
+        const row: []const f32 = agent.batch_rows[i * width ..][0..width];
+        const k: usize = @trunc(row[n_obs]);
+        const original: []const f32 = stored[k * width ..][0..width];
+        for (0..n_obs) |j| {
+            try expectEqual(normalisedByHand(agent.obs_normalizer.?, j, original[j]), row[j]);
+            try expectEqual(normalisedByHand(agent.obs_normalizer.?, j, original[n_obs + 2 + j]), row[n_obs + 2 + j]);
+        }
+        try expectEqual(original[n_obs], row[n_obs]);
+        try expectEqual(original[n_obs + 1], row[n_obs + 1]);
+        try expectEqual(original[width - 1], row[width - 1]);
+    }
+    // 2. The replay's rows are exactly as stored.
+    try expect(eql(f32, stored, agent.replay.data[0 .. 16 * width]));
+    // 3. Later statistics change a batch - the SAME draw (no update has run) comes out differently - never the rows.
+    const first: []f32 = try gpa.dupe(f32, agent.batch_rows);
+    defer gpa.free(first);
+    for (0..20) |k| {
+        const x: f32 = float(k) + 100.0;
+        const obs = [3]f32{ x, 2.0 * x, -x };
+        agent.act(&obs, &action, false);
+    }
+    try agent.sampleBatch();
+    for (0..agent.options.batch) |i| {
+        try expectEqual(first[i * width + n_obs], agent.batch_rows[i * width + n_obs]);
+    }
+    try expect(!eql(f32, first, agent.batch_rows));
+    try expect(eql(f32, stored, agent.replay.data[0 .. 16 * width]));
+    // 4. Acting: an evaluation's action is the policy's on the observation normalised by hand - and it does not feed
+    //    the statistics.
+    const probe = [3]f32{ 5.0, 12.0, 4.0 };
+    var by_hand: [3]f32 = undefined;
+    for (&by_hand, probe, 0..) |*o, x, j| {
+        o.* = normalisedByHand(agent.obs_normalizer.?, j, x);
+    }
+    const count: f64 = agent.obs_normalizer.?.count;
+    var acted: [1]f32 = undefined;
+    agent.act(&probe, &acted, true);
+    var direct: [1]f32 = undefined;
+    _ = agent.policy(&by_hand, &direct, true);
+    try expectEqual(direct[0], acted[0]);
+    try expectEqual(count, agent.obs_normalizer.?.count);
+}
+
 test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
     // ** THE FIRST SAC GATE: zimrnum's continuous cartpole, task `.hold`, a force of +-10 N
     // (the discrete cartpole is this at +-10), episodes capped at 500 steps. SAC should hold the
@@ -1602,25 +1827,31 @@ test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    const agent: *SacAgent = try .init(gpa, zn.cartpole_state_dim, zn.cartpole_action_dim, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    const agent: *SacAgent = try .init(gpa, zrl.cartpole_state_dim, zrl.cartpole_action_dim, .{});
     defer agent.deinit();
     var obs: [4]f32 = undefined;
     var next_obs: [4]f32 = undefined;
     var action: [1]f32 = undefined;
     var episode_index: u32 = 0;
-    var state = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode_index, .hold);
-    try zn.cartpoleObserve(f32, state, &obs);
+    var state = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode_index, .hold);
+    try zrl.cartpoleObserve(f32, state, &obs);
     var episode_steps: u32 = 0;
     var lengths: u64 = 0;
     var episodes: u32 = 0;
     report.print("\n  S1 gate 1, SAC on the continuous cartpole (cap 500):\n", .{});
     for (1..16001) |t| {
         agent.act(&obs, &action, false);
-        const stepped = zn.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
+        const stepped = zrl.cartpoleTaskStep(f32, state, 10.0 * action[0], .hold);
         episode_steps += 1;
         const truncated: bool = !stepped.failed and episode_steps >= 500;
-        try zn.cartpoleObserve(f32, stepped.state, &next_obs);
+        try zrl.cartpoleObserve(f32, stepped.state, &next_obs);
         try agent.remember(&obs, &action, stepped.reward, &next_obs, stepped.failed);
         try agent.update();
         state = stepped.state;
@@ -1630,8 +1861,8 @@ test "robot_gym: S1 gate 1 - SAC balances the continuous cartpole" {
             episodes += 1;
             episode_steps = 0;
             episode_index += 1;
-            state = zn.cartpoleTaskReset(f32, zn.Rng.init(1), episode_index, .hold);
-            try zn.cartpoleObserve(f32, state, &obs);
+            state = zrl.cartpoleTaskReset(f32, zn.Rng.init(1), episode_index, .hold);
+            try zrl.cartpoleObserve(f32, state, &obs);
         }
         if (t % 2000 == 0) {
             report.print("    step {d:>5}: {d:>3} episodes, mean length {d:>6.1}, alpha {d:.3}\n", .{
@@ -1662,6 +1893,25 @@ pub const GpuPpoOptions = struct {
     initial_log_std: f32 = -0.5,
     seed: u64 = 1,
 };
+
+/// One dense layer on the CPU in the kit's layout (W [in, out] row-major, then b [out]).
+fn kitLayer(
+    params_: []const f32,
+    off: u32,
+    x: []const f32,
+    out: []f32,
+    squash: bool,
+) void {
+    const in: usize = x.len;
+    const width: usize = out.len;
+    for (0..width) |o| {
+        var acc: f32 = params_[off + in * width + o];
+        for (x, 0..) |xi, i| {
+            acc += xi * params_[off + i * width + o];
+        }
+        out[o] = if (squash) tanh(acc) else acc;
+    }
+}
 
 /// PPO's learner on the zn_mlp kit: a tanh policy MLP for the mean, one log-std per action
 /// dimension, and a tanh value MLP - all in the kit's `params`, contiguous, so ONE Adam dispatch
@@ -1765,8 +2015,8 @@ pub fn GpuPpoOn(comptime M: type) type {
             p.t1 = try gpa.alloc(f32, options.hidden);
             p.t2 = try gpa.alloc(f32, options.hidden);
             p.mean = try gpa.alloc(f32, n_act);
-            var rng: std.Random.DefaultPrng = .init(options.seed);
-            const random: std.Random = rng.random();
+            var rng: Random.DefaultPrng = .init(options.seed);
+            const random: Random = rng.random();
             const gains = [3]f32{ 1.0, 1.0, 0.01 };
             for (layer_sizes, p.p_off, gains) |dims, off, gain| {
                 initLayer(p.cpu_params[off..][0 .. dims[0] * dims[1] + dims[1]], dims[0], dims[1], gain, random);
@@ -1799,7 +2049,7 @@ pub fn GpuPpoOn(comptime M: type) type {
             in: u32,
             width: u32,
             gain: f32,
-            random: std.Random,
+            random: Random,
         ) void {
             const limit: f32 = gain * @sqrt(6.0 / float(in + width));
             for (out[0 .. in * width]) |*w| {
@@ -1813,7 +2063,7 @@ pub fn GpuPpoOn(comptime M: type) type {
             p: *Self,
             obs: []const f32,
             action: []f32,
-            random: std.Random,
+            random: Random,
         ) f32 {
             kitLayer(p.cpu_params, p.p_off[0], obs, p.t1, true);
             kitLayer(p.cpu_params, p.p_off[1], p.t1, p.t2, true);
@@ -2085,7 +2335,11 @@ pub fn GpuPpoOn(comptime M: type) type {
         /// cloned is the very network PPO then fine-tunes; nothing is copied between two nets. The Adam step
         /// count is shared with PPO's (its bias corrections are ~1 after the first hundred steps anyway).
         /// `observations`: rows x n_obs, normalised exactly as PPO sees them; `labels`: rows x n_act.
-        pub fn cloneMinibatch(p: *Self, observations: []const f32, labels: []const f32) void {
+        pub fn cloneMinibatch(
+            p: *Self,
+            observations: []const f32,
+            labels: []const f32,
+        ) void {
             const rows: u32 = @intCast(p.options.rows);
             const no: u32 = @intCast(p.n_obs);
             const na: u32 = @intCast(p.n_act);
@@ -2133,25 +2387,6 @@ pub fn GpuPpoOn(comptime M: type) type {
 // ============================================================================
 // S2 (rl_track_journal.md section 7): SAC's update on the zn_mlp kit.
 // ============================================================================
-
-/// One dense layer on the CPU in the kit's layout (W [in, out] row-major, then b [out]).
-fn kitLayer(
-    params_: []const f32,
-    off: u32,
-    x: []const f32,
-    out: []f32,
-    squash: bool,
-) void {
-    const in: usize = x.len;
-    const width: usize = out.len;
-    for (0..width) |o| {
-        var acc: f32 = params_[off + in * width + o];
-        for (x, 0..) |xi, i| {
-            acc += xi * params_[off + i * width + o];
-        }
-        out[o] = if (squash) tanh(acc) else acc;
-    }
-}
 
 /// SAC's update on the zn_mlp kit (a GPU, or the kit's CPU twin), step for step
 /// `SacAgent.updateWith`: the target pass (actor on s', squash, target critics, `sac_target`),
@@ -2359,7 +2594,7 @@ pub fn GpuSacOn(comptime M: type) type {
             p: *Self,
             obs: []const f32,
             action: []f32,
-            random: std.Random,
+            random: Random,
             deterministic: bool,
         ) void {
             kitLayer(p.cpu_actor, p.actor[0], obs, p.t1_cpu, true);
@@ -2375,7 +2610,11 @@ pub fn GpuSacOn(comptime M: type) type {
 
         /// A learner holding `agent`'s exact weights, log-std and log alpha - for checking one
         /// against the other on the same numbers.
-        pub fn initFrom(gpa: Allocator, pipe: *compute_host.Compute(M), agent: *const SacAgent) !Self {
+        pub fn initFrom(
+            gpa: Allocator,
+            pipe: *compute_host.Compute(M),
+            agent: *const SacAgent,
+        ) !Self {
             var p: Self = try .init(gpa, pipe, agent.n_obs, agent.n_act, agent.options);
             errdefer p.deinit(gpa);
             const params_: []f32 = try gpa.alloc(f32, p.param_count);

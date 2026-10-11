@@ -6,6 +6,7 @@
 //! or touch move the player, revealing nearby tiles.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const clamp = zm.clamp;
@@ -29,7 +30,7 @@ const State = struct {
     player: Vec2 = .{ 180, 130 },
     tile_x: i32 = 0,
     tile_y: i32 = 0,
-    prng: std.Random.DefaultPrng,
+    prng: Random.DefaultPrng,
     font: z.Font,
 };
 
@@ -55,8 +56,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const tile_fog: []u8 = try gpa.alloc(u8, n);
     const fog_pixels: []u8 = try gpa.alloc(u8, n * 4);
     @memset(tile_fog, 0);
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xF0607);
-    const rng: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0xF0607);
+    const rng: Random = prng.random();
     for (0..n) |i| {
         tile_ids[i] = rng.intRangeAtMost(u8, 0, 1);
         fog_pixels[i * 4 + 0] = 0;
@@ -64,7 +65,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         fog_pixels[i * 4 + 2] = 0;
         fog_pixels[i * 4 + 3] = 255;
     }
-    const fog_tex: z.WgpuTexture = z.WgpuTexture.createFromPixels(f.gpu.device, f.gpu.queue, .{
+    const fog_tex: z.WgpuTexture = .createFromPixels(f.gpu.device, f.gpu.queue, .{
         .pixels = fog_pixels,
         .width = tiles_x,
         .height = tiles_y,

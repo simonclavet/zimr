@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const common = @import("example_common");
 
@@ -62,7 +63,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "tri_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(&vertices));
 
     // The vertex layout is DERIVED from the typed schema - single source of
     // truth, so the buffer and the shader can't drift apart.
@@ -94,7 +95,7 @@ fn update(f: *z.Frame, s: *State) void {
         v.x *= sx;
         v.y *= sy;
     }
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vbo, 0, std.mem.sliceAsBytes(&corrected));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vbo, 0, sliceAsBytes(&corrected));
 
     const ps: *z.PassState = f.gl.pass;
     s.shader.bindForDraw(ps);

@@ -358,6 +358,25 @@ pub fn CornerBake(comptime sm_res: usize, comptime w: usize, comptime h: usize) 
     };
 }
 
+/// One object's geometry - a named pair so every renderer's object loop
+/// reads the same way.
+pub const Geometry = struct {
+    verts: []const SceneVertex,
+    indices: []const u32,
+};
+
+fn geometryOf(
+    o: Object,
+    bunny_verts: []const SceneVertex,
+    bunny_idx: []const u32,
+) Geometry {
+    return switch (o) {
+        .floor => .{ .verts = &floor_verts, .indices = &floor_indices },
+        .pillar, .receiver => .{ .verts = &cube_verts, .indices = &cube_indices },
+        .bunny => .{ .verts = bunny_verts, .indices = bunny_idx },
+    };
+}
+
 pub fn bakeCorner(
     comptime sm_res: usize,
     comptime w: usize,
@@ -459,23 +478,4 @@ pub fn bakeCorner(
         bake.image = @bitCast(img);
     }
     return bake;
-}
-
-/// One object's geometry - a named pair so every renderer's object loop
-/// reads the same way.
-pub const Geometry = struct {
-    verts: []const SceneVertex,
-    indices: []const u32,
-};
-
-fn geometryOf(
-    o: Object,
-    bunny_verts: []const SceneVertex,
-    bunny_idx: []const u32,
-) Geometry {
-    return switch (o) {
-        .floor => .{ .verts = &floor_verts, .indices = &floor_indices },
-        .pillar, .receiver => .{ .verts = &cube_verts, .indices = &cube_indices },
-        .bunny => .{ .verts = bunny_verts, .indices = bunny_idx },
-    };
 }

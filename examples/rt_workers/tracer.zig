@@ -18,10 +18,13 @@
 //!   * Tiles land as they finish, so progressive display is not a presentation trick bolted
 //!     on afterwards - it is what out-of-order completion actually looks like.
 const std = @import("std");
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const zm = @import("zm");
 
 const Allocator = std.mem.Allocator;
-const Writer = std.Io.Writer;
+const Writer = Io.Writer;
 const float = zm.float;
 const dot = zm.dot;
 const normalize = zm.normalize;
@@ -226,6 +229,11 @@ fn radiance(
     return acc;
 }
 
+fn toByte(v: f32) u8 {
+    const c: f32 = clamp(v, 0.0, 1.0) * 255.0;
+    return @trunc(c);
+}
+
 /// THE KERNEL. An ordinary Zig function: allocator first, header, payload, writer.
 ///
 /// Nothing here says "worker". It runs identically on a Web Worker, on the main thread via
@@ -290,17 +298,17 @@ pub fn traceTile(
     }
 }
 
-fn toByte(v: f32) u8 {
-    const c: f32 = clamp(v, 0.0, 1.0) * 255.0;
-    return @trunc(c);
-}
-
 // ---------------------------------------------------------------------------------------
 // The kernel is a plain function, so testing it needs no browser, no worker and no wasm.
 // This is the ergonomic payoff of the jobs design, and it is worth stating plainly: if you
 // can `zig build test` your kernel, the only thing left to break is transport - and
 // transport is the engine's problem, not yours.
 // ---------------------------------------------------------------------------------------
+
+const test_scene = [_]Sphere{
+    .{ .cx = 0, .cy = -100.5, .cz = -1, .r = 100, .mr = 0.5, .mg = 0.5, .mb = 0.5, .mat = mat_diffuse },
+    .{ .cx = 0, .cy = 0, .cz = -1, .r = 0.5, .mr = 0.8, .mg = 0.3, .mb = 0.3, .mat = mat_diffuse },
+};
 
 /// A fixed camera looking down -Z, so the tests exercise the same path the app does.
 fn testTile(
@@ -337,16 +345,11 @@ fn testTile(
     };
 }
 
-const test_scene = [_]Sphere{
-    .{ .cx = 0, .cy = -100.5, .cz = -1, .r = 100, .mr = 0.5, .mg = 0.5, .mb = 0.5, .mat = mat_diffuse },
-    .{ .cx = 0, .cy = 0, .cz = -1, .r = 0.5, .mr = 0.8, .mg = 0.3, .mb = 0.3, .mat = mat_diffuse },
-};
-
 test "traceTile: emits exactly one RGBA pixel per pixel of the band" {
     var buf: [4 * 8 * 3]u8 = undefined;
     var out: Writer = .fixed(&buf);
     const hdr: Tile = testTile(2, 5, 8, 16, 1, 2, 7);
-    try traceTile(std.testing.allocator, hdr, std.mem.sliceAsBytes(&test_scene), &out);
+    try traceTile(testing_allocator, hdr, sliceAsBytes(&test_scene), &out);
     // 3 rows x 8 px x RGBA
     try expectEqual(@as(usize, 3 * 8 * 4), out.buffered().len);
 }
@@ -359,8 +362,8 @@ test "traceTile: a band is deterministic - same tile, same bytes, wherever it ra
     var b_buf: [2 * 6 * 4]u8 = undefined;
     var a: Writer = .fixed(&a_buf);
     var b: Writer = .fixed(&b_buf);
-    try traceTile(std.testing.allocator, hdr, std.mem.sliceAsBytes(&test_scene), &a);
-    try traceTile(std.testing.allocator, hdr, std.mem.sliceAsBytes(&test_scene), &b);
+    try traceTile(testing_allocator, hdr, sliceAsBytes(&test_scene), &a);
+    try traceTile(testing_allocator, hdr, sliceAsBytes(&test_scene), &b);
     try expectEqualSlices(u8, a.buffered(), b.buffered());
 }
 
@@ -373,6 +376,6 @@ test "traceTile: a short payload is an error, not a read past the end" {
     // trusting `bytesAsSlice` here would read whatever happens to follow.
     try expectError(
         error.ShortPayload,
-        traceTile(std.testing.allocator, hdr, std.mem.sliceAsBytes(&test_scene), &out),
+        traceTile(testing_allocator, hdr, sliceAsBytes(&test_scene), &out),
     );
 }

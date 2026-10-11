@@ -9,7 +9,7 @@ Chrome it is attached to. Nothing rebuilds or reloads on its own.
 
 ```
 ┌─ Editor: debug config "Debug: hello-world" ───────────────────────┐
-│  1. build   zig build hello-world   (debug mode: DWARF in wasm)   │
+│  1. build   zig build hello-world -Dplatform=web   (debug, DWARF) │
 │  2. launch  Chrome at http://localhost:8080/hello_world/          │
 │  adapter    vscode-js-debug + a DWARF decoder (one-time setup)    │
 └────────────────┬──────────────────────────────────────────────────┘
@@ -36,13 +36,22 @@ in `build.zig` derives both from one name:
 
 | | `hello_world` |
 | --- | --- |
-| build step | `zig build hello-world` |
-| standalone page | `zig build hello-world-standalone` |
+| build step | `zig build hello-world -Dplatform=web` |
 | installed to | `zig-out/web/hello_world/` (`index.html` + `hello_world.wasm`) |
+| single-file page | `zig-out/standalone/hello_world.html`, from the same build |
 | served at | `http://localhost:8080/hello_world/` |
 
 The server maps a URL straight onto a path under `zig-out/web/`, so
 `http://localhost:8080/hello-world/` is a 404.
+
+Every app has that one step, and `-Dplatform` decides what it builds:
+`web` makes the wasm, as the served page and the single-file page;
+`windows` makes the native program in `zig-out/windows/`. The default
+is the machine's own platform, so **on Windows a bare
+`zig build hello-world` builds the native program** and leaves
+`zig-out/web/` untouched. On a machine zimr has no native platform for,
+the bare step fails and names the choices. The browser flow always
+passes `-Dplatform=web`, and the generated editor tasks do.
 
 ## One-time setup
 
@@ -111,7 +120,7 @@ there is no file watcher, no rebuild and no reload.
   `Debug: hello-world`. Its `"build"` field runs the same
   `zig: build hello-world` task.
 
-That task runs `zig build hello-world`. `-Dmode` defaults to `debug`,
+That task runs `zig build hello-world -Dplatform=web`. `-Dmode` defaults to `debug`,
 so the wasm keeps its DWARF sections (a debug `hello_world.wasm` is
 about 3 MB; a `-Dmode=release` one has none). Then js-debug launches
 Chrome at `http://localhost:8080/hello_world/` and attaches, and
@@ -134,18 +143,22 @@ Nothing rebuilds or reloads when you save. Either:
 
 ## Build steps you care about
 
-| Step                          | What it builds                                                         |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| `zig build`                   | `zimr.js`, the gallery + manifest, the HTML docs. No examples.         |
-| `zig build <step>`            | One app into `zig-out/web/<name>/`, e.g. `zig build hello-world`.      |
-| `zig build <step>-standalone` | One self-contained `zig-out/standalone/<name>.html` (-Dmode=release).  |
-| `zig build all-examples`      | Every example.                                                         |
-| `zig build serve-only`        | The default install, then the static server on :8080.                  |
-| `zig build serve`             | `all-examples`, then the static server on :8080.                       |
-| `zig build gen-vscode`        | The VS Code and Zed configs, from `example_steps` in `build.zig`.      |
-| `zig build test`              | Every quick test: engine, shader-free suites, tier-A examples.         |
-| `zig build dist`              | Builds all-examples + mirrors to prebuilt/.                            |
-| `zig build publish`           | `dist` (release mode) + push to GitHub Pages.                          |
+| Step                              | What it builds                                                       |
+| --------------------------------- | -------------------------------------------------------------------- |
+| `zig build`                       | `zimr.js`, the gallery + manifest, the HTML docs. No examples.       |
+| `zig build <step> -Dplatform=web` | One app: `zig-out/web/<name>/` and `zig-out/standalone/<name>.html`. |
+| `zig build <step>` (on Windows)   | The app's native program, in `zig-out/windows/`.                     |
+| `zig build all-examples`          | Every example, for `-Dplatform`.                                     |
+| `zig build serve-only`            | The default install, then the static server on :8080.                |
+| `zig build serve`                 | Every example's web build, then the static server on :8080.          |
+| `zig build editor-configs`        | The VS Code and Zed configs, for every app with a web build.         |
+| `zig build test`                  | Every quick test: engine, shader-free suites, tier-A examples.       |
+| `zig build dist`                  | Every example's web build, mirrored to prebuilt/.                    |
+| `zig build publish`               | `dist` (release mode) + push to GitHub Pages.                        |
+
+Add `-Dmode=release` to a web build for the pages you ship: smaller,
+no DWARF, and zimr's own asserts still report. The generated
+`zig: release <step>` tasks do exactly that.
 
 ## Troubleshooting
 
@@ -154,7 +167,7 @@ Nothing rebuilds or reloads when you save. Either:
 Nothing is listening on 8080. In Zed, spawn `zig: serve-only`. In VS
 Code, check the `zig: serve-only (background)` terminal to see why the
 server stopped. If the configs point at `localhost:8000`, they are
-older than the move to 8080: run `zig build gen-vscode`.
+older than the move to 8080: run `zig build editor-configs`.
 
 ### 404
 
@@ -162,13 +175,12 @@ The URL has to use the underscored directory (`/hello_world/`), and
 the app has to be built: `serve-only` builds no examples, and the
 server has only what is in `zig-out/web/`. Run the app's build task.
 
-### The page never finishes loading
+### The page still runs the old code
 
-`tools/serve.zig` handles one connection at a time and keeps each one
-open between requests, so a request on a second browser connection
-waits until the first connection closes. A page load can stall for
-minutes behind an idle connection. That's a server limitation, not a
-config problem.
+- On Windows, a build without `-Dplatform=web` made the native program
+  and left the served wasm as it was. Run the editor's build task, or
+  pass `-Dplatform=web` yourself.
+- The page wasn't reloaded: nothing reloads it for you.
 
 ### Breakpoints stay hollow, or you step into wasm disassembly
 
@@ -182,21 +194,25 @@ config problem.
 
 ### A `Debug:` entry is missing, or Zed ignores `.zed/debug.json`
 
-`zig build gen-vscode` rewrites `.vscode/launch.json`,
-`.vscode/tasks.json`, `.zed/debug.json` and `.zed/tasks.json` from the
-`example_steps` list in `build.zig`. Add the app's step there, run it,
-and commit all four files. Zed reads `.zed/debug.json` as a bare JSON
-array and silently ignores the whole file if the JSON is broken, so
-regenerate instead of hand-editing.
+`zig build editor-configs` rewrites `.vscode/launch.json`,
+`.vscode/tasks.json`, `.zed/debug.json` and `.zed/tasks.json` for every
+app with a web build: a new row in `build.zig`'s `wgpu_apps` table gets
+its configs on the next run, with nothing else to list it in. Run it and
+commit all four files. `zig build check` fails, naming the stale files,
+until you do. Zed reads `.zed/debug.json` as a bare JSON array and
+silently ignores the whole file if the JSON is broken, so regenerate
+instead of hand-editing.
 
 ## Where the wiring lives
 
-- `build.zig` — the `serve` and `serve-only` steps; `example_steps`,
-  the list the editor configs come from; `finishWgpuApp`, which
-  installs each app to `web/<name>/` and registers its dashed step.
-- `tools/serve.zig` — the static dev server.
-- `tools/gen_vscode.zig` (`zig build gen-vscode`) — writes the four
-  editor configs.
+- `build.zig` — the `serve` and `serve-only` steps; `web_builds`,
+  the registry the editor configs come from; `finishWgpuApp`, which makes
+  each app's web build (`web/<name>/` and `standalone/<name>.html`);
+  `appBuildFor`, which points each app's dashed step at its web or
+  native build by `-Dplatform`.
+- `tools/serve.zig` — the static dev server, one thread per connection.
+- `tools/gen_editor_configs.zig` (`zig build editor-configs`, or
+  `generate_editor_configs.bat`) — writes the four editor configs.
 - `.vscode/launch.json`, `.vscode/tasks.json`, `.zed/debug.json`,
   `.zed/tasks.json` — generated; regenerating overwrites hand edits.
 

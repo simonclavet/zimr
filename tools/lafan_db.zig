@@ -40,6 +40,8 @@
 //! The data is LAFAN1's, licensed CC BY-NC-ND 4.0 by Ubisoft La Forge; Holden's code is MIT.
 
 const std = @import("std");
+const ArenaAllocator = std.heap.ArenaAllocator;
+const cli = @import("cli");
 const builtin = @import("builtin");
 const codecs = @import("codecs");
 const zm = @import("zm");
@@ -57,13 +59,15 @@ const quatFromAxisAngle = zm.quatFromAxisAngle;
 const length3 = zm.length3;
 const atan2Rad = zm.atan2Rad;
 const pi = zm.pi;
+const float = zm.float;
 const allocPrint = std.fmt.allocPrint;
 const readInt = std.mem.readInt;
 const sliceAsBytes = std.mem.sliceAsBytes;
-const ArgIterator = std.process.Args.Iterator;
-const File = std.Io.File;
-const Dir = std.Io.Dir;
 const Io = std.Io;
+const ArrayList = std.ArrayList;
+const eql = std.mem.eql;
+const File = Io.File;
+const Dir = Io.Dir;
 const Channel = codecs.bvh.Channel;
 const Joint = codecs.bvh.Joint;
 
@@ -290,7 +294,7 @@ fn hipsWorld(db: Database, frame: usize) WorldPose {
 /// motion, `frames` long from the take's first frame.
 fn takeAsBvh(
     gpa: Allocator,
-    arena: *std.heap.ArenaAllocator,
+    arena: *ArenaAllocator,
     db: Database,
     first: usize,
     frames: usize,
@@ -299,7 +303,7 @@ fn takeAsBvh(
     const joint_channels = [_]Channel{ .z_rotation, .y_rotation, .x_rotation };
 
     // The hierarchy. `index_of_bone` remembers where each bone landed once End Sites are in.
-    var joints: std.ArrayList(Joint) = .empty;
+    var joints: ArrayList(Joint) = .empty;
     var index_of_bone: [bone_names.len]i32 = undefined;
     for (bone_names, bone_parents, 0..) |name, parent, b| {
         const offset: Vec = if (parent < 0) vec(0, 0, 0) else db.position(first, b + 1) * splat(100.0);
@@ -312,7 +316,7 @@ fn takeAsBvh(
             .end_site = false,
         });
         for (end_sites) |site| {
-            if (!std.mem.eql(u8, site.bone, name)) {
+            if (!eql(u8, site.bone, name)) {
                 continue;
             }
             try joints.append(gpa, .{
@@ -420,17 +424,33 @@ fn say(io: Io, gpa: Allocator, comptime fmt: []const u8, args: anytype) !void {
     try File.stdout().writeStreamingAll(io, try allocPrint(gpa, fmt, args));
 }
 
+/// The command line (std's cli, `src/command_line.zig`): `zig build lafan-db -- <database.bin> <out_dir> <seconds>`.
+const DatabaseArgs = struct {
+    database: []const u8,
+    @"out-dir": []const u8,
+    seconds: f32,
+};
+
+const database_cli: cli.Config(DatabaseArgs) = .{
+    .prog = "zig build lafan-db --",
+    .description = "LAFAN1 locomotion, out of Daniel Holden's motion-matching database and into BVH.",
+    .args = .{
+        .database = .{ .description = "Holden's database.bin" },
+        .@"out-dir" = .{ .description = "where the .bvh takes go" },
+        .seconds = .{ .description = "how much of each take to keep" },
+    },
+};
+
 pub fn main(init: std.process.Init) !void {
-    var arena_state: std.heap.ArenaAllocator = .init(init.gpa);
+    var arena_state: ArenaAllocator = .init(init.gpa);
     defer arena_state.deinit();
     const gpa: Allocator = arena_state.allocator();
     const io: Io = init.io;
 
-    var args: ArgIterator = try ArgIterator.initAllocator(init.minimal.args, gpa);
-    _ = args.skip();
-    const database_path: []const u8 = args.next() orelse return error.Usage;
-    const out_dir: []const u8 = args.next() orelse return error.Usage;
-    const seconds: f32 = try std.fmt.parseFloat(f32, args.next() orelse return error.Usage);
+    const args: DatabaseArgs = cli.args(&init, DatabaseArgs, database_cli);
+    const database_path: []const u8 = args.database;
+    const out_dir: []const u8 = args.@"out-dir";
+    const seconds: f32 = args.seconds;
 
     const bytes: []u8 = try Dir.cwd().readFileAlloc(io, database_path, gpa, .limited(256 << 20));
     const db: Database = try load(gpa, bytes);
@@ -484,7 +504,7 @@ pub fn main(init: std.process.Init) !void {
         try say(io, gpa, "{s}: {d} frames ({d:.1} s), {d} KB, worst joint round trip {d:.5} cm\n", .{
             path,
             frames,
-            @as(f32, @floatFromInt(frames)) / frames_per_second,
+            float(frames) / frames_per_second,
             text.len / 1024,
             worst,
         });

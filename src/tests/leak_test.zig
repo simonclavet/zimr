@@ -31,10 +31,12 @@ const zm = @import("zm");
 const radFromDeg = zm.radFromDeg;
 const Color = zm.Color;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 
 // Image lifecycle stress
 test "leak: gen/free image - 100 iterations" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var i: usize = 0;
     while (i < 100) : (i += 1) {
         const img: Image = try image.genImageColor(ta, 32, 32, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
@@ -43,7 +45,7 @@ test "leak: gen/free image - 100 iterations" {
 }
 
 test "leak: gen/resize/free chain - 50 iterations" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         var img: Image = try image.genImageColor(ta, 16, 16, .{ .r = 80, .g = 80, .b = 80, .a = 255 });
@@ -53,7 +55,7 @@ test "leak: gen/resize/free chain - 50 iterations" {
 }
 
 test "leak: gen/full-transform-chain/free - 25 iterations" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var i: usize = 0;
     while (i < 25) : (i += 1) {
         // Build a 32x32 image, run it through 5 different transforms,
@@ -69,7 +71,7 @@ test "leak: gen/full-transform-chain/free - 25 iterations" {
 }
 
 test "leak: imageCopy roundtrip - 50 iterations" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const src: Image = try image.genImageColor(ta, 12, 12, .{ .r = 200, .g = 100, .b = 50, .a = 255 });
@@ -80,7 +82,7 @@ test "leak: imageCopy roundtrip - 50 iterations" {
 }
 
 test "leak: imageFromImage extract - 50 iterations" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const src: Image = try image.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
@@ -91,7 +93,7 @@ test "leak: imageFromImage extract - 50 iterations" {
 }
 
 test "leak: gen/blur/free - exercises gpa scratch buffers" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var i: usize = 0;
     while (i < 20) : (i += 1) {
         var img: Image = try image.genImageColor(ta, 16, 16, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
@@ -102,7 +104,7 @@ test "leak: gen/blur/free - exercises gpa scratch buffers" {
 
 // genImage* family - covers Phase B's full surface
 test "leak: gen all image variants" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c1: Color = .{ .r = 10, .g = 20, .b = 30, .a = 255 };
     const c2: Color = .{ .r = 200, .g = 180, .b = 160, .a = 255 };
 
@@ -121,7 +123,7 @@ test "leak: gen all image variants" {
     const img5: Image = try image.genImageChecked(ta, 16, 16, 4, 4, c1, c2);
     defer image.unloadImage(ta, img5);
 
-    var seeded: rng_mod.Seeded = rng_mod.Seeded.init(42);
+    var seeded: rng_mod.Seeded = .init(42);
     const img6: Image = try image.genImageWhiteNoise(ta, seeded.rng(), 16, 16, 0.5);
     defer image.unloadImage(ta, img6);
 
@@ -135,7 +137,7 @@ test "leak: gen all image variants" {
 
 // genMesh* family - covers Phase A's CPU-side surface
 test "leak: gen/free mesh - 25 iterations across mesh types" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // genMesh* internally calls uploadMesh which needs GPU.  On host
     // uploadMesh's wasm_fwd stubs no-op, so the upload doesn't actually
     // happen but the CPU-side per-attribute arrays are allocated.
@@ -171,7 +173,7 @@ test "leak: gen/free mesh - 25 iterations across mesh types" {
 
 // loadImageColors stress - Phase E.2's draw3d.zig private API
 test "leak: loadImageColors round-trip - 50 iterations" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const src: types.Image = try image.genImageColor(ta, 8, 8, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
     defer image.unloadImage(ta, src);
 
@@ -189,7 +191,7 @@ test "leak: loadImageColors round-trip - 50 iterations" {
 test "leak: per-frame arena reset pattern - 100 frames" {
     var gpa_state: std.heap.DebugAllocator(.{ .safety = true }) = .init;
     defer {
-        const status = gpa_state.deinit();
+        const status: std.heap.Check = gpa_state.deinit();
         if (status == .leak) {
             @panic("leak detected in per-frame arena pattern");
         }
@@ -198,7 +200,7 @@ test "leak: per-frame arena reset pattern - 100 frames" {
 
     // Per-frame arena: reset (retain capacity) at the start of each
     // frame, freed at end of test.
-    var frame_arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+    var frame_arena: ArenaAllocator = .init(gpa);
     defer frame_arena.deinit();
 
     var frame_count: usize = 0;

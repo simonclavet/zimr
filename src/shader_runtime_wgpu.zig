@@ -72,6 +72,7 @@ const Vec = zm.Vec;
 const Vec2 = zm.Vec2;
 const Vec3 = zm.Vec3;
 const std = @import("std");
+const indexOfScalar = std.mem.indexOfScalar;
 const gpu = @import("gpu.zig");
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
@@ -80,9 +81,14 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const expectError = std.testing.expectError;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
 const wgpu = @import("wgpu.zig");
 const shader_introspect = @import("shader_introspect.zig");
 const wgpu_texture = @import("wgpu_texture.zig");
+const gpu_iface = @import("gpu_iface.zig");
+
 const PassState = gpu_iface.PassState;
 
 // ============================================================================
@@ -167,6 +173,490 @@ pub fn RenderPipeline(comptime VsT: type, comptime FsT: type) type {
         /// Read by `setPipeline` to populate
         /// `PassState.sw_dispatch`; called by `SwBackend.flushBatch`.
         pub const sw_dispatch = makeSwDispatch(VsT, FsT);
+    };
+}
+
+/// Comptime-generic typed bind group container.  See section header
+/// for the design rationale; see the user-facing tutorial in the
+/// plan's section K for worked examples.
+/// A caller-supplied storage-buffer binding for a `Resources` schema's
+/// `Storage` field: the buffer handle, a byte offset into it, and the bound
+/// byte size. The buffer is owned by the caller (e.g. a compute pass writes it
+/// in place); Resources only references it in the bind group. `offset` lets a
+/// field bind into a sub-region of a larger buffer (must satisfy the device's
+/// storage-buffer offset alignment, 256 by default).
+pub const StorageBinding = struct {
+    handle: wgpu.BufferHandle = .invalid,
+    offset: u64 = 0,
+    size: u64 = 0,
+};
+
+const shader = @import("shader_interface");
+
+pub fn Resources(comptime SchemaT: type) type {
+    const layout = comptime shader_introspect.solveLayout(SchemaT);
+    const has_ubo = comptime @hasDecl(SchemaT, "Ubo");
+    const UboT: type = comptime if (has_ubo) SchemaT.Ubo else void;
+
+    // Comptime count of how many Sampler2D fields the schema has -
+    // used to size the local cache.  Outside the struct body so it's
+    // a free comptime constant, not a struct decl (Zig rejects
+    // interleaved const + field decls).
+    const sampler_count: usize = blk: {
+        var n: usize = 0;
+        for (layout.fields) |fld| {
+            if (fld.kind == .sampler_2d) {
+                n += 1;
+            }
+        }
+        break :blk n;
+    };
+
+    const storage_count: usize = blk: {
+        var n: usize = 0;
+        for (layout.fields) |fld| {
+            if (fld.kind == .storage_buffer) {
+                n += 1;
+            }
+        }
+        break :blk n;
+    };
+
+    return struct {
+        const Self = @This();
+        pub const Schema = SchemaT;
+        pub const Layout = layout;
+
+        gpa: Allocator,
+        f: *gpu.GpuFrame,
+
+        // One BGL + BG per group used.  Indexed by group number; unused
+        // slots hold `.invalid` handles.  Capped at 4 (WebGPU
+        // guaranteed minimum, and what `solveLayout` tracks).
+        bg_layouts: [4]wgpu.BindGroupLayoutHandle = @splat(.invalid),
+        bind_groups: [4]wgpu.BindGroupHandle = @splat(.invalid),
+        groups_used: u8 = 0,
+
+        // UBO buffer (when the schema has a Ubo).  Resources owns
+        // this - created in init, destroyed in deinit.  When no Ubo,
+        // stays `.invalid`.
+        ubo_buffer: wgpu.BufferHandle = .invalid,
+        /// Enforcement state for the one-write-per-frame invariant below. The
+        /// encoder handle IS the frame identity (monotonic on both the bridge and
+        /// the smoke mock), so the counter resets structurally - no per-frame
+        /// call is required of anyone.
+        ubo_write_encoder: wgpu.CommandEncoderHandle = .invalid,
+        ubo_writes_this_frame: u32 = 0,
+
+        // Cached texture handles per sampler, used by `.set()` to
+        // know the current value so a rebuild can preserve un-changed
+        // bindings.  When the schema has no samplers, this is a
+        // zero-sized array.
+        sampler_textures: [sampler_count]wgpu_texture.WgpuTexture = @splat(wgpu_texture.WgpuTexture{}),
+
+        // Caller-supplied storage-buffer bindings (handle + size), one per
+        // `Storage` field. The buffer is owned by the caller (typically a
+        // compute pass writes it); Resources only references it in the bind
+        // group. When the schema has no storage, this is a zero-sized array.
+        storage_bindings: [storage_count]StorageBinding = @splat(StorageBinding{}),
+
+        /// The InitArgs type: a struct with one field per resource
+        /// in the schema, typed by resource kind.
+        ///
+        ///   - `Ubo` field -> no init arg (Resources allocates the buffer)
+        ///     PLUS an `.initial_ubo` init arg of type `?UboT` for the
+        ///     initial value (optional; user can also fill via
+        ///     writeUbo before drawing).
+        ///   - Each Sampler2D field -> field of type `WgpuTexture`.
+        ///
+        /// Built at comptime from the resolved layout using Zig
+        /// 0.16's `@Struct` type-construction builtin.
+        pub const InitArgs = blk: {
+            // Count fields up front so the arrays have a sized
+            // upper bound at comptime.
+            const ubo_field_count: usize = if (has_ubo) 1 else 0;
+            const total: usize = sampler_count + storage_count + ubo_field_count;
+
+            var names: [total][:0]const u8 = undefined;
+            var types: [total]type = undefined;
+            var attrs: [total]std.builtin.Type.Struct.FieldAttributes = undefined;
+            var i: usize = 0;
+
+            // initial_ubo, optional - defaults to null so the user
+            // can skip it.
+            if (has_ubo) {
+                names[i] = "initial_ubo";
+                types[i] = ?UboT;
+                attrs[i] = .{ .default_value_ptr = @as(*const anyopaque, @ptrCast(&@as(?UboT, null))) };
+                i += 1;
+            }
+
+            // One field per sampler, typed WgpuTexture - no default
+            // (user MUST supply a texture).
+            for (layout.fields) |fld| {
+                if (fld.kind != .sampler_2d) {
+                    continue;
+                }
+                names[i] = fld.name;
+                types[i] = wgpu_texture.WgpuTexture;
+                attrs[i] = .{};
+                i += 1;
+            }
+
+            // One field per storage buffer, typed StorageBinding - no default
+            // (user MUST supply the buffer handle + size).
+            for (layout.fields) |fld| {
+                if (fld.kind != .storage_buffer) {
+                    continue;
+                }
+                names[i] = fld.name;
+                types[i] = StorageBinding;
+                attrs[i] = .{};
+                i += 1;
+            }
+
+            break :blk @Struct(.auto, null, &names, &types, &attrs);
+        };
+
+        /// Build a Resources value: allocate the UBO (if any),
+        /// build a BGL per used group, build a BG per used group
+        /// referencing the user-supplied texture handles.
+        pub fn init(
+            gpa: Allocator,
+            f: *gpu.GpuFrame,
+            args: InitArgs,
+        ) !Self {
+            var self: Self = .{ .gpa = gpa, .f = f, .groups_used = layout.groups_used };
+
+            // ---- 1. Allocate the UBO if the schema has one ----
+            if (has_ubo) {
+                self.ubo_buffer = wgpu.createBuffer(f.device, .{
+                    .size = shader.wireSizeOf(UboT),
+                    .usage = .{ .uniform = true, .copy_dst = true },
+                    .label = "ubo",
+                });
+                // Optional initial value: write it now if provided;
+                // user can also call writeUbo later.  If neither
+                // happens, the UBO contains garbage - caller's
+                // responsibility.
+                if (@field(args, "initial_ubo")) |v| {
+                    const bytes: [shader.wireSizeOf(UboT)]u8 = shader.wireOf(UboT, &v);
+                    wgpu.queueWriteBuffer(f.queue, self.ubo_buffer, 0, &bytes);
+                }
+            }
+
+            // ---- 2. Cache sampler textures into our local array ----
+            {
+                comptime var sampler_idx: usize = 0;
+                inline for (layout.fields) |fld| {
+                    if (fld.kind != .sampler_2d) {
+                        continue;
+                    }
+                    self.sampler_textures[sampler_idx] = @field(args, fld.name);
+                    sampler_idx += 1;
+                }
+            }
+
+            // ---- 2b. Cache storage-buffer bindings into our local array ----
+            {
+                comptime var storage_idx: usize = 0;
+                inline for (layout.fields) |fld| {
+                    if (fld.kind != .storage_buffer) {
+                        continue;
+                    }
+                    self.storage_bindings[storage_idx] = @field(args, fld.name);
+                    storage_idx += 1;
+                }
+            }
+
+            // ---- 3. Build one BGL + BG per used group ----
+            inline for (0..4) |g_usize| {
+                const g: u32 = @intCast(g_usize);
+                if (layout.groups_used & (@as(u8, 1) << @intCast(g)) == 0) {
+                    continue;
+                }
+                try self.buildGroup(g);
+            }
+
+            return self;
+        }
+
+        /// Build (or rebuild) the BGL + BG for `group`.  Walks
+        /// `layout.fields` for entries in this group; assembles BGL
+        /// entries and BG entries; calls `createBindGroupLayout` and
+        /// `createBindGroup`.  Used by `init` and by `set` (which
+        /// rebuilds only the affected group).
+        fn buildGroup(self: *Self, group: u32) !void {
+            // Collect entries for this group at comptime.  Allocate
+            // working arrays at runtime since the encoder needs them.
+            var bgl_entries: ArrayList(shader_introspect.BindGroupLayoutEntry) = .empty;
+            defer bgl_entries.deinit(self.gpa);
+            var bg_entries: ArrayList(gpu.BindGroupEntry) = .empty;
+            defer bg_entries.deinit(self.gpa);
+
+            // sampler_idx_global tracks the position of each sampler
+            // field in declaration order, used to look up the
+            // texture in `self.sampler_textures[]`.  Computed purely
+            // at comptime (depends only on the field's position in
+            // the schema, NOT on the runtime `group` parameter).
+            comptime var sampler_idx_global: usize = 0;
+            comptime var storage_idx_global: usize = 0;
+            inline for (layout.fields) |fld| {
+                const fld_kind = fld.kind;
+                const my_sampler_idx = sampler_idx_global;
+                const my_storage_idx = storage_idx_global;
+                // Advance the counter at comptime for every sampler
+                // (regardless of group).  This is correct because the
+                // counter tracks the SCHEMA position, not what we're
+                // currently building.
+                if (fld_kind == .sampler_2d) {
+                    sampler_idx_global += 1;
+                }
+                if (fld_kind == .storage_buffer) {
+                    storage_idx_global += 1;
+                }
+                // Only emit entries for fields in the group we're
+                // currently building.  `fld.group` is comptime but
+                // `group` is the runtime parameter - guard the body
+                // with a runtime if rather than `continue` to keep
+                // the inline-for's comptime structure honest.
+                if (fld.group == group) {
+                    switch (fld_kind) {
+                        .ubo => {
+                            try bgl_entries.append(self.gpa, .{
+                                .binding = fld.binding,
+                                // UBOs are conservatively visible to all
+                                // stages - the cost is zero and it avoids
+                                // a stage-mismatch error when the same
+                                // schema's UBO is read by both VS and FS.
+                                .visibility = .{ .vertex = true, .fragment = true, .compute = true },
+                                .resource = .{ .uniform_buffer = .{ .min_size = shader.wireSizeOf(UboT) } },
+                            });
+                            try bg_entries.append(self.gpa, .{
+                                .binding = fld.binding,
+                                .resource = .{ .buffer = .{
+                                    .handle = self.ubo_buffer,
+                                    .size = shader.wireSizeOf(UboT),
+                                } },
+                            });
+                        },
+                        .sampler_2d => {
+                            // A Sampler2D is TWO WebGPU bindings: the texture at
+                            // @binding(N) and its paired sampler at @binding(N+1).
+                            // `fld.binding` (N) came from `solveLayout`, which
+                            // delegates to `shader_interface.solveSamplerSlots` -
+                            // the SAME authority the WGSL codegen uses - so this
+                            // host entry can't drift from the shader's decoration.
+                            const tex: wgpu_texture.WgpuTexture = self.sampler_textures[my_sampler_idx];
+                            try bgl_entries.append(self.gpa, .{
+                                .binding = fld.binding,
+                                .visibility = .{ .vertex = fld.stages.vertex, .fragment = fld.stages.fragment },
+                                .resource = .{ .texture = .{} },
+                            });
+                            try bgl_entries.append(self.gpa, .{
+                                .binding = fld.binding + 1,
+                                .visibility = .{ .vertex = fld.stages.vertex, .fragment = fld.stages.fragment },
+                                .resource = .{ .sampler = .{} },
+                            });
+                            try bg_entries.append(self.gpa, .{
+                                .binding = fld.binding,
+                                .resource = .{ .texture_view = tex.view },
+                            });
+                            try bg_entries.append(self.gpa, .{
+                                .binding = fld.binding + 1,
+                                .resource = .{ .sampler = tex.sampler },
+                            });
+                        },
+                        .storage_buffer => {
+                            // A storage buffer is ONE binding. The layout entry
+                            // is a storage_buffer (read_only from the resolved
+                            // field); the bind-group entry references the
+                            // caller-supplied buffer via the same `.buffer`
+                            // resource shape as a UBO.
+                            const sb: StorageBinding = self.storage_bindings[my_storage_idx];
+                            try bgl_entries.append(self.gpa, .{
+                                .binding = fld.binding,
+                                .visibility = .{ .vertex = true, .fragment = true, .compute = true },
+                                .resource = .{ .storage_buffer = .{
+                                    .read_only = fld.read_only,
+                                    .min_size = sb.size,
+                                } },
+                            });
+                            try bg_entries.append(self.gpa, .{
+                                .binding = fld.binding,
+                                .resource = .{ .buffer = .{
+                                    .handle = sb.handle,
+                                    .offset = sb.offset,
+                                    .size = sb.size,
+                                } },
+                            });
+                        },
+                    }
+                } // close if (fld.group == group)
+            }
+
+            // Encode + create on the GPU.
+            const bgl_blob: []u8 = try gpu.encodeBindGroupLayoutEntries(self.gpa, bgl_entries.items);
+            defer self.gpa.free(bgl_blob);
+            self.bg_layouts[group] = wgpu.createBindGroupLayout(self.f.device, bgl_blob, "resources_bgl");
+
+            const bg_blob: []u8 = try gpu.encodeBindGroupEntries(self.gpa, bg_entries.items);
+            defer self.gpa.free(bg_blob);
+            self.bind_groups[group] = wgpu.createBindGroup(
+                self.f.device,
+                self.bg_layouts[group],
+                bg_blob,
+                "resources_bg",
+            );
+        }
+
+        /// Free GPU resources Resources owns.  Bind groups + layouts
+        /// will be released by the JS side when the device is
+        /// released (no explicit destroy API for them yet).
+        pub fn deinit(self: *Self) void {
+            if (self.ubo_buffer != .invalid) {
+                wgpu.destroyBuffer(self.ubo_buffer);
+                self.ubo_buffer = .invalid;
+            }
+            // Release the per-instance bind groups + their layouts (created fresh
+            // by Resources.init each lifecycle). Safe even though a cached
+            // pipeline was built from these layouts - a built pipeline doesn't
+            // hold a live reference to them.
+            var g: usize = 0;
+            while (g < self.bind_groups.len) : (g += 1) {
+                if (self.bind_groups[g] != .invalid) {
+                    wgpu.destroyBindGroup(self.bind_groups[g]);
+                }
+                if (self.bg_layouts[g] != .invalid) {
+                    wgpu.destroyBindGroupLayout(self.bg_layouts[g]);
+                }
+            }
+            self.bg_layouts = @splat(.invalid);
+            self.bind_groups = @splat(.invalid);
+            self.groups_used = 0;
+        }
+
+        /// Bind every group used by this Resources value to the
+        /// pass state.  Inline-for over the 4 possible groups; only
+        /// emits `setBindGroup` calls for groups that are used.
+        pub fn bind(self: *Self, ps: *PassState) void {
+            inline for (0..4) |g_usize| {
+                const g: u32 = @intCast(g_usize);
+                if (self.groups_used & (@as(u8, 1) << @intCast(g)) != 0) {
+                    gpu_iface.WgpuBackend.setBindGroup(ps, g, self.bind_groups[g]);
+                }
+            }
+        }
+
+        /// Update the UBO contents.  Requires the schema to have a
+        /// `Ubo` decl; comptime-error otherwise.  No bind group
+        /// rebuild - the BG references the buffer, only the
+        /// buffer's bytes change.
+        ///
+        /// * INVARIANT: at most ONE write per frame - now ENFORCED. *  This is a
+        /// plain `queue.writeBuffer` into a single buffer at offset 0, and the
+        /// queue executes ALL writeBuffer calls BEFORE the frame's encoder
+        /// submit - write twice in a frame and only the LAST value survives,
+        /// applied to EVERY pass segment including ones already recorded (the
+        /// zimr517 "duplicated grid" bug class).  Need per-segment or per-draw
+        /// values?  Ring-buffer them like `renderer_2d`'s ortho ring,
+        /// `flushBatch`'s vertex ring, or `draw3d`'s view-projection ring.
+        /// (`pushUbo` above has the same single-buffer shape and goes through the
+        /// same check.)
+        ///
+        /// This invariant was documented, and violated, for as long as it has
+        /// existed: `beginMode3D` wrote this UBO once per 3D pass, so every
+        /// split-screen / minimap / 3D-into-RT app silently rendered every pass
+        /// with the LAST camera (zimr857). A comment is not a guard. The counter
+        /// below turns the next occurrence into a loud, located panic instead of
+        /// a picture that is merely wrong.
+        pub fn writeUbo(self: *Self, value: UboT) void {
+            if (comptime !has_ubo) {
+                @compileError("Schema `" ++ @typeName(SchemaT) ++ "` has no `Ubo` " ++
+                    "declaration — `writeUbo` not available.");
+            }
+            self.noteUboWrite();
+            // Plain-struct Ubo: explicit wire serialization (see pushUbo).
+            const bytes: [shader.wireSizeOf(UboT)]u8 = shader.wireOf(UboT, &value);
+            wgpu.queueWriteBuffer(self.f.queue, self.ubo_buffer, 0, &bytes);
+        }
+
+        /// Count this frame's writes to the single UBO and panic on the second.
+        pub fn noteUboWrite(self: *Self) void {
+            const enc: wgpu.CommandEncoderHandle = self.f.encoder;
+            if (enc != self.ubo_write_encoder) {
+                self.ubo_write_encoder = enc;
+                self.ubo_writes_this_frame = 0;
+            }
+            self.ubo_writes_this_frame += 1;
+            assertf(
+                self.ubo_writes_this_frame <= 1,
+                @src(),
+                "Schema `{s}`: its UBO was written {d}x in ONE frame. All of a frame's " ++
+                    "queue writes land before its single submit, so every pass — including " ++
+                    "ones already recorded — will read the LAST value, not the one it was " ++
+                    "drawn with. Give the UBO a ring (a slot per pass + a bind group per " ++
+                    "slot, like draw3d's view-projection ring) instead of rewriting it.",
+                .{ @typeName(SchemaT), self.ubo_writes_this_frame },
+            );
+        }
+
+        /// Result of `set` - tells the user whether a bind group
+        /// rebuild happened.  Helpful for perf-sensitive callers.
+        pub const SetResult = enum {
+            /// New resource was different from the current; the
+            /// affected group's bind group was rebuilt.
+            rebuilt_group,
+            /// New resource matched the current; no rebuild.
+            unchanged,
+        };
+
+        /// Swap a sampler texture for a different one.  Rebuilds the
+        /// bind group containing the named field (cheap if the field
+        /// is alone in its group; expensive only if the group has
+        /// many resources and one was changed).  Other groups untouched.
+        ///
+        /// Comptime-error if `field` doesn't name a sampler field in
+        /// the schema.
+        pub fn set(
+            self: *Self,
+            comptime field_tag: anytype,
+            new_tex: wgpu_texture.WgpuTexture,
+        ) !SetResult {
+            const field_name: [:0]const u8 = @tagName(field_tag);
+            // Find the field in the layout to know which group to
+            // rebuild AND its sampler-index.
+            comptime var found_group: ?u32 = null;
+            comptime var sampler_idx_global: usize = 0;
+            comptime var target_sampler_idx: ?usize = null;
+            comptime {
+                for (layout.fields) |fld| {
+                    if (fld.kind != .sampler_2d) {
+                        continue;
+                    }
+                    if (eql(u8, fld.name, field_name)) {
+                        found_group = fld.group;
+                        target_sampler_idx = sampler_idx_global;
+                        break;
+                    }
+                    sampler_idx_global += 1;
+                }
+            }
+            if (comptime found_group == null) {
+                @compileError("Resources.set: no sampler field `" ++ field_name ++
+                    "` in schema `" ++ @typeName(SchemaT) ++ "`.");
+            }
+            const idx: usize = target_sampler_idx.?;
+            // No-op if the texture handle is the same.
+            if (self.sampler_textures[idx].view == new_tex.view and
+                self.sampler_textures[idx].sampler == new_tex.sampler)
+            {
+                return .unchanged;
+            }
+            self.sampler_textures[idx] = new_tex;
+            try self.buildGroup(found_group.?);
+            return .rebuilt_group;
+        }
     };
 }
 
@@ -287,7 +777,12 @@ pub fn LoadedShader(comptime SchemaT: type) type {
 
         /// Draw `vertex_count` vertices across `instance_count` instances (pass
         /// 1 for a plain non-instanced draw).
-        pub fn draw(self: Self, ps: *PassState, vertex_count: u32, instance_count: u32) void {
+        pub fn draw(
+            self: Self,
+            ps: *PassState,
+            vertex_count: u32,
+            instance_count: u32,
+        ) void {
             _ = self;
             wgpu.render_pass.draw(ps.pass, .{ .vertex_count = vertex_count, .instance_count = instance_count });
         }
@@ -305,14 +800,24 @@ pub fn LoadedShader(comptime SchemaT: type) type {
         }
 
         /// Draw `index_count` indices across `instance_count` instances.
-        pub fn drawIndexed(self: Self, ps: *PassState, index_count: u32, instance_count: u32) void {
+        pub fn drawIndexed(
+            self: Self,
+            ps: *PassState,
+            index_count: u32,
+            instance_count: u32,
+        ) void {
             _ = self;
             wgpu.render_pass.drawIndexed(ps.pass, .{ .index_count = index_count, .instance_count = instance_count });
         }
 
         /// Bind an extra bind group the app owns (e.g. a storage buffer) at a
         /// group index beyond the schema-managed UBO group.
-        pub fn setBindGroup(self: Self, ps: *PassState, group: u32, bind_group: wgpu.BindGroupHandle) void {
+        pub fn setBindGroup(
+            self: Self,
+            ps: *PassState,
+            group: u32,
+            bind_group: wgpu.BindGroupHandle,
+        ) void {
             _ = self;
             gpu_iface.WgpuBackend.setBindGroup(ps, group, bind_group);
         }
@@ -322,6 +827,32 @@ pub fn LoadedShader(comptime SchemaT: type) type {
 // ============================================================================
 // SECTION 2 - loadShader descriptor (typed-schema path)
 // ============================================================================
+
+/// A struct with one `WgpuTexture` field per `Samplers` field in the schema
+/// (same names), or an empty struct if the schema has no samplers. Each field
+/// defaults to an empty texture so the `ShaderDesc.textures` default is always
+/// valid; sampler shaders override the relevant fields at load.
+pub fn SamplerTextures(comptime SchemaT: type) type {
+    if (!@hasDecl(SchemaT, "Samplers")) {
+        return struct {};
+    }
+    const fnames = @typeInfo(SchemaT.Samplers).@"struct".field_names;
+    if (fnames.len == 0) {
+        return struct {};
+    }
+    comptime {
+        const empty_tex: wgpu_texture.WgpuTexture = .{};
+        var names: [fnames.len][:0]const u8 = undefined;
+        var types: [fnames.len]type = undefined;
+        var attrs: [fnames.len]std.builtin.Type.Struct.FieldAttributes = undefined;
+        for (fnames, 0..) |fname, i| {
+            names[i] = fname;
+            types[i] = wgpu_texture.WgpuTexture;
+            attrs[i] = .{ .default_value_ptr = @as(*const anyopaque, @ptrCast(&empty_tex)) };
+        }
+        return @Struct(.auto, null, &names, &types, &attrs);
+    }
+}
 
 pub fn ShaderDesc(comptime SchemaT: type) type {
     return struct {
@@ -371,32 +902,6 @@ pub fn ShaderDesc(comptime SchemaT: type) type {
         /// set at pipeline-creation time. Empty = use the shader's defaults.
         constants: []const gpu.PipelineConstant = &.{},
     };
-}
-
-/// A struct with one `WgpuTexture` field per `Samplers` field in the schema
-/// (same names), or an empty struct if the schema has no samplers. Each field
-/// defaults to an empty texture so the `ShaderDesc.textures` default is always
-/// valid; sampler shaders override the relevant fields at load.
-pub fn SamplerTextures(comptime SchemaT: type) type {
-    if (!@hasDecl(SchemaT, "Samplers")) {
-        return struct {};
-    }
-    const fnames = @typeInfo(SchemaT.Samplers).@"struct".field_names;
-    if (fnames.len == 0) {
-        return struct {};
-    }
-    comptime {
-        const empty_tex: wgpu_texture.WgpuTexture = .{};
-        var names: [fnames.len][:0]const u8 = undefined;
-        var types: [fnames.len]type = undefined;
-        var attrs: [fnames.len]std.builtin.Type.Struct.FieldAttributes = undefined;
-        for (fnames, 0..) |fname, i| {
-            names[i] = fname;
-            types[i] = wgpu_texture.WgpuTexture;
-            attrs[i] = .{ .default_value_ptr = @as(*const anyopaque, @ptrCast(&empty_tex)) };
-        }
-        return @Struct(.auto, null, &names, &types, &attrs);
-    }
 }
 
 pub const LoadError = error{
@@ -473,13 +978,78 @@ pub fn vertexLayout(comptime VsSchema: type) gpu.VertexBufferLayout {
     };
 }
 
-/// Compile + assemble a shader into a ready-to-use `LoadedShader`.
-/// This is the descriptor-with-defaults user-facing API.
-///
-/// Every step is in this function body - grep `orelse` to find
-/// every default.  Nothing hidden.
-pub fn loadShader(
+/// How many of `attributes` sit at one of `locations`.
+fn countAt(comptime attributes: []const gpu.VertexAttribute, comptime locations: []const u32) usize {
+    var count: usize = 0;
+    for (attributes) |attribute| {
+        if (indexOfScalar(u32, locations, attribute.shader_location) != null) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// The attributes at one of `locations`, in their order.
+fn keptAt(
+    comptime attributes: []const gpu.VertexAttribute,
+    comptime locations: []const u32,
+) [countAt(attributes, locations)]gpu.VertexAttribute {
+    var kept: [countAt(attributes, locations)]gpu.VertexAttribute = undefined;
+    var count: usize = 0;
+    for (attributes) |attribute| {
+        if (indexOfScalar(u32, locations, attribute.shader_location) != null) {
+            kept[count] = attribute;
+            count += 1;
+        }
+    }
+    return kept;
+}
+
+/// The default vertex layout's attributes - `Vertex2D`'s position at location 0, UV at 1 and color at 2 - keeping only
+/// those at `read_locations`, the locations the vertex shader's schema declares (null: all three), as
+/// `DefaultVertexAttributes(read_locations).list`: constants computed at compile time, so the slice points at static
+/// data. The buffer's stride stays the whole `Vertex2D`'s, so each attribute kept still reads its own bytes. An
+/// attribute the shader never reads is not described at all: WebGPU allows describing it, but fetching it is wasted
+/// work, which Vulkan warns about.
+fn DefaultVertexAttributes(comptime read_locations: ?[]const u32) type {
+    return struct {
+        const every = [_]gpu.VertexAttribute{
+            .{ .format = .float32x2, .offset = 0, .shader_location = 0 },
+            .{ .format = .float32x2, .offset = 8, .shader_location = 1 },
+            .{ .format = .uint8x4_unorm, .offset = 16, .shader_location = 2 },
+        };
+        const every_location = [_]u32{ 0, 1, 2 };
+        const kept = keptAt(&every, read_locations orelse &every_location);
+        pub const list: []const gpu.VertexAttribute = &kept;
+    };
+}
+
+/// The input locations a vertex schema declares - its `Attributes`, each field a `shader.Attr` carrying its location.
+fn locationsOf(comptime Attributes: type) [@typeInfo(Attributes).@"struct".field_types.len]u32 {
+    const field_types = @typeInfo(Attributes).@"struct".field_types;
+    var locations: [field_types.len]u32 = undefined;
+    for (field_types, 0..) |FieldType, index| {
+        locations[index] = FieldType.location;
+    }
+    return locations;
+}
+
+/// The input locations a vertex schema declares, as `AttributeLocations(VsSchema).list` - null when the schema declares
+/// no `Attributes`, which keeps every attribute of the default layout.
+fn AttributeLocations(comptime VsSchema: type) type {
+    const declares: bool = @hasDecl(VsSchema, "Attributes");
+    return struct {
+        const declared = if (declares) locationsOf(VsSchema.Attributes) else [0]u32{};
+        pub const list: ?[]const u32 = if (declares) &declared else null;
+    };
+}
+
+/// `loadShader`, told which input locations the vertex shader reads (`read_locations`; null: every attribute of the
+/// default layout) - `loadShaderVF` knows them from the vertex schema, so the default layout describes no attribute
+/// the shader ignores.
+fn loadShaderReading(
     comptime SchemaT: type,
+    comptime read_locations: ?[]const u32,
     desc: ShaderDesc(SchemaT),
 ) LoadError!LoadedShader(SchemaT) {
     // ---- Step 1: resolve defaults ----
@@ -544,10 +1114,10 @@ pub fn loadShader(
         }
         break :blk a;
     } else .{};
-    const resources: Resources(SchemaT) = try Resources(SchemaT).init(desc.gpa, desc.f, init_args);
+    const resources: Resources(SchemaT) = try .init(desc.gpa, desc.f, init_args);
 
     // ---- Step 8: build the render pipeline (cached by source+state) ----
-    const state_combo: gpu.StateCombo = gpu.StateCombo.fromParts(
+    const state_combo: gpu.StateCombo = .fromParts(
         topology,
         blend,
         depth,
@@ -563,7 +1133,7 @@ pub fn loadShader(
         desc.vs_wgsl_source,
         desc.fs_wgsl_source,
     );
-    const cache_key: gpu.CacheKey = gpu.CacheKey.from(source_hash, state_combo);
+    const cache_key: gpu.CacheKey = .from(source_hash, state_combo);
 
     const pipeline: wgpu.RenderPipelineHandle = blk: {
         if (desc.f.pipeline_cache) |pc| {
@@ -607,11 +1177,7 @@ pub fn loadShader(
         const default_vertex_layout = gpu.VertexBufferLayout{
             .array_stride = 20,
             .step_mode = .vertex,
-            .attributes = &.{
-                .{ .format = .float32x2, .offset = 0, .shader_location = 0 },
-                .{ .format = .float32x2, .offset = 8, .shader_location = 1 },
-                .{ .format = .uint8x4_unorm, .offset = 16, .shader_location = 2 },
-            },
+            .attributes = DefaultVertexAttributes(read_locations).list,
         };
         const vbls: []const gpu.VertexBufferLayout =
             desc.vertex_buffer_layouts orelse &.{default_vertex_layout};
@@ -670,6 +1236,18 @@ pub fn loadShader(
     };
 }
 
+/// Compile + assemble a shader into a ready-to-use `LoadedShader`.
+/// This is the descriptor-with-defaults user-facing API.
+///
+/// Every step is in `loadShaderReading`'s body - grep `orelse` there to find
+/// every default.  Nothing hidden.
+pub fn loadShader(
+    comptime SchemaT: type,
+    desc: ShaderDesc(SchemaT),
+) LoadError!LoadedShader(SchemaT) {
+    return loadShaderReading(SchemaT, null, desc);
+}
+
 /// `loadShader`, but with the VS->FS varying contract enforced at COMPILE TIME.
 /// Takes BOTH schemas: `VsSchema` (the `*_vs_io.zig` type) and `FsSchema` (the
 /// `*_fs_io.zig` type), and asserts `VsSchema.Outputs` match `FsSchema.Inputs`
@@ -723,7 +1301,7 @@ pub fn loadShaderVF(
     desc: ShaderDesc(MaterialSchema(VsSchema, FsSchema)),
 ) LoadError!LoadedShader(MaterialSchema(VsSchema, FsSchema)) {
     comptime shader_introspect.assertVaryingsMatch(VsSchema, FsSchema);
-    return loadShader(MaterialSchema(VsSchema, FsSchema), desc);
+    return loadShaderReading(MaterialSchema(VsSchema, FsSchema), AttributeLocations(VsSchema).list, desc);
 }
 
 // ============================================================================
@@ -845,468 +1423,6 @@ test "LoadedShader wraps a Resources for its bind groups" {
 //   - Storage buffers not yet supported - turn 11 adds them as
 //     first-class schema fields with their own DSL marker.
 
-/// Comptime-generic typed bind group container.  See section header
-/// for the design rationale; see the user-facing tutorial in the
-/// plan's section K for worked examples.
-/// A caller-supplied storage-buffer binding for a `Resources` schema's
-/// `Storage` field: the buffer handle, a byte offset into it, and the bound
-/// byte size. The buffer is owned by the caller (e.g. a compute pass writes it
-/// in place); Resources only references it in the bind group. `offset` lets a
-/// field bind into a sub-region of a larger buffer (must satisfy the device's
-/// storage-buffer offset alignment, 256 by default).
-pub const StorageBinding = struct {
-    handle: wgpu.BufferHandle = .invalid,
-    offset: u64 = 0,
-    size: u64 = 0,
-};
-
-pub fn Resources(comptime SchemaT: type) type {
-    const layout = comptime shader_introspect.solveLayout(SchemaT);
-    const has_ubo = comptime @hasDecl(SchemaT, "Ubo");
-    const UboT: type = comptime if (has_ubo) SchemaT.Ubo else void;
-
-    // Comptime count of how many Sampler2D fields the schema has -
-    // used to size the local cache.  Outside the struct body so it's
-    // a free comptime constant, not a struct decl (Zig rejects
-    // interleaved const + field decls).
-    const sampler_count: usize = blk: {
-        var n: usize = 0;
-        for (layout.fields) |fld| {
-            if (fld.kind == .sampler_2d) {
-                n += 1;
-            }
-        }
-        break :blk n;
-    };
-
-    const storage_count: usize = blk: {
-        var n: usize = 0;
-        for (layout.fields) |fld| {
-            if (fld.kind == .storage_buffer) {
-                n += 1;
-            }
-        }
-        break :blk n;
-    };
-
-    return struct {
-        const Self = @This();
-        pub const Schema = SchemaT;
-        pub const Layout = layout;
-
-        gpa: Allocator,
-        f: *gpu.GpuFrame,
-
-        // One BGL + BG per group used.  Indexed by group number; unused
-        // slots hold `.invalid` handles.  Capped at 4 (WebGPU
-        // guaranteed minimum, and what `solveLayout` tracks).
-        bg_layouts: [4]wgpu.BindGroupLayoutHandle = @splat(.invalid),
-        bind_groups: [4]wgpu.BindGroupHandle = @splat(.invalid),
-        groups_used: u8 = 0,
-
-        // UBO buffer (when the schema has a Ubo).  Resources owns
-        // this - created in init, destroyed in deinit.  When no Ubo,
-        // stays `.invalid`.
-        ubo_buffer: wgpu.BufferHandle = .invalid,
-        /// Enforcement state for the one-write-per-frame invariant below. The
-        /// encoder handle IS the frame identity (monotonic on both the bridge and
-        /// the smoke mock), so the counter resets structurally - no per-frame
-        /// call is required of anyone.
-        ubo_write_encoder: wgpu.CommandEncoderHandle = .invalid,
-        ubo_writes_this_frame: u32 = 0,
-
-        // Cached texture handles per sampler, used by `.set()` to
-        // know the current value so a rebuild can preserve un-changed
-        // bindings.  When the schema has no samplers, this is a
-        // zero-sized array.
-        sampler_textures: [sampler_count]wgpu_texture.WgpuTexture = @splat(wgpu_texture.WgpuTexture{}),
-
-        // Caller-supplied storage-buffer bindings (handle + size), one per
-        // `Storage` field. The buffer is owned by the caller (typically a
-        // compute pass writes it); Resources only references it in the bind
-        // group. When the schema has no storage, this is a zero-sized array.
-        storage_bindings: [storage_count]StorageBinding = @splat(StorageBinding{}),
-
-        /// The InitArgs type: a struct with one field per resource
-        /// in the schema, typed by resource kind.
-        ///
-        ///   - `Ubo` field -> no init arg (Resources allocates the buffer)
-        ///     PLUS an `.initial_ubo` init arg of type `?UboT` for the
-        ///     initial value (optional; user can also fill via
-        ///     writeUbo before drawing).
-        ///   - Each Sampler2D field -> field of type `WgpuTexture`.
-        ///
-        /// Built at comptime from the resolved layout using Zig
-        /// 0.16's `@Struct` type-construction builtin.
-        pub const InitArgs = blk: {
-            // Count fields up front so the arrays have a sized
-            // upper bound at comptime.
-            const ubo_field_count: usize = if (has_ubo) 1 else 0;
-            const total = sampler_count + storage_count + ubo_field_count;
-
-            var names: [total][:0]const u8 = undefined;
-            var types: [total]type = undefined;
-            var attrs: [total]std.builtin.Type.Struct.FieldAttributes = undefined;
-            var i: usize = 0;
-
-            // initial_ubo, optional - defaults to null so the user
-            // can skip it.
-            if (has_ubo) {
-                names[i] = "initial_ubo";
-                types[i] = ?UboT;
-                attrs[i] = .{ .default_value_ptr = @as(*const anyopaque, @ptrCast(&@as(?UboT, null))) };
-                i += 1;
-            }
-
-            // One field per sampler, typed WgpuTexture - no default
-            // (user MUST supply a texture).
-            for (layout.fields) |fld| {
-                if (fld.kind != .sampler_2d) continue;
-                names[i] = fld.name;
-                types[i] = wgpu_texture.WgpuTexture;
-                attrs[i] = .{};
-                i += 1;
-            }
-
-            // One field per storage buffer, typed StorageBinding - no default
-            // (user MUST supply the buffer handle + size).
-            for (layout.fields) |fld| {
-                if (fld.kind != .storage_buffer) continue;
-                names[i] = fld.name;
-                types[i] = StorageBinding;
-                attrs[i] = .{};
-                i += 1;
-            }
-
-            break :blk @Struct(.auto, null, &names, &types, &attrs);
-        };
-
-        /// Build a Resources value: allocate the UBO (if any),
-        /// build a BGL per used group, build a BG per used group
-        /// referencing the user-supplied texture handles.
-        pub fn init(
-            gpa: Allocator,
-            f: *gpu.GpuFrame,
-            args: InitArgs,
-        ) !Self {
-            var self: Self = .{ .gpa = gpa, .f = f, .groups_used = layout.groups_used };
-
-            // ---- 1. Allocate the UBO if the schema has one ----
-            if (has_ubo) {
-                self.ubo_buffer = wgpu.createBuffer(f.device, .{
-                    .size = shader.wireSizeOf(UboT),
-                    .usage = .{ .uniform = true, .copy_dst = true },
-                    .label = "ubo",
-                });
-                // Optional initial value: write it now if provided;
-                // user can also call writeUbo later.  If neither
-                // happens, the UBO contains garbage - caller's
-                // responsibility.
-                if (@field(args, "initial_ubo")) |v| {
-                    const bytes: [shader.wireSizeOf(UboT)]u8 = shader.wireOf(UboT, &v);
-                    wgpu.queueWriteBuffer(f.queue, self.ubo_buffer, 0, &bytes);
-                }
-            }
-
-            // ---- 2. Cache sampler textures into our local array ----
-            {
-                comptime var sampler_idx: usize = 0;
-                inline for (layout.fields) |fld| {
-                    if (fld.kind != .sampler_2d) continue;
-                    self.sampler_textures[sampler_idx] = @field(args, fld.name);
-                    sampler_idx += 1;
-                }
-            }
-
-            // ---- 2b. Cache storage-buffer bindings into our local array ----
-            {
-                comptime var storage_idx: usize = 0;
-                inline for (layout.fields) |fld| {
-                    if (fld.kind != .storage_buffer) continue;
-                    self.storage_bindings[storage_idx] = @field(args, fld.name);
-                    storage_idx += 1;
-                }
-            }
-
-            // ---- 3. Build one BGL + BG per used group ----
-            inline for (0..4) |g_usize| {
-                const g: u32 = @intCast(g_usize);
-                if (layout.groups_used & (@as(u8, 1) << @intCast(g)) == 0) continue;
-                try self.buildGroup(g);
-            }
-
-            return self;
-        }
-
-        /// Build (or rebuild) the BGL + BG for `group`.  Walks
-        /// `layout.fields` for entries in this group; assembles BGL
-        /// entries and BG entries; calls `createBindGroupLayout` and
-        /// `createBindGroup`.  Used by `init` and by `set` (which
-        /// rebuilds only the affected group).
-        fn buildGroup(self: *Self, group: u32) !void {
-            // Collect entries for this group at comptime.  Allocate
-            // working arrays at runtime since the encoder needs them.
-            var bgl_entries: ArrayList(shader_introspect.BindGroupLayoutEntry) = .empty;
-            defer bgl_entries.deinit(self.gpa);
-            var bg_entries: ArrayList(gpu.BindGroupEntry) = .empty;
-            defer bg_entries.deinit(self.gpa);
-
-            // sampler_idx_global tracks the position of each sampler
-            // field in declaration order, used to look up the
-            // texture in `self.sampler_textures[]`.  Computed purely
-            // at comptime (depends only on the field's position in
-            // the schema, NOT on the runtime `group` parameter).
-            comptime var sampler_idx_global: usize = 0;
-            comptime var storage_idx_global: usize = 0;
-            inline for (layout.fields) |fld| {
-                const fld_kind = fld.kind;
-                const my_sampler_idx = sampler_idx_global;
-                const my_storage_idx = storage_idx_global;
-                // Advance the counter at comptime for every sampler
-                // (regardless of group).  This is correct because the
-                // counter tracks the SCHEMA position, not what we're
-                // currently building.
-                if (fld_kind == .sampler_2d) sampler_idx_global += 1;
-                if (fld_kind == .storage_buffer) storage_idx_global += 1;
-                // Only emit entries for fields in the group we're
-                // currently building.  `fld.group` is comptime but
-                // `group` is the runtime parameter - guard the body
-                // with a runtime if rather than `continue` to keep
-                // the inline-for's comptime structure honest.
-                if (fld.group == group) {
-                    switch (fld_kind) {
-                        .ubo => {
-                            try bgl_entries.append(self.gpa, .{
-                                .binding = fld.binding,
-                                // UBOs are conservatively visible to all
-                                // stages - the cost is zero and it avoids
-                                // a stage-mismatch error when the same
-                                // schema's UBO is read by both VS and FS.
-                                .visibility = .{ .vertex = true, .fragment = true, .compute = true },
-                                .resource = .{ .uniform_buffer = .{ .min_size = shader.wireSizeOf(UboT) } },
-                            });
-                            try bg_entries.append(self.gpa, .{
-                                .binding = fld.binding,
-                                .resource = .{ .buffer = .{
-                                    .handle = self.ubo_buffer,
-                                    .size = shader.wireSizeOf(UboT),
-                                } },
-                            });
-                        },
-                        .sampler_2d => {
-                            // A Sampler2D is TWO WebGPU bindings: the texture at
-                            // @binding(N) and its paired sampler at @binding(N+1).
-                            // `fld.binding` (N) came from `solveLayout`, which
-                            // delegates to `shader_interface.solveSamplerSlots` -
-                            // the SAME authority the WGSL codegen uses - so this
-                            // host entry can't drift from the shader's decoration.
-                            const tex = self.sampler_textures[my_sampler_idx];
-                            try bgl_entries.append(self.gpa, .{
-                                .binding = fld.binding,
-                                .visibility = .{ .vertex = fld.stages.vertex, .fragment = fld.stages.fragment },
-                                .resource = .{ .texture = .{} },
-                            });
-                            try bgl_entries.append(self.gpa, .{
-                                .binding = fld.binding + 1,
-                                .visibility = .{ .vertex = fld.stages.vertex, .fragment = fld.stages.fragment },
-                                .resource = .{ .sampler = .{} },
-                            });
-                            try bg_entries.append(self.gpa, .{
-                                .binding = fld.binding,
-                                .resource = .{ .texture_view = tex.view },
-                            });
-                            try bg_entries.append(self.gpa, .{
-                                .binding = fld.binding + 1,
-                                .resource = .{ .sampler = tex.sampler },
-                            });
-                        },
-                        .storage_buffer => {
-                            // A storage buffer is ONE binding. The layout entry
-                            // is a storage_buffer (read_only from the resolved
-                            // field); the bind-group entry references the
-                            // caller-supplied buffer via the same `.buffer`
-                            // resource shape as a UBO.
-                            const sb = self.storage_bindings[my_storage_idx];
-                            try bgl_entries.append(self.gpa, .{
-                                .binding = fld.binding,
-                                .visibility = .{ .vertex = true, .fragment = true, .compute = true },
-                                .resource = .{ .storage_buffer = .{
-                                    .read_only = fld.read_only,
-                                    .min_size = sb.size,
-                                } },
-                            });
-                            try bg_entries.append(self.gpa, .{
-                                .binding = fld.binding,
-                                .resource = .{ .buffer = .{
-                                    .handle = sb.handle,
-                                    .offset = sb.offset,
-                                    .size = sb.size,
-                                } },
-                            });
-                        },
-                    }
-                } // close if (fld.group == group)
-            }
-
-            // Encode + create on the GPU.
-            const bgl_blob = try gpu.encodeBindGroupLayoutEntries(self.gpa, bgl_entries.items);
-            defer self.gpa.free(bgl_blob);
-            self.bg_layouts[group] = wgpu.createBindGroupLayout(self.f.device, bgl_blob, "resources_bgl");
-
-            const bg_blob = try gpu.encodeBindGroupEntries(self.gpa, bg_entries.items);
-            defer self.gpa.free(bg_blob);
-            self.bind_groups[group] = wgpu.createBindGroup(
-                self.f.device,
-                self.bg_layouts[group],
-                bg_blob,
-                "resources_bg",
-            );
-        }
-
-        /// Free GPU resources Resources owns.  Bind groups + layouts
-        /// will be released by the JS side when the device is
-        /// released (no explicit destroy API for them yet).
-        pub fn deinit(self: *Self) void {
-            if (self.ubo_buffer != .invalid) {
-                wgpu.destroyBuffer(self.ubo_buffer);
-                self.ubo_buffer = .invalid;
-            }
-            // Release the per-instance bind groups + their layouts (created fresh
-            // by Resources.init each lifecycle). Safe even though a cached
-            // pipeline was built from these layouts - a built pipeline doesn't
-            // hold a live reference to them.
-            var g: usize = 0;
-            while (g < self.bind_groups.len) : (g += 1) {
-                if (self.bind_groups[g] != .invalid) {
-                    wgpu.destroyBindGroup(self.bind_groups[g]);
-                }
-                if (self.bg_layouts[g] != .invalid) {
-                    wgpu.destroyBindGroupLayout(self.bg_layouts[g]);
-                }
-            }
-            self.bg_layouts = @splat(.invalid);
-            self.bind_groups = @splat(.invalid);
-            self.groups_used = 0;
-        }
-
-        /// Bind every group used by this Resources value to the
-        /// pass state.  Inline-for over the 4 possible groups; only
-        /// emits `setBindGroup` calls for groups that are used.
-        pub fn bind(self: *Self, ps: *PassState) void {
-            inline for (0..4) |g_usize| {
-                const g: u32 = @intCast(g_usize);
-                if (self.groups_used & (@as(u8, 1) << @intCast(g)) != 0) {
-                    gpu_iface.WgpuBackend.setBindGroup(ps, g, self.bind_groups[g]);
-                }
-            }
-        }
-
-        /// Update the UBO contents.  Requires the schema to have a
-        /// `Ubo` decl; comptime-error otherwise.  No bind group
-        /// rebuild - the BG references the buffer, only the
-        /// buffer's bytes change.
-        ///
-        /// * INVARIANT: at most ONE write per frame - now ENFORCED. *  This is a
-        /// plain `queue.writeBuffer` into a single buffer at offset 0, and the
-        /// queue executes ALL writeBuffer calls BEFORE the frame's encoder
-        /// submit - write twice in a frame and only the LAST value survives,
-        /// applied to EVERY pass segment including ones already recorded (the
-        /// zimr517 "duplicated grid" bug class).  Need per-segment or per-draw
-        /// values?  Ring-buffer them like `renderer_2d`'s ortho ring,
-        /// `flushBatch`'s vertex ring, or `draw3d`'s view-projection ring.
-        /// (`pushUbo` above has the same single-buffer shape and goes through the
-        /// same check.)
-        ///
-        /// This invariant was documented, and violated, for as long as it has
-        /// existed: `beginMode3D` wrote this UBO once per 3D pass, so every
-        /// split-screen / minimap / 3D-into-RT app silently rendered every pass
-        /// with the LAST camera (zimr857). A comment is not a guard. The counter
-        /// below turns the next occurrence into a loud, located panic instead of
-        /// a picture that is merely wrong.
-        pub fn writeUbo(self: *Self, value: UboT) void {
-            if (comptime !has_ubo) {
-                @compileError("Schema `" ++ @typeName(SchemaT) ++ "` has no `Ubo` " ++
-                    "declaration — `writeUbo` not available.");
-            }
-            self.noteUboWrite();
-            // Plain-struct Ubo: explicit wire serialization (see pushUbo).
-            const bytes: [shader.wireSizeOf(UboT)]u8 = shader.wireOf(UboT, &value);
-            wgpu.queueWriteBuffer(self.f.queue, self.ubo_buffer, 0, &bytes);
-        }
-
-        /// Count this frame's writes to the single UBO and panic on the second.
-        pub fn noteUboWrite(self: *Self) void {
-            const enc: wgpu.CommandEncoderHandle = self.f.encoder;
-            if (enc != self.ubo_write_encoder) {
-                self.ubo_write_encoder = enc;
-                self.ubo_writes_this_frame = 0;
-            }
-            self.ubo_writes_this_frame += 1;
-            assertf(
-                self.ubo_writes_this_frame <= 1,
-                @src(),
-                "Schema `{s}`: its UBO was written {d}x in ONE frame. All of a frame's " ++
-                    "queue writes land before its single submit, so every pass — including " ++
-                    "ones already recorded — will read the LAST value, not the one it was " ++
-                    "drawn with. Give the UBO a ring (a slot per pass + a bind group per " ++
-                    "slot, like draw3d's view-projection ring) instead of rewriting it.",
-                .{ @typeName(SchemaT), self.ubo_writes_this_frame },
-            );
-        }
-
-        /// Result of `set` - tells the user whether a bind group
-        /// rebuild happened.  Helpful for perf-sensitive callers.
-        pub const SetResult = enum {
-            /// New resource was different from the current; the
-            /// affected group's bind group was rebuilt.
-            rebuilt_group,
-            /// New resource matched the current; no rebuild.
-            unchanged,
-        };
-
-        /// Swap a sampler texture for a different one.  Rebuilds the
-        /// bind group containing the named field (cheap if the field
-        /// is alone in its group; expensive only if the group has
-        /// many resources and one was changed).  Other groups untouched.
-        ///
-        /// Comptime-error if `field` doesn't name a sampler field in
-        /// the schema.
-        pub fn set(self: *Self, comptime field_tag: anytype, new_tex: wgpu_texture.WgpuTexture) !SetResult {
-            const field_name = @tagName(field_tag);
-            // Find the field in the layout to know which group to
-            // rebuild AND its sampler-index.
-            comptime var found_group: ?u32 = null;
-            comptime var sampler_idx_global: usize = 0;
-            comptime var target_sampler_idx: ?usize = null;
-            comptime {
-                for (layout.fields) |fld| {
-                    if (fld.kind != .sampler_2d) continue;
-                    if (eql(u8, fld.name, field_name)) {
-                        found_group = fld.group;
-                        target_sampler_idx = sampler_idx_global;
-                        break;
-                    }
-                    sampler_idx_global += 1;
-                }
-            }
-            if (comptime found_group == null) {
-                @compileError("Resources.set: no sampler field `" ++ field_name ++
-                    "` in schema `" ++ @typeName(SchemaT) ++ "`.");
-            }
-            const idx = target_sampler_idx.?;
-            // No-op if the texture handle is the same.
-            if (self.sampler_textures[idx].view == new_tex.view and
-                self.sampler_textures[idx].sampler == new_tex.sampler)
-            {
-                return .unchanged;
-            }
-            self.sampler_textures[idx] = new_tex;
-            try self.buildGroup(found_group.?);
-            return .rebuilt_group;
-        }
-    };
-}
-
 // ============================================================================
 // SECTION 5 - RenderPipeline(VsT, FsT) - typed render pipeline
 // ============================================================================
@@ -1363,8 +1479,6 @@ pub const autoConnect = @import("shader_connect.zig").autoConnect;
 // ============================================================================
 // SECTION 6 - Tests for Resources(SchemaT)
 // ============================================================================
-
-const shader = @import("shader_interface");
 
 // Re-export the UBO wire-layout serializer so `z.shader.wireOf` /
 // `z.shader.wireSizeOf` are reachable from examples (which see this module as
@@ -1567,7 +1681,6 @@ test "autoConnect skips VsOut fields not present in FsIo" {
 
 const raster = @import("raster.zig");
 const raster_shader = @import("raster_shader.zig");
-const gpu_iface = @import("gpu_iface.zig");
 
 /// Test-only side channel - see the test below.  Production engines
 /// store their batch on `PassState.batch` instead of this.
@@ -1601,7 +1714,7 @@ test "SwPipelineDispatch through setPipeline rasterizes a triangle" {
     // rasterizer," with the indirect call paid ONCE per flush_batch
     // (not per pixel).
 
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const VsModule = struct {
         pub const Io = struct {
@@ -1890,7 +2003,7 @@ pub const shader_compile = struct {
         spirv: []const u32,
     ) ShaderError!CompiledShader {
         // Internal arena for the transpiler's intermediate state.
-        var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(allocator);
+        var arena: ArenaAllocator = .init(allocator);
         defer arena.deinit();
 
         const wgsl_arena: []const u8 = spv2wgsl.convertSpirvToWgsl(arena.allocator(), spirv) catch |err| {
@@ -1952,7 +2065,7 @@ pub const shader_compile = struct {
     // ============================================================================
 
     test "compileFromWgsl copies the source text" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         var compiled: CompiledShader = try compileFromWgsl(
             allocator,
             "@vertex fn vs() -> @location(0) vec4f { return vec4f(0); }",
@@ -1960,23 +2073,23 @@ pub const shader_compile = struct {
         defer compiled.deinit(allocator);
 
         try expect(compiled.wgsl.len > 0);
-        try expect(std.mem.indexOf(u8, compiled.wgsl, "@vertex") != null);
+        try expect(indexOf(u8, compiled.wgsl, "@vertex") != null);
     }
 
     test "compileFromSpirv rejects non-SPIR-V input" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         const bad: []const u32 = &.{ 0xdeadbeef, 0, 0, 0, 0 };
         try expectError(ShaderError.InvalidSpirv, compileFromSpirv(allocator, bad));
     }
 
     test "compileFromSpirv rejects truncated header" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         const bad: []const u32 = &.{ 0x07230203, 0, 0 };
         try expectError(ShaderError.InvalidSpirv, compileFromSpirv(allocator, bad));
     }
 
     test "compileFromSpirv accepts a minimal SPIR-V module" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         // Minimal: magic, version, generator, bound=3, schema=0, OpTypeVoid %1
         const word0: u32 = (@as(u32, 2) << 16) | 19; // OpTypeVoid, word count 2
         const mod: []const u32 = &.{
@@ -1990,7 +2103,7 @@ pub const shader_compile = struct {
     }
 
     test "CompiledShader.deinit cleans up reflection arrays" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         var reflection = Reflection{};
         reflection.bindings = try allocator.alloc(Binding, 1);
         reflection.bindings[0] = .{
@@ -2014,3 +2127,18 @@ pub const shader_compile = struct {
         compiled.deinit(allocator);
     }
 };
+
+test "the default vertex layout keeps the attributes the vertex schema declares, at Vertex2D's offsets" {
+    const TrivialVertex = struct {
+        pub const Attributes = struct {
+            vertex_position: shader.Attr(.vec2, 0),
+            vertex_tex_coord: shader.Attr(.vec2, 1),
+        };
+    };
+    const read: []const gpu.VertexAttribute = DefaultVertexAttributes(AttributeLocations(TrivialVertex).list).list;
+    try expectEqual(@as(usize, 2), read.len);
+    try expectEqual(@as(u32, 1), read[1].shader_location);
+    try expectEqual(@as(u32, 8), read[1].offset);
+    const every: []const gpu.VertexAttribute = DefaultVertexAttributes(AttributeLocations(struct {}).list).list;
+    try expectEqual(@as(usize, 3), every.len);
+}

@@ -32,6 +32,7 @@ const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
 const Color = zm.Color;
+const Vec2 = zm.Vec2;
 const c = z.colors;
 const common = @import("example_common");
 
@@ -119,7 +120,7 @@ fn update(f: *z.Frame, s: *State) void {
     for (s.fonts, 0..) |font, i| {
         const info: FontInfo = font_info[i];
         const size: f32 = float(font.baseSize) * s.size_scale;
-        const dim: zm.Vec2 = z.measureTextEx(font, msg, size, s.spacing);
+        const dim: Vec2 = z.measureTextEx(font, msg, size, s.spacing);
         const row_y: f32 = top + row_h * float(@as(u32, @intCast(i)));
 
         // small TTF caption naming the face

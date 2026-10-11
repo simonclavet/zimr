@@ -70,12 +70,12 @@ fn starRating(
     value: *u8,
     max_stars: u8,
 ) bool {
-    const STAR_SIZE: f32 = 28;
-    const STAR_SPACING: f32 = 2;
-    const row_width: f32 = float(max_stars) * (STAR_SIZE + STAR_SPACING) - STAR_SPACING;
+    const star_size: f32 = 28;
+    const star_spacing: f32 = 2;
+    const row_width: f32 = float(max_stars) * (star_size + star_spacing) - star_spacing;
 
     const it: ui.Ui.ItemCtx = u.beginItem(label, .{
-        .size = .{ row_width, STAR_SIZE },
+        .size = .{ row_width, star_size },
     }) orelse return false;
     defer u.endItem(it);
 
@@ -91,7 +91,7 @@ fn starRating(
     var hover_idx: i32 = -1;
     if (it.hovered) {
         const local_x: f32 = u.ctx.input.mouse_pos[0] - it.rect.x;
-        const star_pitch: f32 = STAR_SIZE + STAR_SPACING;
+        const star_pitch: f32 = star_size + star_spacing;
         const idx: i32 = @floor(local_x / star_pitch);
         if (idx >= 0 and idx < @as(i32, @intCast(max_stars))) {
             hover_idx = idx;
@@ -115,10 +115,10 @@ fn starRating(
     var i: u8 = 0;
     while (i < max_stars) : (i += 1) {
         const star_rect: z.Rectangle = .{
-            .x = it.rect.x + float(i) * (STAR_SIZE + STAR_SPACING),
+            .x = it.rect.x + float(i) * (star_size + star_spacing),
             .y = it.rect.y,
-            .width = STAR_SIZE,
-            .height = STAR_SIZE,
+            .width = star_size,
+            .height = star_size,
         };
         const is_filled: bool = @as(i32, i) < filled_cutoff;
         const color: Color = if (is_filled)

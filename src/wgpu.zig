@@ -37,12 +37,18 @@ const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const refAllDecls = std.testing.refAllDecls;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const expect = std.testing.expect;
 const zm = @import("zm");
 const assertf = zm.assertf;
 const assert = zm.assert;
-const builtin = @import("builtin");
-
-const is_wasm = builtin.target.cpu.arch.isWasm();
+const gpu_abi = @import("gpu_abi.zig");
+const host = @import("host.zig");
+/// The native GPU host. Imports are lazy: web and test builds only ever take its functions' types (the check below).
+/// The native host, for a program that starts it itself: `vulkan_host.startHeadless()` before `initDevice` gives a
+/// host without a window (the host's tests), and `messageCounts` / `isValidating` report the validation layer.
+pub const vulkan_host = @import("wgpu_vulkan.zig");
 
 // ============================================================================
 // SECTION 1 - typed handles
@@ -79,140 +85,28 @@ pub inline fn isValid(handle: anytype) bool {
 // SECTION 2 - enums + packed flag types
 // ============================================================================
 
-pub const TextureFormat = enum(u32) {
-    undefined_ = 0,
-    rgba8_unorm = 1,
-    rgba8_unorm_srgb = 2,
-    bgra8_unorm = 3,
-    bgra8_unorm_srgb = 4,
-    rgba16_float = 5,
-    rgba32_float = 6,
-    r8_unorm = 7,
-    rg8_unorm = 8,
-    depth16_unorm = 9,
-    depth24_plus = 10,
-    depth32_float = 11,
-};
-
-pub const BufferUsage = packed struct(u32) {
-    map_read: bool = false,
-    map_write: bool = false,
-    copy_src: bool = false,
-    copy_dst: bool = false,
-    index: bool = false,
-    vertex: bool = false,
-    uniform: bool = false,
-    storage: bool = false,
-    indirect: bool = false,
-    query_resolve: bool = false,
-    _pad: u22 = 0,
-};
-
-pub const TextureUsage = packed struct(u32) {
-    copy_src: bool = false,
-    copy_dst: bool = false,
-    texture_binding: bool = false,
-    storage_binding: bool = false,
-    render_attachment: bool = false,
-    _pad: u27 = 0,
-};
-
-pub const ShaderStage = packed struct(u32) {
-    vertex: bool = false,
-    fragment: bool = false,
-    compute: bool = false,
-    _pad: u29 = 0,
-};
-
-pub const LoadOp = enum(u32) { load = 0, clear = 1 };
-pub const StoreOp = enum(u32) { store = 0, discard = 1 };
-
-pub const PrimitiveTopology = enum(u32) {
-    point_list = 0,
-    line_list = 1,
-    line_strip = 2,
-    triangle_list = 3,
-    triangle_strip = 4,
-};
-
-pub const CullMode = enum(u32) { none = 0, front = 1, back = 2 };
-
-pub const BlendMode = enum(u32) {
-    /// Disabled - fragment color overwrites destination.
-    none = 0,
-    /// Standard alpha blend: src * src.a + dst * (1 - src.a).
-    alpha = 1,
-    /// Additive: src + dst.
-    additive = 2,
-    /// Multiplicative: src * dst.
-    multiply = 3,
-    /// Premultiplied alpha: src + dst * (1 - src.a).
-    premultiplied = 4,
-};
-
-pub const DepthMode = enum(u32) {
-    none = 0,
-    less = 1,
-    less_equal = 2,
-    greater = 3,
-    greater_equal = 4,
-    equal = 5,
-    always = 6,
-    /// Depth-test (less) but no depth-write - for transparent/sprite draws.
-    less_no_write = 7,
-    /// Depth-test (less-equal) but no depth-write - for projected decals that
-    /// lie exactly ON a surface that already wrote depth (equal passes) and must
-    /// not re-write depth (so stacked decals don't z-fight each other).
-    less_equal_no_write = 8,
-
-    /// The WebGPU `depthCompare` string for this mode. SINGLE SOURCE OF TRUTH:
-    /// the descriptor encoder bakes this into the pipeline blob so the JS bridge
-    /// consumes it verbatim and never re-derives it from a position-indexed
-    /// table (which silently mis-maps when a variant is added or reordered). The
-    /// exhaustive switch makes a new variant a COMPILE ERROR until its compare
-    /// is stated here.
-    pub fn depthCompare(self: DepthMode) []const u8 {
-        return switch (self) {
-            .none, .always => "always",
-            .less, .less_no_write => "less",
-            .less_equal, .less_equal_no_write => "less-equal",
-            .greater => "greater",
-            .greater_equal => "greater-equal",
-            .equal => "equal",
-        };
-    }
-
-    /// Whether this mode WRITES depth. PASSIVE modes - `none` (no attachment),
-    /// `always` (overlay / 2D `clearViewport`), and `less_no_write` (sprites) -
-    /// must NOT write, or a passive full-screen draw stamps the depth buffer and
-    /// rejects every later depth-tested 3D draw (the zimr345 black-screen bug).
-    /// Like `depthCompare`, this is the authoritative value the encoder bakes
-    /// into the blob; the exhaustive switch forces every new variant to declare
-    /// its write semantics here rather than in an ad-hoc `depth != N` check.
-    pub fn writesDepth(self: DepthMode) bool {
-        return switch (self) {
-            .less, .less_equal, .greater, .greater_equal, .equal => true,
-            .none, .always, .less_no_write, .less_equal_no_write => false,
-        };
-    }
-};
-
-pub const VertexFormat = enum(u32) {
-    float32 = 0,
-    float32x2 = 1,
-    float32x3 = 2,
-    float32x4 = 3,
-    uint32 = 4,
-    uint32x2 = 5,
-    uint8x4 = 6,
-    uint8x4_unorm = 7,
-};
-
-pub const VertexStepMode = enum(u32) { vertex = 0, instance = 1 };
-
-pub const IndexFormat = enum(u32) { uint16 = 0, uint32 = 1 };
-
-pub const ColorF32 = extern struct { r: f32, g: f32, b: f32, a: f32 };
+// The enumerations and flag words are the ABI between the engine and its GPU hosts. They live in `gpu_abi.zig`, which
+// the Vulkan host imports directly (importing this file would close an import cycle); engine code keeps naming them
+// here.
+pub const TextureFormat = gpu_abi.TextureFormat;
+pub const BufferUsage = gpu_abi.BufferUsage;
+pub const TextureUsage = gpu_abi.TextureUsage;
+pub const ShaderStage = gpu_abi.ShaderStage;
+/// What a bind-group layout entry binds, what a bind-group entry's handle names, and a texture binding's view - the
+/// words of the layout and group blobs (`gpu_abi`).
+pub const BindingKind = gpu_abi.BindingKind;
+pub const BindingResource = gpu_abi.BindingResource;
+pub const TextureViewDimension = gpu_abi.TextureViewDimension;
+pub const LoadOp = gpu_abi.LoadOp;
+pub const StoreOp = gpu_abi.StoreOp;
+pub const PrimitiveTopology = gpu_abi.PrimitiveTopology;
+pub const CullMode = gpu_abi.CullMode;
+pub const BlendMode = gpu_abi.BlendMode;
+pub const DepthMode = gpu_abi.DepthMode;
+pub const VertexFormat = gpu_abi.VertexFormat;
+pub const VertexStepMode = gpu_abi.VertexStepMode;
+pub const IndexFormat = gpu_abi.IndexFormat;
+pub const ColorF32 = gpu_abi.ColorF32;
 
 // ============================================================================
 // SECTION 3 - extern JS bridge declarations
@@ -271,6 +165,7 @@ extern "wgpu" fn js_texture_create_view_mip(
     mip_count: u32,
 ) u32;
 extern "wgpu" fn js_texture_create_view_array(texture: u32, layer_count: u32) u32;
+extern "wgpu" fn js_texture_create_view_layer(texture: u32, layer: u32) u32;
 extern "wgpu" fn js_texture_destroy(texture: u32) void;
 extern "wgpu" fn js_bind_group_destroy(id: u32) void;
 extern "wgpu" fn js_bind_group_layout_destroy(id: u32) void;
@@ -477,6 +372,13 @@ extern "wgpu" fn js_render_pass_draw_indexed(
     base_vertex: i32,
     first_instance: u32,
 ) void;
+extern "wgpu" fn js_render_pass_set_scissor_rect(
+    pass: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) void;
 extern "wgpu" fn js_render_pass_end(pass: u32) void;
 
 // --- Compute pass encoder ---
@@ -496,6 +398,115 @@ extern "wgpu" fn js_compute_pass_dispatch_workgroups(
 extern "wgpu" fn js_compute_pass_end(pass: u32) void;
 
 // ============================================================================
+// SECTION 3b - the GPU host: the browser's externs above, or the Vulkan host
+// ============================================================================
+
+/// The browser's side of each call, under the host-neutral name every GPU host declares: the extern's name without
+/// `js_`. On the web `gpu_host` IS this namespace, so every wrapper's call compiles to the same wasm import as before.
+const web_host = struct {
+    pub const initDevice = js_init_device;
+    pub const deviceGetQueue = js_device_get_queue;
+    pub const getSurface = js_get_surface;
+    pub const surfaceGetCurrentTexture = js_surface_get_current_texture;
+    pub const surfacePresent = js_surface_present;
+    pub const surfaceGetFormat = js_surface_get_format;
+    pub const surfaceGetSize = js_surface_get_size;
+    pub const surfaceGetCssSize = js_surface_get_css_size;
+    pub const nowMs = js_now_ms;
+    pub const gpuMsLast = js_gpu_ms_last;
+    pub const deviceCreateBuffer = js_device_create_buffer;
+    pub const bufferDestroy = js_buffer_destroy;
+    pub const queueWriteBuffer = js_queue_write_buffer;
+    pub const deviceCreateTexture = js_device_create_texture;
+    pub const textureCreateView = js_texture_create_view;
+    pub const textureCreateViewMip = js_texture_create_view_mip;
+    pub const textureCreateViewArray = js_texture_create_view_array;
+    pub const textureCreateViewLayer = js_texture_create_view_layer;
+    pub const textureDestroy = js_texture_destroy;
+    pub const bindGroupDestroy = js_bind_group_destroy;
+    pub const bindGroupLayoutDestroy = js_bind_group_layout_destroy;
+    pub const pipelineLayoutDestroy = js_pipeline_layout_destroy;
+    pub const renderPipelineDestroy = js_render_pipeline_destroy;
+    pub const computePipelineDestroy = js_compute_pipeline_destroy;
+    pub const samplerDestroy = js_sampler_destroy;
+    pub const shaderModuleDestroy = js_shader_module_destroy;
+    pub const textureViewDestroy = js_texture_view_destroy;
+    pub const queueWriteTexture = js_queue_write_texture;
+    pub const queueWriteTextureRegion = js_queue_write_texture_region;
+    pub const deviceCreateSampler = js_device_create_sampler;
+    pub const deviceCreateShaderModuleWgsl = js_device_create_shader_module_wgsl;
+    pub const deviceCreateBindGroupLayout = js_device_create_bind_group_layout;
+    pub const deviceCreateBindGroup = js_device_create_bind_group;
+    pub const deviceCreatePipelineLayout = js_device_create_pipeline_layout;
+    pub const deviceCreateRenderPipeline = js_device_create_render_pipeline;
+    pub const deviceCreateComputePipeline = js_device_create_compute_pipeline;
+    pub const deviceCreateCommandEncoder = js_device_create_command_encoder;
+    pub const commandEncoderFinish = js_command_encoder_finish;
+    pub const encoderCopyBufferToBuffer = js_encoder_copy_buffer_to_buffer;
+    pub const bufferReadStart = js_buffer_read_start;
+    pub const bufferReadPoll = js_buffer_read_poll;
+    pub const bufferReadInto = js_buffer_read_into;
+    pub const bufferReadRelease = js_buffer_read_release;
+    pub const adapterInfo = js_adapter_info;
+    pub const encoderCopyTextureToBuffer = js_encoder_copy_texture_to_buffer;
+    pub const queueSubmit = js_queue_submit;
+    pub const encoderBeginRenderPass = js_encoder_begin_render_pass;
+    pub const encoderBeginRenderPassMrt = js_encoder_begin_render_pass_mrt;
+    pub const renderPassSetPipeline = js_render_pass_set_pipeline;
+    pub const renderPassSetBindGroup = js_render_pass_set_bind_group;
+    pub const renderPassSetVertexBuffer = js_render_pass_set_vertex_buffer;
+    pub const renderPassSetIndexBuffer = js_render_pass_set_index_buffer;
+    pub const renderPassDraw = js_render_pass_draw;
+    pub const renderPassDrawIndexed = js_render_pass_draw_indexed;
+    pub const renderPassSetScissorRect = js_render_pass_set_scissor_rect;
+    pub const renderPassEnd = js_render_pass_end;
+    pub const encoderBeginComputePass = js_encoder_begin_compute_pass;
+    pub const computePassSetPipeline = js_compute_pass_set_pipeline;
+    pub const computePassSetBindGroup = js_compute_pass_set_bind_group;
+    pub const computePassDispatchWorkgroups = js_compute_pass_dispatch_workgroups;
+    pub const computePassEnd = js_compute_pass_end;
+};
+
+/// The host every wrapper calls, chosen at compile time: WebGPU through the browser bridge on the web, Vulkan
+/// natively. Without a GPU (host tests, tools) each wrapper returns its invalid default before reaching it.
+const gpu_host = switch (host.kind) {
+    .native, .headless => vulkan_host,
+    .web, .none => web_host,
+};
+
+/// `Host` declares each of `web_host`'s calls with the same parameter types and result type (calling convention
+/// aside: the browser's are wasm imports).
+fn checkHostInterface(comptime Host: type) void {
+    for (@typeInfo(web_host).@"struct".decl_names) |name| {
+        if (!@hasDecl(Host, name)) {
+            @compileError("the Vulkan host does not declare `" ++ name ++ "`");
+        }
+        const browser: std.lang.Type.Fn = @typeInfo(@TypeOf(@field(web_host, name))).@"fn";
+        const declared: std.lang.Type.Fn = @typeInfo(@TypeOf(@field(Host, name))).@"fn";
+        if (browser.param_types.len != declared.param_types.len) {
+            @compileError("the Vulkan host's `" ++ name ++ "` takes a different number of parameters");
+        }
+        for (browser.param_types, declared.param_types) |browser_param, declared_param| {
+            if (browser_param.? != declared_param.?) {
+                @compileError("the Vulkan host's `" ++ name ++ "` takes a parameter of another type");
+            }
+        }
+        if (browser.return_type.? != declared.return_type.?) {
+            @compileError("the Vulkan host's `" ++ name ++ "` returns another type");
+        }
+    }
+}
+
+comptime {
+    // Every call the browser takes, the Vulkan host declares with the same parameters and result, so a call it lacks
+    // fails the build by name. Checked in web builds only: anywhere else, naming an
+    // `extern "wgpu"` function - even only for its type - would make the program link against a library "wgpu".
+    if (host.kind == .web) {
+        checkHostInterface(vulkan_host);
+    }
+}
+
+// ============================================================================
 // SECTION 4 - Zig-friendly wrappers
 // ============================================================================
 
@@ -504,31 +515,31 @@ extern "wgpu" fn js_compute_pass_end(pass: u32) void;
 /// call (the JS side blocks the async boundary by deferring the
 /// first wasm tick until the device is ready).
 pub fn initDevice() DeviceHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_init_device()));
+    return @fromBackingInt(@intCast(gpu_host.initDevice()));
 }
 
 pub fn getQueue(device: DeviceHandle) QueueHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_device_get_queue(@backingInt(device))));
+    return @fromBackingInt(@intCast(gpu_host.deviceGetQueue(@backingInt(device))));
 }
 
 pub fn getSurface() SurfaceHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_get_surface()));
+    return @fromBackingInt(@intCast(gpu_host.getSurface()));
 }
 
 pub fn getSurfaceFormat(surface: SurfaceHandle) TextureFormat {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .undefined_;
     }
-    return @fromBackingInt(@intCast(js_surface_get_format(@backingInt(surface))));
+    return @fromBackingInt(@intCast(gpu_host.surfaceGetFormat(@backingInt(surface))));
 }
 
 /// Backing-pixel dimensions of a surface's canvas.
@@ -538,10 +549,10 @@ pub const SurfaceSize = struct { width: u32, height: u32 };
 /// equal this every frame or WebGPU rejects the whole render pass, so the
 /// frame loop polls it. Returns `.{ 1, 1 }` on native (no surface).
 pub fn getSurfaceSize(surface: SurfaceHandle) SurfaceSize {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .{ .width = 1, .height = 1 };
     }
-    const packed_size: u32 = js_surface_get_size(@backingInt(surface));
+    const packed_size: u32 = gpu_host.surfaceGetSize(@backingInt(surface));
     return .{ .width = packed_size >> 16, .height = packed_size & 0xffff };
 }
 
@@ -551,42 +562,42 @@ pub fn getSurfaceSize(surface: SurfaceHandle) SurfaceSize {
 /// bridge delivers as CSS px). Distinct from `getSurfaceSize` (backing px, for
 /// the depth attachment). Returns `.{ 1, 1 }` on native.
 pub fn getSurfaceCssSize(surface: SurfaceHandle) SurfaceSize {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .{ .width = 1, .height = 1 };
     }
-    const packed_size: u32 = js_surface_get_css_size(@backingInt(surface));
+    const packed_size: u32 = gpu_host.surfaceGetCssSize(@backingInt(surface));
     return .{ .width = packed_size >> 16, .height = packed_size & 0xffff };
 }
 
 /// Monotonic-ish wall clock in milliseconds (browser `performance.now()`).
 /// Used by the app run-loop for elapsed time + delta_time. 0 on native.
 pub fn nowMs() f64 {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return 0;
     }
-    return js_now_ms();
+    return gpu_host.nowMs();
 }
 
 /// Most recent GPU pass time (ms) from timestamp-query, or 0 when unsupported.
 pub fn gpuMs() f64 {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return 0;
     }
-    return js_gpu_ms_last();
+    return gpu_host.gpuMsLast();
 }
 
 pub fn getCurrentTextureView(surface: SurfaceHandle) TextureViewHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_surface_get_current_texture(@backingInt(surface))));
+    return @fromBackingInt(@intCast(gpu_host.surfaceGetCurrentTexture(@backingInt(surface))));
 }
 
 pub fn surfacePresent(surface: SurfaceHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_surface_present(@backingInt(surface));
+    gpu_host.surfacePresent(@backingInt(surface));
 }
 
 /// Create a buffer.  Caller owns the returned handle.
@@ -595,20 +606,6 @@ pub const BufferDesc = struct {
     usage: BufferUsage,
     label: []const u8 = "",
 };
-
-pub fn createBuffer(device: DeviceHandle, desc: BufferDesc) BufferHandle {
-    if (comptime !is_wasm) {
-        return .invalid;
-    }
-    bumpHandle(.buffer, 1);
-    return @fromBackingInt(@intCast(js_device_create_buffer(
-        @backingInt(device),
-        desc.size,
-        @bitCast(desc.usage),
-        desc.label.ptr,
-        desc.label.len,
-    )));
-}
 
 // ---- GPU-handle leak canary (Phase 1b) --------------------------------------
 // Per-kind live count (created - destroyed), maintained by the create*/destroy*
@@ -630,14 +627,30 @@ pub const HandleKind = enum(u8) {
     shader_module,
     texture_view,
 };
+
 // A census indexed by HandleKind - sized to the enum automatically (no manual
 // count), and named via @tagName in the report (no parallel names array).
 pub const HandleCensus = std.enums.EnumArray(HandleKind, i64);
+
 // lint:off module-var: process-wide GPU-handle census for the leak canary
-var live_handles: HandleCensus = HandleCensus.initFill(0);
+var live_handles: HandleCensus = .initFill(0);
 
 fn bumpHandle(kind: HandleKind, delta: i64) void {
     live_handles.getPtr(kind).* += delta;
+}
+
+pub fn createBuffer(device: DeviceHandle, desc: BufferDesc) BufferHandle {
+    if (comptime !host.has_gpu) {
+        return .invalid;
+    }
+    bumpHandle(.buffer, 1);
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateBuffer(
+        @backingInt(device),
+        desc.size,
+        @bitCast(desc.usage),
+        desc.label.ptr,
+        desc.label.len,
+    )));
 }
 
 /// Snapshot the current per-kind live counts (call after engine init, before an
@@ -661,21 +674,21 @@ pub fn liveHandleReport(baseline: HandleCensus, buf: []u8) []const u8 {
 }
 
 pub fn destroyBuffer(buffer: BufferHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.buffer, -1);
-    js_buffer_destroy(@backingInt(buffer));
+    gpu_host.bufferDestroy(@backingInt(buffer));
 }
 
 /// Fetch the adapter's vendor/architecture/device/description string -
 /// the on-device answer to "which WebGPU backend did this page get?"
 /// (t1178: Vulkan vs compat/GLES is the live coherency question).
 pub fn adapterInfo(buf: []u8) []const u8 {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return "native";
     }
-    const n: u32 = js_adapter_info(buf.ptr, @intCast(buf.len));
+    const n: u32 = gpu_host.adapterInfo(buf.ptr, @intCast(buf.len));
     return buf[0..n];
 }
 
@@ -699,10 +712,10 @@ pub fn queueWriteBuffer(
         "queueWriteBuffer: byte count {d} must be a multiple of 4 (use createBufferInit, which pads)",
         .{data.len},
     );
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_queue_write_buffer(
+    gpu_host.queueWriteBuffer(
         @backingInt(queue),
         @backingInt(buffer),
         offset,
@@ -764,11 +777,11 @@ pub fn createShaderModuleWgsl(
     wgsl: []const u8,
     label: []const u8,
 ) ShaderModuleHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.shader_module, 1);
-    return @fromBackingInt(@intCast(js_device_create_shader_module_wgsl(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateShaderModuleWgsl(
         @backingInt(device),
         wgsl.ptr,
         wgsl.len,
@@ -780,10 +793,10 @@ pub fn createShaderModuleWgsl(
 /// Create a command encoder.  One per frame.  Caller calls `finish`
 /// at frame end to produce a CommandBuffer.
 pub fn createCommandEncoder(device: DeviceHandle) CommandEncoderHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_device_create_command_encoder(@backingInt(device))));
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateCommandEncoder(@backingInt(device))));
 }
 
 /// Copy `size` bytes between two GPU buffers (src must be COPY_SRC, dst COPY_DST).
@@ -795,10 +808,10 @@ pub fn copyBufferToBuffer(
     dst_off: u32,
     size: u32,
 ) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_encoder_copy_buffer_to_buffer(
+    gpu_host.encoderCopyBufferToBuffer(
         @backingInt(encoder),
         @backingInt(src),
         src_off,
@@ -825,10 +838,10 @@ pub fn copyTextureToBuffer(
     width: u32,
     height: u32,
 ) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_encoder_copy_texture_to_buffer(
+    gpu_host.encoderCopyTextureToBuffer(
         @backingInt(encoder),
         @backingInt(texture),
         @backingInt(dst),
@@ -839,48 +852,48 @@ pub fn copyTextureToBuffer(
 }
 
 pub fn bufferReadStart(buf: BufferHandle, size: u32) BufferRead {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_buffer_read_start(@backingInt(buf), size)));
+    return @fromBackingInt(@intCast(gpu_host.bufferReadStart(@backingInt(buf), size)));
 }
 
 /// 0 = still mapping, 1 = data ready to copy via `bufferReadInto`.
 pub fn bufferReadPoll(handle: BufferRead) bool {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return false;
     }
-    return js_buffer_read_poll(@backingInt(handle)) != 0;
+    return gpu_host.bufferReadPoll(@backingInt(handle)) != 0;
 }
 
 /// Copy the mapped bytes into `dst` (only valid after poll==true).
 pub fn bufferReadInto(handle: BufferRead, dst: []u8) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_buffer_read_into(@backingInt(handle), dst.ptr, @intCast(dst.len));
+    gpu_host.bufferReadInto(@backingInt(handle), dst.ptr, @intCast(dst.len));
 }
 
 /// Unmap + free the read handle.
 pub fn bufferReadRelease(handle: BufferRead) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_buffer_read_release(@backingInt(handle));
+    gpu_host.bufferReadRelease(@backingInt(handle));
 }
 
 pub fn finishCommandEncoder(encoder: CommandEncoderHandle) CommandBufferHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
-    return @fromBackingInt(@intCast(js_command_encoder_finish(@backingInt(encoder))));
+    return @fromBackingInt(@intCast(gpu_host.commandEncoderFinish(@backingInt(encoder))));
 }
 
 pub fn queueSubmit(queue: QueueHandle, cmd_buffer: CommandBufferHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_queue_submit(@backingInt(queue), @backingInt(cmd_buffer));
+    gpu_host.queueSubmit(@backingInt(queue), @backingInt(cmd_buffer));
 }
 
 /// Create a bind group layout from a pre-serialized entries blob.
@@ -893,11 +906,11 @@ pub fn createBindGroupLayout(
     entries_blob: []const u8,
     label: []const u8,
 ) BindGroupLayoutHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.bind_group_layout, 1);
-    return @fromBackingInt(@intCast(js_device_create_bind_group_layout(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateBindGroupLayout(
         @backingInt(device),
         entries_blob.ptr,
         entries_blob.len,
@@ -914,11 +927,11 @@ pub fn createBindGroup(
     entries_blob: []const u8,
     label: []const u8,
 ) BindGroupHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.bind_group, 1);
-    return @fromBackingInt(@intCast(js_device_create_bind_group(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateBindGroup(
         @backingInt(device),
         @backingInt(layout),
         entries_blob.ptr,
@@ -936,15 +949,16 @@ pub fn createPipelineLayout(
     bind_group_layouts: []const BindGroupLayoutHandle,
     label: []const u8,
 ) PipelineLayoutHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.pipeline_layout, 1);
-    // BindGroupLayoutHandle is enum(u32); slice cast is safe.
-    const ids: []const u8 = std.mem.sliceAsBytes(bind_group_layouts);
-    return @fromBackingInt(@intCast(js_device_create_pipeline_layout(
+    // BindGroupLayoutHandle is enum(u32), so its pointer casts straight to u32s. Not via
+    // `sliceAsBytes`: it returns a 1-aligned `&[0]u8{}` for an empty slice, which fails the
+    // `@alignCast` back to u32 (a layout-less shader has zero groups).
+    return @fromBackingInt(@intCast(gpu_host.deviceCreatePipelineLayout(
         @backingInt(device),
-        @ptrCast(@alignCast(ids.ptr)),
+        @ptrCast(bind_group_layouts.ptr),
         bind_group_layouts.len,
         label.ptr,
         label.len,
@@ -969,11 +983,11 @@ pub fn createRenderPipeline(
     descriptor_blob: []const u8,
     label: []const u8,
 ) RenderPipelineHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.render_pipeline, 1);
-    return @fromBackingInt(@intCast(js_device_create_render_pipeline(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateRenderPipeline(
         @backingInt(device),
         @backingInt(layout),
         @backingInt(vs_module),
@@ -994,11 +1008,11 @@ pub fn createComputePipeline(
     entry_point: []const u8,
     label: []const u8,
 ) ComputePipelineHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.compute_pipeline, 1);
-    return @fromBackingInt(@intCast(js_device_create_compute_pipeline(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateComputePipeline(
         @backingInt(device),
         @backingInt(layout),
         @backingInt(shader_module),
@@ -1029,11 +1043,11 @@ pub const TextureDesc = struct {
 };
 
 pub fn createTexture(device: DeviceHandle, desc: TextureDesc) TextureHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.texture, 1);
-    return @fromBackingInt(@intCast(js_device_create_texture(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateTexture(
         @backingInt(device),
         desc.width,
         desc.height,
@@ -1048,11 +1062,11 @@ pub fn createTexture(device: DeviceHandle, desc: TextureDesc) TextureHandle {
 }
 
 pub fn createTextureView(texture: TextureHandle) TextureViewHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.texture_view, 1);
-    return @fromBackingInt(@intCast(js_texture_create_view(@backingInt(texture))));
+    return @fromBackingInt(@intCast(gpu_host.textureCreateView(@backingInt(texture))));
 }
 
 /// A view of a single mip level (base_mip_level = `base_mip`, count 1) - used to
@@ -1063,99 +1077,98 @@ pub fn createTextureViewMip(
     base_mip: u32,
     mip_count: u32,
 ) TextureViewHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.texture_view, 1);
-    return @fromBackingInt(@intCast(js_texture_create_view_mip(@backingInt(texture), base_mip, mip_count)));
+    return @fromBackingInt(@intCast(gpu_host.textureCreateViewMip(@backingInt(texture), base_mip, mip_count)));
 }
 
 /// A 2d-array view covering `layer_count` layers (base layer 0). Bind it as a
 /// `texture_2d_array` (sampled) or `texture_storage_2d_array` (compute write).
 pub fn createTextureViewArray(texture: TextureHandle, layer_count: u32) TextureViewHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.texture_view, 1);
-    return @fromBackingInt(@intCast(js_texture_create_view_array(@backingInt(texture), layer_count)));
+    return @fromBackingInt(@intCast(gpu_host.textureCreateViewArray(@backingInt(texture), layer_count)));
+}
+
+/// A 2D view of the one layer `layer` of an array texture, at its first mip level: what a render pass draws into,
+/// layer by layer (a render target is one layer), and what a shader samples as an ordinary 2D texture.
+pub fn createTextureViewLayer(texture: TextureHandle, layer: u32) TextureViewHandle {
+    if (comptime !host.has_gpu) {
+        return .invalid;
+    }
+    bumpHandle(.texture_view, 1);
+    return @fromBackingInt(@intCast(gpu_host.textureCreateViewLayer(@backingInt(texture), layer)));
 }
 
 pub fn destroyTexture(texture: TextureHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.texture, -1);
-    js_texture_destroy(@backingInt(texture));
+    gpu_host.textureDestroy(@backingInt(texture));
 }
 
 // Explicit destroys for the remaining GPU resource types (WebGPU GC's these
 // once the JS handle table drops its ref; the bridge just releases the slot).
 pub fn destroyBindGroup(handle: BindGroupHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.bind_group, -1);
-    js_bind_group_destroy(@backingInt(handle));
+    gpu_host.bindGroupDestroy(@backingInt(handle));
 }
 pub fn destroyBindGroupLayout(handle: BindGroupLayoutHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.bind_group_layout, -1);
-    js_bind_group_layout_destroy(@backingInt(handle));
+    gpu_host.bindGroupLayoutDestroy(@backingInt(handle));
 }
 pub fn destroyPipelineLayout(handle: PipelineLayoutHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.pipeline_layout, -1);
-    js_pipeline_layout_destroy(@backingInt(handle));
+    gpu_host.pipelineLayoutDestroy(@backingInt(handle));
 }
 pub fn destroyRenderPipeline(handle: RenderPipelineHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.render_pipeline, -1);
-    js_render_pipeline_destroy(@backingInt(handle));
+    gpu_host.renderPipelineDestroy(@backingInt(handle));
 }
 pub fn destroyComputePipeline(handle: ComputePipelineHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.compute_pipeline, -1);
-    js_compute_pipeline_destroy(@backingInt(handle));
+    gpu_host.computePipelineDestroy(@backingInt(handle));
 }
 pub fn destroySampler(handle: SamplerHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.sampler, -1);
-    js_sampler_destroy(@backingInt(handle));
+    gpu_host.samplerDestroy(@backingInt(handle));
 }
 pub fn destroyShaderModule(handle: ShaderModuleHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.shader_module, -1);
-    js_shader_module_destroy(@backingInt(handle));
+    gpu_host.shaderModuleDestroy(@backingInt(handle));
 }
 pub fn destroyTextureView(handle: TextureViewHandle) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
     bumpHandle(.texture_view, -1);
-    js_texture_view_destroy(@backingInt(handle));
-}
-
-pub fn queueWriteTexture(
-    queue: QueueHandle,
-    texture: TextureHandle,
-    width: u32,
-    height: u32,
-    bytes_per_row: u32,
-    data: []const u8,
-) void {
-    queueWriteTextureLevel(queue, texture, width, height, bytes_per_row, data, 0);
+    gpu_host.textureViewDestroy(@backingInt(handle));
 }
 
 /// Like `queueWriteTexture` but targets an explicit `mip_level` of the texture
@@ -1169,10 +1182,10 @@ pub fn queueWriteTextureLevel(
     data: []const u8,
     mip_level: u32,
 ) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_queue_write_texture(
+    gpu_host.queueWriteTexture(
         @backingInt(queue),
         @backingInt(texture),
         width,
@@ -1182,6 +1195,17 @@ pub fn queueWriteTextureLevel(
         data.len,
         mip_level,
     );
+}
+
+pub fn queueWriteTexture(
+    queue: QueueHandle,
+    texture: TextureHandle,
+    width: u32,
+    height: u32,
+    bytes_per_row: u32,
+    data: []const u8,
+) void {
+    queueWriteTextureLevel(queue, texture, width, height, bytes_per_row, data, 0);
 }
 
 /// Write a `width`x`height` rectangle of mip level 0 at (`x`, `y`), leaving the
@@ -1198,10 +1222,10 @@ pub fn queueWriteTextureRegion(
     bytes_per_row: u32,
     data: []const u8,
 ) void {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return;
     }
-    js_queue_write_texture_region(
+    gpu_host.queueWriteTextureRegion(
         @backingInt(queue),
         @backingInt(texture),
         x,
@@ -1220,19 +1244,15 @@ pub const SamplerDesc = struct {
     mipmap_filter_linear: bool = false,
     address_mode: AddressMode = .clamp_to_edge,
 
-    pub const AddressMode = enum(u32) {
-        clamp_to_edge = 0,
-        repeat = 1,
-        mirror_repeat = 2,
-    };
+    pub const AddressMode = gpu_abi.AddressMode;
 };
 
 pub fn createSampler(device: DeviceHandle, desc: SamplerDesc) SamplerHandle {
-    if (comptime !is_wasm) {
+    if (comptime !host.has_gpu) {
         return .invalid;
     }
     bumpHandle(.sampler, 1);
-    return @fromBackingInt(@intCast(js_device_create_sampler(
+    return @fromBackingInt(@intCast(gpu_host.deviceCreateSampler(
         @backingInt(device),
         @intFromBool(desc.mag_filter_linear),
         @intFromBool(desc.min_filter_linear),
@@ -1272,13 +1292,13 @@ test "refAllDecls: every decl compiles (catches removed-API / non-generic breaka
     // removals) fails here instead of silently slipping through. NOTE: it does
     // NOT analyze generic fn bodies until they're instantiated, so it's a
     // partial net -- real generic coverage comes from tests that call them.
-    std.testing.refAllDecls(@This());
+    refAllDecls(@This());
 }
 
 // ===========================================================================
-// STRUCTURE-PLAN S2 (t1177): former src/render_pass.zig folded in as a
-// section namespace.  One-way deps only; the umbrella re-exports keep the
-// public `z.render_pass` shape unchanged.
+// RENDER PASSES - the `render_pass` namespace, public as `z.render_pass`
+// through the umbrella's re-exports. It depends only on declarations above
+// it, never on what follows.
 // ===========================================================================
 pub const render_pass = struct {
     // src/render_pass.zig - render pass lifecycle helpers.
@@ -1331,7 +1351,7 @@ pub const render_pass = struct {
         const load_op: LoadOp = if (desc.clear != null) LoadOp.clear else desc.load_op;
         const clear = desc.clear orelse ColorF32{ .r = 0, .g = 0, .b = 0, .a = 1 };
 
-        return @fromBackingInt(@intCast(wgpu_js.begin_render_pass(
+        return @fromBackingInt(@intCast(wgpu_js.beginRenderPass(
             @backingInt(desc.encoder),
             @backingInt(desc.color_view),
             clear.r,
@@ -1346,7 +1366,7 @@ pub const render_pass = struct {
     }
 
     pub fn end(pass: RenderPassEncoderHandle) void {
-        wgpu_js.render_pass_end(@backingInt(pass));
+        wgpu_js.renderPassEnd(@backingInt(pass));
     }
 
     /// Begin an MRT render pass: `color_views` (up to 8 - WebGPU's
@@ -1373,7 +1393,7 @@ pub const render_pass = struct {
         for (desc.color_views[0..n], raw[0..n]) |v, *r| {
             r.* = @backingInt(v);
         }
-        return @fromBackingInt(@intCast(wgpu_js.begin_render_pass_mrt(
+        return @fromBackingInt(@intCast(wgpu_js.beginRenderPassMrt(
             @backingInt(desc.encoder),
             raw[0..n],
             clear.r,
@@ -1390,7 +1410,7 @@ pub const render_pass = struct {
         pass: RenderPassEncoderHandle,
         pipeline: RenderPipelineHandle,
     ) void {
-        wgpu_js.render_pass_set_pipeline(
+        wgpu_js.renderPassSetPipeline(
             @backingInt(pass),
             @backingInt(pipeline),
         );
@@ -1401,7 +1421,7 @@ pub const render_pass = struct {
         group_index: u32,
         bind_group: BindGroupHandle,
     ) void {
-        wgpu_js.render_pass_set_bind_group(
+        wgpu_js.renderPassSetBindGroup(
             @backingInt(pass),
             group_index,
             @backingInt(bind_group),
@@ -1419,7 +1439,7 @@ pub const render_pass = struct {
         pass: RenderPassEncoderHandle,
         binding: VertexBufferBinding,
     ) void {
-        wgpu_js.render_pass_set_vertex_buffer(
+        wgpu_js.renderPassSetVertexBuffer(
             @backingInt(pass),
             binding.slot,
             @backingInt(binding.buffer),
@@ -1439,7 +1459,7 @@ pub const render_pass = struct {
         pass: RenderPassEncoderHandle,
         binding: IndexBufferBinding,
     ) void {
-        wgpu_js.render_pass_set_index_buffer(
+        wgpu_js.renderPassSetIndexBuffer(
             @backingInt(pass),
             @backingInt(binding.buffer),
             @backingInt(binding.format),
@@ -1456,7 +1476,7 @@ pub const render_pass = struct {
     };
 
     pub fn draw(pass: RenderPassEncoderHandle, desc: DrawDesc) void {
-        wgpu_js.render_pass_draw(
+        wgpu_js.renderPassDraw(
             @backingInt(pass),
             desc.vertex_count,
             desc.instance_count,
@@ -1474,7 +1494,7 @@ pub const render_pass = struct {
     };
 
     pub fn drawIndexed(pass: RenderPassEncoderHandle, desc: DrawIndexedDesc) void {
-        wgpu_js.render_pass_draw_indexed(
+        wgpu_js.renderPassDrawIndexed(
             @backingInt(pass),
             desc.index_count,
             desc.instance_count,
@@ -1493,20 +1513,20 @@ pub const render_pass = struct {
         w: u32,
         h: u32,
     ) void {
-        wgpu_js.render_pass_set_scissor_rect(@backingInt(pass), x, y, w, h);
+        wgpu_js.renderPassSetScissorRect(@backingInt(pass), x, y, w, h);
     }
 
     // ============================================================================
     // Internal - JS-bridge thunks
     // ============================================================================
     //
-    // We re-route through a `wgpu_js` namespace so this file can be
-    // host-tested without dragging in the wgpu extern declarations.  On
-    // wasm builds these all forward to the wgpu.zig extern fns; on host
-    // builds they're no-ops returning 0 / void.
+    // The render-pass calls go through this `wgpu_js` namespace so the file can be
+    // tested on the build machine without a GPU. With one - the browser's, or the
+    // Vulkan host's - each forwards to the host's call (`gpu_host`); in a build
+    // without a GPU (`host.has_gpu` false) each does nothing and returns 0.
 
     const wgpu_js = struct {
-        inline fn begin_render_pass(
+        inline fn beginRenderPass(
             encoder: u32,
             color_view: u32,
             clear_r: f32,
@@ -1518,10 +1538,10 @@ pub const render_pass = struct {
             depth_view: u32,
             resolve_view: u32,
         ) u32 {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return 0;
             }
-            return wgpu_externs.js_encoder_begin_render_pass(
+            return gpu_host.encoderBeginRenderPass(
                 encoder,
                 color_view,
                 clear_r,
@@ -1535,7 +1555,7 @@ pub const render_pass = struct {
             );
         }
 
-        inline fn begin_render_pass_mrt(
+        inline fn beginRenderPassMrt(
             encoder: u32,
             views: []const u32,
             clear_r: f32,
@@ -1546,10 +1566,10 @@ pub const render_pass = struct {
             store_op: u32,
             depth_view: u32,
         ) u32 {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return 0;
             }
-            return wgpu_externs.js_encoder_begin_render_pass_mrt(
+            return gpu_host.encoderBeginRenderPassMrt(
                 encoder,
                 views.ptr,
                 views.len,
@@ -1563,71 +1583,71 @@ pub const render_pass = struct {
             );
         }
 
-        inline fn render_pass_end(pass: u32) void {
-            if (comptime !is_wasm) {
+        inline fn renderPassEnd(pass: u32) void {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_end(pass);
+            gpu_host.renderPassEnd(pass);
         }
 
-        inline fn render_pass_set_pipeline(pass: u32, pipeline: u32) void {
-            if (comptime !is_wasm) {
+        inline fn renderPassSetPipeline(pass: u32, pipeline: u32) void {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_set_pipeline(pass, pipeline);
+            gpu_host.renderPassSetPipeline(pass, pipeline);
         }
 
-        inline fn render_pass_set_bind_group(
+        inline fn renderPassSetBindGroup(
             pass: u32,
             group_index: u32,
             bind_group: u32,
         ) void {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_set_bind_group(pass, group_index, bind_group);
+            gpu_host.renderPassSetBindGroup(pass, group_index, bind_group);
         }
 
-        inline fn render_pass_set_vertex_buffer(
+        inline fn renderPassSetVertexBuffer(
             pass: u32,
             slot: u32,
             buffer: u32,
             offset: u64,
             size: u64,
         ) void {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_set_vertex_buffer(pass, slot, buffer, offset, size);
+            gpu_host.renderPassSetVertexBuffer(pass, slot, buffer, offset, size);
         }
 
-        inline fn render_pass_set_index_buffer(
+        inline fn renderPassSetIndexBuffer(
             pass: u32,
             buffer: u32,
             format: u32,
             offset: u64,
             size: u64,
         ) void {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_set_index_buffer(pass, buffer, format, offset, size);
+            gpu_host.renderPassSetIndexBuffer(pass, buffer, format, offset, size);
         }
 
-        inline fn render_pass_draw(
+        inline fn renderPassDraw(
             pass: u32,
             vc: u32,
             ic: u32,
             fv: u32,
             fi: u32,
         ) void {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_draw(pass, vc, ic, fv, fi);
+            gpu_host.renderPassDraw(pass, vc, ic, fv, fi);
         }
 
-        inline fn render_pass_draw_indexed(
+        inline fn renderPassDrawIndexed(
             pass: u32,
             ic: u32,
             instc: u32,
@@ -1635,95 +1655,24 @@ pub const render_pass = struct {
             bv: i32,
             finst: u32,
         ) void {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_draw_indexed(pass, ic, instc, fi, bv, finst);
+            gpu_host.renderPassDrawIndexed(pass, ic, instc, fi, bv, finst);
         }
 
-        inline fn render_pass_set_scissor_rect(
+        inline fn renderPassSetScissorRect(
             pass: u32,
             x: u32,
             y: u32,
             w: u32,
             h: u32,
         ) void {
-            if (comptime !is_wasm) {
+            if (comptime !host.has_gpu) {
                 return;
             }
-            wgpu_externs.js_render_pass_set_scissor_rect(pass, x, y, w, h);
+            gpu_host.renderPassSetScissorRect(pass, x, y, w, h);
         }
-    };
-
-    // Re-export the extern decls so they're reachable from wgpu_js.
-    const wgpu_externs = struct {
-        pub extern "wgpu" fn js_encoder_begin_render_pass(
-            encoder: u32,
-            color_view: u32,
-            clear_r: f32,
-            clear_g: f32,
-            clear_b: f32,
-            clear_a: f32,
-            load_op: u32,
-            store_op: u32,
-            depth_view: u32,
-            resolve_view: u32,
-        ) u32;
-        pub extern "wgpu" fn js_encoder_begin_render_pass_mrt(
-            encoder: u32,
-            views_ptr: [*]const u32,
-            views_len: usize,
-            clear_r: f32,
-            clear_g: f32,
-            clear_b: f32,
-            clear_a: f32,
-            load_op: u32,
-            store_op: u32,
-            depth_view: u32,
-        ) u32;
-        pub extern "wgpu" fn js_render_pass_set_pipeline(pass: u32, pipeline: u32) void;
-        pub extern "wgpu" fn js_render_pass_set_bind_group(
-            pass: u32,
-            group_index: u32,
-            bind_group: u32,
-        ) void;
-        pub extern "wgpu" fn js_render_pass_set_vertex_buffer(
-            pass: u32,
-            slot: u32,
-            buffer: u32,
-            offset: u64,
-            size: u64,
-        ) void;
-        pub extern "wgpu" fn js_render_pass_set_index_buffer(
-            pass: u32,
-            buffer: u32,
-            format: u32,
-            offset: u64,
-            size: u64,
-        ) void;
-        pub extern "wgpu" fn js_render_pass_draw(
-            pass: u32,
-            vc: u32,
-            ic: u32,
-            fv: u32,
-            fi: u32,
-        ) void;
-        pub extern "wgpu" fn js_render_pass_draw_indexed(
-            pass: u32,
-            ic: u32,
-            instc: u32,
-            fi: u32,
-            bv: i32,
-            finst: u32,
-        ) void;
-        pub extern "wgpu" fn js_render_pass_set_scissor_rect(
-            pass: u32,
-            x: u32,
-            y: u32,
-            w: u32,
-            h: u32,
-        ) void;
-        pub extern "wgpu" fn js_render_pass_end(pass: u32) void;
     };
 
     test "refAllDecls: every decl compiles (catches removed-API / non-generic breakage)" {
@@ -1732,14 +1681,14 @@ pub const render_pass = struct {
         // removals) fails here instead of silently slipping through. NOTE: it does
         // NOT analyze generic fn bodies until they're instantiated, so it's a
         // partial net -- real generic coverage comes from tests that call them.
-        std.testing.refAllDecls(@This());
+        refAllDecls(@This());
     }
 };
 
 // ===========================================================================
-// STRUCTURE-PLAN S2 (t1177): former src/compute_pass.zig folded in as a
-// section namespace.  One-way deps only; the umbrella re-exports keep the
-// public `z.compute_pass` shape unchanged.
+// COMPUTE PASSES - the `compute_pass` namespace, public as `z.compute_pass`
+// through the umbrella's re-exports. It depends only on declarations above
+// it, never on what follows.
 // ===========================================================================
 pub const compute_pass = struct {
     // src/compute_pass.zig - compute pass lifecycle helpers.
@@ -1752,27 +1701,27 @@ pub const compute_pass = struct {
     // `GpuFrame.beginComputePass` helper's) responsibility.
 
     pub fn begin(encoder: CommandEncoderHandle) ComputePassEncoderHandle {
-        if (comptime !is_wasm) {
+        if (comptime !host.has_gpu) {
             return .invalid;
         }
-        return @fromBackingInt(@intCast(externs.js_encoder_begin_compute_pass(@backingInt(encoder))));
+        return @fromBackingInt(@intCast(gpu_host.encoderBeginComputePass(@backingInt(encoder))));
     }
 
     pub fn end(pass: ComputePassEncoderHandle) void {
-        if (comptime !is_wasm) {
+        if (comptime !host.has_gpu) {
             return;
         }
-        externs.js_compute_pass_end(@backingInt(pass));
+        gpu_host.computePassEnd(@backingInt(pass));
     }
 
     pub fn setPipeline(
         pass: ComputePassEncoderHandle,
         pipeline: ComputePipelineHandle,
     ) void {
-        if (comptime !is_wasm) {
+        if (comptime !host.has_gpu) {
             return;
         }
-        externs.js_compute_pass_set_pipeline(
+        gpu_host.computePassSetPipeline(
             @backingInt(pass),
             @backingInt(pipeline),
         );
@@ -1783,10 +1732,10 @@ pub const compute_pass = struct {
         group_index: u32,
         bind_group: BindGroupHandle,
     ) void {
-        if (comptime !is_wasm) {
+        if (comptime !host.has_gpu) {
             return;
         }
-        externs.js_compute_pass_set_bind_group(
+        gpu_host.computePassSetBindGroup(
             @backingInt(pass),
             group_index,
             @backingInt(bind_group),
@@ -1799,10 +1748,10 @@ pub const compute_pass = struct {
         pass: ComputePassEncoderHandle,
         d: Dispatch,
     ) void {
-        if (comptime !is_wasm) {
+        if (comptime !host.has_gpu) {
             return;
         }
-        externs.js_compute_pass_dispatch_workgroups(
+        gpu_host.computePassDispatchWorkgroups(
             @backingInt(pass),
             d.x,
             d.y,
@@ -1810,37 +1759,20 @@ pub const compute_pass = struct {
         );
     }
 
-    const externs = struct {
-        pub extern "wgpu" fn js_encoder_begin_compute_pass(encoder: u32) u32;
-        pub extern "wgpu" fn js_compute_pass_set_pipeline(pass: u32, pipeline: u32) void;
-        pub extern "wgpu" fn js_compute_pass_set_bind_group(
-            pass: u32,
-            group_index: u32,
-            bind_group: u32,
-        ) void;
-        pub extern "wgpu" fn js_compute_pass_dispatch_workgroups(
-            pass: u32,
-            x: u32,
-            y: u32,
-            z: u32,
-        ) void;
-        pub extern "wgpu" fn js_compute_pass_end(pass: u32) void;
-    };
-
     test "refAllDecls: every decl compiles (catches removed-API / non-generic breakage)" {
         // refAllDecls forces semantic analysis of each top-level decl, so a removed
         // stdlib API in a non-generic fn (e.g. the Zig 0.17 bufPrintZ/dupeZ/meta.Int
         // removals) fails here instead of silently slipping through. NOTE: it does
         // NOT analyze generic fn bodies until they're instantiated, so it's a
         // partial net -- real generic coverage comes from tests that call them.
-        std.testing.refAllDecls(@This());
+        refAllDecls(@This());
     }
 };
 
 // ===========================================================================
-// STRUCTURE-PLAN S2 (t1177): former src/storage_buffer.zig folded in as a
-// section namespace.  One-way deps only; the umbrella re-exports keep the
-// public `z.storage_buffer` shape unchanged.
+// STORAGE BUFFERS - the `storage_buffer` namespace, public as
+// `z.storage_buffer` through the umbrella's re-exports. It depends only on
+// what is above it.
 // ===========================================================================
 pub const storage_buffer = struct {
     // src/storage_buffer.zig - typed storage buffer wrapper for compute + instancing.
@@ -1907,7 +1839,7 @@ pub const storage_buffer = struct {
                 desc: CreateDesc,
             ) Self {
                 const size_bytes = @as(u64, desc.count) * element_size;
-                const buf = createBuffer(device, .{
+                const buf: BufferHandle = createBuffer(device, .{
                     .size = size_bytes,
                     .usage = desc.usage,
                     .label = desc.label,
@@ -1922,7 +1854,7 @@ pub const storage_buffer = struct {
                 gpa: Allocator,
                 desc: CreateWithDataDesc,
             ) Self {
-                const self = create(device, gpa, .{
+                const self: Self = create(device, gpa, .{
                     .count = @intCast(desc.data.len),
                     .usage = desc.usage,
                     .label = desc.label,
@@ -1931,7 +1863,7 @@ pub const storage_buffer = struct {
                     queue,
                     self.buffer,
                     0,
-                    std.mem.sliceAsBytes(desc.data),
+                    sliceAsBytes(desc.data),
                 );
                 return self;
             }
@@ -1948,7 +1880,7 @@ pub const storage_buffer = struct {
                     queue,
                     self.buffer,
                     @as(u64, offset_elements) * element_size,
-                    std.mem.sliceAsBytes(data),
+                    sliceAsBytes(data),
                 );
             }
 
@@ -2008,7 +1940,7 @@ pub const storage_buffer = struct {
     }
 };
 
-const expectTrue = std.testing.expect;
+const expectTrue = expect;
 
 test "alignedBufferSize rounds up to four, which is what queueWriteBuffer requires" {
     // * THE SHAPE OF A REAL BUG, pinned.

@@ -19,10 +19,13 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
 const rotationZ = zm.rotationZ;
+const Color = zm.Color;
+const Mat = zm.Mat;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -91,7 +94,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "msaa_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(&vertices));
 
     // 1-sample sampleable targets: one rendered directly (aliased), one used as
     // the MSAA resolve target. Plus a 4-sample colour texture for the MSAA pass.
@@ -120,9 +123,9 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    const m: zm.Mat = rotationZ(f.time.time * 0.5);
+    const m: Mat = rotationZ(f.time.time * 0.5);
     const vsize: u64 = @sizeOf(@TypeOf(vertices));
-    const clear: zm.Color = .{ .r = 12, .g = 14, .b = 20, .a = 255 };
+    const clear: Color = .{ .r = 12, .g = 14, .b = 20, .a = 255 };
 
     // LEFT: aliased (1 sample) via the normal offscreen path.
     s.aliased_shader.pushUbo(f.gpu.queue, .{ .transform = m });
@@ -161,7 +164,7 @@ fn update(f: *z.Frame, s: *State) void {
     const total: f32 = cell * 2 + gap;
     const x0: f32 = (w - total) * 0.5;
     const y0: f32 = (h - cell) * 0.5;
-    const white: zm.Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
+    const white: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     f.gl.texture(.{ .x = x0, .y = y0, .width = cell, .height = cell }, s.aliased_rt.asTexture(), .{ .tint = white });
     f.gl.texture(
         .{ .x = x0 + cell + gap, .y = y0, .width = cell, .height = cell },

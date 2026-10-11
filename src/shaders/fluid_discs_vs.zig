@@ -9,6 +9,7 @@
 
 const zm = @import("zm");
 const clamp01 = zm.clamp01;
+const Vec2 = zm.Vec2;
 const shader_io = @import("fluid_discs_vs_io.zig");
 const shader_externs = @import("fluid_discs_vs_externs");
 
@@ -25,8 +26,8 @@ pub fn shaderMain(io_in: Io) Out {
     const cx: f32 = if (vi == 1 or vi == 4 or vi == 5) 1.0 else -1.0;
     const cy: f32 = if (vi == 2 or vi == 3 or vi == 5) 1.0 else -1.0;
 
-    const p: zm.Vec2 = io_in.positions(ii);
-    const d: zm.Vec2 = io_in.density(ii);
+    const p: Vec2 = io_in.positions(ii);
+    const d: Vec2 = io_in.density(ii);
     const uu = io_in.u;
 
     // sim px -> logical px (aspect-fit) -> NDC (y down -> y up).

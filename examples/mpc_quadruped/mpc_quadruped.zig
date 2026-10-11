@@ -46,6 +46,7 @@ const mulMat = zm.mulMat;
 const rotationX = zm.rotationX;
 const rotationY = zm.rotationY;
 const rotationZ = zm.rotationZ;
+const Mat = zm.Mat;
 
 const sim_timestep: f32 = 1.0 / 100.0;
 const horizon_knots: u32 = 20;
@@ -89,7 +90,7 @@ const State = struct {
     ui_host: z.UiHost,
     cube: z.Mesh,
     sphere: z.Mesh,
-    transform: [1]zm.Mat,
+    transform: [1]Mat,
 };
 
 const gait_names = [_][]const u8{ "stand (works)", "walk (broken)", "trot (broken)" };
@@ -114,6 +115,21 @@ const terminal_weight = [_]f32{ 40, 40, 800, 800, 800, 400, 4, 4, 40, 40, 40, 20
 fn weights() mpc.Weights {
     return .{ .state = &state_weight, .control = &control_weight, .terminal = &terminal_weight };
 }
+
+fn resetRobot(s: *State) void {
+    @memset(&s.trunk_state, 0);
+    s.trunk_state[mpc.pos_offset + 2] = stand_height;
+    s.gait_phase = 0;
+    s.accumulator = 0;
+    @memset(s.plan.ctrl, 0);
+    for (0..mpc.leg_count) |leg| {
+        s.foot_planted[leg] = s.layout.hip[leg];
+        s.foot_target[leg] = s.layout.hip[leg];
+        s.foot_was_down[leg] = true;
+    }
+}
+
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
@@ -159,19 +175,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
     s.ui_host.deinit();
     s.plan.deinit();
-}
-
-fn resetRobot(s: *State) void {
-    @memset(&s.trunk_state, 0);
-    s.trunk_state[mpc.pos_offset + 2] = stand_height;
-    s.gait_phase = 0;
-    s.accumulator = 0;
-    @memset(s.plan.ctrl, 0);
-    for (0..mpc.leg_count) |leg| {
-        s.foot_planted[leg] = s.layout.hip[leg];
-        s.foot_target[leg] = s.layout.hip[leg];
-        s.foot_was_down[leg] = true;
-    }
 }
 
 /// One control tick: decide where the feet are, plan the forces, apply the first knot.
@@ -279,121 +282,6 @@ fn controlTick(s: *State) void {
     s.gait_phase = mpc.advance(s.gait, s.gait_phase, sim_timestep);
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    s.frame_ms += (f.time.delta_time * 1000.0 - s.frame_ms) * 0.1;
-    if (s.running) {
-        s.accumulator += @min(f.time.delta_time, 0.1);
-        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            controlTick(s);
-        }
-    }
-
-    // The trunk falling through the floor is the failure mode, and a demo you have to reset by
-    // hand after every glance at it is a demo nobody looks at twice.
-    if (s.trunk_state[mpc.pos_offset + 2] < -0.5) {
-        resetRobot(s);
-    }
-
-    z.clearViewport(f, background);
-    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    s.cam.distance = clamp(2.0 / @max(0.35, aspect), 1.4, 5.0);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 0.8, .max_distance = 8.0 });
-    z.beginMode3D(gl, cam);
-    drawScene(s, gl);
-    z.endMode3D(gl);
-}
-
-fn drawScene(s: *State, gl: *z.WgpuGl) void {
-    z.drawGrid(gl, 16, 0.25);
-
-    const centre: Vec = vec(
-        s.trunk_state[mpc.pos_offset],
-        s.trunk_state[mpc.pos_offset + 1],
-        s.trunk_state[mpc.pos_offset + 2],
-    );
-
-    // * THE PLANNED PATH, which is the point of drawing any of this: where the optimiser
-    // thinks the trunk is about to go, one faint segment per knot.
-    var knot: usize = 1;
-    while (knot <= horizon_knots) : (knot += 1) {
-        const previous: Vec = planPosition(s, knot - 1);
-        const current: Vec = planPosition(s, knot);
-        z.drawLine3D(gl, zm.zUpToYUpPoint(previous), zm.zUpToYUpPoint(current), ghost_colour);
-    }
-
-    // The trunk, oriented by roll-pitch-yaw.
-    const roll: f32 = s.trunk_state[mpc.rpy_offset];
-    const pitch: f32 = s.trunk_state[mpc.rpy_offset + 1];
-    const yaw: f32 = s.trunk_state[mpc.rpy_offset + 2];
-    // Renderer is Y-up, so the model's yaw about +z is a rotation about the renderer's +y.
-    const orientation: zm.Mat = mulMat(
-        mulMat(rotationY(-yaw), rotationZ(pitch)),
-        rotationX(roll),
-    );
-    const drawn: Vec = zm.zUpToYUpPoint(centre);
-    s.transform[0] = mulMat(
-        mulMat(translation(drawn[0], drawn[1], drawn[2]), orientation),
-        scaling(0.38, 0.10, 0.22),
-    );
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, trunk_colour);
-
-    // Feet, and the force each one is being asked for.
-    for (0..mpc.leg_count) |leg_index| {
-        const leg: mpc.Leg = @fromBackingInt(@intCast(leg_index));
-        const down: bool = mpc.inStance(s.gait, s.gait_phase, leg);
-        const foot: Vec = if (down) s.foot_planted[leg_index] else swingFootPosition(s, leg, leg_index);
-        const rendered: Vec = zm.zUpToYUpPoint(foot);
-        s.transform[0] = mulMat(
-            translation(rendered[0], rendered[1], rendered[2]),
-            scaling(0.035, 0.035, 0.035),
-        );
-        z.drawMeshInstanced(
-            gl,
-            &s.sphere,
-            &s.transform,
-            if (down) stance_foot_colour else swing_foot_colour,
-        );
-
-        // * THE FORCE ARROW IS THE INTERESTING PART. Standing, all four are equal and vertical;
-        // lean the command and you can watch the load move onto the feet that can act on it.
-        // 0.004 m per newton puts a 29 N hold at about 12 cm - readable without swamping the
-        // robot.
-        if (down) {
-            const force: Vec = vec(
-                s.plan.ctrl[3 * leg_index],
-                s.plan.ctrl[3 * leg_index + 1],
-                s.plan.ctrl[3 * leg_index + 2],
-            );
-            const tip: Vec = foot + force * splat(0.004);
-            z.drawLine3D(gl, rendered, zm.zUpToYUpPoint(tip), force_colour);
-        } else {
-            // Where this foot is going to land.
-            const target: Vec = zm.zUpToYUpPoint(s.foot_target[leg_index]);
-            s.transform[0] = mulMat(translation(target[0], target[1], target[2]), scaling(0.02, 0.005, 0.02));
-            z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
-        }
-    }
-}
-
-fn planPosition(s: *const State, knot: usize) Vec {
-    const base: usize = knot * mpc.trunk_state_dim;
-    return vec(
-        s.plan.states[base + mpc.pos_offset],
-        s.plan.states[base + mpc.pos_offset + 1],
-        s.plan.states[base + mpc.pos_offset + 2],
-    );
-}
-
-fn swingFootPosition(s: *const State, leg: mpc.Leg, leg_index: usize) Vec {
-    const progress: f32 = mpc.swingProgress(s.gait, s.gait_phase, leg);
-    return mpc.swingPoint(s.foot_planted[leg_index], s.foot_target[leg_index], 0.06, progress);
-}
-
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     const captured: bool = u.wantCaptureMouse();
     const narrow: bool = ui.Ui.isNarrow(viewport_w);
@@ -460,7 +348,120 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn planPosition(s: *const State, knot: usize) Vec {
+    const base: usize = knot * mpc.trunk_state_dim;
+    return vec(
+        s.plan.states[base + mpc.pos_offset],
+        s.plan.states[base + mpc.pos_offset + 1],
+        s.plan.states[base + mpc.pos_offset + 2],
+    );
+}
+
+fn swingFootPosition(s: *const State, leg: mpc.Leg, leg_index: usize) Vec {
+    const progress: f32 = mpc.swingProgress(s.gait, s.gait_phase, leg);
+    return mpc.swingPoint(s.foot_planted[leg_index], s.foot_target[leg_index], 0.06, progress);
+}
+
+fn drawScene(s: *State, gl: *z.WgpuGl) void {
+    z.drawGrid(gl, 16, 0.25);
+
+    const centre: Vec = vec(
+        s.trunk_state[mpc.pos_offset],
+        s.trunk_state[mpc.pos_offset + 1],
+        s.trunk_state[mpc.pos_offset + 2],
+    );
+
+    // * THE PLANNED PATH, which is the point of drawing any of this: where the optimiser
+    // thinks the trunk is about to go, one faint segment per knot.
+    var knot: usize = 1;
+    while (knot <= horizon_knots) : (knot += 1) {
+        const previous: Vec = planPosition(s, knot - 1);
+        const current: Vec = planPosition(s, knot);
+        z.drawLine3D(gl, zm.zUpToYUpPoint(previous), zm.zUpToYUpPoint(current), ghost_colour);
+    }
+
+    // The trunk, oriented by roll-pitch-yaw.
+    const roll: f32 = s.trunk_state[mpc.rpy_offset];
+    const pitch: f32 = s.trunk_state[mpc.rpy_offset + 1];
+    const yaw: f32 = s.trunk_state[mpc.rpy_offset + 2];
+    // Renderer is Y-up, so the model's yaw about +z is a rotation about the renderer's +y.
+    const orientation: Mat = mulMat(
+        mulMat(rotationY(-yaw), rotationZ(pitch)),
+        rotationX(roll),
+    );
+    const drawn: Vec = zm.zUpToYUpPoint(centre);
+    s.transform[0] = mulMat(
+        mulMat(translation(drawn[0], drawn[1], drawn[2]), orientation),
+        scaling(0.38, 0.10, 0.22),
+    );
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, trunk_colour);
+
+    // Feet, and the force each one is being asked for.
+    for (0..mpc.leg_count) |leg_index| {
+        const leg: mpc.Leg = @fromBackingInt(@intCast(leg_index));
+        const down: bool = mpc.inStance(s.gait, s.gait_phase, leg);
+        const foot: Vec = if (down) s.foot_planted[leg_index] else swingFootPosition(s, leg, leg_index);
+        const rendered: Vec = zm.zUpToYUpPoint(foot);
+        s.transform[0] = mulMat(
+            translation(rendered[0], rendered[1], rendered[2]),
+            scaling(0.035, 0.035, 0.035),
+        );
+        z.drawMeshInstanced(
+            gl,
+            &s.sphere,
+            &s.transform,
+            if (down) stance_foot_colour else swing_foot_colour,
+        );
+
+        // * THE FORCE ARROW IS THE INTERESTING PART. Standing, all four are equal and vertical;
+        // lean the command and you can watch the load move onto the feet that can act on it.
+        // 0.004 m per newton puts a 29 N hold at about 12 cm - readable without swamping the
+        // robot.
+        if (down) {
+            const force: Vec = vec(
+                s.plan.ctrl[3 * leg_index],
+                s.plan.ctrl[3 * leg_index + 1],
+                s.plan.ctrl[3 * leg_index + 2],
+            );
+            const tip: Vec = foot + force * splat(0.004);
+            z.drawLine3D(gl, rendered, zm.zUpToYUpPoint(tip), force_colour);
+        } else {
+            // Where this foot is going to land.
+            const target: Vec = zm.zUpToYUpPoint(s.foot_target[leg_index]);
+            s.transform[0] = mulMat(translation(target[0], target[1], target[2]), scaling(0.02, 0.005, 0.02));
+            z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
+        }
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    s.frame_ms += (f.time.delta_time * 1000.0 - s.frame_ms) * 0.1;
+    if (s.running) {
+        s.accumulator += @min(f.time.delta_time, 0.1);
+        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
+            controlTick(s);
+        }
+    }
+
+    // The trunk falling through the floor is the failure mode, and a demo you have to reset by
+    // hand after every glance at it is a demo nobody looks at twice.
+    if (s.trunk_state[mpc.pos_offset + 2] < -0.5) {
+        resetRobot(s);
+    }
+
+    z.clearViewport(f, background);
+    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
+    s.cam.distance = clamp(2.0 / @max(0.35, aspect), 1.4, 5.0);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 0.8, .max_distance = 8.0 });
+    z.beginMode3D(gl, cam);
+    drawScene(s, gl);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

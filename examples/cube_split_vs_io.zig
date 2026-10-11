@@ -10,6 +10,7 @@
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
 const shader = @import("shader_interface");
+const Vec = zm.Vec;
 
 /// Vertex attributes consumed by this VS.  Position is 3D world-space;
 /// tex_coord is the 2D UV.  Location 0 / 1 match the GPU side's
@@ -27,7 +28,7 @@ pub const Ubo = struct {
     /// Model-view-projection matrix.  4 columns x 4 rows = 16 f32.
     /// Standard GLSL column-major layout - `mat[col][row]`.
     /// `zm.mulMatVec` consumes this directly.
-    mvp: [4]@Vector(4, f32),
+    mvp: [4]Vec,
 };
 
 /// Varying outputs to the fragment shader.  Just the UV - the cube

@@ -420,41 +420,6 @@ const worker_error_names = jobs_abi.worker_errors;
 /// it: the runtime invokes `handleMessageFromHost` with no context of ours to carry state in.
 var kernel_wasm_exports_handle: JsHandle = 0; // lint:off module-var: one kernel instance per worker
 
-/// THE ENTRY POINT. c2js emits this as a plain JavaScript function, and the worker bootstrap in
-/// `bridge.zig` calls it exactly once, immediately after loading the program.
-///
-/// All it does is register the callback. Everything else in this file happens only because the
-/// browser delivers a message.
-export fn start() void {
-    const the_global_scope: JsValue = globalScope();
-    const message_handler: JsValue = asJsFunction(&handleMessageFromHost);
-    the_global_scope.setProperty("onmessage", message_handler);
-}
-
-/// Called by the browser once per message from the host. THIS IS THE ENTIRE WORKER.
-///
-/// Notice what is absent: no loop, no waiting, no locks, no shared state. A worker handles one
-/// message at a time, start to finish, and `bridge.zig` guarantees it never has two jobs in
-/// flight on one worker (see `busy_with` there). So this can be perfectly ordinary, blocking,
-/// sequential code - which is precisely why it is able to be Zig.
-fn handleMessageFromHost(event_handle: JsHandle) callconv(.c) void {
-    const event_object: JsValue = .{ .handle = event_handle };
-    const message_object: JsValue = event_object.getProperty("data");
-
-    const message_tag: JsValue = message_object.getProperty("t");
-    const init_tag: JsValue = asJsString(message_tags.init);
-    const this_message_is_the_init_message: bool = message_tag.strictlyEquals(init_tag);
-
-    if (this_message_is_the_init_message) {
-        const kernel_wasm_bytes: JsValue = message_object.getProperty("wasm");
-        instantiateKernelWasm(kernel_wasm_bytes);
-        return;
-    }
-
-    // Anything that is not `init` is a job: { t: "job", handle, kernel, bytes }.
-    runOneJob(message_object);
-}
-
 /// Compile and instantiate the kernel wasm, then tell the host we are ready to receive work.
 ///
 /// THE WHOLE POINT OF THIS FUNCTION IS THAT IT BLOCKS.
@@ -502,6 +467,45 @@ fn instantiateKernelWasm(kernel_wasm_bytes: JsValue) void {
     const ready_tag: JsValue = asJsString(message_tags.ready);
     ready_reply.setProperty("t", ready_tag);
     _ = globalScope().callMethod("postMessage", .{ready_reply});
+}
+
+/// Report a failure whose name is already a JavaScript string.
+fn replyWithFailureValue(job_handle: f64, failure_name: JsValue) void {
+    const failure_reply: JsValue = newEmptyJsObject();
+    failure_reply.setProperty("t", asJsString(message_tags.done));
+    failure_reply.setNumberProperty("handle", job_handle);
+    failure_reply.setNumberProperty("failed", 1);
+    failure_reply.setProperty("err", failure_name);
+    _ = globalScope().callMethod("postMessage", .{failure_reply});
+}
+
+/// Report a failure whose name we already know as a Zig string.
+fn replyWithFailureName(job_handle: f64, failure_name: []const u8) void {
+    replyWithFailureValue(job_handle, asJsString(failure_name));
+}
+
+/// The kernel returned a Zig error. Fetch its NAME out of the kernel's memory and send that, so
+/// the host reads "ShortPayload" instead of a bare, useless "-1".
+fn replyWithKernelError(job_handle: f64, kernel_exports: JsValue) void {
+    const error_name_pointer: f64 = kernel_exports.callMethod(jobs_abi.err_ptr, .{}).asNumber();
+    const error_name_length: f64 = kernel_exports.callMethod(jobs_abi.err_len, .{}).asNumber();
+
+    // `.buffer` fresh, once more - the kernel ran, so its memory may have grown.
+    const kernel_memory: JsValue = kernel_exports.getProperty(jobs_abi.memory);
+    const kernel_memory_buffer: JsValue = kernel_memory.getProperty("buffer");
+
+    const uint8_array_constructor: JsValue = globalScope().getProperty("Uint8Array");
+    const error_name_bytes: JsValue = uint8_array_constructor.construct(.{
+        kernel_memory_buffer,
+        asJsNumber(error_name_pointer),
+        asJsNumber(error_name_length),
+    });
+
+    const text_decoder_constructor: JsValue = globalScope().getProperty("TextDecoder");
+    const text_decoder: JsValue = text_decoder_constructor.construct(.{});
+    const error_name_string: JsValue = text_decoder.callMethod("decode", .{error_name_bytes});
+
+    replyWithFailureValue(job_handle, error_name_string);
 }
 
 /// Run exactly one job: copy the bytes in, call the one kernel export, copy the result out.
@@ -636,43 +640,39 @@ fn runOneJob(message_object: JsValue) void {
     _ = globalScope().callMethod("postMessage", .{ done_reply, transfer_list });
 }
 
-/// The kernel returned a Zig error. Fetch its NAME out of the kernel's memory and send that, so
-/// the host reads "ShortPayload" instead of a bare, useless "-1".
-fn replyWithKernelError(job_handle: f64, kernel_exports: JsValue) void {
-    const error_name_pointer: f64 = kernel_exports.callMethod(jobs_abi.err_ptr, .{}).asNumber();
-    const error_name_length: f64 = kernel_exports.callMethod(jobs_abi.err_len, .{}).asNumber();
+/// Called by the browser once per message from the host. THIS IS THE ENTIRE WORKER.
+///
+/// Notice what is absent: no loop, no waiting, no locks, no shared state. A worker handles one
+/// message at a time, start to finish, and `bridge.zig` guarantees it never has two jobs in
+/// flight on one worker (see `busy_with` there). So this can be perfectly ordinary, blocking,
+/// sequential code - which is precisely why it is able to be Zig.
+fn handleMessageFromHost(event_handle: JsHandle) callconv(.c) void {
+    const event_object: JsValue = .{ .handle = event_handle };
+    const message_object: JsValue = event_object.getProperty("data");
 
-    // `.buffer` fresh, once more - the kernel ran, so its memory may have grown.
-    const kernel_memory: JsValue = kernel_exports.getProperty(jobs_abi.memory);
-    const kernel_memory_buffer: JsValue = kernel_memory.getProperty("buffer");
+    const message_tag: JsValue = message_object.getProperty("t");
+    const init_tag: JsValue = asJsString(message_tags.init);
+    const this_message_is_the_init_message: bool = message_tag.strictlyEquals(init_tag);
 
-    const uint8_array_constructor: JsValue = globalScope().getProperty("Uint8Array");
-    const error_name_bytes: JsValue = uint8_array_constructor.construct(.{
-        kernel_memory_buffer,
-        asJsNumber(error_name_pointer),
-        asJsNumber(error_name_length),
-    });
+    if (this_message_is_the_init_message) {
+        const kernel_wasm_bytes: JsValue = message_object.getProperty("wasm");
+        instantiateKernelWasm(kernel_wasm_bytes);
+        return;
+    }
 
-    const text_decoder_constructor: JsValue = globalScope().getProperty("TextDecoder");
-    const text_decoder: JsValue = text_decoder_constructor.construct(.{});
-    const error_name_string: JsValue = text_decoder.callMethod("decode", .{error_name_bytes});
-
-    replyWithFailureValue(job_handle, error_name_string);
+    // Anything that is not `init` is a job: { t: "job", handle, kernel, bytes }.
+    runOneJob(message_object);
 }
 
-/// Report a failure whose name we already know as a Zig string.
-fn replyWithFailureName(job_handle: f64, failure_name: []const u8) void {
-    replyWithFailureValue(job_handle, asJsString(failure_name));
-}
-
-/// Report a failure whose name is already a JavaScript string.
-fn replyWithFailureValue(job_handle: f64, failure_name: JsValue) void {
-    const failure_reply: JsValue = newEmptyJsObject();
-    failure_reply.setProperty("t", asJsString(message_tags.done));
-    failure_reply.setNumberProperty("handle", job_handle);
-    failure_reply.setNumberProperty("failed", 1);
-    failure_reply.setProperty("err", failure_name);
-    _ = globalScope().callMethod("postMessage", .{failure_reply});
+/// THE ENTRY POINT. c2js emits this as a plain JavaScript function, and the worker bootstrap in
+/// `bridge.zig` calls it exactly once, immediately after loading the program.
+///
+/// All it does is register the callback. Everything else in this file happens only because the
+/// browser delivers a message.
+export fn start() void {
+    const the_global_scope: JsValue = globalScope();
+    const message_handler: JsValue = asJsFunction(&handleMessageFromHost);
+    the_global_scope.setProperty("onmessage", message_handler);
 }
 
 comptime {

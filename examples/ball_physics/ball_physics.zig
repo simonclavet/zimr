@@ -21,6 +21,8 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -43,8 +45,8 @@ const Ball = struct {
 };
 
 const State = struct {
-    scratch: std.heap.ArenaAllocator,
-    rng: std.Random.DefaultPrng,
+    scratch: ArenaAllocator,
+    rng: Random.DefaultPrng,
     gpa: Allocator,
     ui_host: z.UiHost,
     font: z.Font,
@@ -85,8 +87,8 @@ fn initState(
 ) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     s.* = .{
-        .scratch = std.heap.ArenaAllocator.init(gpa),
-        .rng = std.Random.DefaultPrng.init(0xBA11_C0DE),
+        .scratch = ArenaAllocator.init(gpa),
+        .rng = Random.DefaultPrng.init(0xBA11_C0DE),
         .gpa = gpa,
         .ui_host = z.UiHost.init(gpa, font),
         .font = font,
@@ -107,11 +109,11 @@ fn initState(
     });
 }
 
-fn randomSpeed(rand: std.Random) f32 {
+fn randomSpeed(rand: Random) f32 {
     return @floatFromInt(rand.intRangeAtMost(i32, -300, 300));
 }
 
-fn randomU8(rand: std.Random) u8 {
+fn randomU8(rand: Random) u8 {
     return rand.intRangeAtMost(u8, 0, 255);
 }
 
@@ -119,7 +121,7 @@ fn spawnBallAt(state: *State, at: Vec2) void {
     if (state.balls.items.len >= max_balls) {
         return;
     }
-    const rand: std.Random = state.rng.random();
+    const rand: Random = state.rng.random();
     // `ensureTotalCapacity(max_balls)` already ran in initState, so
     // appendAssumeCapacity is correct here - we just checked the cap
     // above, and the reserved capacity never shrinks.
@@ -134,7 +136,7 @@ fn spawnBallAt(state: *State, at: Vec2) void {
 }
 
 fn shakeAll(state: *State) void {
-    const rand: std.Random = state.rng.random();
+    const rand: Random = state.rng.random();
     for (state.balls.items) |*b| {
         if (b.grabbed) {
             continue;

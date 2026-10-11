@@ -1,3 +1,3 @@
-# EMPTY. Every violation the ratchet was grandfathering has been fixed.
-# Regenerate only if a deliberate backlog is ever accepted again:
-#   zimrlint --baseline tools/lint_baseline.tsv --write-baseline <files...>
+# EMPTY (Oct 2). The by-hand backlog the complete walk exposed at the L4b landing - 172 findings - is all fixed,
+# each one read in its context and fixed as an improvement where it allowed (L4c, ten batches).
+# Regenerate only if a deliberate backlog is ever accepted again: `zig build lint -- --write-baseline`.

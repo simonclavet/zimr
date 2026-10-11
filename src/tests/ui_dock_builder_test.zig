@@ -19,6 +19,7 @@ const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const ui = @import("../ui.zig");
 
 fn testCtx(gpa: Allocator) ui.UiContext {
@@ -56,7 +57,7 @@ fn makeRootNode(ctx: *ui.UiContext) !ui.Id {
 }
 
 test "dockBuilderSplitNode: produces two children with valid ids" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -80,7 +81,7 @@ test "dockBuilderSplitNode: produces two children with valid ids" {
 }
 
 test "dockBuilderSplitNode: invalid node returns zero ids" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
     const u: ui.Ui = testUi(&ctx);
@@ -91,7 +92,7 @@ test "dockBuilderSplitNode: invalid node returns zero ids" {
 }
 
 test "dockBuilderDockWindow: wires Window.dock_node_id + leaf list" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -114,7 +115,7 @@ test "dockBuilderDockWindow: wires Window.dock_node_id + leaf list" {
 }
 
 test "dockBuilderDockWindow: idempotent (same window, same node)" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -135,7 +136,7 @@ test "dockBuilderDockWindow: re-docking moves window (collapses empty leaf)" {
     // the sibling's identity, and the old leaf ids become
     // invalid.  This is the correct behavior for a layout that
     // self-prunes empty branches; test verifies the final shape.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -163,7 +164,7 @@ test "dockBuilderDockWindow: re-docking moves window (collapses empty leaf)" {
 }
 
 test "dockBuilderDockWindow: error on non-leaf target is silent" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -181,7 +182,7 @@ test "dockBuilderDockWindow: error on non-leaf target is silent" {
 }
 
 test "dockBuilderRemoveNode: clears dock_node_id on all windows in subtree" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -205,7 +206,7 @@ test "dockBuilderRemoveNode: clears dock_node_id on all windows in subtree" {
 }
 
 test "dockBuilderFinish: no-op (placeholder for future layout cache)" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -215,7 +216,7 @@ test "dockBuilderFinish: no-op (placeholder for future layout cache)" {
 }
 
 test "docked window: findOrCreateWindow pulls pos/size from leaf rect" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 
@@ -239,7 +240,7 @@ test "docked window: findOrCreateWindow pulls pos/size from leaf rect" {
 }
 
 test "docked window: stale dock_node_id falls back to floating" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var ctx: ui.UiContext = testCtx(gpa);
     defer ctx.deinit();
 

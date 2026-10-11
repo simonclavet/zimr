@@ -21,6 +21,11 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const Random = std.Random;
+const testing_allocator = std.testing.allocator;
+const swap = std.mem.swap;
+const eql = std.mem.eql;
 
 const zm = @import("zm");
 const rbt = @import("robot.zig");
@@ -43,6 +48,7 @@ const sinRad = zm.sinRad;
 const pi = zm.pi;
 const quat = zm.quat;
 const qmul = zm.qmul;
+const Quat = zm.Quat;
 
 /// Which velocity DOFs a controller may push on, and how hard.
 pub const Actuation = struct {
@@ -94,6 +100,22 @@ pub const Actuation = struct {
     }
 };
 
+/// Which joint owns a velocity DOF.
+fn dofJoint(model: *const rbt.Model, dof: u32) u32 {
+    for (0..model.njnt) |j| {
+        const first: u32 = model.jnt_dof_adr[j];
+        const width: u32 = switch (model.jnt_type[j]) {
+            .free => 6,
+            .ball => 3,
+            .hinge, .slide => 1,
+        };
+        if (dof >= first and dof < first + width) {
+            return @intCast(j);
+        }
+    }
+    return 0;
+}
+
 /// Restrict an `Actuation` to the joints on the path from one body to the world.
 ///
 /// -- * WHY IK NEEDS THIS TO MOVE A QUADRUPED'S BODY --
@@ -125,22 +147,6 @@ pub fn limbActuation(gpa: Allocator, model: *const rbt.Model, tip: u32) !Actuati
         }
     }
     return .{ .powered = powered, .gpa = gpa };
-}
-
-/// Which joint owns a velocity DOF.
-fn dofJoint(model: *const rbt.Model, dof: u32) u32 {
-    for (0..model.njnt) |j| {
-        const first: u32 = model.jnt_dof_adr[j];
-        const width: u32 = switch (model.jnt_type[j]) {
-            .free => 6,
-            .ball => 3,
-            .hinge, .slide => 1,
-        };
-        if (dof >= first and dof < first + width) {
-            return @intCast(j);
-        }
-    }
-    return 0;
 }
 
 /// A joint-space pose controller.
@@ -380,7 +386,7 @@ pub const IkTarget = struct {
     /// * IT COSTS THREE MORE ROWS on the same Jacobian and turns the 3x3 damped least-squares
     /// system into a 6x6 - which is why the solve below is written for N rows rather than
     /// three, with the explicit 3x3 inverse replaced by a Cholesky.
-    orientation: ?zm.Quat = null,
+    orientation: ?Quat = null,
 };
 
 /// Solve for joint angles that put an end effector on a target.
@@ -498,9 +504,9 @@ pub const Ik = struct {
             // than by 359 deg.
             var turn: Vec = vec_zero;
             if (target.orientation) |wanted| {
-                const misalignment: zm.Quat =
+                const misalignment: Quat =
                     qmul(wanted, zm.conjugate(data.body_xrot[target.body]));
-                const shortest: zm.Quat = if (misalignment[3] < 0) -misalignment else misalignment;
+                const shortest: Quat = if (misalignment[3] < 0) -misalignment else misalignment;
                 turn = vec(2 * shortest[0], 2 * shortest[1], 2 * shortest[2]);
                 // * ONE NUMBER OUT, POSITION-DOMINANT. The halves are in different units -
                 // metres and radians - and none combines them honestly, so `error_distance`
@@ -619,12 +625,12 @@ test "ik: a KUKA reaches a target it can reach" {
     // ** A REAL ROBOT, NOT A CONTRIVED ONE. Two links and a hinge would prove nothing about
     // conditioning: the KUKA is 7-DOF and redundant, so `J*J^T` is genuinely rank-deficient in
     // directions the arm cannot move, which is exactly the case damping exists for.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var model: rbt.Model = try kuka.Model.build(gpa);
     defer model.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &model);
+    var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, &model);
+    var actuation: Actuation = try .init(gpa, &model);
     defer actuation.deinit();
     const scratch: []Vec = try gpa.alloc(Vec, Ik.scratchSize(&model));
     defer gpa.free(scratch);
@@ -657,12 +663,12 @@ test "ik: an unreachable target gives the closest approach, not a failure" {
     // * `reached = false` IS A NORMAL OUTCOME. A target outside the workspace has no solution,
     // and the useful answer is the nearest pose rather than an error - a caller steering a
     // hand toward a moving object wants it to keep pointing the right way, not to stop.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var model: rbt.Model = try kuka.Model.build(gpa);
     defer model.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &model);
+    var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, &model);
+    var actuation: Actuation = try .init(gpa, &model);
     defer actuation.deinit();
     const scratch: []Vec = try gpa.alloc(Vec, Ik.scratchSize(&model));
     defer gpa.free(scratch);
@@ -687,12 +693,12 @@ test "ik: an unreachable target gives the closest approach, not a failure" {
 test "ik: joint limits are respected by the answer" {
     // An IK result that violates a limit is not a pose the robot can hold; handing one to a
     // controller produces a machine fighting its own constraint solver.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var model: rbt.Model = try kuka.Model.build(gpa);
     defer model.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &model);
+    var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, &model);
+    var actuation: Actuation = try .init(gpa, &model);
     defer actuation.deinit();
     const scratch: []Vec = try gpa.alloc(Vec, Ik.scratchSize(&model));
     defer gpa.free(scratch);
@@ -720,13 +726,13 @@ test "control: only powered DOFs are driven" {
     // *** THE RULE THAT HAS BITTEN THREE TIMES - crates hanging in mid-air, and a Go1 rising
     // at a steady 2.4 m/s. `bias_force` covers every DOF including a floating base's six, and
     // adding all of it cancels the machine's own weight.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Floating: type = rbt.Spec(.{
         .bodies = &.{
             .{
                 .name = "base",
                 .joints = &.{.{ .name = "root", .kind = .free }},
-                .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = zm.splat(@as(f32, 0.1)) } } }},
+                .geoms = &.{.{ .shape = .{ .box = .{ .half_extent = splat(@as(f32, 0.1)) } } }},
             },
             .{
                 .name = "arm",
@@ -739,9 +745,9 @@ test "control: only powered DOFs are driven" {
     });
     var model: rbt.Model = try Floating.build(gpa);
     defer model.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &model);
+    var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, &model);
+    var actuation: Actuation = try .init(gpa, &model);
     defer actuation.deinit();
 
     // Six free DOFs unpowered, one hinge powered.
@@ -786,7 +792,12 @@ test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
     //
     // MuJoCo's own `humanoid.xml`, imported through `mjcf` + `robot_mjcf`, held at its default
     // pose by `PoseHold`, on a floor, for 5000 steps at 500 Hz.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -799,9 +810,9 @@ test "* THE GATE: a 27-DOF humanoid stands for 10 seconds" {
     });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, model);
+    var actuation: Actuation = try .init(gpa, model);
     defer actuation.deinit();
 
     var world: zimrphysics.World = try .init(gpa, 128);
@@ -979,6 +990,45 @@ pub fn centroidalMomentumDirect(
     }
 }
 
+fn solve3(matrix: *[9]f32, rhs: *[3]f32) bool {
+    var a: [9]f32 = matrix.*;
+    var b: [3]f32 = rhs.*;
+    for (0..3) |col| {
+        var pivot: usize = col;
+        for (col + 1..3) |r| {
+            if (@abs(a[r * 3 + col]) > @abs(a[pivot * 3 + col])) {
+                pivot = r;
+            }
+        }
+        if (@abs(a[pivot * 3 + col]) < 1.0e-20) {
+            return false;
+        }
+        if (pivot != col) {
+            for (0..3) |k| {
+                swap(f32, &a[col * 3 + k], &a[pivot * 3 + k]);
+            }
+            swap(f32, &b[col], &b[pivot]);
+        }
+        for (col + 1..3) |r| {
+            const factor: f32 = a[r * 3 + col] / a[col * 3 + col];
+            for (col..3) |k| {
+                a[r * 3 + k] -= factor * a[col * 3 + k];
+            }
+            b[r] -= factor * b[col];
+        }
+    }
+    var k: usize = 3;
+    while (k > 0) {
+        k -= 1;
+        var sum: f32 = b[k];
+        for (k + 1..3) |j| {
+            sum -= a[k * 3 + j] * rhs[j];
+        }
+        rhs[k] = sum / a[k * 3 + k];
+    }
+    return true;
+}
+
 /// Joint torques that produce a requested rate of change of angular momentum about the centre
 /// of mass. `scratch` is `3 x nv`; `out` is `nv` and is ACCUMULATED into.
 ///
@@ -1072,45 +1122,6 @@ pub fn momentumTorques(
 /// the matrix is singular, which the caller treats as "this direction is unreachable".
 pub fn solve3Pub(matrix: *[9]f32, rhs: *[3]f32) bool {
     return solve3(matrix, rhs);
-}
-
-fn solve3(matrix: *[9]f32, rhs: *[3]f32) bool {
-    var a: [9]f32 = matrix.*;
-    var b: [3]f32 = rhs.*;
-    for (0..3) |col| {
-        var pivot: usize = col;
-        for (col + 1..3) |r| {
-            if (@abs(a[r * 3 + col]) > @abs(a[pivot * 3 + col])) {
-                pivot = r;
-            }
-        }
-        if (@abs(a[pivot * 3 + col]) < 1.0e-20) {
-            return false;
-        }
-        if (pivot != col) {
-            for (0..3) |k| {
-                std.mem.swap(f32, &a[col * 3 + k], &a[pivot * 3 + k]);
-            }
-            std.mem.swap(f32, &b[col], &b[pivot]);
-        }
-        for (col + 1..3) |r| {
-            const factor: f32 = a[r * 3 + col] / a[col * 3 + col];
-            for (col..3) |k| {
-                a[r * 3 + k] -= factor * a[col * 3 + k];
-            }
-            b[r] -= factor * b[col];
-        }
-    }
-    var k: usize = 3;
-    while (k > 0) {
-        k -= 1;
-        var sum: f32 = b[k];
-        for (k + 1..3) |j| {
-            sum -= a[k * 3 + j] * rhs[j];
-        }
-        rhs[k] = sum / a[k * 3 + k];
-    }
-    return true;
 }
 
 /// IK that reaches for a target while holding the centre of mass over a fixed spot.
@@ -1232,6 +1243,12 @@ pub const BalancedIk = struct {
     }
 };
 
+fn comDrift(now: Vec, rest: Vec) f32 {
+    const dx: f32 = now[0] - rest[0];
+    const dy: f32 = now[1] - rest[1];
+    return @sqrt(dx * dx + dy * dy);
+}
+
 test "ik: reaching while holding the centre of mass" {
     // ** THE PROBLEM A STANDING ROBOT HAS THAT A BENCH-MOUNTED ARM DOES NOT. Moving the arm
     // MOVES THE CENTRE OF MASS, and a humanoid whose CM leaves its feet falls over. The two
@@ -1240,7 +1257,7 @@ test "ik: reaching while holding the centre of mass" {
     //
     // A 27-DOF humanoid reaching with one hand has 24 spare dimensions, so there is usually
     // room to lean and counterweight without the hand drifting at all.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1249,9 +1266,9 @@ test "ik: reaching while holding the centre of mass" {
     var imported: rmj.Imported = try rmj.build(gpa, &robot, .{ .max_contacts = 8 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, model);
+    var actuation: Actuation = try .init(gpa, model);
     defer actuation.deinit();
     const scratch: []Vec = try gpa.alloc(Vec, BalancedIk.scratchSize(model));
     defer gpa.free(scratch);
@@ -1293,12 +1310,6 @@ test "ik: reaching while holding the centre of mass" {
     try expect(result.reach.error_distance < 0.01);
 }
 
-fn comDrift(now: Vec, rest: Vec) f32 {
-    const dx: f32 = now[0] - rest[0];
-    const dy: f32 = now[1] - rest[1];
-    return @sqrt(dx * dx + dy * dy);
-}
-
 /// A model, its state, and the buffers a learning loop needs - assembled once.
 ///
 /// -- * WHY A WRAPPER, WHEN THE PIECES ARE ALL PUBLIC --
@@ -1321,9 +1332,9 @@ pub const Env = struct {
     gpa: Allocator,
 
     pub fn init(gpa: Allocator, model: *const rbt.Model) !Env {
-        var data: rbt.Data = try rbt.Data.init(gpa, model);
+        var data: rbt.Data = try .init(gpa, model);
         errdefer data.deinit();
-        var start: rbt.State = try rbt.State.init(gpa, model);
+        var start: rbt.State = try .init(gpa, model);
         errdefer start.deinit();
         rbt.forward(model, &data);
         start.save(&data);
@@ -1414,7 +1425,7 @@ test "* env: reset replays, and actions are clamped to what the model declares" 
     // ** THE TWO PROPERTIES A LEARNING LOOP DEPENDS ON, and they fail silently if wrong:
     // a reset that does not fully reset makes episodes correlated, and an unclamped action
     // teaches physics no real robot can produce.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm: type = rbt.Spec(.{
         .bodies = &.{.{
             .name = "link",
@@ -1432,7 +1443,7 @@ test "* env: reset replays, and actions are clamped to what the model declares" 
     });
     var model: rbt.Model = try Arm.build(gpa);
     defer model.deinit();
-    var env: Env = try Env.init(gpa, &model);
+    var env: Env = try .init(gpa, &model);
     defer env.deinit();
 
     try expectEqual(@as(usize, 1), env.actionSize());
@@ -1475,7 +1486,7 @@ test "env: markStart makes a settled pose the episode start" {
     // A legged robot's `qpos0` is usually a pose it immediately falls out of, so every episode
     // would begin with the same half-second of settling - time a policy spends learning
     // something the environment could simply not do to it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm: type = rbt.Spec(.{
         .bodies = &.{.{
             .name = "link",
@@ -1498,7 +1509,7 @@ test "env: markStart makes a settled pose the episode start" {
     });
     var model: rbt.Model = try Arm.build(gpa);
     defer model.deinit();
-    var env: Env = try Env.init(gpa, &model);
+    var env: Env = try .init(gpa, &model);
     defer env.deinit();
 
     // Let it swing down and settle against its limit.
@@ -1524,7 +1535,7 @@ test "* ik: an orientation target aims the jaws, which a position target cannot"
     // statement about the jaws' DIRECTION, and a position-only solver returns whatever attitude
     // its nullspace happened to drift into. On the demo the jaws sat sideways at rest and no
     // choice of target position changed it, because position targets cannot express it.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/arm_gripper.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1533,9 +1544,9 @@ test "* ik: an orientation target aims the jaws, which a position target cannot"
     var imported: rmj.Imported = try rmj.build(gpa, &robot, .{ .max_contacts = 8, .gravity = vec(0, 0, -9.81) });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, model);
+    var actuation: Actuation = try .init(gpa, model);
     defer actuation.deinit();
     const scratch: []Vec = try gpa.alloc(Vec, Ik.scratchSize(model));
     defer gpa.free(scratch);
@@ -1544,7 +1555,7 @@ test "* ik: an orientation target aims the jaws, which a position target cannot"
     const grasp: Vec = vec(0, 0, 0.055);
     const goal: Vec = vec(0.40, 0, 0.50);
     // Jaws pointing straight down: the wrist's local +z onto the world's -z.
-    const jaws_down: zm.Quat = quatFromAxisAngle(vec(0, 1, 0), pi);
+    const jaws_down: Quat = quatFromAxisAngle(vec(0, 1, 0), pi);
 
     const jawDirection = struct {
         fn go(m: *const rbt.Model, d: *rbt.Data, body: u32) Vec {
@@ -1713,7 +1724,7 @@ test "* batch: many environments agree bit-for-bit with running each alone" {
     // `robot.zig` already proves the underlying independence: three `Data` interleaved against
     // one `Model` match their solo runs exactly. This checks the layer above, where an indexing
     // slip in the observation matrix would be just as invisible and considerably more likely.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const Arm: type = rbt.Spec(.{
         .bodies = &.{
             .{
@@ -1757,7 +1768,7 @@ test "* batch: many environments agree bit-for-bit with running each alone" {
     // -- Each one alone --
     var solo: [environments][2]f32 = undefined;
     for (0..environments) |i| {
-        var env: Env = try Env.init(gpa, &model);
+        var env: Env = try .init(gpa, &model);
         defer env.deinit();
         _ = env.reset();
         for (0..600) |_| {
@@ -1767,7 +1778,7 @@ test "* batch: many environments agree bit-for-bit with running each alone" {
     }
 
     // -- All of them together --
-    var batch: Batch = try Batch.init(gpa, &model, environments);
+    var batch: Batch = try .init(gpa, &model, environments);
     defer batch.deinit();
     _ = batch.reset();
     for (0..600) |_| {
@@ -1805,7 +1816,12 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
     //
     // ** SO A CONTROLLER TEST NEEDS BOTH HALVES. "Does not explode" is satisfied by a
     // controller that does nothing at all, and that is exactly the failure this missed.
-    const gpa: Allocator = std.testing.allocator;
+    const options = @import("build_options");
+    const slow: bool = comptime @hasDecl(options, "slow_tests") and options.slow_tests;
+    if (!slow) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1818,9 +1834,9 @@ test "** PoseHold: inertia-scaled gains must both HOLD and not explode" {
     });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
-    var actuation: Actuation = try Actuation.init(gpa, model);
+    var actuation: Actuation = try .init(gpa, model);
     defer actuation.deinit();
 
     var world: zimrphysics.World = try .init(gpa, 256);
@@ -1954,7 +1970,7 @@ test "*** centroidal momentum: the matrix agrees with a sum that shares no code 
     // over bodies using `cinert`/`cvel`, which the dynamics maintains for its own purposes and
     // which never touches a Jacobian. If they agree on a non-trivial velocity, the assembly is
     // right - the same cross-check that caught a missing block in the trunk model.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const humanoid_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
 
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
@@ -1968,7 +1984,7 @@ test "*** centroidal momentum: the matrix agrees with a sum that shares no code 
     });
     defer imported.deinit();
     const model: *const rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     const jac: []Vec = try gpa.alloc(Vec, model.nv);
@@ -1981,10 +1997,10 @@ test "*** centroidal momentum: the matrix agrees with a sum that shares no code 
     defer gpa.free(scratch_rot);
 
     // A pose and a velocity with nothing symmetric about them, so no term can cancel by luck.
-    var seed: std.Random.DefaultPrng = .init(0x9e3779b9);
-    const rng: std.Random = seed.random();
+    var seed: Random.DefaultPrng = .init(0x9e3779b9);
+    const rng: Random = seed.random();
     for (robot.keyframes) |kf| {
-        if (std.mem.eql(u8, kf.name, "stand_on_left_leg")) {
+        if (eql(u8, kf.name, "stand_on_left_leg")) {
             _ = rmj.applyKeyframe(model, &data, kf);
         }
     }
@@ -2029,7 +2045,7 @@ test "*** centroidal momentum: angular momentum is CONSERVED in free flight" {
     //
     // This tests the quantity against the world rather than against another formula: an error
     // shared between the matrix and the direct sum would pass the previous test and fail here.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const humanoid_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
 
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
@@ -2043,18 +2059,18 @@ test "*** centroidal momentum: angular momentum is CONSERVED in free flight" {
     });
     defer imported.deinit();
     const model: *const rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     for (robot.keyframes) |kf| {
-        if (std.mem.eql(u8, kf.name, "stand_on_left_leg")) {
+        if (eql(u8, kf.name, "stand_on_left_leg")) {
             _ = rmj.applyKeyframe(model, &data, kf);
         }
     }
     // Well clear of the ground, and thrown into a tumble so the limbs really do move.
     data.pos[model.jnt_qpos_adr[0] + 2] += 5.0;
-    var seed: std.Random.DefaultPrng = .init(0x1234567);
-    const rng: std.Random = seed.random();
+    var seed: Random.DefaultPrng = .init(0x1234567);
+    const rng: Random = seed.random();
     for (0..model.nv) |v| {
         data.vel[v] = rng.float(f32) * 4.0 - 2.0;
     }
@@ -2118,7 +2134,7 @@ test "momentum torques: SKIPPED - free flight is the wrong gate; see the note ab
     // `tau = A_G^T*w` scored cosines from -0.90 to +0.27 - anticorrelated - because a transpose
     // assumes quasi-statics and this is a dynamics problem. `tau = G^T(G*G^T)^-1*w` inverts the
     // operator that was in the way.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const humanoid_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
 
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, humanoid_xml, null);
@@ -2132,7 +2148,7 @@ test "momentum torques: SKIPPED - free flight is the wrong gate; see the note ab
     });
     defer imported.deinit();
     const model: *const rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     const rows: []Vec = try gpa.alloc(Vec, model.nv);
@@ -2167,7 +2183,7 @@ test "momentum torques: SKIPPED - free flight is the wrong gate; see the note ab
 
     for (wanted) |direction| {
         for (robot.keyframes) |kf| {
-            if (std.mem.eql(u8, kf.name, "stand_on_left_leg")) {
+            if (eql(u8, kf.name, "stand_on_left_leg")) {
                 _ = rmj.applyKeyframe(model, &data, kf);
             }
         }
@@ -2270,11 +2286,11 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     const paths: struct {
         robot: []const u8,
@@ -2287,10 +2303,10 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     };
 
     const Read = struct {
-        fn all(a: Allocator, w: std.Io, path: []const u8) ![]u8 {
-            var file: std.Io.File = std.Io.Dir.cwd().openFile(w, path, .{}) catch return error.SkipZigTest;
+        fn all(a: Allocator, w: Io, path: []const u8) ![]u8 {
+            var file: Io.File = Io.Dir.cwd().openFile(w, path, .{}) catch return error.SkipZigTest;
             defer file.close(w);
-            const info: std.Io.File.Stat = try file.stat(w);
+            const info: Io.File.Stat = try file.stat(w);
             const bytes: []u8 = try a.alloc(u8, info.size);
             _ = try file.readPositionalAll(w, bytes, 0);
             return bytes;
@@ -2308,7 +2324,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
         .max_contacts = 256,
     });
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
     rbt.forward(&imported.model, &data);
 
@@ -2413,7 +2429,7 @@ test "stage 0: how long does open-loop clip playback keep a humanoid upright" {
     defer gpa.free(target);
     @memcpy(target, data.pos);
 
-    var actuation: Actuation = try Actuation.init(gpa, &imported.model);
+    var actuation: Actuation = try .init(gpa, &imported.model);
     defer actuation.deinit();
 
     const dt: f32 = 1.0 / 240.0;
@@ -2543,17 +2559,17 @@ test "stage 0 debug: does the IK solve wind joints past their limits" {
     // This asks the first question alone: run the solve over the whole clip and report each
     // hinge's range against its declared limit. **The solve is deterministic and needs no
     // physics**, so the answer costs one test run rather than a device round trip.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     const Read = struct {
-        fn all(a: Allocator, w: std.Io, path: []const u8) ![]u8 {
-            var file: std.Io.File = std.Io.Dir.cwd().openFile(w, path, .{}) catch return error.SkipZigTest;
+        fn all(a: Allocator, w: Io, path: []const u8) ![]u8 {
+            var file: Io.File = Io.Dir.cwd().openFile(w, path, .{}) catch return error.SkipZigTest;
             defer file.close(w);
-            const info: std.Io.File.Stat = try file.stat(w);
+            const info: Io.File.Stat = try file.stat(w);
             const bytes: []u8 = try a.alloc(u8, info.size);
             _ = try file.readPositionalAll(w, bytes, 0);
             return bytes;
@@ -2610,19 +2626,19 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid_flex.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -2648,7 +2664,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     defer imported.deinit();
     const m: *const rbt.Model = &imported.model;
 
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     rbt.forward(m, &data);
 
@@ -2656,7 +2672,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     var elbow: usize = 0;
     for (0..m.njnt) |j| {
         if (m.jnt_type[j] == .hinge and
-            std.mem.eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
+            eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
         {
             elbow = j;
             break;
@@ -2669,7 +2685,7 @@ test "stage 0 debug: can a PD servo hold ONE elbow, with everything else frozen"
     const goal: f32 = -1.0; // comfortably inside [-2.62, 0.35]
     target[m.jnt_qpos_adr[elbow]] = goal;
 
-    var actuation: Actuation = try Actuation.init(gpa, m);
+    var actuation: Actuation = try .init(gpa, m);
     defer actuation.deinit();
 
     // ** THE ROOT IS PINNED EVERY STEP, so this measures the servo and nothing else - no
@@ -2821,19 +2837,19 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
     //
     // Simon's suggestion, and it is checkable without physics: place the character at rest and
     // ask how far the excluded pairs interpenetrate.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid_flex.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -2846,7 +2862,7 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
     defer imported.deinit();
     const m: *const rbt.Model = &imported.model;
 
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     rbt.forward(m, &data);
 
@@ -2863,10 +2879,10 @@ test "stage 0 debug: are excluded body pairs actually colliding" {
         var a_body: ?u32 = null;
         var b_body: ?u32 = null;
         for (0..m.nbody) |b| {
-            if (std.mem.eql(u8, imported.names[b], pair[0])) {
+            if (eql(u8, imported.names[b], pair[0])) {
                 a_body = @intCast(b);
             }
-            if (std.mem.eql(u8, imported.names[b], pair[1])) {
+            if (eql(u8, imported.names[b], pair[1])) {
                 b_body = @intCast(b);
             }
         }
@@ -2914,19 +2930,19 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid_flex.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -2942,7 +2958,7 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     defer imported.deinit();
     const m: *const rbt.Model = &imported.model;
 
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     rbt.forward(m, &data);
 
@@ -2954,8 +2970,8 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
             continue;
         }
         const body_name: []const u8 = imported.names[m.jnt_body[j]];
-        if (std.mem.eql(u8, body_name, "upper_arm_right") or
-            std.mem.eql(u8, body_name, "lower_arm_right"))
+        if (eql(u8, body_name, "upper_arm_right") or
+            eql(u8, body_name, "lower_arm_right"))
         {
             free_joint[free_count] = j;
             free_count += 1;
@@ -2972,7 +2988,7 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
     const frozen: []f32 = try gpa.dupe(f32, data.pos);
     defer gpa.free(frozen);
 
-    var actuation: Actuation = try Actuation.init(gpa, m);
+    var actuation: Actuation = try .init(gpa, m);
     defer actuation.deinit();
 
     const hold: PoseHold = .{ .target = target, .kp = 800.0, .kv = 40.0 };
@@ -3021,7 +3037,7 @@ test "stage 0 debug: one arm free, everything else frozen, watch the motor" {
                 }
                 var in_group: bool = false;
                 for (group) |name| {
-                    if (std.mem.eql(u8, imported.names[m.jnt_body[j]], name)) {
+                    if (eql(u8, imported.names[m.jnt_body[j]], name)) {
                         in_group = true;
                     }
                 }
@@ -3081,19 +3097,19 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid_flex.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -3111,14 +3127,14 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     defer imported.deinit();
     const m: *const rbt.Model = &imported.model;
 
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     rbt.forward(m, &data);
 
     var elbow: usize = 0;
     for (0..m.njnt) |j| {
         if (m.jnt_type[j] == .hinge and
-            std.mem.eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
+            eql(u8, imported.names[m.jnt_body[j]], "lower_arm_right"))
         {
             elbow = j;
             break;
@@ -3140,7 +3156,7 @@ test "stage 0 debug: can one elbow follow a MOVING target, everything else froze
     const target: []f32 = try gpa.dupe(f32, data.pos);
     defer gpa.free(target);
 
-    var actuation: Actuation = try Actuation.init(gpa, m);
+    var actuation: Actuation = try .init(gpa, m);
     defer actuation.deinit();
 
     // ** EVERY OTHER JOINT IS FROZEN, NOT MERELY UNPOWERED. Leaving them free lets the arm's
@@ -3274,19 +3290,19 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid_flex.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -3304,14 +3320,14 @@ test "rung 2: can the full humanoid hold the pose it is already in" {
     defer imported.deinit();
     const m: *const rbt.Model = &imported.model;
 
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     rbt.forward(m, &data);
 
     const target: []f32 = try gpa.dupe(f32, data.pos);
     defer gpa.free(target);
 
-    var actuation: Actuation = try Actuation.init(gpa, m);
+    var actuation: Actuation = try .init(gpa, m);
     defer actuation.deinit();
 
     // ** THE ROOT IS PINNED, so this is purely a question about the joints. A free root would

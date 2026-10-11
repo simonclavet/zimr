@@ -22,6 +22,7 @@
 //! an entry fall back to declaration order.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const zeroes = std.mem.zeroes;
 
 // --- protobuf wire types (the low 3 bits of every field tag) ---
 const wire_varint: u3 = 0; // ints, bools, enums
@@ -169,9 +170,42 @@ pub fn encodedSize(value: anytype) usize {
     var total: usize = 0;
     inline for (info.@"struct".field_names, 0..) |field_name, i| {
         const number = comptime fieldNumber(T, field_name, i);
+        // lint:off decl-order: a message's size is its fields', and a field may hold a message - the format recurses
         total += fieldSize(number, @field(value, field_name));
     }
     return total;
+}
+
+// ===========================================================================
+// Packed helpers for vectors and arrays (zm.Vec, zm.Quat, zm.Mat, and friends).
+// We store the whole aggregate as one length-delimited field whose body is the
+// elements written back-to-back with no per-element tag. Element counts are
+// known at comptime, so decode reads exactly the right number back. Mat is
+// [4]Vec, so this recurses (array -> vector -> floats) all on its own.
+// ===========================================================================
+fn bareSize(value: anytype) usize {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .int => return varintSize(intToVarint(value)),
+        .bool => return 1,
+        .@"enum" => return varintSize(@backingInt(value)),
+        .float => |f| return if (f.bits == 64) @as(usize, 8) else 4,
+        .vector => |v| {
+            var total: usize = 0;
+            inline for (0..v.len) |i| {
+                total += bareSize(value[i]);
+            }
+            return total;
+        },
+        .array => |a| {
+            var total: usize = 0;
+            inline for (0..a.len) |i| {
+                total += bareSize(value[i]);
+            }
+            return total;
+        },
+        else => @compileError("cannot pack element type: " ++ @typeName(T)),
+    }
 }
 
 fn fieldSize(field_number: u32, value: anytype) usize {
@@ -213,6 +247,15 @@ fn fieldSize(field_number: u32, value: anytype) usize {
 // ENCODE
 // ===========================================================================
 
+fn encodeMessage(cursor: *WriteCursor, value: anytype) void {
+    const T = @TypeOf(value);
+    inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, i| {
+        const number = comptime fieldNumber(T, field_name, i);
+        // lint:off decl-order: a message is written as its fields; a field may hold a message - the format recurses
+        encodeField(cursor, number, @field(value, field_name));
+    }
+}
+
 /// Encode `value` into `buf`, returning the number of bytes written. `buf` must
 /// be at least `encodedSize(value)` long.
 pub fn encode(value: anytype, buf: []u8) Error!usize {
@@ -232,11 +275,30 @@ pub fn encodeAlloc(value: anytype, gpa: Allocator) Error![]u8 {
     return buf[0..n];
 }
 
-fn encodeMessage(cursor: *WriteCursor, value: anytype) void {
+fn encodeBare(cursor: *WriteCursor, value: anytype) void {
     const T = @TypeOf(value);
-    inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, i| {
-        const number = comptime fieldNumber(T, field_name, i);
-        encodeField(cursor, number, @field(value, field_name));
+    switch (@typeInfo(T)) {
+        .int => cursor.varint(intToVarint(value)),
+        .bool => cursor.varint(if (value) 1 else 0),
+        .@"enum" => cursor.varint(@backingInt(value)),
+        .float => |f| {
+            if (f.bits == 64) {
+                cursor.bytes(&@as([8]u8, @bitCast(@as(f64, value))));
+            } else {
+                cursor.bytes(&@as([4]u8, @bitCast(@as(f32, value))));
+            }
+        },
+        .vector => |v| {
+            inline for (0..v.len) |i| {
+                encodeBare(cursor, value[i]);
+            }
+        },
+        .array => |a| {
+            inline for (0..a.len) |i| {
+                encodeBare(cursor, value[i]);
+            }
+        },
+        else => @compileError("cannot pack element type: " ++ @typeName(T)),
     }
 }
 
@@ -298,16 +360,6 @@ fn encodeField(cursor: *WriteCursor, field_number: u32, value: anytype) void {
 // DECODE
 // ===========================================================================
 
-/// Decode `bytes` into a `T`. Strings and slices are allocated with `gpa`; free
-/// the result with `freeDecoded(T, value, gpa)`. Fields absent from the input
-/// keep their struct-declared default; unknown fields are skipped.
-pub fn decode(comptime T: type, bytes: []const u8, gpa: Allocator) Error!T {
-    var result: T = .{}; // struct defaults fill in anything the wire omits
-    var cursor = ReadCursor{ .data = bytes };
-    try decodeMessage(T, &result, &cursor, gpa);
-    return result;
-}
-
 /// Is this a repeated field - a `[]const T` slice of something other than u8?
 /// (u8 slices are strings/bytes and take the single length-delimited path.)
 fn isRepeatedSlice(comptime FT: type) bool {
@@ -337,6 +389,19 @@ fn appendDecoded(
     }
 }
 
+fn skipField(wire_type: u3, cursor: *ReadCursor) Error!void {
+    switch (wire_type) {
+        wire_varint => _ = try cursor.varint(),
+        wire_i64 => _ = try cursor.take(8),
+        wire_i32 => _ = try cursor.take(4),
+        wire_len => {
+            const len: usize = @intCast(try cursor.varint());
+            _ = try cursor.take(len);
+        },
+        else => return Error.WireTypeMismatch,
+    }
+}
+
 fn decodeMessage(
     comptime T: type,
     result: *T,
@@ -356,7 +421,8 @@ fn decodeMessage(
                 if (comptime isRepeatedSlice(FieldT)) {
                     // repeated field: decode one element and append it to the slice
                     const Elem = @typeInfo(FieldT).pointer.child;
-                    var elem: Elem = std.mem.zeroes(Elem);
+                    var elem: Elem = zeroes(Elem);
+                    // lint:off decl-order: a field may hold a message - the format recurses
                     try decodeField(Elem, &elem, wire_type, cursor, gpa);
                     try appendDecoded(Elem, gpa, &@field(result, field_name), elem);
                 } else {
@@ -367,6 +433,50 @@ fn decodeMessage(
         if (!matched) {
             try skipField(wire_type, cursor);
         }
+    }
+}
+
+/// Decode `bytes` into a `T`. Strings and slices are allocated with `gpa`; free
+/// the result with `freeDecoded(T, value, gpa)`. Fields absent from the input
+/// keep their struct-declared default; unknown fields are skipped.
+pub fn decode(comptime T: type, bytes: []const u8, gpa: Allocator) Error!T {
+    var result: T = .{}; // struct defaults fill in anything the wire omits
+    var cursor = ReadCursor{ .data = bytes };
+    try decodeMessage(T, &result, &cursor, gpa);
+    return result;
+}
+
+fn decodeBare(comptime T: type, dst: *T, cursor: *ReadCursor) Error!void {
+    switch (@typeInfo(T)) {
+        .int => dst.* = varintToInt(T, try cursor.varint()),
+        .bool => dst.* = (try cursor.varint()) != 0,
+        .@"enum" => dst.* = @fromBackingInt(@intCast(try cursor.varint())),
+        .float => |f| {
+            if (f.bits == 64) {
+                dst.* = @bitCast((try cursor.take(8))[0..8].*);
+            } else {
+                dst.* = @bitCast((try cursor.take(4))[0..4].*);
+            }
+        },
+        .vector => |v| {
+            // vector elements aren't addressable, so decode into a scalar then
+            // assign by (comptime) index
+            var result: T = undefined;
+            inline for (0..v.len) |i| {
+                var elem: v.child = undefined;
+                try decodeBare(v.child, &elem, cursor);
+                result[i] = elem;
+            }
+            dst.* = result;
+        },
+        .array => |a| {
+            var result: T = undefined;
+            inline for (0..a.len) |i| {
+                try decodeBare(a.child, &result[i], cursor);
+            }
+            dst.* = result;
+        },
+        else => @compileError("cannot unpack element type: " ++ @typeName(T)),
     }
 }
 
@@ -451,141 +561,34 @@ fn decodeField(
     }
 }
 
-fn skipField(wire_type: u3, cursor: *ReadCursor) Error!void {
-    switch (wire_type) {
-        wire_varint => _ = try cursor.varint(),
-        wire_i64 => _ = try cursor.take(8),
-        wire_i32 => _ = try cursor.take(4),
-        wire_len => {
-            const len: usize = @intCast(try cursor.varint());
-            _ = try cursor.take(len);
-        },
-        else => return Error.WireTypeMismatch,
-    }
-}
-
-/// Free anything `decode` allocated (strings/bytes, and nested structs that
-/// contain them). Safe to call on any decoded value.
+/// Free anything `decode` allocated: strings and bytes, repeated slices (each element's allocations first, then
+/// the slice itself), and whatever a nested struct or an optional holds. One function for every type a decoded
+/// value can have - a struct's fields are freed by the very call that frees the struct, so there is no second
+/// "free a field" function to keep in step. Safe to call on any decoded value.
 pub fn freeDecoded(comptime T: type, value: T, gpa: Allocator) void {
-    inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, i| {
-        const FieldT: type = @typeInfo(T).@"struct".field_types[i];
-        freeFieldValue(FieldT, @field(value, field_name), gpa);
-    }
-}
-
-fn freeFieldValue(comptime FT: type, value: FT, gpa: Allocator) void {
-    switch (@typeInfo(FT)) {
-        .pointer => |p| {
-            if (p.child == u8) {
+    switch (@typeInfo(T)) {
+        .pointer => |pointer| {
+            if (pointer.child == u8) {
                 gpa.free(value);
             } else {
                 // repeated slice: free each element's allocations, then the slice
-                for (value) |elem| {
-                    freeFieldValue(p.child, elem, gpa);
+                for (value) |element| {
+                    freeDecoded(pointer.child, element, gpa);
                 }
                 gpa.free(value);
             }
         },
-        .@"struct" => freeDecoded(FT, value, gpa),
-        .optional => |o| {
+        .@"struct" => |structure| {
+            inline for (structure.field_names, 0..) |field_name, i| {
+                freeDecoded(structure.field_types[i], @field(value, field_name), gpa);
+            }
+        },
+        .optional => |optional| {
             if (value) |inner| {
-                freeFieldValue(o.child, inner, gpa);
+                freeDecoded(optional.child, inner, gpa);
             }
         },
         else => {},
-    }
-}
-
-// ===========================================================================
-// Packed helpers for vectors and arrays (zm.Vec, zm.Quat, zm.Mat, and friends).
-// We store the whole aggregate as one length-delimited field whose body is the
-// elements written back-to-back with no per-element tag. Element counts are
-// known at comptime, so decode reads exactly the right number back. Mat is
-// [4]Vec, so this recurses (array -> vector -> floats) all on its own.
-// ===========================================================================
-fn bareSize(value: anytype) usize {
-    const T = @TypeOf(value);
-    switch (@typeInfo(T)) {
-        .int => return varintSize(intToVarint(value)),
-        .bool => return 1,
-        .@"enum" => return varintSize(@backingInt(value)),
-        .float => |f| return if (f.bits == 64) @as(usize, 8) else 4,
-        .vector => |v| {
-            var total: usize = 0;
-            inline for (0..v.len) |i| {
-                total += bareSize(value[i]);
-            }
-            return total;
-        },
-        .array => |a| {
-            var total: usize = 0;
-            inline for (0..a.len) |i| {
-                total += bareSize(value[i]);
-            }
-            return total;
-        },
-        else => @compileError("cannot pack element type: " ++ @typeName(T)),
-    }
-}
-
-fn encodeBare(cursor: *WriteCursor, value: anytype) void {
-    const T = @TypeOf(value);
-    switch (@typeInfo(T)) {
-        .int => cursor.varint(intToVarint(value)),
-        .bool => cursor.varint(if (value) 1 else 0),
-        .@"enum" => cursor.varint(@backingInt(value)),
-        .float => |f| {
-            if (f.bits == 64) {
-                cursor.bytes(&@as([8]u8, @bitCast(@as(f64, value))));
-            } else {
-                cursor.bytes(&@as([4]u8, @bitCast(@as(f32, value))));
-            }
-        },
-        .vector => |v| {
-            inline for (0..v.len) |i| {
-                encodeBare(cursor, value[i]);
-            }
-        },
-        .array => |a| {
-            inline for (0..a.len) |i| {
-                encodeBare(cursor, value[i]);
-            }
-        },
-        else => @compileError("cannot pack element type: " ++ @typeName(T)),
-    }
-}
-
-fn decodeBare(comptime T: type, dst: *T, cursor: *ReadCursor) Error!void {
-    switch (@typeInfo(T)) {
-        .int => dst.* = varintToInt(T, try cursor.varint()),
-        .bool => dst.* = (try cursor.varint()) != 0,
-        .@"enum" => dst.* = @fromBackingInt(@intCast(try cursor.varint())),
-        .float => |f| {
-            if (f.bits == 64) {
-                dst.* = @bitCast((try cursor.take(8))[0..8].*);
-            } else {
-                dst.* = @bitCast((try cursor.take(4))[0..4].*);
-            }
-        },
-        .vector => |v| {
-            // vector elements aren't addressable, so decode into a scalar then
-            // assign by (comptime) index
-            var result: T = undefined;
-            inline for (0..v.len) |i| {
-                var elem: v.child = undefined;
-                try decodeBare(v.child, &elem, cursor);
-                result[i] = elem;
-            }
-            dst.* = result;
-        },
-        .array => |a| {
-            var result: T = undefined;
-            inline for (0..a.len) |i| {
-                try decodeBare(a.child, &result[i], cursor);
-            }
-            dst.* = result;
-        },
-        else => @compileError("cannot unpack element type: " ++ @typeName(T)),
     }
 }
 

@@ -149,6 +149,12 @@
 //!     Same broadcast()/sendTo() API; it just keeps working. Direct is always
 //!     preferred; relay only starts when the direct path gives up.
 //!
+//!   * No direct connections at all -- a native app has no WebRTC (it exists
+//!     only in the browser), so its session relays every peer from the start,
+//!     and tells each peer so with a `relay` signal. A browser in the same room
+//!     switches that peer to relay at once, rather than offer a connection that
+//!     will never be answered, or wait for an offer that will never come.
+//!
 //!   * Reconnection -- if the signaling socket itself drops (the free server went
 //!     to sleep during a lull, a phone changed networks), the session reopens it
 //!     on its own and rebuilds the mesh; you see the peers leave and rejoin.
@@ -240,8 +246,50 @@
 //!   * STUN only for direct connections (the relay fallback covers the rest).
 //! ============================================================================
 
+// lint:off browser-call: the browser's WebSocket and WebRTC modules; WebRTC exists in the browser alone
 const web = @import("web.zig");
 const net_core = @import("net_core.zig");
+const platform = @import("platform.zig");
+
+/// WebSocket connections on any platform (`platform.current`) - the page's own WebSocket in the browser, the native
+/// client elsewhere (`net_core.native_websocket`) - with the names of the browser's module they began as (`web.ws`),
+/// so the session layer (`Session`) and the apps are the same everywhere.
+pub const ws = struct {
+    /// A socket's handle; 0 is no socket, and reads closed.
+    pub const Handle = u32;
+    pub const State = platform.contract.SocketState;
+
+    /// Opens a socket to `url` and returns at once; it connects in the background - poll `state` until open.
+    pub fn open(url: []const u8) Handle {
+        return platform.current.openSocket(url);
+    }
+
+    pub fn state(handle: Handle) State {
+        return platform.current.socketState(handle);
+    }
+
+    /// Sends `bytes` as a text message; dropped before the socket is open.
+    pub fn send(handle: Handle, bytes: []const u8) void {
+        platform.current.sendSocket(handle, bytes);
+    }
+
+    /// The oldest received message, copied into `out`; null when none waits, or when it is longer than `out` (it is
+    /// then dropped). Call in a loop each frame to drain what arrived.
+    pub fn poll(handle: Handle, out: []u8) ?[]const u8 {
+        return platform.current.pollSocket(handle, out);
+    }
+
+    /// Closes the socket and frees its handle; safe to call more than once.
+    pub fn close(handle: Handle) void {
+        platform.current.closeSocket(handle);
+    }
+
+    /// The address of the server the app came from - the page's origin in the browser, the signaling server on this
+    /// machine natively - written into `out`.
+    pub fn originUrl(out: []u8) []const u8 {
+        return platform.current.socketOriginUrl(out);
+    }
+};
 
 /// Friends-only scale. One connection per peer; this caps the mesh size.
 pub const max_peers = net_core.max_peers;
@@ -254,7 +302,7 @@ pub const Net = net_core.Net;
 /// A multiplayer session over the real browser transports. Embed one in your
 /// app State (it holds fixed buffers, so no allocator needed), call
 /// `connect(url, room)`, then drive `poll(&buf)` each frame.
-pub const Session = net_core.Net(web.ws, web.rtc).Session;
+pub const Session = net_core.Net(ws, web.rtc).Session;
 
 /// What `poll` hands back: joined_as / peer_joined / peer_state / channel_open /
 /// message / peer_left. A `message`'s bytes are valid until the next `poll`.

@@ -14,6 +14,7 @@ const z = @import("zimr");
 const zm = @import("zm");
 const proxy = @import("bunny_proxy");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const Mat = zm.Mat;
 const Vec = zm.Vec;
 const float = zm.float;
@@ -39,9 +40,9 @@ const ink_world: f32 = 0.015;
 
 pub fn main() !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     // ---- proxy bunny, measured + framed like the app ----
     var mn: [3]f32 = .{ 1.0e30, 1.0e30, 1.0e30 };
@@ -154,7 +155,7 @@ pub fn main() !void {
 
     const png: []u8 = try z.codecs.png.encode(gpa, @ptrCast(&img), img_w, img_h);
     defer gpa.free(png);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "cel_verify.png", .data = png });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "cel_verify.png", .data = png });
     std.debug.print("  wrote cel_verify.png\n", .{});
 
     if (paper == 0 or bright_band == 0 or ink_px == 0) {

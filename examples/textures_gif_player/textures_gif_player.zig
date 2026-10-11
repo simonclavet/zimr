@@ -109,6 +109,36 @@ fn advance(f: *z.Frame, s: *State) void {
     }
 }
 
+/// A dim checkerboard so the sprite's transparent cut-out reads as such.
+fn drawChecker(
+    gl: *z.WgpuGl,
+    x: f32,
+    y: f32,
+    wpx: f32,
+    hpx: f32,
+) void {
+    const cell: f32 = 12;
+    const a: Color = .{ .r = 44, .g = 48, .b = 58, .a = 255 };
+    const b: Color = .{ .r = 34, .g = 38, .b = 46, .a = 255 };
+    var yy: f32 = 0;
+    var row: u32 = 0;
+    while (yy < hpx) : (yy += cell) {
+        var xx: f32 = 0;
+        var col: u32 = 0;
+        while (xx < wpx) : (xx += cell) {
+            const cw: f32 = @min(cell, wpx - xx);
+            const ch: f32 = @min(cell, hpx - yy);
+            const on: bool = ((row + col) & 1) == 0;
+            gl.rect(
+                .{ .x = x + xx, .y = y + yy, .width = cw, .height = ch },
+                .{ .color = if (on) a else b },
+            );
+            col += 1;
+        }
+        row += 1;
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const fw: f32 = f.window.widthf();
     const fh: f32 = f.window.heightf();
@@ -200,36 +230,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     common.caption(f.gl, s.font, "(c) Scarfy sprite by Eiden Marsal - decoded by the pure-Zig GIF codec");
     z.endDrawing(f.gl);
-}
-
-/// A dim checkerboard so the sprite's transparent cut-out reads as such.
-fn drawChecker(
-    gl: *z.WgpuGl,
-    x: f32,
-    y: f32,
-    wpx: f32,
-    hpx: f32,
-) void {
-    const cell: f32 = 12;
-    const a: Color = .{ .r = 44, .g = 48, .b = 58, .a = 255 };
-    const b: Color = .{ .r = 34, .g = 38, .b = 46, .a = 255 };
-    var yy: f32 = 0;
-    var row: u32 = 0;
-    while (yy < hpx) : (yy += cell) {
-        var xx: f32 = 0;
-        var col: u32 = 0;
-        while (xx < wpx) : (xx += cell) {
-            const cw: f32 = @min(cell, wpx - xx);
-            const ch: f32 = @min(cell, hpx - yy);
-            const on: bool = ((row + col) & 1) == 0;
-            gl.rect(
-                .{ .x = x + xx, .y = y + yy, .width = cw, .height = ch },
-                .{ .color = if (on) a else b },
-            );
-            col += 1;
-        }
-        row += 1;
-    }
 }
 
 /// Descriptor-only: the runner or launcher drives this. No offscreen render

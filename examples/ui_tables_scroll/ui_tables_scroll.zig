@@ -8,6 +8,8 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sortSlice = std.mem.sort;
 const z = @import("zimr");
 const ui = z.ui_real;
 
@@ -50,8 +52,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // Seed 200 rows with synthetic data.  Names are "row<idx>"
     // padded into the inline buffer; scores / ranks have a
     // deterministic pattern so sorting is verifiable.
-    var rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x5eed);
-    const r: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(0x5eed);
+    const r: Random = rng.random();
     for (&s.rows, 0..) |*row, i| {
         const written: []u8 = bufPrint(&row.name_buf, "row{d:0>3}", .{i}) catch row.name_buf[0..0];
         row.name_len = written.len;
@@ -124,7 +126,7 @@ fn update(f: *z.Frame, s: *State) void {
             u.tableHeadersRow();
 
             if (u.tableGetSortSpecs()) |specs| {
-                std.mem.sort(Row, &s.rows, specs, sortRows);
+                sortSlice(Row, &s.rows, specs, sortRows);
             }
 
             for (s.rows) |row| {

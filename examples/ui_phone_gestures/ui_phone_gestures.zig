@@ -9,6 +9,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -34,7 +35,7 @@ const handle_size: f32 = 96;
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     tap_counts: [4]u32 = .{ 0, 0, 0, 0 },
     drag_pos: Vec2 = .{ 60, 360 },
     drag_offset: Vec2 = .{ 0, 0 },
@@ -52,7 +53,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
     };
 }
 

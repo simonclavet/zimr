@@ -10,10 +10,17 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const asBytes = std.mem.asBytes;
+const readInt = std.mem.readInt;
+const writeInt = std.mem.writeInt;
 const wgpu = @import("wgpu.zig");
 const shader_introspect = @import("shader_introspect.zig");
 const BindGroupCache = @import("BindGroupCache.zig");
+const gpu_abi = @import("gpu_abi.zig");
 
 // ============================ pipeline state cache ============================
 
@@ -62,7 +69,7 @@ pub const CacheKey = packed struct(u128) {
 
 const KeyContext = struct {
     pub fn hash(_: KeyContext, k: CacheKey) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.asBytes(&k));
+        return std.hash.Wyhash.hash(0, asBytes(&k));
     }
     pub fn eql(
         _: KeyContext,
@@ -183,7 +190,7 @@ pub fn hashSource(source: []const u8) u64 {
 /// the SAME (vs, fs) pair share a cached pipeline; two consumers
 /// using different VS or different FS get distinct entries.
 pub fn hashSource2(vs_source: []const u8, fs_source: []const u8) u64 {
-    var hasher: std.hash.Wyhash = std.hash.Wyhash.init(0xC0FFEE);
+    var hasher: std.hash.Wyhash = .init(0xC0FFEE);
     hasher.update(vs_source);
     // Separator byte so concat(A,B) != concat(A',B') when A|B overlap.
     hasher.update(&[1]u8{0});
@@ -212,7 +219,7 @@ test "hashSource is deterministic" {
 }
 
 test "invalidateSource removes only matching entries" {
-    var cache: PipelineCache = .{ .gpa = std.testing.allocator };
+    var cache: PipelineCache = .{ .gpa = testing_allocator };
     defer cache.deinit();
 
     const shader_a: u64 = 0xAAAA_AAAA_AAAA_AAAA;
@@ -231,8 +238,9 @@ test "invalidateSource removes only matching entries" {
 // ============================= descriptor encoding ============================
 
 // ============================================================================
-// SECTION 1 - bind group layout entries
+// Primitive writers - the little-endian byte writers every encoder below uses
 // ============================================================================
+
 //
 // Format (per entry):
 //   u32 binding
@@ -249,7 +257,7 @@ fn writeU32(
     v: u32,
 ) !void {
     var bytes: [4]u8 = undefined;
-    std.mem.writeInt(u32, &bytes, v, .little);
+    writeInt(u32, &bytes, v, .little);
     try buf.appendSlice(gpa, &bytes);
 }
 
@@ -259,9 +267,32 @@ fn writeF64(
     v: f64,
 ) !void {
     var bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &bytes, @bitCast(v), .little);
+    writeInt(u64, &bytes, @bitCast(v), .little);
     try buf.appendSlice(gpa, &bytes);
 }
+
+fn writeU64(
+    gpa: Allocator,
+    buf: *ArrayList(u8),
+    v: u64,
+) !void {
+    var bytes: [8]u8 = undefined;
+    writeInt(u64, &bytes, v, .little);
+    try buf.appendSlice(gpa, &bytes);
+}
+
+fn writeStr(
+    gpa: Allocator,
+    buf: *ArrayList(u8),
+    s: []const u8,
+) !void {
+    try writeU32(gpa, buf, @intCast(s.len));
+    try buf.appendSlice(gpa, s);
+}
+
+// ============================================================================
+// SECTION 1 - bind group layout entries
+// ============================================================================
 
 pub fn encodeBindGroupLayoutEntries(
     gpa: Allocator,
@@ -303,6 +334,7 @@ pub fn encodeBindGroupLayoutEntries(
 // ============================================================================
 // SECTION 2 - bind group entries (resource bindings)
 // ============================================================================
+
 //
 // Format (per entry):
 //   u32 binding
@@ -350,36 +382,6 @@ pub fn uniformBindGroupLayout(
     return wgpu.createBindGroupLayout(device, blob, label);
 }
 
-/// The matching bind group: one uniform buffer bound at 0.
-pub fn uniformBindGroup(
-    gpa: Allocator,
-    device: wgpu.DeviceHandle,
-    layout: wgpu.BindGroupLayoutHandle,
-    buffer: wgpu.BufferHandle,
-    size: u64,
-    label: []const u8,
-) !wgpu.BindGroupHandle {
-    const entries = [_]BindGroupEntry{
-        .{
-            .binding = 0,
-            .resource = .{ .buffer = .{ .handle = buffer, .offset = 0, .size = size } },
-        },
-    };
-    const blob: []const u8 = try encodeBindGroupEntries(gpa, &entries);
-    defer gpa.free(blob);
-    return wgpu.createBindGroup(device, layout, blob, label);
-}
-
-fn writeU64(
-    gpa: Allocator,
-    buf: *ArrayList(u8),
-    v: u64,
-) !void {
-    var bytes: [8]u8 = undefined;
-    std.mem.writeInt(u64, &bytes, v, .little);
-    try buf.appendSlice(gpa, &bytes);
-}
-
 pub fn encodeBindGroupEntries(
     gpa: Allocator,
     entries: []const BindGroupEntry,
@@ -414,9 +416,30 @@ pub fn encodeBindGroupEntries(
     return buf.toOwnedSlice(gpa);
 }
 
+/// The matching bind group: one uniform buffer bound at 0.
+pub fn uniformBindGroup(
+    gpa: Allocator,
+    device: wgpu.DeviceHandle,
+    layout: wgpu.BindGroupLayoutHandle,
+    buffer: wgpu.BufferHandle,
+    size: u64,
+    label: []const u8,
+) !wgpu.BindGroupHandle {
+    const entries = [_]BindGroupEntry{
+        .{
+            .binding = 0,
+            .resource = .{ .buffer = .{ .handle = buffer, .offset = 0, .size = size } },
+        },
+    };
+    const blob: []const u8 = try encodeBindGroupEntries(gpa, &entries);
+    defer gpa.free(blob);
+    return wgpu.createBindGroup(device, layout, blob, label);
+}
+
 // ============================================================================
 // SECTION 3 - render pipeline descriptor
 // ============================================================================
+
 //
 // Format:
 //   u32 vertex_buffer_layouts_count
@@ -450,6 +473,12 @@ pub const VertexBufferLayout = struct {
     attributes: []const VertexAttribute,
 };
 
+/// One pipeline-overridable constant: the WGSL `override` name and its value.
+pub const PipelineConstant = struct {
+    name: []const u8,
+    value: f64,
+};
+
 pub const RenderPipelineDescriptor = struct {
     vertex_buffer_layouts: []const VertexBufferLayout = &.{},
     vs_entry_point: []const u8 = "vs_main",
@@ -465,21 +494,6 @@ pub const RenderPipelineDescriptor = struct {
     /// single-target pipeline, byte-identical blob to before.
     extra_color_formats: []const wgpu.TextureFormat = &.{},
 };
-
-/// One pipeline-overridable constant: the WGSL `override` name and its value.
-pub const PipelineConstant = struct {
-    name: []const u8,
-    value: f64,
-};
-
-fn writeStr(
-    gpa: Allocator,
-    buf: *ArrayList(u8),
-    s: []const u8,
-) !void {
-    try writeU32(gpa, buf, @intCast(s.len));
-    try buf.appendSlice(gpa, s);
-}
 
 pub fn encodeRenderPipelineDescriptor(
     gpa: Allocator,
@@ -535,10 +549,6 @@ pub fn encodeRenderPipelineDescriptor(
 }
 
 // ============================================================================
-// SECTION 4 - primitive writers
-// ============================================================================
-
-// ============================================================================
 // Tests
 // ============================================================================
 
@@ -550,22 +560,22 @@ test "encodeBindGroupLayoutEntries emits expected bytes for a UBO entry" {
             .resource = .{ .uniform_buffer = .{ .min_size = 16 } },
         },
     };
-    const bytes: []const u8 = try encodeBindGroupLayoutEntries(std.testing.allocator, entries);
-    defer std.testing.allocator.free(bytes);
+    const bytes: []const u8 = try encodeBindGroupLayoutEntries(testing_allocator, entries);
+    defer testing_allocator.free(bytes);
 
     // 4 (count) + 4 (binding) + 4 (visibility) + 4 (type_tag) + 4 (extra)
     //   + 4 (view_dim) = 24
     try expectEqual(@as(usize, 24), bytes.len);
     // count = 1
-    try expectEqual(@as(u32, 1), std.mem.readInt(u32, bytes[0..4], .little));
+    try expectEqual(@as(u32, 1), readInt(u32, bytes[0..4], .little));
     // binding = 0
-    try expectEqual(@as(u32, 0), std.mem.readInt(u32, bytes[4..8], .little));
+    try expectEqual(@as(u32, 0), readInt(u32, bytes[4..8], .little));
     // type_tag = 0 (uniform)
-    try expectEqual(@as(u32, 0), std.mem.readInt(u32, bytes[12..16], .little));
+    try expectEqual(@as(u32, 0), readInt(u32, bytes[12..16], .little));
     // extra = 16
-    try expectEqual(@as(u32, 16), std.mem.readInt(u32, bytes[16..20], .little));
+    try expectEqual(@as(u32, 16), readInt(u32, bytes[16..20], .little));
     // view_dim = 0 (unused for a buffer entry)
-    try expectEqual(@as(u32, 0), std.mem.readInt(u32, bytes[20..24], .little));
+    try expectEqual(@as(u32, 0), readInt(u32, bytes[20..24], .little));
 }
 
 test "encodeBindGroupEntries handles mixed resource types" {
@@ -574,17 +584,17 @@ test "encodeBindGroupEntries handles mixed resource types" {
         .{ .binding = 1, .resource = .{ .sampler = @fromBackingInt(@intCast(7)) } },
         .{ .binding = 2, .resource = .{ .texture_view = @fromBackingInt(@intCast(99)) } },
     };
-    const bytes: []const u8 = try encodeBindGroupEntries(std.testing.allocator, entries);
-    defer std.testing.allocator.free(bytes);
+    const bytes: []const u8 = try encodeBindGroupEntries(testing_allocator, entries);
+    defer testing_allocator.free(bytes);
 
     // 4 (count) + 3 x (4+4+4+8+8) = 4 + 84 = 88
     try expectEqual(@as(usize, 88), bytes.len);
-    try expectEqual(@as(u32, 3), std.mem.readInt(u32, bytes[0..4], .little));
+    try expectEqual(@as(u32, 3), readInt(u32, bytes[0..4], .little));
     // First entry: binding=0, type=0 (buffer), handle=42, offset=0, size=256
-    try expectEqual(@as(u32, 0), std.mem.readInt(u32, bytes[4..8], .little));
-    try expectEqual(@as(u32, 0), std.mem.readInt(u32, bytes[8..12], .little));
-    try expectEqual(@as(u32, 42), std.mem.readInt(u32, bytes[12..16], .little));
-    try expectEqual(@as(u64, 256), std.mem.readInt(u64, bytes[24..32], .little));
+    try expectEqual(@as(u32, 0), readInt(u32, bytes[4..8], .little));
+    try expectEqual(@as(u32, 0), readInt(u32, bytes[8..12], .little));
+    try expectEqual(@as(u32, 42), readInt(u32, bytes[12..16], .little));
+    try expectEqual(@as(u64, 256), readInt(u64, bytes[24..32], .little));
 }
 
 test "encodeRenderPipelineDescriptor round-trips entry-point strings" {
@@ -603,15 +613,15 @@ test "encodeRenderPipelineDescriptor round-trips entry-point strings" {
         .vs_entry_point = "main_vs",
         .fs_entry_point = "main_fs",
     };
-    const bytes: []const u8 = try encodeRenderPipelineDescriptor(std.testing.allocator, desc);
-    defer std.testing.allocator.free(bytes);
+    const bytes: []const u8 = try encodeRenderPipelineDescriptor(testing_allocator, desc);
+    defer testing_allocator.free(bytes);
 
     // Header should contain VBL count = 1
-    try expectEqual(@as(u32, 1), std.mem.readInt(u32, bytes[0..4], .little));
+    try expectEqual(@as(u32, 1), readInt(u32, bytes[0..4], .little));
     // Entry-point strings should appear in the blob
-    const idx = std.mem.indexOf(u8, bytes, "main_vs");
+    const idx = indexOf(u8, bytes, "main_vs");
     try expect(idx != null);
-    try expect(std.mem.indexOf(u8, bytes, "main_fs") != null);
+    try expect(indexOf(u8, bytes, "main_fs") != null);
 }
 
 test "encodeRenderPipelineDescriptor appends pipeline-overridable constants" {
@@ -623,16 +633,16 @@ test "encodeRenderPipelineDescriptor appends pipeline-overridable constants" {
             .{ .name = "tint_r", .value = 1.0 },
         },
     };
-    const bytes: []const u8 = try encodeRenderPipelineDescriptor(std.testing.allocator, desc);
-    defer std.testing.allocator.free(bytes);
+    const bytes: []const u8 = try encodeRenderPipelineDescriptor(testing_allocator, desc);
+    defer testing_allocator.free(bytes);
 
     // Names appear, and a trailing f64 0.5 (little-endian bits) is present.
-    try expect(std.mem.indexOf(u8, bytes, "scl") != null);
-    try expect(std.mem.indexOf(u8, bytes, "tint_r") != null);
+    try expect(indexOf(u8, bytes, "scl") != null);
+    try expect(indexOf(u8, bytes, "tint_r") != null);
     const half_bits: u64 = @bitCast(@as(f64, 0.5));
     var half_le: [8]u8 = undefined;
-    std.mem.writeInt(u64, &half_le, half_bits, .little);
-    try expect(std.mem.indexOf(u8, bytes, &half_le) != null);
+    writeInt(u64, &half_le, half_bits, .little);
+    try expect(indexOf(u8, bytes, &half_le) != null);
 }
 
 test "encodeRenderPipelineDescriptor appends the MRT extra-target tail" {
@@ -641,21 +651,21 @@ test "encodeRenderPipelineDescriptor appends the MRT extra-target tail" {
         .fs_entry_point = "fs",
         .extra_color_formats = &.{ .rgba16_float, .rgba8_unorm },
     };
-    const bytes: []const u8 = try encodeRenderPipelineDescriptor(std.testing.allocator, desc);
-    defer std.testing.allocator.free(bytes);
+    const bytes: []const u8 = try encodeRenderPipelineDescriptor(testing_allocator, desc);
+    defer testing_allocator.free(bytes);
 
     // The tail is count + N formats, LAST in the blob (the bridge decoder
     // reads it after the constants block).  Pin it byte-for-byte so a
     // reordering on either side fails here, not on a black screen.
     const tail: []const u8 = bytes[bytes.len - 12 ..];
-    try expectEqual(@as(u32, 2), std.mem.readInt(u32, tail[0..4], .little));
+    try expectEqual(@as(u32, 2), readInt(u32, tail[0..4], .little));
     try expectEqual(
         @as(u32, @backingInt(wgpu.TextureFormat.rgba16_float)),
-        std.mem.readInt(u32, tail[4..8], .little),
+        readInt(u32, tail[4..8], .little),
     );
     try expectEqual(
         @as(u32, @backingInt(wgpu.TextureFormat.rgba8_unorm)),
-        std.mem.readInt(u32, tail[8..12], .little),
+        readInt(u32, tail[8..12], .little),
     );
 }
 
@@ -785,4 +795,140 @@ test "GpuFrame default-initialises to safe state" {
     try expectEqual(wgpu.DeviceHandle.invalid, gf.device);
     try expectEqual(wgpu.CommandEncoderHandle.invalid, gf.encoder);
     try expectEqual(@as(?*anyopaque, null), gf.sw_ctx);
+}
+
+// ============================================================================
+// The encoders against gpu_abi's decoders: what `gpu.zig` writes is what the Vulkan host reads.
+// ============================================================================
+
+test "gpu_abi round trip: shader_introspect's view dimensions are numbered as gpu_abi's" {
+    const ViewDimension = shader_introspect.BindGroupLayoutEntry.ViewDimension;
+    inline for (@typeInfo(ViewDimension).@"enum".field_names) |name| {
+        const abi_value: u32 = @backingInt(@field(gpu_abi.TextureViewDimension, name));
+        try expectEqual(abi_value, @backingInt(@field(ViewDimension, name)));
+    }
+}
+
+test "gpu_abi round trip: every bind-group layout entry kind decodes to what was encoded" {
+    const gpa: Allocator = testing_allocator;
+    const entries = [_]shader_introspect.BindGroupLayoutEntry{
+        .{
+            .binding = 0,
+            .visibility = .{ .vertex = true, .fragment = true },
+            .resource = .{ .uniform_buffer = .{ .min_size = 64 } },
+        },
+        .{
+            .binding = 1,
+            .visibility = .{ .compute = true },
+            .resource = .{ .storage_buffer = .{ .read_only = true, .min_size = 16 } },
+        },
+        .{ .binding = 2, .visibility = .{ .compute = true }, .resource = .{ .storage_buffer = .{} } },
+        .{ .binding = 3, .visibility = .{ .fragment = true }, .resource = .{ .sampler = .{ .filtering = false } } },
+        .{
+            .binding = 4,
+            .visibility = .{ .fragment = true },
+            .resource = .{ .texture = .{ .view_dimension = .d2_array } },
+        },
+        .{
+            .binding = 5,
+            .visibility = .{ .compute = true },
+            .resource = .{ .storage_texture = .{ .format = .rgba8_unorm, .view_dimension = .d2 } },
+        },
+    };
+    const blob: []u8 = try encodeBindGroupLayoutEntries(gpa, &entries);
+    defer gpa.free(blob);
+    var room: [8]gpu_abi.BindGroupLayoutEntry = undefined;
+    const decoded: []gpu_abi.BindGroupLayoutEntry = try gpu_abi.decodeBindGroupLayout(blob, &room);
+    try expectEqual(entries.len, decoded.len);
+    const kinds = [_]gpu_abi.BindingKind{
+        .uniform_buffer,
+        .read_only_storage_buffer,
+        .storage_buffer,
+        .sampler,
+        .texture,
+        .storage_texture,
+    };
+    for (entries, decoded, kinds) |entry, read_back, kind| {
+        try expectEqual(entry.binding, read_back.binding);
+        try expectEqual(entry.visibility, read_back.visibility);
+        try expectEqual(kind, read_back.kind);
+    }
+    try expectEqual(@as(u32, 64), decoded[0].extra);
+    try expectEqual(@as(u32, 16), decoded[1].extra);
+    try expectEqual(@as(u32, 1), decoded[3].extra);
+    try expectEqual(gpu_abi.TextureViewDimension.d2_array, decoded[4].view_dimension);
+}
+
+test "gpu_abi round trip: a bind group's buffer range, sampler and view decode to what was encoded" {
+    const gpa: Allocator = testing_allocator;
+    const entries = [_]BindGroupEntry{
+        .{
+            .binding = 0,
+            .resource = .{ .buffer = .{ .handle = @fromBackingInt(@intCast(5)), .offset = 256, .size = 1024 } },
+        },
+        .{ .binding = 1, .resource = .{ .sampler = @fromBackingInt(@intCast(6)) } },
+        .{ .binding = 2, .resource = .{ .texture_view = @fromBackingInt(@intCast(7)) } },
+    };
+    const blob: []u8 = try encodeBindGroupEntries(gpa, &entries);
+    defer gpa.free(blob);
+    var room: [4]gpu_abi.BindGroupEntry = undefined;
+    const decoded: []gpu_abi.BindGroupEntry = try gpu_abi.decodeBindGroup(blob, &room);
+    try expectEqual(@as(usize, 3), decoded.len);
+    try expectEqual(gpu_abi.BindingResource.buffer, decoded[0].resource);
+    try expectEqual(@as(u32, 5), decoded[0].handle);
+    try expectEqual(@as(u64, 256), decoded[0].offset);
+    try expectEqual(@as(u64, 1024), decoded[0].size);
+    try expectEqual(gpu_abi.BindingResource.sampler, decoded[1].resource);
+    try expectEqual(@as(u32, 6), decoded[1].handle);
+    try expectEqual(gpu_abi.BindingResource.texture_view, decoded[2].resource);
+    try expectEqual(@as(u32, 7), decoded[2].handle);
+}
+
+test "gpu_abi round trip: a render pipeline's layouts, state, depth semantics and tails decode to what was encoded" {
+    const gpa: Allocator = testing_allocator;
+    const position_and_uv = [_]VertexAttribute{
+        .{ .format = .float32x3, .offset = 0, .shader_location = 0 },
+        .{ .format = .float32x2, .offset = 12, .shader_location = 1 },
+    };
+    const per_instance = [_]VertexAttribute{.{ .format = .uint8x4_unorm, .offset = 0, .shader_location = 2 }};
+    const descriptor: RenderPipelineDescriptor = .{
+        .vertex_buffer_layouts = &.{
+            .{ .array_stride = 20, .attributes = &position_and_uv },
+            .{ .array_stride = 4, .step_mode = .instance, .attributes = &per_instance },
+        },
+        .vs_entry_point = "entry",
+        .fs_entry_point = "fs_entry",
+        .state = .{
+            .topology = @backingInt(wgpu.PrimitiveTopology.triangle_strip),
+            .cull = @backingInt(wgpu.CullMode.back),
+            .blend = @backingInt(wgpu.BlendMode.premultiplied),
+            .depth = @backingInt(wgpu.DepthMode.less_no_write),
+            .color_format = @backingInt(wgpu.TextureFormat.bgra8_unorm),
+            .depth_format = @backingInt(wgpu.TextureFormat.depth24_plus),
+            .sample_count = 4,
+        },
+        .constants = &.{.{ .name = "scale", .value = 2.5 }},
+        .extra_color_formats = &.{ .rgba16_float, .rgba32_float },
+    };
+    const blob: []u8 = try encodeRenderPipelineDescriptor(gpa, descriptor);
+    defer gpa.free(blob);
+    const decoded: gpu_abi.RenderPipelineDescriptor = try gpu_abi.decodeRenderPipeline(blob);
+    try expectEqual(@as(usize, 2), decoded.vertexBuffers().len);
+    const instance_layout: gpu_abi.VertexBufferLayout = decoded.vertexBuffers()[1];
+    try expectEqual(@as(u32, 4), instance_layout.array_stride);
+    try expectEqual(wgpu.VertexStepMode.instance, instance_layout.step_mode);
+    try expectEqual(wgpu.VertexFormat.uint8x4_unorm, decoded.attributesOf(instance_layout)[0].format);
+    try expectEqual(@as(u32, 1), decoded.attributesOf(decoded.vertexBuffers()[0])[1].shader_location);
+    try expectEqualStrings("entry", decoded.vs_entry_point);
+    try expectEqualStrings("fs_entry", decoded.fs_entry_point);
+    try expectEqual(wgpu.PrimitiveTopology.triangle_strip, decoded.topology);
+    try expectEqual(wgpu.BlendMode.premultiplied, decoded.blend);
+    try expectEqual(wgpu.TextureFormat.depth24_plus, decoded.depth_format);
+    try expectEqual(@as(u32, 4), decoded.sample_count);
+    // `less_no_write` tests "less" and does not write: resolved by the encoder, read back as such.
+    try expectEqualStrings("less", decoded.depth_compare);
+    try expect(!decoded.writes_depth);
+    try expectEqual(@as(u32, 1), decoded.constant_count);
+    try expectEqual(@as(usize, 2), decoded.extraColorFormats().len);
+    try expectEqual(wgpu.TextureFormat.rgba32_float, decoded.extraColorFormats()[1]);
 }

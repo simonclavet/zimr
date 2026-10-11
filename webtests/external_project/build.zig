@@ -11,7 +11,7 @@
 //   four_ways   zimr's own example, taken from the dependency: GPU compute kernels
 //               and worker job kernels beside a root that is not in this project
 //   test        a host unit test importing zm + zn
-//   lint        zimr's linter over src/, gating `check` and `*-standalone`
+//   lint        zimr's linter over src/, gating `check` and every app's step
 
 const std = @import("std");
 const zimr = @import("zimr");

@@ -675,7 +675,7 @@ fn NamesEnum(comptime names: []const []const u8) type {
             if (b.parent) |parent| {
                 var found: bool = false;
                 for (spec.bodies[0..bi]) |earlier| {
-                    if (std.mem.eql(u8, earlier.name, parent)) {
+                    if (eql(u8, earlier.name, parent)) {
                         found = true;
                         break;
                     }
@@ -1077,7 +1077,7 @@ fn buildFromSpec(gpa: Allocator, comptime spec: ModelSpec) !Model {
     /// struct's ADDRESS. Storing it by value and returning the model would strand every
     /// allocation in a copy nobody frees. (zimr has been bitten by this shape before -
     /// see the wgpu_bringup use-after-scope note in claude.md.)
-    arena: *std.heap.ArenaAllocator,</code></pre>
+    arena: *ArenaAllocator,</code></pre>
 
 <pre><code class="zig">    pub fn deinit(self: *Model) void {
         const gpa: Allocator = self.arena.child_allocator;
@@ -1820,10 +1820,10 @@ pub fn crb(m: *const Model, d: *Data) void {
 <details class="src-fold"><summary><code>const gpa</code><span class="faint"> · 36 lines</span></summary><pre><code class="zig">test "crb: M is symmetric, positive definite, and configuration-dependent" {
     // Invariants, which keep testing when the numbers legitimately change. Together they
     // say "this is a mass matrix" without reference to any particular model.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: Model = try DoublePendulum.build(gpa);
     defer m.deinit();
-    var d: Data = try Data.init(gpa, &amp;m);
+    var d: Data = try .init(gpa, &amp;m);
     defer d.deinit();
 
     var dense: [4]f32 = undefined;

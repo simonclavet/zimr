@@ -42,6 +42,7 @@ const humanoid_ball_xml = @embedFile("tests/fixtures/robot/humanoid_ball.xml");
 const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
 
 const vec = zm.vec;
+const Vec = zm.Vec;
 
 /// A two-link arm, the same one the tests use.
 const TwoLink = rbt.Spec(.{
@@ -78,6 +79,7 @@ const steps_per_case: usize = 200_000;
 /// nothing to measure in a wasm build that does not run the same code on the same silicon.
 fn monotonicNanos() u64 {
     var ts: std.os.linux.timespec = undefined;
+    // lint:off own-clock: a benchmark timing its own work on the build machine
     _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
@@ -117,7 +119,7 @@ const Hold = struct {
                 else => continue,
             };
             const body: u32 = model.geom_body[g];
-            const at: zm.Vec = data.body_xpos[body] + zm.rotate(data.body_xrot[body], model.geom_pos[g]);
+            const at: Vec = data.body_xpos[body] + zm.rotate(data.body_xrot[body], model.geom_pos[g]);
             const gap: f32 = at[2] - radius;
             if (gap > 0.01) {
                 continue; // clear of the floor
@@ -150,13 +152,8 @@ const Hold = struct {
     }
 };
 
-fn benchmark(
-    comptime label: []const u8,
-    model: *rbt.Model,
-    data: *rbt.Data,
-    steps: usize,
-) void {
-    benchmarkHeld(label, model, data, steps, null);
+fn toF64(x: anytype) f64 {
+    return @floatFromInt(x);
 }
 
 fn benchmarkHeld(
@@ -205,8 +202,18 @@ fn benchmarkHeld(
     );
 }
 
-fn toF64(x: anytype) f64 {
-    return @floatFromInt(x);
+fn benchmark(
+    comptime label: []const u8,
+    model: *rbt.Model,
+    data: *rbt.Data,
+    steps: usize,
+) void {
+    benchmarkHeld(label, model, data, steps, null);
+}
+
+/// The profiler wants milliseconds as an f64.
+fn profilerClockMs() f64 {
+    return toF64(monotonicNanos()) * 1.0e-6;
 }
 
 /// Break one model's step down by pipeline stage, using the profiler zones that
@@ -299,11 +306,6 @@ fn profileStages(
     );
 }
 
-/// The profiler wants milliseconds as an f64.
-fn profilerClockMs() f64 {
-    return toF64(monotonicNanos()) * 1.0e-6;
-}
-
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
@@ -316,7 +318,7 @@ pub fn main() !void {
     {
         var m: rbt.Model = try TwoLink.build(gpa);
         defer m.deinit();
-        var d: rbt.Data = try rbt.Data.init(gpa, &m);
+        var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
         d.pos[0] = 1.1;
         d.pos[1] = -0.6;
@@ -328,7 +330,7 @@ pub fn main() !void {
         var m: rbt.Model = try kuka.Model.build(gpa);
         defer m.deinit();
         m.opt.timestep = 1.0 / 240.0;
-        var d: rbt.Data = try rbt.Data.init(gpa, &m);
+        var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
         d.pos[1] = 0.6;
         d.pos[3] = -0.9;
@@ -348,7 +350,7 @@ pub fn main() !void {
         for (0..m.njnt) |ji| {
             m.jnt_range[ji] = .{ -0.05, 0.05 };
         }
-        var d: rbt.Data = try rbt.Data.init(gpa, &m);
+        var d: rbt.Data = try .init(gpa, &m);
         defer d.deinit();
         for (0..m.nv) |i| {
             d.pos[i] = 0.3; // outside every limit
@@ -390,7 +392,7 @@ pub fn main() !void {
         options.solver.algorithm = algorithm;
         var imported: rmj.Imported = try rmj.build(gpa, &robot, options);
         defer imported.deinit();
-        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var d: rbt.Data = try .init(gpa, &imported.model);
         defer d.deinit();
         if (!rmj.applyKeyframe(&imported.model, &d, robot.keyframes[0])) {
             // * A BENCHMARK MUST NOT RUN ON A POSE IT FAILED TO SET. `applyKeyframe`
@@ -501,7 +503,7 @@ pub fn main() !void {
         var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
         defer imported.deinit();
 
-        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var d: rbt.Data = try .init(gpa, &imported.model);
         defer d.deinit();
         rbt.forward(&imported.model, &d);
 
@@ -520,7 +522,7 @@ pub fn main() !void {
         defer robot.deinit();
         var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
         defer imported.deinit();
-        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var d: rbt.Data = try .init(gpa, &imported.model);
         defer d.deinit();
         rbt.forward(&imported.model, &d);
         benchmark("6. humanoid_flex2, ball joints", &imported.model, &d, steps_per_case / 10);
@@ -543,7 +545,7 @@ pub fn main() !void {
         defer robot.deinit();
         var imported: rmj.Imported = try rmj.build(gpa, &robot, .{});
         defer imported.deinit();
-        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var d: rbt.Data = try .init(gpa, &imported.model);
         defer d.deinit();
         rbt.forward(&imported.model, &d);
         benchmark("7. humanoid_ball, all ball", &imported.model, &d, steps_per_case / 10);
@@ -572,7 +574,7 @@ pub fn main() !void {
             .max_contacts = 256,
         });
         defer imported.deinit();
-        var d: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var d: rbt.Data = try .init(gpa, &imported.model);
         defer d.deinit();
         rbt.forward(&imported.model, &d);
 
@@ -622,7 +624,7 @@ pub fn main() !void {
             });
             var cube_model: rbt.Model = try Cube.build(gpa);
             defer cube_model.deinit();
-            var cd: rbt.Data = try rbt.Data.init(gpa, &cube_model);
+            var cd: rbt.Data = try .init(gpa, &cube_model);
             defer cd.deinit();
             cd.pos[2] = 1.0;
             rbt.forward(&cube_model, &cd);
@@ -682,7 +684,7 @@ pub fn main() !void {
                 .motion_type = .static,
             });
 
-            var d2: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+            var d2: rbt.Data = try .init(gpa, &imported.model);
             defer d2.deinit();
             rbt.forward(&imported.model, &d2);
             var proxy: rphys.Bridge = try .init(gpa, &world, &imported.model, &d2, 256);

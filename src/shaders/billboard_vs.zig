@@ -7,6 +7,7 @@
 
 const zm = @import("zm");
 const mulMatVec = zm.mulMatVec;
+const Vec3 = zm.Vec3;
 const shader_io = @import("billboard_vs_io.zig");
 const shader_externs = @import("billboard_vs_externs");
 
@@ -16,7 +17,7 @@ pub const Out = shader_externs.Out;
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
-    const p: zm.Vec3 = io_in.p;
+    const p: Vec3 = io_in.p;
     out.position = mulMatVec(io_in.u.vp, .{ p[0], p[1], p[2], 1.0 });
     out.o_uv = io_in.uv;
     out.o_col = io_in.col;

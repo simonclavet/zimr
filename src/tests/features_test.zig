@@ -15,6 +15,8 @@
 
 const std = @import("std");
 const expect = std.testing.expect;
+const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 // GL-retirement P5a: retargeted at the LIVE umbrella - the namespace
 // shape these tests guard is now zimr's.
 const z = @import("../zimr.zig");
@@ -135,7 +137,7 @@ test "audio: test_sine.wav decodes to real PCM" {
     const types = @import("../types.zig");
     const wav_bytes: []const u8 = @embedFile("../assets/test_sine.wav");
 
-    const gpa: std.mem.Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var tbl: sound.waves.AllocTable = .{};
     const wave: types.Wave = try sound.waves.loadFromMemory(&tbl, gpa, ".wav", wav_bytes);
     defer sound.waves.unload(&tbl, wave);
@@ -156,7 +158,7 @@ test "audio: test_sine.wav decodes to real PCM" {
 test "audio: composer ADSR shapes the tone (attack/sustain/release)" {
     const sound = @import("../sound.zig");
     const types = @import("../types.zig");
-    const gpa: std.mem.Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     var tbl: sound.waves.AllocTable = .{};
     const wave: types.Wave = try sound.composer.tone(&tbl, gpa, .{
@@ -180,8 +182,10 @@ test "audio: composer ADSR shapes the tone (attack/sustain/release)" {
     const sr: f32 = @floatFromInt(wave.sampleRate);
     const peakIn = struct {
         fn f(s: []const f32, rate: f32, t0_ms: f32, t1_ms: f32) f32 {
-            const a: usize = @intFromFloat(@max(0.0, t0_ms * rate / 1000.0));
-            const b: usize = @intFromFloat(@min(@as(f32, @floatFromInt(s.len)), t1_ms * rate / 1000.0));
+            const sample_count: f32 = @floatFromInt(s.len);
+            // The sample at or before each time: floor.
+            const a: usize = @floor(@max(0.0, t0_ms * rate / 1000.0));
+            const b: usize = @floor(@min(sample_count, t1_ms * rate / 1000.0));
             var m: f32 = 0;
             var i: usize = a;
             while (i < b) : (i += 1) {

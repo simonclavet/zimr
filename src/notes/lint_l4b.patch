@@ -1,0 +1,1605 @@
+--- a/tools/zimrlint.zig
++++ b/tools/zimrlint.zig
+@@ -29,7 +29,7 @@
+ //!   `// lint:off <tag>: <why>` (one line) or a file-level `//! lint:off <tag>`
+ //!   (container doc-comment). Rough groupings:
+ //!     idiom/style : untyped-local, branch-braces, fn-args-multiline, decl-order,
+-//!                   anon-return, module-var, prefer-std-alias, ascii-comments,
++//!                   anon-return, module-var, ascii-comments,
+ //!                   no-qualified-std,
+ //!                   import-at-top, import-at-root, line-length, ascii-test-names,
+ //!                   named-struct-init, screaming-const, canonical-alias,
+@@ -204,8 +204,8 @@
+ /// File-level opt-out: a top-of-file `//! lint:off <tag>[,<tag2>] [: why]`
+ /// container doc-comment suppresses `tag` for the WHOLE file.  Use sparingly,
+ /// for files whose existing convention conflicts with a rule (e.g. codecs.zig's
+-/// per-struct `const testing = std.testing;` alias clashing with the file-scope
+-/// `prefer-std-alias` binding).  Tag-list syntax matches the per-line form.
++/// per-struct `const testing = std.testing;` alias clashing with a file-scope
++/// `no-qualified-std` binding).  Tag-list syntax matches the per-line form.
+ fn fileSuppressedByDirective(source: [:0]const u8, tag: []const u8) bool {
+     var lines: std.mem.SplitIterator(u8, .scalar) = splitScalar(u8, source, '\n');
+     while (lines.next()) |raw| {
+@@ -393,7 +393,7 @@
+ 
+     /// Whether this file has a column-0 `const std = @import("std");` (or `pub`
+     /// variant).  Like `zm_col0`: only such files are subject to
+-    /// `prefer-std-alias`, since a file whose std import is function-local
++    /// `no-qualified-std`, since a file whose std import is function-local
+     /// can't host a file-scope alias binding.
+     std_col0: bool = false,
+ 
+@@ -602,7 +602,7 @@
+ // ============================================================================
+ 
+ // A keyword is a zm decl that (1) must be aliased at file scope (`const NAME =
+-// zm.NAME;`) and used bare - never written `zm.NAME` in a body (`no-qualified-zm`)
++// zm.NAME;`) and used bare - never written `zm.NAME`, anywhere (`no-qualified-zm`)
+ // - and (2) may NOT be the name of any other decl/local (`reserved-math-names`),
+ // so bare `dot`/`clamp`/`atan2` always means the zimrmath function and stays
+ // greppable. NON-keyword zm decls (matFromAxisAngle, quatFromEulerXYZ, the obscure
+@@ -996,29 +996,6 @@
+         ,
+     },
+     .{
+-        .tag = "prefer-std-alias",
+-        .title = "prefer-std-alias - bind hot std.* names at file scope, use bare",
+-        .body =
+-        \\Frequently-used std members read better aliased once at file scope
+-        \\and used bare: `const ArrayList = std.ArrayList;` then `ArrayList(u8)`;
+-        \\`const expectEqual = std.testing.expectEqual;` then `expectEqual(...)`.
+-        \\Greppability + less line noise; the file-scope binding is the single
+-        \\home for the name (mirrors the zm convention).
+-        \\
+-        \\Enforced names: std.ArrayList, std.ArrayListAligned, std.fmt.bufPrint,
+-        \\std.fmt.allocPrint, and the std.testing.expect* family.  Only fires
+-        \\inside function/test bodies (the file-scope binding itself is fine)
+-        \\and only in files with a column-0 `const std = @import("std");` (a
+-        \\file whose std is function-local can't host the binding).  mem.eql /
+-        \\startsWith / endsWith and std.meta are deliberately NOT enforced -
+-        \\they collide with idiomatic method names (`fn eql`).
+-        \\
+-        \\Fix: add `const <name> = std.<path>.<name>;` near the top and use
+-        \\`<name>`.  If the bare name is already taken, keep the qualified
+-        \\form with `// lint:off prefer-std-alias: <why>`.
+-        ,
+-    },
+-    .{
+         .tag = "import-at-top",
+         .title = "import-at-top - std/builtin/root imports belong at file scope",
+         .body =
+@@ -1419,7 +1396,7 @@
+         \\When a file binds `const wgpu = @import("wgpu.zig");`, spelling the import
+         \\out again inline is the long way round: `@import("wgpu.zig").render_pass`
+         \\says exactly what `wgpu.render_pass` says, with the alias sitting right
+-        \\there. Same "one obvious way" as prefer-std-alias and no-qualified-zm,
++        \\there. Same "one obvious way" as no-qualified-std and no-qualified-zm,
+         \\generalized to every module. `--fix` swaps in the alias.
+         \\
+         \\Only WHOLE-module bindings count. A member binding
+@@ -1504,7 +1481,8 @@
+         \\In a file with a column-0 `const zm = @import("zm");`, a zm KEYWORD (the
+         \\curated core vocabulary: length, dot, cross, clamp, vec, ...) is used bare
+         \\through a file-scope binding - `const length = zm.length;` then
+-        \\`length(v)` - never qualified inline as `zm.length(v)` in a body. Math reads
++        \\`length(v)` - never qualified as `zm.length(v)`: not in a body, not in a
++        \\signature, not in a field type (one way, Oct 2). Math reads
+         \\like math, and the binding block at the top of the file is the list of
+         \\what the file uses. Non-keyword zm helpers may stay qualified.
+         \\
+@@ -1964,6 +1942,309 @@
+     }
+ }
+ 
++/// Where `allChildren` keeps the children it cannot point into the AST for: the irregular ones (a condition, a
++/// callee, a type expression...) and the one- or two-node buffers std's `full*` helpers fill for their short forms.
++const ChildBuffer = struct {
++    fixed: [8]Index = undefined,
++    helper: [2]Index = undefined,
++};
++
++/// A node's children in two runs: `fixed`, the irregular children, then `list`, the list-shaped run - arguments,
++/// statements, members, elements, prongs, inputs, parameters - straight from the AST or from a helper's buffer.
++const ChildIterator = struct {
++    fixed: []const Index,
++    list: []const Index = &.{},
++    next_index: usize = 0,
++
++    fn next(self: *ChildIterator) ?Index {
++        if (self.next_index < self.fixed.len) {
++            self.next_index += 1;
++            return self.fixed[self.next_index - 1];
++        }
++        const list_index: usize = self.next_index - self.fixed.len;
++        if (list_index < self.list.len) {
++            self.next_index += 1;
++            return self.list[list_index];
++        }
++        return null;
++    }
++};
++
++/// Fills `ChildBuffer.fixed`: present children only.
++const FixedChildren = struct {
++    buffer: *[8]Index,
++    count: usize = 0,
++
++    fn add(self: *FixedChildren, child: Index) void {
++        self.buffer[self.count] = child;
++        self.count += 1;
++    }
++
++    fn addOptional(self: *FixedChildren, child: Ast.Node.OptionalIndex) void {
++        if (child.unwrap()) |present| {
++            self.add(present);
++        }
++    }
++
++    fn done(self: FixedChildren, list: []const Index) ChildIterator {
++        return .{ .fixed = self.buffer[0..self.count], .list = list };
++    }
++};
++
++/// EVERY child node of `node` - no exceptions, so a walk built on it cannot be blind anywhere. An EXHAUSTIVE switch
++/// over `Ast.Node.Tag` with NO `else` arm: a tag a future Zig adds is a compile error here, not a silent hole (the
++/// holes `childNodes` collected, one per incident, are the reason this exists). Composite shapes go through std's
++/// `full*` helpers, which decode every variant of a family; simple shapes read their node data directly.
++fn allChildren(ast: *const Ast, node: Index, buffer: *ChildBuffer) ChildIterator {
++    var fixed: FixedChildren = .{ .buffer = &buffer.fixed };
++    const data: Ast.Node.Data = ast.nodeData(node);
++    switch (ast.nodeTag(node)) {
++        .root => return fixed.done(ast.rootDecls()),
++        // Nothing below a leaf: literals, identifiers, error sets and multiline strings are tokens.
++        .anyframe_literal,
++        .char_literal,
++        .number_literal,
++        .unreachable_literal,
++        .identifier,
++        .enum_literal,
++        .string_literal,
++        .error_value,
++        .multiline_string_literal,
++        .error_set_decl,
++        => return fixed.done(&.{}),
++        // One operand.
++        .bool_not,
++        .negation,
++        .bit_not,
++        .negation_wrap,
++        .address_of,
++        .@"try",
++        .optional_type,
++        .deref,
++        .@"suspend",
++        .@"resume",
++        .@"comptime",
++        .@"nosuspend",
++        .@"defer",
++        .@"errdefer",
++        => fixed.add(data.node),
++        .field_access, .unwrap_optional, .grouped_expression, .asm_input => fixed.add(data.node_and_token[0]),
++        .asm_output => fixed.addOptional(data.opt_node_and_token[0]),
++        .anyframe_type => fixed.add(data.token_and_node[1]),
++        .@"return" => fixed.addOptional(data.opt_node),
++        .@"break", .@"continue" => fixed.addOptional(data.opt_token_and_opt_node[1]),
++        .test_decl => fixed.add(data.opt_token_and_node[1]),
++        // Two operands: every binary operator, assignment, comparison, `catch`, `orelse`, `a[i]`, `a!b`, `[n]T`.
++        .@"catch",
++        .@"orelse",
++        .equal_equal,
++        .bang_equal,
++        .less_than,
++        .greater_than,
++        .less_or_equal,
++        .greater_or_equal,
++        .assign,
++        .assign_mul,
++        .assign_div,
++        .assign_mod,
++        .assign_add,
++        .assign_sub,
++        .assign_shl,
++        .assign_shl_sat,
++        .assign_shr,
++        .assign_bit_and,
++        .assign_bit_xor,
++        .assign_bit_or,
++        .assign_mul_wrap,
++        .assign_add_wrap,
++        .assign_sub_wrap,
++        .assign_mul_sat,
++        .assign_add_sat,
++        .assign_sub_sat,
++        .merge_error_sets,
++        .mul,
++        .div,
++        .mod,
++        .mul_wrap,
++        .mul_sat,
++        .add,
++        .sub,
++        .array_cat,
++        .add_wrap,
++        .sub_wrap,
++        .add_sat,
++        .sub_sat,
++        .shl,
++        .shl_sat,
++        .shr,
++        .bit_and,
++        .bit_xor,
++        .bit_or,
++        .bool_and,
++        .bool_or,
++        .array_access,
++        .error_union,
++        .switch_range,
++        .fn_decl,
++        => {
++            const left: Index, const right: Index = data.node_and_node;
++            fixed.add(left);
++            fixed.add(right);
++        },
++        .for_range => {
++            const start: Index, const end: Ast.Node.OptionalIndex = data.node_and_opt_node;
++            fixed.add(start);
++            fixed.addOptional(end);
++        },
++        .simple_var_decl, .local_var_decl, .global_var_decl, .aligned_var_decl => {
++            const declaration: Ast.full.VarDecl = ast.fullVarDecl(node).?;
++            fixed.addOptional(declaration.ast.type_node);
++            fixed.addOptional(declaration.ast.align_node);
++            fixed.addOptional(declaration.ast.addrspace_node);
++            fixed.addOptional(declaration.ast.section_node);
++            fixed.addOptional(declaration.ast.init_node);
++        },
++        .assign_destructure => {
++            const destructure: Ast.full.AssignDestructure = ast.assignDestructure(node);
++            fixed.add(destructure.ast.value_expr);
++            return fixed.done(destructure.ast.variables);
++        },
++        .container_field_init, .container_field_align, .container_field => {
++            const field: Ast.full.ContainerField = ast.fullContainerField(node).?;
++            fixed.addOptional(field.ast.type_expr);
++            fixed.addOptional(field.ast.align_expr);
++            fixed.addOptional(field.ast.value_expr);
++        },
++        .fn_proto_simple, .fn_proto_multi, .fn_proto_one, .fn_proto => {
++            var param_buffer: [1]Index = undefined;
++            const proto: Ast.full.FnProto = ast.fullFnProto(&param_buffer, node).?;
++            fixed.addOptional(proto.ast.return_type);
++            fixed.addOptional(proto.ast.align_expr);
++            fixed.addOptional(proto.ast.addrspace_expr);
++            fixed.addOptional(proto.ast.section_expr);
++            fixed.addOptional(proto.ast.callconv_expr);
++            // A one-parameter form keeps its parameter in the helper's buffer: copy it into ours.
++            if (proto.ast.params.len == 1 and proto.ast.params.ptr == &param_buffer) {
++                buffer.helper[0] = param_buffer[0];
++                return fixed.done(buffer.helper[0..1]);
++            }
++            return fixed.done(proto.ast.params);
++        },
++        .if_simple, .@"if" => {
++            const branch: Ast.full.If = ast.fullIf(node).?;
++            fixed.add(branch.ast.cond_expr);
++            fixed.add(branch.ast.then_expr);
++            fixed.addOptional(branch.ast.else_expr);
++        },
++        .while_simple, .while_cont, .@"while" => {
++            const loop: Ast.full.While = ast.fullWhile(node).?;
++            fixed.add(loop.ast.cond_expr);
++            fixed.addOptional(loop.ast.cont_expr);
++            fixed.add(loop.ast.then_expr);
++            fixed.addOptional(loop.ast.else_expr);
++        },
++        .for_simple, .@"for" => {
++            const loop: Ast.full.For = ast.fullFor(node).?;
++            fixed.add(loop.ast.then_expr);
++            fixed.addOptional(loop.ast.else_expr);
++            return fixed.done(loop.ast.inputs);
++        },
++        .@"switch", .switch_comma => {
++            const choice: Ast.full.Switch = ast.fullSwitch(node).?;
++            fixed.add(choice.ast.condition);
++            return fixed.done(choice.ast.cases);
++        },
++        .switch_case_one, .switch_case_inline_one, .switch_case, .switch_case_inline => {
++            const prong: Ast.full.SwitchCase = ast.fullSwitchCase(node).?;
++            fixed.add(prong.ast.target_expr);
++            return fixed.done(prong.ast.values);
++        },
++        .call_one, .call_one_comma, .call, .call_comma => {
++            const call: Ast.full.Call = ast.fullCall(buffer.helper[0..1], node).?;
++            fixed.add(call.ast.fn_expr);
++            return fixed.done(call.ast.params);
++        },
++        .builtin_call_two, .builtin_call_two_comma, .builtin_call, .builtin_call_comma => {
++            return fixed.done(ast.builtinCallParams(&buffer.helper, node).?);
++        },
++        .block_two, .block_two_semicolon, .block, .block_semicolon => {
++            return fixed.done(ast.blockStatements(&buffer.helper, node).?);
++        },
++        .struct_init_one,
++        .struct_init_one_comma,
++        .struct_init_dot_two,
++        .struct_init_dot_two_comma,
++        .struct_init_dot,
++        .struct_init_dot_comma,
++        .struct_init,
++        .struct_init_comma,
++        => {
++            const literal: Ast.full.StructInit = ast.fullStructInit(&buffer.helper, node).?;
++            fixed.addOptional(literal.ast.type_expr);
++            return fixed.done(literal.ast.fields);
++        },
++        .array_init_one,
++        .array_init_one_comma,
++        .array_init_dot_two,
++        .array_init_dot_two_comma,
++        .array_init_dot,
++        .array_init_dot_comma,
++        .array_init,
++        .array_init_comma,
++        => {
++            const literal: Ast.full.ArrayInit = ast.fullArrayInit(&buffer.helper, node).?;
++            fixed.addOptional(literal.ast.type_expr);
++            return fixed.done(literal.ast.elements);
++        },
++        .container_decl,
++        .container_decl_trailing,
++        .container_decl_two,
++        .container_decl_two_trailing,
++        .container_decl_arg,
++        .container_decl_arg_trailing,
++        .tagged_union,
++        .tagged_union_trailing,
++        .tagged_union_two,
++        .tagged_union_two_trailing,
++        .tagged_union_enum_tag,
++        .tagged_union_enum_tag_trailing,
++        => {
++            const container: Ast.full.ContainerDecl = ast.fullContainerDecl(&buffer.helper, node).?;
++            fixed.addOptional(container.ast.arg);
++            return fixed.done(container.ast.members);
++        },
++        .array_type, .array_type_sentinel => {
++            const array: Ast.full.ArrayType = ast.fullArrayType(node).?;
++            fixed.add(array.ast.elem_count);
++            fixed.addOptional(array.ast.sentinel);
++            fixed.add(array.ast.elem_type);
++        },
++        .ptr_type_aligned, .ptr_type_sentinel, .ptr_type, .ptr_type_bit_range => {
++            const pointer: Ast.full.PtrType = ast.fullPtrType(node).?;
++            fixed.addOptional(pointer.ast.align_node);
++            fixed.addOptional(pointer.ast.addrspace_node);
++            fixed.addOptional(pointer.ast.sentinel);
++            fixed.addOptional(pointer.ast.bit_range_start);
++            fixed.addOptional(pointer.ast.bit_range_end);
++            fixed.add(pointer.ast.child_type);
++        },
++        .slice_open, .slice, .slice_sentinel => {
++            const slice: Ast.full.Slice = ast.fullSlice(node).?;
++            fixed.add(slice.ast.sliced);
++            fixed.add(slice.ast.start);
++            fixed.addOptional(slice.ast.end);
++            fixed.addOptional(slice.ast.sentinel);
++        },
++        .asm_simple, .@"asm" => {
++            const assembly: Ast.full.Asm = ast.fullAsm(node).?;
++            fixed.add(assembly.ast.template);
++            fixed.addOptional(assembly.ast.clobbers);
++            return fixed.done(assembly.ast.items);
++        },
++    }
++    return fixed.done(&.{});
++}
++
+ fn hasTypeSignalImpl(
+     ast: *const Ast,
+     node: Index,
+@@ -2907,13 +3188,16 @@
+ /// The std names `no-qualified-std` asks to be bound once and used bare - chosen by counting zimr's own
+ /// qualified uses (Sep 29: `std.testing.allocator` 1969, `std.Io` 1066, `std.mem.eql` 498, ...). Kept out:
+ /// `std.meta.eql` (a bare `eql` can mean one thing), `std.debug.print` and `std.log.*` (their own rules and
+-/// idioms), `std.Build`, `std.process`, `std.fs` (few files; OS-facing calls read better qualified), and
+-/// `prefer-std-alias`'s names (`ArrayList`, `bufPrint`, `allocPrint`, `expect*`) until that rule folds in.
++/// idioms), `std.Build`, `std.process`, `std.fs` (few files; OS-facing calls read better qualified). Folded in on
++/// Oct 2: the names `prefer-std-alias` used to enforce in bodies only (`ArrayList`, `bufPrint`, `allocPrint`, every
++/// `expect...`) - one rule, one binding mechanism, everywhere, with this rule's collision safety and its `--fix`.
+ const std_vocabulary = [_]StdAlias{
+     // Types and namespaces.
+     .{ .namespace = "", .name = "Io", .alias = "Io" },
+     .{ .namespace = "", .name = "Random", .alias = "Random" },
+     .{ .namespace = "", .name = "ArrayListUnmanaged", .alias = "ArrayListUnmanaged" },
++    .{ .namespace = "", .name = "ArrayList", .alias = "ArrayList" },
++    .{ .namespace = "", .name = "ArrayListAligned", .alias = "ArrayListAligned" },
+     .{ .namespace = "", .name = "AutoHashMapUnmanaged", .alias = "AutoHashMapUnmanaged" },
+     .{ .namespace = "", .name = "StringHashMap", .alias = "StringHashMap" },
+     .{ .namespace = "mem", .name = "Allocator", .alias = "Allocator" },
+@@ -2942,6 +3226,21 @@
+     .{ .namespace = "mem", .name = "sort", .alias = "sortSlice" },
+     // std.fmt.
+     .{ .namespace = "fmt", .name = "parseInt", .alias = "parseInt" },
++    .{ .namespace = "fmt", .name = "bufPrint", .alias = "bufPrint" },
++    .{ .namespace = "fmt", .name = "allocPrint", .alias = "allocPrint" },
++    // The test vocabulary: every `expect...` std.testing has.
++    .{ .namespace = "testing", .name = "expect", .alias = "expect" },
++    .{ .namespace = "testing", .name = "expectEqual", .alias = "expectEqual" },
++    .{ .namespace = "testing", .name = "expectError", .alias = "expectError" },
++    .{ .namespace = "testing", .name = "expectEqualSlices", .alias = "expectEqualSlices" },
++    .{ .namespace = "testing", .name = "expectEqualStrings", .alias = "expectEqualStrings" },
++    .{ .namespace = "testing", .name = "expectEqualDeep", .alias = "expectEqualDeep" },
++    .{ .namespace = "testing", .name = "expectEqualSentinel", .alias = "expectEqualSentinel" },
++    .{ .namespace = "testing", .name = "expectApproxEqAbs", .alias = "expectApproxEqAbs" },
++    .{ .namespace = "testing", .name = "expectApproxEqRel", .alias = "expectApproxEqRel" },
++    .{ .namespace = "testing", .name = "expectFmt", .alias = "expectFmt" },
++    .{ .namespace = "testing", .name = "expectStringStartsWith", .alias = "expectStringStartsWith" },
++    .{ .namespace = "testing", .name = "expectStringEndsWith", .alias = "expectStringEndsWith" },
+     .{ .namespace = "fmt", .name = "parseFloat", .alias = "parseFloat" },
+ };
+ 
+@@ -2979,15 +3278,17 @@
+     }
+ };
+ 
+-/// True when the file has the file-scope binding for `alias` in `family`: a root declaration named `alias`
+-/// whose init is a member of `roots` that the family binds to `alias` (`const eql = std.mem.eql;`). When it
+-/// exists, a qualified use can be rewritten to the bare name safely - it already resolves to this binding.
+-fn fileScopeBinds(
++/// The file-scope binding for `alias` in `family` - a root declaration named `alias` whose init is a member of
++/// `roots` that the family binds to `alias` (`const eql = std.mem.eql;`) - as its first token; null when the file
++/// has none. WHERE it sits matters: a qualified use may become the bare name only BELOW the binding, or the rewrite
++/// would create a use before the declaration (`decl-order`) - the L4b dry run met one, wgpu_app.zig's late
++/// `const Vec2 = zm.Vec2;` hundreds of lines under a `zm.Vec2` the fix had turned into `Vec2`.
++fn fileScopeBinding(
+     ast: *const Ast,
+     roots: []const []const u8,
+     family: AliasFamily,
+     alias: []const u8,
+-) bool {
++) ?u32 {
+     for (ast.rootDecls()) |decl| {
+         const var_decl: Ast.full.VarDecl = ast.fullVarDecl(decl) orelse continue;
+         const declared_name: []const u8 = ast.tokenSlice(var_decl.ast.mut_token + 1);
+@@ -2998,10 +3299,10 @@
+         const member: QualifiedMember = qualifiedMember(ast, init, roots) orelse continue;
+         const bound_to: []const u8 = family.aliasFor(member) orelse continue;
+         if (eql(u8, bound_to, alias)) {
+-            return true;
++            return ast.firstToken(decl);
+         }
+     }
+-    return false;
++    return null;
+ }
+ 
+ /// True when the file has a file-scope `const <n> = <zmAlias>.<n>;` binding - `fileScopeBinds` for zm.
+@@ -3010,7 +3311,7 @@
+     zm_aliases: []const []const u8,
+     name: []const u8,
+ ) bool {
+-    return fileScopeBinds(ast, zm_aliases, .zm, name);
++    return fileScopeBinding(ast, zm_aliases, .zm, name) != null;
+ }
+ 
+ /// The fix that turns a qualified use into the bare name. When the alias IS the member's name, drop the
+@@ -3091,13 +3392,30 @@
+ }
+ 
+ /// `no-qualified-zm` (R2): every `zm.X` member access in a zm-importing file
+-/// must go through a file-scope named import (`const X = zm.X;`), never inline
+-/// in a body.  The canonical binding init is the one allowed `zm.X` (pre-marked
++/// must go through a file-scope named import (`const X = zm.X;`), never inline -
++/// anywhere: bodies, signatures, field types (one way: Simon, Oct 2; the old walk
++/// never showed this rule a signature, so it used to read "in a body").  The
++/// canonical binding init is the one allowed `zm.X` (pre-marked
+ /// in `ctx.canonical_zm_inits`).  Files that don't import zm are exempt
+ /// (`zm_aliases` empty - e.g. zimrmath itself).  Mirrors checkDebugPrint: fires
+ /// on a `field_access` whose object identifier is a zm alias, at the field
+ /// token.  A blocked name (a local/param/fn already owns `X`) or runtime.zig's
+ /// per-struct zm opts out with `// lint:off no-qualified-zm: <reason>`.
++/// How many times `name` is DECLARED in the file - after `fn` / `const` / `var`, as a parameter or field, or as a
++/// capture (`isDeclarationToken`, the test `no-qualified-std`'s pre-pass uses). One pass over the tokens.
++fn declarationCount(ast: *const Ast, name: []const u8) u32 {
++    const tags: []const std.zig.Token.Tag = ast.tokens.items(.tag);
++    var count: u32 = 0;
++    for (tags, 0..) |token_tag, token_index| {
++        if (token_tag == .identifier and eql(u8, ast.tokenSlice(@intCast(token_index)), name)) {
++            if (isDeclarationToken(tags, token_index)) {
++                count += 1;
++            }
++        }
++    }
++    return count;
++}
++
+ fn checkNoQualifiedZm(ctx: Ctx, node: Index, tag: Ast.Node.Tag) !void {
+     if (tag != .field_access) {
+         return;
+@@ -3125,15 +3443,52 @@
+     // the `zm.` prefix (the field token already resolves to that binding - safe,
+     // no collision). When the binding is absent we only report: adding it is the
+     // riskier half (needs a free-name check) and is left to the developer.
+-    if (fileScopeBinds(ast, ctx.zm_aliases, .zm, field)) {
++    if (fileScopeBinding(ast, ctx.zm_aliases, .zm, field)) |binding_token| {
++        // Bound ABOVE this use: drop the `zm.`. Bound only below it: the rewrite would put the use before the
++        // declaration - a human moves the binding up with the others first.
++        if (binding_token < ast.firstToken(node)) {
++            try ctx.emitFix(
++                member.name_token,
++                "no-qualified-zm",
++                0,
++                bareUseFix(ast, node, member, field),
++                "qualified 'zm.{s}' - bind it once at file scope as " ++
++                    "`const {s} = zm.{s};` then use `{s}`, or rename the decl that " ++
++                    "shadows it (`// lint:off no-qualified-zm: <why>` for a real one)",
++                .{ field, field, field, field },
++            );
++        } else {
++            const binding_line: usize = ast.tokenLocation(0, binding_token).line + 1;
++            try ctx.emitAt(
++                member.name_token,
++                "no-qualified-zm",
++                0,
++                "qualified 'zm.{s}' - this file binds `{s}` only below this use (line {d}): " ++
++                    "move that binding up with the others, then use `{s}`",
++                .{ field, field, binding_line, field },
++            );
++        }
++        return;
++    }
++    // The binding is missing. `--fix` inserts it - one pass - and the next pass, now bound, drops the `zm.` from every
++    // use; every use of one name asks for the same insertion, so the copies collapse into one binding. Not when the
++    // name is already declared somewhere in the file (a local, a parameter, a capture): the binding would collide
++    // with it, which no parse check would notice - that one is for a human (or `reserved-math-names`) to resolve.
++    const root_name: []const u8 = ast.tokenSlice(ast.firstToken(node));
++    var qualified_buffer: [128]u8 = undefined;
++    const qualified: []const u8 = bufPrint(&qualified_buffer, "{s}.{s}", .{ root_name, field }) catch "";
++    const insert_at: ?u32 = if (qualified.len > 0) bindingInsertOffset(ast, ctx.zm_aliases, qualified) else null;
++    if (insert_at != null and declarationCount(ast, field) == 0) {
++        const binding_line: []u8 = try allocPrint(ctx.alloc, "const {s} = {s}.{s};\n", .{ field, root_name, field });
++        defer ctx.alloc.free(binding_line);
++        const binding: Fix = .{ .start = insert_at.?, .end = insert_at.?, .replacement = binding_line };
+         try ctx.emitFix(
+             member.name_token,
+             "no-qualified-zm",
+             0,
+-            bareUseFix(ast, node, member, field),
+-            "qualified 'zm.{s}' in a body - bind it once at file scope as " ++
+-                "`const {s} = zm.{s};` then use `{s}`, or rename the decl that " ++
+-                "shadows it (`// lint:off no-qualified-zm: <why>` for a real one)",
++            binding,
++            "qualified 'zm.{s}' - bind it once at file scope as " ++
++                "`const {s} = zm.{s};` then use `{s}`",
+             .{ field, field, field, field },
+         );
+         return;
+@@ -3142,7 +3497,7 @@
+         member.name_token,
+         "no-qualified-zm",
+         0,
+-        "qualified 'zm.{s}' in a body - bind it once at file scope as " ++
++        "qualified 'zm.{s}' - bind it once at file scope as " ++
+             "`const {s} = zm.{s};` then use `{s}`, or rename the decl that " ++
+             "shadows it (`// lint:off no-qualified-zm: <why>` for a real one)",
+         .{ field, field, field, field },
+@@ -3158,12 +3513,13 @@
+     return ast.nodeTag(current) == .identifier and isOneOf(ast.tokenSlice(ast.nodeMainToken(current)), roots);
+ }
+ 
+-/// Where `--fix` inserts a missing std binding: the start of the line after the header's last std alias
++/// Where `--fix` inserts a missing binding - std's (`no-qualified-std`) or zm's (`no-qualified-zm`), the family
++/// given by its `roots`. For std: the start of the line after the header's last std alias
+ /// (the run of one-line `const` imports and aliases following the std import), or right after the std import
+ /// itself when a header line uses `qualified` (e.g. `std.Io`) - a header alias like `const Writer = std.Io.Writer;`
+ /// must find `Io` declared above it. Decided per NAME, not per use: every use of one missing name must ask for
+ /// its binding at the same spot, or the copies would not collapse into one. Null without a column-0 std import.
+-fn stdBindingInsertOffset(
++fn bindingInsertOffset(
+     ast: *const Ast,
+     std_roots: []const []const u8,
+     qualified: []const u8,
+@@ -3240,7 +3596,8 @@
+     const alias: []const u8 = AliasFamily.std_lib.aliasFor(member) orelse return;
+     // Declared elsewhere in the file? The binding itself is one declaration of the name; any other means the
+     // name is taken, and the rule stays out of it.
+-    const bound: bool = fileScopeBinds(ast, ctx.std_aliases, .std_lib, alias);
++    const binding_token: ?u32 = fileScopeBinding(ast, ctx.std_aliases, .std_lib, alias);
++    const bound: bool = binding_token != null;
+     const vocabulary_index: usize = stdVocabularyIndexOfAlias(alias).?;
+     const declarations: u32 = if (vocabulary_index < ctx.std_alias_declarations.len)
+         ctx.std_alias_declarations[vocabulary_index]
+@@ -3252,14 +3609,27 @@
+     }
+     const separator: []const u8 = if (member.namespace.len > 0) "." else "";
+     if (bound) {
+-        try ctx.emitFix(
+-            member.name_token,
+-            "no-qualified-std",
+-            0,
+-            bareUseFix(ast, node, member, alias),
+-            "qualified 'std.{s}{s}{s}' - this file binds `{s}`; use it",
+-            .{ member.namespace, separator, member.name, alias },
+-        );
++        // Bound ABOVE this use: rewrite it. Bound only below: the rewrite would put the use before the declaration.
++        if (binding_token.? < ast.firstToken(node)) {
++            try ctx.emitFix(
++                member.name_token,
++                "no-qualified-std",
++                0,
++                bareUseFix(ast, node, member, alias),
++                "qualified 'std.{s}{s}{s}' - this file binds `{s}`; use it",
++                .{ member.namespace, separator, member.name, alias },
++            );
++        } else {
++            const binding_line: usize = ast.tokenLocation(0, binding_token.?).line + 1;
++            try ctx.emitAt(
++                member.name_token,
++                "no-qualified-std",
++                0,
++                "qualified 'std.{s}{s}{s}' - this file binds `{s}` only below this use (line {d}): " ++
++                    "move that binding up with the others, then use it",
++                .{ member.namespace, separator, member.name, alias, binding_line },
++            );
++        }
+         return;
+     }
+     // The binding is missing: `--fix` inserts it (one pass), and the next pass - now bound - rewrites every use.
+@@ -3274,7 +3644,7 @@
+         separator,
+         member.name,
+     }) catch return;
+-    if (stdBindingInsertOffset(ast, ctx.std_aliases, qualified)) |offset| {
++    if (bindingInsertOffset(ast, ctx.std_aliases, qualified)) |offset| {
+         const binding: Fix = .{ .start = offset, .end = offset, .replacement = std_binding_lines[vocabulary_index] };
+         try ctx.emitFix(
+             member.name_token,
+@@ -3295,7 +3665,7 @@
+     );
+ }
+ 
+-/// `no-qualified-std` (advisory): a std name from `std_vocabulary`, used qualified, should go through its
++/// `no-qualified-std`: a std name from `std_vocabulary`, used qualified, should go through its
+ /// file-scope binding. Anywhere - bodies, signatures, field types - except the binding's own init
+ /// (`ctx.canonical_std_inits`), and only in files with a column-0 std import (a file whose std is
+ /// function-local cannot host the binding). Silent when the bare name is already declared in the file
+@@ -3523,6 +3893,12 @@
+         .container_decl_two_trailing,
+         .container_decl_arg,
+         .container_decl_arg_trailing,
++        .tagged_union,
++        .tagged_union_trailing,
++        .tagged_union_two,
++        .tagged_union_two_trailing,
++        .tagged_union_enum_tag,
++        .tagged_union_enum_tag_trailing,
+         => true,
+         else => false,
+     };
+@@ -3781,78 +4157,6 @@
+     return false;
+ }
+ 
+-/// `prefer-std-alias` - in a function/test body, a hot std.* member should be
+-/// bound once at file scope and used bare.  Enforced names: std.ArrayList,
+-/// std.ArrayListAligned, std.fmt.bufPrint, std.fmt.allocPrint, and the
+-/// std.testing.expect* family.  mem.eql/startsWith/endsWith and std.meta are
+-/// intentionally NOT enforced (they collide with idiomatic method names like
+-/// `fn eql`).  Skipped at container scope (fn_depth 0 - that's the binding
+-/// itself) and in files without a col-0 std import (can't host the binding).
+-/// Detection mirrors checkDebugPrint: a `field_access` rooted at `std` (or a
+-/// whole-module std alias), one segment (`std.ArrayList`) or two
+-/// (`std.fmt.bufPrint`, `std.testing.expect*`).
+-fn checkPreferStdAlias(
+-    ctx: Ctx,
+-    node: Index,
+-    tag: Ast.Node.Tag,
+-    fn_depth: u8,
+-) !void {
+-    if (tag != .field_access) {
+-        return;
+-    }
+-    if (fn_depth == 0) {
+-        return;
+-    }
+-    if (!ctx.std_col0) {
+-        return;
+-    }
+-    const ast: *const Ast = ctx.ast;
+-    const data: Ast.Node.Data = ast.nodeData(node);
+-    const lhs: Index = data.node_and_token[0];
+-    const field_tok: u32 = data.node_and_token[1];
+-    const field: []const u8 = ast.tokenSlice(field_tok);
+-
+-    const lhs_tag: Ast.Node.Tag = ast.nodeTag(lhs);
+-    var matched: bool = false;
+-    if (lhs_tag == .identifier) {
+-        // 1-segment: <std>.<field>  (std.ArrayList, std.ArrayListAligned)
+-        if (isStdRoot(ctx, ast.tokenSlice(ast.nodeMainToken(lhs)))) {
+-            if (eql(u8, field, "ArrayList") or eql(u8, field, "ArrayListAligned")) {
+-                matched = true;
+-            }
+-        }
+-    } else if (lhs_tag == .field_access) {
+-        // 2-segment: <std>.<mid>.<field>  (std.testing.expect*, std.fmt.bufPrint)
+-        const ld: Ast.Node.Data = ast.nodeData(lhs);
+-        const ll: Index = ld.node_and_token[0];
+-        const mid_tok: u32 = ld.node_and_token[1];
+-        if (ast.nodeTag(ll) == .identifier and
+-            isStdRoot(ctx, ast.tokenSlice(ast.nodeMainToken(ll))))
+-        {
+-            const mid: []const u8 = ast.tokenSlice(mid_tok);
+-            if (eql(u8, mid, "testing") and startsWith(u8, field, "expect")) {
+-                matched = true;
+-            } else if (eql(u8, mid, "fmt") and
+-                (eql(u8, field, "bufPrint") or eql(u8, field, "allocPrint")))
+-            {
+-                matched = true;
+-            }
+-        }
+-    }
+-    if (!matched) {
+-        return;
+-    }
+-    try ctx.emitAt(
+-        field_tok,
+-        "prefer-std-alias",
+-        0,
+-        "qualified std '{s}' in a body - bind it once at file scope as " ++
+-            "`const {s} = std.<path>.{s};` then use `{s}` (if the bare name " ++
+-            "is taken: `// lint:off prefer-std-alias: <why>`)",
+-        .{ field, field, field, field },
+-    );
+-}
+-
+ fn isRoundingBuiltin(ast: *const Ast, node: Index) bool {
+     const t: Ast.Node.Tag = ast.nodeTag(node);
+     if (t != .builtin_call_two and t != .builtin_call_two_comma and
+@@ -4281,47 +4585,14 @@
+     fn_depth: u8,
+ ) !void {
+     const ast: *const Ast = ctx.ast;
+-    const tag: Ast.Node.Tag = ast.nodeTag(container);
+-    var buf: [2]Index = undefined;
+-    const members: []const Index = switch (tag) {
+-        .container_decl, .container_decl_trailing => blk: {
+-            const range: Ast.Node.SubRange = ast.nodeData(container).extra_range;
+-            break :blk ast.extraDataSlice(range, Index);
+-        },
+-        .container_decl_two, .container_decl_two_trailing => blk: {
+-            const a, const b = ast.nodeData(container).opt_node_and_opt_node;
+-            var n: usize = 0;
+-            if (a.unwrap()) |x| {
+-                buf[n] = x;
+-                n += 1;
+-            }
+-            if (b.unwrap()) |x| {
+-                buf[n] = x;
+-                n += 1;
+-            }
+-            break :blk buf[0..n];
+-        },
+-        else => return,
+-    };
+-    for (members) |m| {
+-        try walkNode(ctx, m, .container, fn_depth);
++    var member_buffer: [2]Index = undefined;
++    const declaration: Ast.full.ContainerDecl = ast.fullContainerDecl(&member_buffer, container) orelse return;
++    // `enum(u8)`'s tag type, `union(E)`'s enum, a packed struct's backing integer: an expression like any other.
++    if (declaration.ast.arg.unwrap()) |argument| {
++        try walkNode(ctx, argument, .expression, fn_depth);
+     }
+-}
+-
+-/// Run type-level checks on a type-expression node and everything reachable
+-/// from it. The main walk skips fn-proto param/return type nodes (it descends
+-/// into bodies, not signatures), so type rules like `prefer-vec` need this to
+-/// reach `fn f(v: @Vector(4, f32))` and `fn f() @Vector(4, f32)` - and
+-/// `no-qualified-std` needs it for `fn f(gpa: std.mem.Allocator)`, the place
+-/// `Allocator` is written most.
+-fn walkTypeExpr(ctx: Ctx, node: Index) anyerror!void {
+-    const ast: *const Ast = ctx.ast;
+-    const tag: Ast.Node.Tag = ast.nodeTag(node);
+-    try checkPreferVec(ctx, node, tag);
+-    try checkNoQualifiedStd(ctx, node, tag);
+-    var buf: [8]Index = undefined;
+-    for (childNodes(ast, node, &buf)) |child| {
+-        try walkTypeExpr(ctx, child);
++    for (declaration.ast.members) |member| {
++        try walkNode(ctx, member, .container, fn_depth);
+     }
+ }
+ 
+@@ -5012,22 +5283,9 @@
+     }
+ 
+     // Per-node checks.
++    // Declaration types and field types need no second walk: the walk reaches them, like every other node.
+     if (ast.fullVarDecl(node)) |vd| {
+         try checkVarDecl(ctx, vd, pos, fn_depth);
+-        // The generic descent visits the init expression but not the explicit
+-        // type annotation (`const uv: @Vector(2, f32) = ...`), so type rules
+-        // like prefer-vec would miss it. Walk it explicitly.
+-        if (vd.ast.type_node.unwrap()) |tn| {
+-            try walkTypeExpr(ctx, tn);
+-        }
+-    }
+-    // Struct/union field types (`field: @Vector(4, f32)`) aren't visited by the
+-    // generic descent either - reach them so prefer-vec covers UBO/vertex
+-    // schema fields (`Vec` transpiles to the same `vec4<f32>` there).
+-    if (ast.fullContainerField(node)) |cf| {
+-        if (cf.ast.type_expr.unwrap()) |tn| {
+-            try walkTypeExpr(ctx, tn);
+-        }
+     }
+     if (pos == .statement) {
+         try checkBranchBraces(ctx, node, tag);
+@@ -5040,7 +5298,6 @@
+     try checkNoQualifiedStd(ctx, node, tag);
+     try checkPreferVec(ctx, node, tag);
+     try checkStdDebugAssert(ctx, node, tag);
+-    try checkPreferStdAlias(ctx, node, tag, fn_depth);
+     try checkImportAtTop(ctx, node, tag, fn_depth);
+     try checkClampPattern(ctx, node, tag);
+     try checkAsRound(ctx, node, tag);
+@@ -5063,38 +5320,23 @@
+     // condition or body).
+     switch (tag) {
+         .fn_decl => {
+-            // The walker reaches `.fn_decl` but never descends into
+-            // the fn_proto child (which holds params + return type).
+-            // Run proto-targeted checks explicitly so they actually
+-            // fire on top-level fns.  Without this, fn-args-multiline
+-            // and anon-return silently do nothing for `pub fn foo(...)`
+-            // declarations - bug discovered turn 348.
++            // The prototype - parameters, return type, align / section / callconv - is walked as a node below, like any
++            // other node: its own checks (fn-args-multiline, anon-return) and the checks on its types run there, once.
++            // (While the walk never descended into prototypes, those ran here by hand - a fix from turn 348 that
++            // became a duplicate once the walk could see everything.) What stays here needs the name or the body.
+             const proto_n, const body = ast.nodeData(node).node_and_node;
+-            const proto_tag: Ast.Node.Tag = ast.nodeTag(proto_n);
+-            try checkFnArgsMultiline(ctx, proto_n, proto_tag);
+-            try checkAnonReturn(ctx, proto_n, proto_tag);
+-            // Rule reserved-math-names: a fn named like an R_core word
+-            // (e.g. a local `fn lerp`) shadows zm.* - flag it.
++            // Rule reserved-math-names: a fn named like an R_core word (e.g. a local `fn lerp`) shadows zm.* - flag it.
+             var name_buf: [1]Index = undefined;
+             if (ast.fullFnProto(&name_buf, node)) |proto| {
+                 if (proto.name_token) |nt| {
+                     try checkReservedMath(ctx, nt, null);
+                 }
+-                // The walk descends into fn BODIES but not the proto's type
+-                // expressions, so type-level rules (prefer-vec) would miss
+-                // param and return types. Visit them explicitly.
+-                var it: Ast.full.FnProto.Iterator = proto.iterate(ast);
+-                while (it.next()) |param| {
+-                    if (param.type_expr) |te| {
+-                        try walkTypeExpr(ctx, te);
+-                    }
+-                }
+                 if (proto.ast.return_type.unwrap()) |rt| {
+-                    try walkTypeExpr(ctx, rt);
+                     try checkUselessErrorReturn(ctx, proto, rt, body);
+                 }
+             }
+             try checkReturnedStackRef(ctx, body);
++            try walkNode(ctx, proto_n, .expression, fn_depth);
+             try walkBlockBody(ctx, body, fn_depth + 1);
+         },
+         .test_decl => {
+@@ -5107,18 +5349,21 @@
+             try walkBlockBody(ctx, node, fn_depth);
+         },
+         .if_simple => {
+-            _, const then_e = ast.nodeData(node).node_and_node;
++            const condition, const then_e = ast.nodeData(node).node_and_node;
++            try walkNode(ctx, condition, .expression, fn_depth);
+             try walkNode(ctx, then_e, pos, fn_depth);
+         },
+         .@"if" => {
+             const if_full: Ast.full.If = ast.fullIf(node).?;
++            try walkNode(ctx, if_full.ast.cond_expr, .expression, fn_depth);
+             try walkNode(ctx, if_full.ast.then_expr, pos, fn_depth);
+             if (if_full.ast.else_expr.unwrap()) |e| {
+                 try walkNode(ctx, e, pos, fn_depth);
+             }
+         },
+         .while_simple, .for_simple => {
+-            _, const body = ast.nodeData(node).node_and_node;
++            const head, const body = ast.nodeData(node).node_and_node;
++            try walkNode(ctx, head, .expression, fn_depth);
+             try walkNode(ctx, body, pos, fn_depth);
+         },
+         // `.while_cont` is the `while (i < n) : (i += 1)` form and is a DIFFERENT tag from
+@@ -5128,6 +5373,10 @@
+         // reported clean for as long as that line has existed.
+         .@"while", .while_cont => {
+             const w: Ast.full.While = ast.fullWhile(node).?;
++            try walkNode(ctx, w.ast.cond_expr, .expression, fn_depth);
++            if (w.ast.cont_expr.unwrap()) |continuation| {
++                try walkNode(ctx, continuation, .expression, fn_depth);
++            }
+             try walkNode(ctx, w.ast.then_expr, pos, fn_depth);
+             if (w.ast.else_expr.unwrap()) |e| {
+                 try walkNode(ctx, e, pos, fn_depth);
+@@ -5135,6 +5384,9 @@
+         },
+         .@"for" => {
+             const f: Ast.full.For = ast.fullFor(node).?;
++            for (f.ast.inputs) |input| {
++                try walkNode(ctx, input, .expression, fn_depth);
++            }
+             try walkNode(ctx, f.ast.then_expr, pos, fn_depth);
+             if (f.ast.else_expr.unwrap()) |e| {
+                 try walkNode(ctx, e, pos, fn_depth);
+@@ -5150,6 +5402,9 @@
+             try walkNode(ctx, s.ast.condition, .expression, fn_depth);
+             for (s.ast.cases) |case_node| {
+                 if (ast.fullSwitchCase(case_node)) |case_full| {
++                    for (case_full.ast.values) |value| {
++                        try walkNode(ctx, value, .expression, fn_depth);
++                    }
+                     try walkNode(ctx, case_full.ast.target_expr, pos, fn_depth);
+                 }
+             }
+@@ -5169,6 +5424,14 @@
+             // container so nested fn decls get linted; if it's
+             // anything else, walk as an expression.
+             if (ast.fullVarDecl(node)) |vd| {
++                const declaration_parts = [_]Ast.Node.OptionalIndex{
++                    vd.ast.type_node, vd.ast.align_node, vd.ast.addrspace_node, vd.ast.section_node,
++                };
++                for (declaration_parts) |part| {
++                    if (part.unwrap()) |present| {
++                        try walkNode(ctx, present, .expression, fn_depth);
++                    }
++                }
+                 if (vd.ast.init_node.unwrap()) |init_n| {
+                     const init_tag: Ast.Node.Tag = ast.nodeTag(init_n);
+                     if (isContainerDeclTag(init_tag)) {
+@@ -5177,11 +5440,13 @@
+                         try walkNode(ctx, init_n, .expression, fn_depth);
+                     }
+                 }
++            } else if (isContainerDeclTag(tag)) {
++                try walkContainerChildren(ctx, node, fn_depth);
+             } else {
+-                var buf: [8]Index = undefined;
+-                const children: []const Index = childNodes(ast, node, &buf);
+-                for (children) |c| {
+-                    try walkNode(ctx, c, .expression, fn_depth);
++                var child_buffer: ChildBuffer = .{};
++                var children: ChildIterator = allChildren(ast, node, &child_buffer);
++                while (children.next()) |child| {
++                    try walkNode(ctx, child, .expression, fn_depth);
+                 }
+             }
+         },
+@@ -5486,7 +5751,7 @@
+ /// redundant-import: the file already binds this module to a file-scope alias, so
+ /// a second `@import("m.zig")` spelled out inline is the long way round --
+ /// `wgpu.render_pass` says the same thing as `@import("wgpu.zig").render_pass`
+-/// with the alias sitting right there. Same "one obvious way" as prefer-std-alias
++/// with the alias sitting right there. Same "one obvious way" as no-qualified-std
+ /// and no-qualified-zm, generalized to every module.
+ ///
+ /// Only whole-module bindings count (`const wgpu = @import("wgpu.zig");`); a
+@@ -6630,64 +6895,163 @@
+     return unwalkedNodes(gpa, ast, visited);
+ }
+ 
+-/// `--coverage`: for every file, each tracked node the walk never reaches (`path:line:col: [coverage] <kind> never
+-/// walked`), then a tally by kind over all the files, largest first. Exit 0: a report about the linter, not the code.
++/// SCRATCH (L2 measurement): what opens the block enclosing token `token` - the reason a statement there was missed.
++fn enclosingBlockOpener(ast: *const Ast, token: u32) []const u8 {
++    const tags = ast.tokens.items(.tag);
++    var depth: u32 = 0;
++    var cursor: u32 = token;
++    while (cursor > 0) {
++        cursor -= 1;
++        switch (tags[cursor]) {
++            .r_brace => depth += 1,
++            .l_brace => {
++                if (depth == 0) {
++                    if (cursor == 0) return "the file";
++                    const opener = tags[cursor - 1];
++                    const before_opener = if (cursor >= 2) tags[cursor - 2] else .invalid;
++                    return switch (opener) {
++                        .equal_angle_bracket_right => "a `switch` prong's block",
++                        .pipe => "a block after a capture |x|",
++                        .keyword_comptime => "a `comptime` block",
++                        .keyword_defer, .keyword_errdefer => "a defer block",
++                        .keyword_else => "an `else` block",
++                        .colon => "a labeled block",
++                        .r_paren => switch (before_opener) {
++                            .keyword_struct, .keyword_union, .keyword_enum, .keyword_opaque => "a container's members",
++                            else => "a block after ')' (if/while/for/fn body, or a tagged container)",
++                        },
++                        .keyword_struct, .keyword_union, .keyword_enum, .keyword_opaque => blk: {
++                            const before_keyword = if (cursor >= 2) tags[cursor - 2] else .invalid;
++                            break :blk switch (before_keyword) {
++                                .keyword_return => "the members of a container in a `return`",
++                                .equal => "the members of a container after '='",
++                                .l_paren, .comma => "the members of a container passed as an argument",
++                                .keyword_packed, .keyword_extern => "the members of a packed/extern container",
++                                else => "the members of a container (other)",
++                            };
++                        },
++                        .keyword_test, .string_literal, .identifier => "a test or named block",
++                        else => @tagName(opener),
++                    };
++                }
++                depth -= 1;
++            },
++            else => {},
++        }
++    }
++    return "the file";
++}
++
++/// SCRATCH (L2 measurement): a short label for where an unwalked ROOT sits.
++fn coverageContext(ast: *const Ast, node: Index) []const u8 {
++    const tags = ast.tokens.items(.tag);
++    const first: u32 = ast.firstToken(node);
++    const last: u32 = ast.lastToken(node);
++    const next = if (last + 1 < tags.len) tags[last + 1] else .eof;
++    switch (ast.nodeTag(node)) {
++        .simple_var_decl,
++        .local_var_decl,
++        .global_var_decl,
++        .aligned_var_decl,
++        .fn_decl,
++        .test_decl,
++        .if_simple,
++        .@"if",
++        .while_simple,
++        .while_cont,
++        .@"while",
++        .for_simple,
++        .@"for",
++        .@"switch",
++        .switch_comma,
++        => {
++            const previous = if (first > 0) tags[first - 1] else .invalid;
++            if (previous == .semicolon or previous == .l_brace or previous == .r_brace or
++                previous == .doc_comment or previous == .container_doc_comment or previous == .keyword_pub)
++            {
++                return enclosingBlockOpener(ast, first);
++            }
++        },
++        .field_access => {
++            if (next == .l_paren) return "a callee, read through its call";
++            if (next == .period) return "a receiver, read through its field access";
++        },
++        else => {},
++    }
++    if (first == 0) return "the file's first token";
++    const previous = tags[first - 1];
++    const before_previous = if (first >= 2) tags[first - 2] else .invalid;
++    return switch (previous) {
++        .colon => "after ':' - a type",
++        .l_paren => switch (before_previous) {
++            .keyword_if => "an `if` condition",
++            .keyword_while => "a `while` condition",
++            .keyword_switch => "a `switch` operand",
++            .keyword_for => "a `for` operand",
++            else => "after '(' - a first argument or a grouped expression",
++        },
++        .r_paren => "after ')' - a return type, or an if/while/for branch",
++        .keyword_return => "a `return` value",
++        .equal => "after '=' - an initializer or assignment",
++        .comma => "after ',' - a later argument or element",
++        .keyword_try => "after `try`",
++        .keyword_orelse => "after `orelse`",
++        .keyword_catch => "after `catch`",
++        .pipe => "after a capture |x| (a catch/if/while body)",
++        .equal_angle_bracket_right => "a `switch` prong's value",
++        .keyword_else => "an `else` value",
++        .l_bracket => "an index or array type",
++        .bang => "after '!' - an error union's payload type",
++        .question_mark => "after '?' - an optional's payload type",
++        .asterisk => "after '*' - a pointer type, or a product",
++        else => @tagName(previous),
++    };
++}
++
++/// SCRATCH (L2 measurement): `--coverage` printing ROOTS only (outermost unwalked tracked nodes, by token span), each
++/// labelled by `coverageContext`, then the totals by kind (all unwalked) and the roots by (kind, context).
+ fn runCoverage(io: Io, gpa: Allocator, files: []const []const u8) !u8 {
+     var out_buffer: [4096]u8 = undefined;
+     var out_writer: Io.File.Writer = Io.File.stdout().writer(io, &out_buffer);
+     const out: *Io.Writer = &out_writer.interface;
+-    const kind_count: usize = @typeInfo(Ast.Node.Tag).@"enum".field_names.len;
+-    var totals: [kind_count]u32 = @splat(0);
+-    var files_with_holes: u32 = 0;
+     for (files) |path| {
+-        const source: []u8 = Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e| {
+-            try out.print("{s}: unreadable ({s})\n", .{ path, @errorName(e) });
+-            continue;
+-        };
++        const source: []u8 = Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch continue;
+         defer gpa.free(source);
+         const source_z: [:0]u8 = try gpa.allocSentinel(u8, source.len, 0);
+         defer gpa.free(source_z);
+         @memcpy(source_z, source);
+         var ast: Ast = try .parse(gpa, source_z, .{ .mode = .zig });
+         defer ast.deinit(gpa);
+-        if (ast.errors.len > 0) {
+-            try out.print("{s}: does not parse - skipped\n", .{path});
+-            continue;
+-        }
++        if (ast.errors.len > 0) continue;
+         const unwalked: []Index = try walkCoverage(gpa, path, source_z, &ast);
+         defer gpa.free(unwalked);
+-        if (unwalked.len > 0) {
+-            files_with_holes += 1;
+-        }
++        // Every unwalked node, for the totals by kind.
+         for (unwalked) |node| {
+-            const tag: Ast.Node.Tag = ast.nodeTag(node);
+-            totals[@backingInt(tag)] += 1;
+-            const location: Ast.Location = ast.tokenLocation(0, ast.firstToken(node));
+-            const line: usize = location.line + 1;
+-            const column: usize = location.column + 1;
+-            try out.print("{s}:{d}:{d}: [coverage] {s} never walked\n", .{ path, line, column, @tagName(tag) });
+-        }
+-    }
+-    var grand_total: u64 = 0;
+-    for (totals) |count| {
+-        grand_total += count;
+-    }
+-    const summary_format: []const u8 = "\ncoverage: {d} tracked node(s) never walked, in {d} of {d} file(s)\n";
+-    try out.print(summary_format, .{ grand_total, files_with_holes, files.len });
+-    // The tally by kind, largest first: a selection over the kinds still unprinted.
+-    var printed: [kind_count]bool = @splat(false);
+-    while (true) {
+-        var largest: ?usize = null;
+-        for (totals, 0..) |count, kind| {
+-            const larger: bool = largest == null or count > totals[largest.?];
+-            if (count > 0 and !printed[kind] and larger) {
+-                largest = kind;
+-            }
++            try out.print("ALL\t{s}\n", .{@tagName(ast.nodeTag(node))});
++        }
++        // Roots: sort by (first token ascending, last token descending), sweep with the end of the open root.
++        const Span = struct { first: u32, last: u32, node: Index };
++        const spans: []Span = try gpa.alloc(Span, unwalked.len);
++        defer gpa.free(spans);
++        for (unwalked, spans) |node, *span| {
++            span.* = .{ .first = ast.firstToken(node), .last = ast.lastToken(node), .node = node };
++        }
++        std.mem.sort(Span, spans, {}, struct {
++            fn lessThan(_: void, a: Span, b: Span) bool {
++                return a.first < b.first or (a.first == b.first and a.last > b.last);
++            }
++        }.lessThan);
++        var open_root_end: ?u32 = null;
++        for (spans) |span| {
++            if (open_root_end) |end| {
++                if (span.first <= end) continue; // inside the open root
++            }
++            open_root_end = span.last;
++            const location: Ast.Location = ast.tokenLocation(0, span.first);
++            const kind: []const u8 = @tagName(ast.nodeTag(span.node));
++            const context: []const u8 = coverageContext(&ast, span.node);
++            try out.print("ROOT\t{s}\t{s}\t{s}:{d}\n", .{ kind, context, path, location.line + 1 });
+         }
+-        const kind: usize = largest orelse break;
+-        printed[kind] = true;
+-        const tag: Ast.Node.Tag = @fromBackingInt(@intCast(kind));
+-        try out.print("  {d:>7}  {s}\n", .{ totals[kind], @tagName(tag) });
+     }
+     try out.flush();
+     return 0;
+@@ -6890,7 +7254,7 @@
+ }
+ 
+ /// True when the source has a column-0 (file-scope) `const std = @import("std")`
+-/// or `pub const std = @import("std")`.  Drives `prefer-std-alias`'s scope: a
++/// or `pub const std = @import("std")`.  Drives `no-qualified-std`'s scope: a
+ /// file whose only std import is function-local (e.g. zimr.zig's logFn) can't
+ /// host a file-scope alias and is exempt.  Mirrors `hasCol0ZmImport`.
+ fn hasCol0StdImport(source: []const u8) bool {
+@@ -7619,9 +7983,20 @@
+             try out.append(gpa, fx);
+         }
+     }
++    // By start, then end, then text: identical edits must sit side by side for the duplicate check below to see
++    // them. Sorting by start alone let two names' bindings at one spot interleave - A, B, A, B - and each A, compared
++    // only with the B before it, was inserted again: a redeclaration, AstGen failed, the guard threw the whole pass
++    // away, and every fix of the file was lost (codecs.zig's 106, found by the L4b dry run). The text order also
++    // makes the bindings inserted at one spot come out sorted, the same on every run.
+     sortSlice(Fix, out.items, {}, struct {
+         fn lt(_: void, a: Fix, b: Fix) bool {
+-            return a.start < b.start;
++            if (a.start != b.start) {
++                return a.start < b.start;
++            }
++            if (a.end != b.end) {
++                return a.end < b.end;
++            }
++            return std.mem.order(u8, a.replacement, b.replacement) == .lt;
+         }
+     }.lt);
+     var w: usize = 0;
+@@ -7645,13 +8020,46 @@
+ }
+ 
+ /// Outcome of fixing one file: the final source (owned), how many edits landed,
+-/// and whether a pass was rolled back by the parse guard.
++/// and whether any fix was refused because it would have broken the file.
+ const FixOutcome = struct {
+     bytes: []u8,
+     edits_applied: usize,
+-    rolled_back: bool,
++    /// Some fixes were refused: applied, they would have broken the file (`applyFixesGuarded`). The findings they
++    /// belong to stay, marked for a human.
++    refused_any: bool,
++};
++
++/// What `applyFixesGuarded` did: the result (owned), and how many fixes it kept and refused.
++const GuardedOutcome = struct {
++    bytes: []u8,
++    applied: usize,
++    refused: usize,
+ };
+ 
++/// `fixes` applied to `source` ONE AT A TIME - from the last, so each one's offsets still hold - keeping each that
++/// leaves the file clean (`compilesClean`) and refusing the others. What the fix loop falls back to when a pass,
++/// applied all at once, breaks the file: one bad fix, or two that only clash together, must not cost the file all
++/// the good ones. `fixes` are sorted ascending and do not overlap (`collectFixes`).
++fn applyFixesGuarded(gpa: Allocator, source: []const u8, fixes: []const Fix) !GuardedOutcome {
++    var current: []u8 = try gpa.dupe(u8, source);
++    var applied: usize = 0;
++    var refused: usize = 0;
++    var index: usize = fixes.len;
++    while (index > 0) {
++        index -= 1;
++        const candidate: []u8 = try applyFixes(gpa, current, fixes[index .. index + 1]);
++        if (compilesClean(gpa, candidate)) {
++            gpa.free(current);
++            current = candidate;
++            applied += 1;
++        } else {
++            gpa.free(candidate);
++            refused += 1;
++        }
++    }
++    return .{ .bytes = current, .applied = applied, .refused = refused };
++}
++
+ /// Iteratively analyze -> collect fixes -> splice, until no more fixes (or 5
+ /// passes). The loop is what lets a cascade settle: removing decl A in pass 1
+ /// can make decl B unused, caught in pass 2. Each pass re-parses the spliced
+@@ -7659,7 +8067,7 @@
+ fn runFixLoop(gpa: Allocator, path: []const u8, original: []const u8, args: *const Args) !FixOutcome {
+     var cur: []u8 = try gpa.dupe(u8, original);
+     var total_edits: usize = 0;
+-    var rolled_back: bool = false;
++    var refused_any: bool = false;
+     var pass: usize = 0;
+     while (pass < 5) : (pass += 1) {
+         const cur_z: [:0]u8 = try gpa.allocSentinel(u8, cur.len, 0);
+@@ -7689,15 +8097,24 @@
+         const next: []u8 = try applyFixes(gpa, cur, fixes.items);
+         const after_ok: bool = compilesClean(gpa, next);
+         if (before_ok and !after_ok) {
+-            gpa.free(next); // guard: a clean file just went broken - discard the pass
+-            rolled_back = true;
+-            break;
++            // Together these edits break a clean file. Keep the ones that do not, one at a time; refuse the rest.
++            gpa.free(next);
++            const guarded: GuardedOutcome = try applyFixesGuarded(gpa, cur, fixes.items);
++            gpa.free(cur);
++            cur = guarded.bytes;
++            total_edits += guarded.applied;
++            refused_any = refused_any or guarded.refused > 0;
++            // Nothing applied: only refused fixes are left, and the next pass would propose the same ones.
++            if (guarded.applied == 0) {
++                break;
++            }
++            continue;
+         }
+         gpa.free(cur);
+         cur = next;
+         total_edits += fixes.items.len;
+     }
+-    return .{ .bytes = cur, .edits_applied = total_edits, .rolled_back = rolled_back };
++    return .{ .bytes = cur, .edits_applied = total_edits, .refused_any = refused_any };
+ }
+ 
+ // ==== --reorder-decls: move declarations above their first use (the hoist strategy) ====
+@@ -8232,6 +8649,9 @@
+ /// `--fix`. zimr's build and a project's pass `zig build fix` instead - the step that runs `--fix`, then zig fmt.
+ const fix_command_default: []const u8 = "rerun this command with --fix";
+ 
++/// The hint after `--fix` REFUSED a finding's fix (it would have broken the file): not an autofix any more.
++const fix_refused_hint: []const u8 = "refused here (it would break this file) - by hand";
++
+ /// Sort + print a file's issues (with first-hit rule notes), shared by the
+ /// check path and the fix path's residual report. A finding with a mechanical
+ /// fix ends with how to apply it - ` - autofix: <fix_command>` - the same for
+@@ -8516,6 +8936,8 @@
+     var total_issues: usize = 0;
+     // The findings `--fix` can repair, and the command that does it (`--fix-command`, else the linter's own advice).
+     var total_fixable: usize = 0;
++    // Fixes `--fix` refused because applying them would have broken their file - left for a human.
++    var total_refused: usize = 0;
+     const fix_command: []const u8 = args.fix_command orelse fix_command_default;
+     // Reports from advisory rules: printed, counted here, never in the exit code.
+     var total_advisory: usize = 0;
+@@ -8608,8 +9030,9 @@
+             const outcome: FixOutcome = try runFixLoop(gpa, path, source_bytes, &args);
+             defer gpa.free(outcome.bytes);
+ 
+-            if (outcome.rolled_back) {
+-                try out.print("{s}: skipped a fix that would break parsing (parse guard)\n", .{path});
++            if (outcome.refused_any) {
++                try out.print("{s}: some autofixes were refused - applied, they would break the file; " ++
++                    "their findings are marked below, for a human\n", .{path});
+             }
+             if (outcome.edits_applied > 0) {
+                 if (args.dry_run) {
+@@ -8637,13 +9060,20 @@
+                 fix_issues.deinit(gpa);
+             }
+             _ = try analyzeSource(gpa, path, final_z, &args, &fix_issues);
+-            total_fixable += try printIssues(out, &seen_tags, fix_issues.items, fix_command);
++            // After a refusal, what still carries a fix is exactly what was refused: say so, not "autofix".
++            const residual_hint: []const u8 = if (outcome.refused_any) fix_refused_hint else fix_command;
++            const residual_fixable: usize = try printIssues(out, &seen_tags, fix_issues.items, residual_hint);
++            if (outcome.refused_any) {
++                total_refused += residual_fixable;
++            } else {
++                total_fixable += residual_fixable;
++            }
+             total_issues += fix_issues.items.len;
+ 
+             // Stamp clean when the file is fully resolved (no residual, no
+             // rollback, real write). Re-stat after a write so the stamp records
+             // the post-fix mtime; an untouched clean file keeps `fix_mtime_ns`.
+-            if (!args.dry_run and !outcome.rolled_back and fix_issues.items.len == 0) {
++            if (!args.dry_run and !outcome.refused_any and fix_issues.items.len == 0) {
+                 const stamp_mtime_ns: i128 = if (outcome.edits_applied == 0) fix_mtime_ns else blk: {
+                     const stat: Io.Dir.Stat = Io.Dir.cwd().statFile(io, path, .{}) catch break :blk 0;
+                     break :blk stat.mtime.nanoseconds;
+@@ -8794,6 +9224,11 @@
+     if (total_fixable > 0) {
+         try out.print("{d} of the findings can be fixed automatically: {s}\n", .{ total_fixable, fix_command });
+     }
++    if (total_refused > 0) {
++        try out.print("{d} autofixes were refused - applied, they would break their file: fix those by hand\n", .{
++            total_refused,
++        });
++    }
+     if (io_failures > 0) {
+         try out.print("\n{d} input(s) could not be read or written - pass files, not directories\n", .{io_failures});
+     }
+@@ -9412,8 +9847,8 @@
+ test "no-qualified-zm offers the fix when the binding exists - dropping `zm.`" {
+     var arena: ArenaAllocator = .init(testing_allocator);
+     defer arena.deinit();
+-    const src: []const u8 = "const zm = @import(\"zm\");\nconst length = zm.length;\n" ++
+-        "fn f(v: zm.Vec3) f32 {\n    return zm.length(v);\n}\n";
++    const src: []const u8 = "const zm = @import(\"zm\");\nconst length = zm.length;\nconst Vec3 = zm.Vec3;\n" ++
++        "fn f(v: Vec3) f32 {\n    return zm.length(v);\n}\n";
+     const issues: []Issue = try issuesTagged(arena.allocator(), src, "no-qualified-zm");
+     try expect(issues.len == 1);
+     const fix: Fix = issues[0].fix.?;
+@@ -9423,9 +9858,57 @@
+     try expect(indexOf(u8, fixed, "return length(v);") != null);
+ }
+ 
++test "no-qualified-zm: a keyword is bare EVERYWHERE - a parameter, a return type, a field type (Oct 2)" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const src: []const u8 = "const zm = @import(\"zm\");\nconst Vec3 = zm.Vec3;\n" ++
++        "fn f(v: zm.Vec3) zm.Vec3 {\n    return v;\n}\n" ++
++        "const Body = struct {\n    position: zm.Vec3,\n};\n";
++    const issues: []Issue = try issuesTagged(arena.allocator(), src, "no-qualified-zm");
++    try expect(issues.len == 3);
++    for (issues) |issue| {
++        // The binding exists, so each one's fix drops the `zm.`.
++        try expect(issue.fix != null and eql(u8, src[issue.fix.?.start..issue.fix.?.end], "zm."));
++    }
++}
++
++test "no-qualified-zm --fix: a missing binding is inserted (pass one), then every use goes bare (pass two)" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const alloc: Allocator = arena.allocator();
++    const src: []const u8 = "const zm = @import(\"zm\");\n" ++
++        "fn f(a: f32, b: f32) f32 {\n    return zm.clamp(a, 0, 1) + zm.clamp(b, 0, 1);\n}\n";
++    // Pass one: both uses ask for the same insertion - one binding, right after the zm import.
++    const first: []Issue = try issuesTagged(alloc, src, "no-qualified-zm");
++    try expect(first.len == 2);
++    try expect(first[0].fix != null and first[1].fix != null);
++    try expect(first[0].fix.?.start == first[1].fix.?.start);
++    const bound: []u8 = try applyFix(alloc, src, first[0].fix.?);
++    try expect(startsWith(u8, bound, "const zm = @import(\"zm\");\nconst clamp = zm.clamp;\n"));
++    // Pass two: bound now - each fix drops a `zm.`; applied back to front, nothing is left to say.
++    const second: []Issue = try issuesTagged(alloc, bound, "no-qualified-zm");
++    try expect(second.len == 2);
++    const one_dropped: []u8 = try applyFix(alloc, bound, second[1].fix.?);
++    const both_dropped: []u8 = try applyFix(alloc, one_dropped, second[0].fix.?);
++    try expect(indexOf(u8, both_dropped, "return clamp(a, 0, 1) + clamp(b, 0, 1);") != null);
++    try expectClean(both_dropped, "no-qualified-zm");
++}
++
++test "no-qualified-zm --fix inserts no binding where the name is already declared - that would collide" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const src: []const u8 = "const zm = @import(\"zm\");\n" ++
++        "fn f(clamp: f32) f32 {\n    return zm.clamp(clamp, 0, 1);\n}\n";
++    const issues: []Issue = try issuesTagged(arena.allocator(), src, "no-qualified-zm");
++    try expect(issues.len == 1 and issues[0].fix == null);
++}
++
+ test "no-qualified-zm stays quiet on a non-keyword, on the binding itself, and without a column-0 zm" {
+-    // `Vec3` is not a keyword: it may stay qualified.
+-    try expectClean("const zm = @import(\"zm\");\nfn f(v: zm.Vec3) zm.Vec3 {\n    return v;\n}\n", "no-qualified-zm");
++    // `matFromAxisAngle` is not a keyword: it may stay qualified.
++    try expectClean(
++        "const zm = @import(\"zm\");\nfn f(axis: [3]f32) [16]f32 {\n    return zm.matFromAxisAngle(axis, 0.5);\n}\n",
++        "no-qualified-zm",
++    );
+     // The binding's own `zm.length` is its one legal home.
+     try expectClean("const zm = @import(\"zm\");\nconst length = zm.length;\n", "no-qualified-zm");
+     // zm imported inside a struct, not at column 0: no file-scope binding is possible.
+@@ -9580,7 +10063,7 @@
+ 
+ // ---- --coverage ----------------------------------------------------------------------------------------------------
+ 
+-test "coverage finds a declaration no walk reaches - in a struct returned by a function - and not a walked one" {
++test "coverage: the complete walk reaches every tracked node - even inside a struct returned by a function" {
+     var arena: ArenaAllocator = .init(testing_allocator);
+     defer arena.deinit();
+     const alloc: Allocator = arena.allocator();
+@@ -9599,13 +10082,8 @@
+     var ast: Ast = try .parse(alloc, src, .{ .mode = .zig });
+     defer ast.deinit(alloc);
+     const unwalked: []Index = try walkCoverage(alloc, "probe.zig", src, &ast);
+-    var unwalked_on_line: [16]bool = @splat(false);
+-    for (unwalked) |node| {
+-        unwalked_on_line[ast.tokenLocation(0, ast.firstToken(node)).line + 1] = true;
+-    }
+-    // The returned struct's method and its declaration were never walked; nothing of `plain` was missed.
+-    try expect(unwalked_on_line[3] and unwalked_on_line[4]);
+-    try expect(!unwalked_on_line[9] and !unwalked_on_line[10]);
++    // The returned struct's method and its declaration were the old walk's blind spot; nothing is missed now.
++    try expect(unwalked.len == 0);
+ }
+ 
+ // ---- fn-args-multiline and branch-braces: the autofixes ------------------------------------------------------------
+@@ -9687,6 +10165,67 @@
+     try expectClean(formatted, "branch-braces");
+ }
+ 
++test "a binding below the use gets no rewrite - it would put the use before the declaration (both rules)" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const alloc: Allocator = arena.allocator();
++    const zm_source: []const u8 = "const zm = @import(\"zm\");\n" ++
++        "fn f(v: zm.Vec2) f32 {\n    return v[0];\n}\n" ++
++        "const Vec2 = zm.Vec2;\n";
++    const zm_issues: []Issue = try issuesTagged(alloc, zm_source, "no-qualified-zm");
++    try expect(zm_issues.len == 1 and zm_issues[0].fix == null);
++    try expect(indexOf(u8, zm_issues[0].message, "only below this use (line 5)") != null);
++    const std_source: []const u8 = "const std = @import(\"std\");\n" ++
++        "fn f(a: []const u8, b: []const u8) bool {\n    return std.mem.eql(u8, a, b);\n}\n" ++
++        "const eql = std.mem.eql;\n";
++    const std_issues: []Issue = try issuesTagged(alloc, std_source, "no-qualified-std");
++    try expect(std_issues.len == 1 and std_issues[0].fix == null);
++    try expect(indexOf(u8, std_issues[0].message, "only below this use (line 5)") != null);
++}
++
++test "applyFixesGuarded keeps each fix that leaves the file clean and refuses the one that would not" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const alloc: Allocator = arena.allocator();
++    // Each insertion is fine alone; together they declare `b` twice - AstGen fails.
++    const source: []const u8 = "const a: u32 = 1;\n";
++    const end: u32 = @intCast(source.len);
++    const fixes = [_]Fix{
++        .{ .start = end, .end = end, .replacement = "const b: u32 = 2;\n" },
++        .{ .start = end, .end = end, .replacement = "const b: u32 = a;\n" },
++    };
++    try expect(!compilesClean(alloc, try applyFixes(alloc, source, &fixes)));
++    const guarded: GuardedOutcome = try applyFixesGuarded(alloc, source, &fixes);
++    try expect(guarded.applied == 1 and guarded.refused == 1);
++    try expect(compilesClean(alloc, guarded.bytes));
++}
++
++test "collectFixes keeps ONE of each binding when two names' insertions at one spot interleave (A, B, A, B)" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const alloc: Allocator = arena.allocator();
++    const first_binding: []const u8 = "const allocPrint = std.fmt.allocPrint;\n";
++    const second_binding: []const u8 = "const expectEqual = std.testing.expectEqual;\n";
++    var issues: [4]Issue = undefined;
++    for (&issues, [_][]const u8{ second_binding, first_binding, second_binding, first_binding }) |*issue, line| {
++        issue.* = .{
++            .file = "a.zig",
++            .line = 1,
++            .col = 1,
++            .tag = "no-qualified-std",
++            .message = try alloc.dupe(u8, "qualified"),
++            .rule = 0,
++            .fix = .{ .start = 30, .end = 30, .replacement = try alloc.dupe(u8, line) },
++        };
++    }
++    var fixes: ArrayList(Fix) = .empty;
++    try collectFixes(alloc, &issues, &fixes);
++    try expect(fixes.items.len == 2);
++    // Sorted by text at the one spot - the same on every run.
++    try expect(eql(u8, fixes.items[0].replacement, first_binding));
++    try expect(eql(u8, fixes.items[1].replacement, second_binding));
++}
++
+ test "a fixable finding ends with the command that fixes it; the others do not; printIssues counts them" {
+     var arena: ArenaAllocator = .init(testing_allocator);
+     defer arena.deinit();
+@@ -9722,6 +10261,28 @@
+     try expect(indexOf(u8, text, "a.zig:4:5: [untyped-local] local 'x' lacks a type annotation (rule 2)\n") != null);
+ }
+ 
++test "no-qualified-std covers what prefer-std-alias did: `std.ArrayList` gets its binding, then its bare use" {
++    var arena: ArenaAllocator = .init(testing_allocator);
++    defer arena.deinit();
++    const alloc: Allocator = arena.allocator();
++    const src: []const u8 = "const std = @import(\"std\");\n" ++
++        "fn f() void {\n" ++
++        "    var list: std.ArrayList(u8) = .empty;\n" ++
++        "    _ = &list;\n" ++
++        "}\n";
++    // Pass one: the binding is missing - the fix inserts it.
++    const first: []Issue = try issuesTagged(alloc, src, "no-qualified-std");
++    try expect(first.len == 1 and first[0].fix != null);
++    const bound: []u8 = try applyFix(alloc, src, first[0].fix.?);
++    try expect(indexOf(u8, bound, "const ArrayList = std.ArrayList;") != null);
++    // Pass two: now bound - the fix rewrites the use, and nothing is left to say.
++    const second: []Issue = try issuesTagged(alloc, bound, "no-qualified-std");
++    try expect(second.len == 1 and second[0].fix != null);
++    const rewritten: []u8 = try applyFix(alloc, bound, second[0].fix.?);
++    try expect(indexOf(u8, rewritten, "    var list: ArrayList(u8) = .empty;\n") != null);
++    try expectClean(rewritten, "no-qualified-std");
++}
++
+ test "advisory reports never fail a run - and no-qualified-std, graduated, fails it like any rule" {
+     // The mechanism, on a table of its own (no real rule is advisory once its tree has caught up).
+     const notes = [_]RuleNote{
+@@ -9818,7 +10379,7 @@
+     const args: Args = allRulesArgs();
+     const outcome: FixOutcome = try runFixLoop(testing_allocator, "src/lint_fixture.zig", source, &args);
+     defer testing_allocator.free(outcome.bytes);
+-    try expect(!outcome.rolled_back);
++    try expect(!outcome.refused_any);
+     try expectEqualStrings(expected, outcome.bytes);
+ }
+ 
+--- a/build.zig
++++ b/build.zig
+@@ -238,7 +238,6 @@
+     turn_in_radian_call, // a pi or tau inside a trig argument means you wanted turns
+     std_math, // no std.math outside zimrmath (GPU-portability)
+     std_debug_assert, // no std.debug.assert outside tools
+-    prefer_std_alias, // bind hot std.* names at file scope, use bare
+     import_at_top, // std/builtin/root imports belong at file scope
+     clamp_pattern, // Bonus rule - prefer zm.clamp over @min(@max())
+     as_round, // Rule - no @as(T, @trunc(x)); use bare builtin or zm.* helper
+@@ -297,7 +296,6 @@
+     .turn_in_radian_call,
+     .std_math,
+     .std_debug_assert,
+-    .prefer_std_alias,
+     .import_at_top,
+     .clamp_pattern,
+     .as_round,
+--- a/src/codecs.zig
++++ b/src/codecs.zig
+@@ -1,5 +1,4 @@
+ //! lint:alias codecs
+-//! lint:off prefer-std-alias: gltf sub-struct's local `testing` alias would clash
+ // src/codecs.zig - file-format decoders/encoders for assets we ship with.
+ // Aggregates parsing libraries into one file with namespaced sub-structs:
+ //     codecs.png         - PNG decoder + encoder (RGBA8)

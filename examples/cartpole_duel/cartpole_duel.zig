@@ -29,6 +29,8 @@
 //! the last twenty episodes (500 physics steps, 5 s, is the cap).
 
 const std = @import("std");
+const Random = std.Random;
+const copyForwards = std.mem.copyForwards;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -55,8 +57,10 @@ const clamp = zm.clamp;
 const Color = zm.Color;
 const vec2 = zm.vec2;
 const pi = zm.pi;
+const Mat = zm.Mat;
 const gym = z.robot_gym;
 const zn = @import("zn");
+const zrl = @import("zrl");
 const zn_mlp = @import("zn_mlp");
 const Learner = gym.GpuPpoOn(zn_mlp);
 const SacLearner = gym.GpuSacOn(zn_mlp);
@@ -250,7 +254,7 @@ const State = struct {
     ui_host: z.UiHost,
     cube: z.Mesh,
     cylinder: z.Mesh,
-    transform: [1]zm.Mat,
+    transform: [1]Mat,
     // -- PPO --
     pipe: z.Compute(zn_mlp),
     learner: Learner,
@@ -264,10 +268,10 @@ const State = struct {
     train_epoch: usize,
     train_batch: usize,
     order: [samples]u32,
-    rollout_buffer: zn.RolloutBuffer,
+    rollout_buffer: zrl.RolloutBuffer,
     advantages: []f64,
     returns: []f64,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     survival: [survival_window]u32,
     survival_len: usize,
     survival_at: usize,
@@ -291,7 +295,7 @@ const State = struct {
     kind: LearnerKind,
     sac_pipe: z.Compute(zn_mlp),
     sac: SacLearner,
-    replay: zn.ReplayBuffer(f32),
+    replay: zrl.ReplayBuffer(f32),
     sac_rows: []f32,
     sac_next_noise: []f32,
     sac_actor_noise: []f32,
@@ -338,6 +342,32 @@ fn costOf(s: *const State) mpc.Cost {
     };
 }
 
+/// Put the pole at `angle` (0 upright, pi hanging) and throw away the plan.
+fn reset(s: *State, angle: f32) void {
+    s.data.reset(&s.model);
+    s.data.pos[pole_hinge] = angle;
+    rbt.forward(&s.model, &s.data);
+    @memset(s.plan.ctrl, 0);
+    @memset(s.plan.feedback, 0);
+    @memset(s.plan.feedforward, 0);
+    s.warming = true;
+    s.accumulator = 0;
+    s.plan_iterations = 0;
+    s.first_cost = 0;
+    s.cost_history_len = 0;
+}
+
+/// A PPO cartpole back to upright, with a small random tilt.
+fn resetEnv(s: *State, e: usize) void {
+    const d: *rbt.Data = &s.envs[e];
+    d.reset(&s.model);
+    d.pos[pole_hinge] = 0.1 * (2.0 * s.rng.random().float(f32) - 1.0);
+    rbt.forward(&s.model, d);
+    s.env_steps[e] = 0;
+}
+
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
     s.model = try Cartpole.build(gpa);
@@ -366,7 +396,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.cam = z.OrbitCamera.init(vec(0, 0.35, 0), 2.4);
     s.pipe = try z.Compute(zn_mlp).initGpu(gpa, f.gpu.device, f.gpu.queue, &pipelineEntries(zn_mlp));
     s.learner = try Learner.init(gpa, &s.pipe, 4, 1, .{ .rows = minibatch_rows });
-    s.rng = .init(20260919);
+    s.rng = Random.DefaultPrng.init(20260919);
     for (&s.envs, 0..) |*d, e| {
         d.* = try rbt.Data.init(gpa, &s.model);
         resetEnv(s, e);
@@ -379,7 +409,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     for (&s.order, 0..) |*o, i| {
         o.* = @intCast(i);
     }
-    s.rollout_buffer = try zn.RolloutBuffer.init(gpa, samples);
+    s.rollout_buffer = try zrl.RolloutBuffer.init(gpa, samples);
     s.advantages = try gpa.alloc(f64, samples);
     s.returns = try gpa.alloc(f64, samples);
     s.survival = @splat(0);
@@ -401,7 +431,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.sac_pipe = try z.Compute(zn_mlp).initGpu(gpa, f.gpu.device, f.gpu.queue, &pipelineEntries(zn_mlp));
     s.sac = try SacLearner.initFresh(gpa, &s.sac_pipe, 4, 1, .{});
     s.sac.readbackActorOnly();
-    s.replay = try zn.ReplayBuffer(f32).init(gpa, sac_capacity, sac_width);
+    s.replay = try zrl.ReplayBuffer(f32).init(gpa, sac_capacity, sac_width);
     const sac_rows_len: usize = s.sac.options.batch * sac_width;
     s.sac_rows = try gpa.alloc(f32, sac_rows_len);
     s.sac_next_noise = try gpa.alloc(f32, s.sac.options.batch);
@@ -477,21 +507,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.plan.deinit();
     s.data.deinit();
     s.model.deinit();
-}
-
-/// Put the pole at `angle` (0 upright, pi hanging) and throw away the plan.
-fn reset(s: *State, angle: f32) void {
-    s.data.reset(&s.model);
-    s.data.pos[pole_hinge] = angle;
-    rbt.forward(&s.model, &s.data);
-    @memset(s.plan.ctrl, 0);
-    @memset(s.plan.feedback, 0);
-    @memset(s.plan.feedforward, 0);
-    s.warming = true;
-    s.accumulator = 0;
-    s.plan_iterations = 0;
-    s.first_cost = 0;
-    s.cost_history_len = 0;
 }
 
 /// -- *** THE BUDGET LOOP: PLAN A LITTLE, ALWAYS RETURN --
@@ -574,7 +589,7 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
         s.cost_history[s.cost_history_len] = result.cost;
         s.cost_history_len += 1;
     } else {
-        std.mem.copyForwards(f32, s.cost_history[0 .. s.cost_history.len - 1], s.cost_history[1..]);
+        copyForwards(f32, s.cost_history[0 .. s.cost_history.len - 1], s.cost_history[1..]);
         s.cost_history[s.cost_history.len - 1] = result.cost;
     }
 
@@ -595,15 +610,6 @@ fn planWithinFrame(s: *State, delta_time: f32) void {
     }
     s.budget = clamp(s.mpc_budget_ms / @max(s.ms_per_iteration, 0.01), 1.0, 40.0);
     _ = target;
-}
-
-/// A PPO cartpole back to upright, with a small random tilt.
-fn resetEnv(s: *State, e: usize) void {
-    const d: *rbt.Data = &s.envs[e];
-    d.reset(&s.model);
-    d.pos[pole_hinge] = 0.1 * (2.0 * s.rng.random().float(f32) - 1.0);
-    rbt.forward(&s.model, d);
-    s.env_steps[e] = 0;
 }
 
 fn observe(d: *const rbt.Data) [4]f32 {
@@ -664,8 +670,8 @@ fn finishRollout(s: *State) !void {
             r.logp[row],
         );
     }
-    try zn.gae(s.rollout_buffer.steps[0..samples], 0.99, 0.95, s.advantages, s.returns);
-    try zn.normalizeAdvantages(f64, s.advantages, 1.0e-8);
+    try zrl.gae(s.rollout_buffer.steps[0..samples], 0.99, 0.95, s.advantages, s.returns);
+    try zrl.normalizeAdvantages(f64, s.advantages, 1.0e-8);
     s.training = s.fill;
     s.train_epoch = 0;
     s.train_batch = 0;
@@ -799,7 +805,7 @@ fn switchLearner(s: *State) void {
 /// and its transition goes into the replay. `done` is a FALL, never the cap: a capped episode
 /// is truncated, and its value bootstraps.
 fn sacTick(s: *State) void {
-    const random: std.Random = s.rng.random();
+    const random: Random = s.rng.random();
     for (0..n_envs) |e| {
         const d: *rbt.Data = &s.envs[e];
         const obs: [4]f32 = observe(d);
@@ -838,7 +844,7 @@ fn sacTick(s: *State) void {
 
 /// One SAC update: a replayed batch and fresh noise, dispatched to the GPU.
 fn sacUpdate(s: *State) void {
-    const random: std.Random = s.rng.random();
+    const random: Random = s.rng.random();
     const draw: zn.Rng = .init(@truncate(s.sac_updates *% 2654435761));
     for (0..s.sac.options.batch) |i| {
         s.replay.sample(draw, @intCast(i), s.sac_rows[i * sac_width ..][0..sac_width]) catch |err| {
@@ -916,7 +922,7 @@ fn runSac(s: *State, delta_time: f32) void {
 /// hold the action for `st_frame_skip` physics steps, remember the transition in that cartpole's
 /// ring. A push starts a new segment (the world model never sees across one), as do resets.
 fn stTick(s: *State) void {
-    const random: std.Random = s.rng.random();
+    const random: Random = s.rng.random();
     for (0..n_envs) |e| {
         const d: *rbt.Data = &s.envs[e];
         if (s.st_steps[e] > 0 and s.st_steps[e] % st_push_every == 0) {
@@ -1007,124 +1013,6 @@ fn meanSurvival(s: *const State) f32 {
         sum += v;
     }
     return float(sum) / float(s.survival_len);
-}
-
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    // 1. PLAN - bounded, every frame, whether or not the physics advances.
-    planWithinFrame(s, f.time.delta_time);
-    switch (s.kind) {
-        .ppo => runPpo(s, f.time.delta_time),
-        .sac => runSac(s, f.time.delta_time),
-        .supertrack => runSuperTrack(s, f.time.delta_time),
-    }
-
-    // 2. ACT - the simulation runs on its own clock, not the display's.
-    //
-    // * WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few
-    // iterations, and applying it would flail the cart around for a quarter of a second before
-    // the optimiser found anything. Holding still until the first solve converges makes the
-    // ghost trajectory readable and the start honest: you are watching it think, then act.
-    if (s.running and !s.warming) {
-        s.accumulator += @min(f.time.delta_time, 0.1);
-        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
-            // * `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole
-            // reason MPC survives a slow solver. The plan in hand was linearised about a state
-            // the robot has since left - up to two sim steps ago, because physics runs at 100 Hz
-            // and planning at the display rate. `K_0*dx` is the backward pass's own answer to
-            // being somewhere else.
-            mpc.feedbackControl(&s.model, &s.data, &s.plan, s.applied);
-            @memcpy(s.data.ctrl, s.applied);
-            rbt.step(&s.model, &s.data);
-            // ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
-            // robot has advanced a tick, knot 1 is the new now. Shifting before the step
-            // applies knot 1's control to knot 0's state - off by one, every tick, compounding.
-            mpc.shift(&s.plan);
-        }
-    }
-
-    z.clearViewport(f, bg);
-    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    // * FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost
-    // trajectory is the thing worth seeing; a distance tuned to the robot alone crops it.
-    s.cam.distance = clamp(5.2 / @max(0.35, aspect), 4.0, 11.0);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.2, .max_distance = 9.0 });
-    z.beginMode3D(gl, cam);
-    drawScene(s, gl);
-    drawPpo(s, gl);
-    z.endMode3D(gl);
-}
-
-fn drawScene(s: *State, gl: *z.WgpuGl) void {
-    // The rail and its limits.
-    s.transform[0] = mulMat(translation(0, -0.06, 0), scaling(2 * rail_limit, 0.01, 0.06));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
-    inline for (.{ -rail_limit, rail_limit }) |edge| {
-        s.transform[0] = mulMat(translation(edge, 0.0, 0), scaling(0.02, 0.12, 0.08));
-        z.drawMeshInstanced(gl, &s.cube, &s.transform, limit_col);
-    }
-
-    // -- * THE PLAN, DRAWN AS GHOSTS. This is the demo's actual subject: the optimiser's
-    // intention, one faint pole per planned knot, sharpening as it converges. Every fourth
-    // knot, because sixty overlapping poles is a smear rather than a trajectory.
-    const ns: u32 = s.plan.nstate;
-    var knot: usize = 0;
-    while (knot <= s.plan.horizon) : (knot += 4) {
-        const px: f32 = s.plan.states[knot * ns + cart_slide];
-        const pa: f32 = s.plan.states[knot * ns + pole_hinge];
-        drawPole(s, gl, px, pa, 0.02, ghost_col);
-    }
-
-    // The robot itself, on top.
-    const x: f32 = s.data.pos[cart_slide];
-    const angle: f32 = s.data.pos[pole_hinge];
-    s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
-    drawPole(s, gl, x, angle, 0.035, pole_col);
-}
-
-/// One pole, drawn from its pivot rather than centred on it - the cylinder mesh spans [0, h]
-/// along Y, so rotating about the cart's origin puts the pivot where the hinge is.
-fn drawPole(
-    s: *State,
-    gl: *z.WgpuGl,
-    x: f32,
-    angle: f32,
-    thickness: f32,
-    colour: Color,
-) void {
-    drawPoleAt(s, gl, x, 0, angle, thickness, colour);
-}
-
-fn drawPoleAt(
-    s: *State,
-    gl: *z.WgpuGl,
-    x: f32,
-    depth: f32,
-    angle: f32,
-    thickness: f32,
-    colour: Color,
-) void {
-    s.transform[0] = mulMat(
-        mulMat(translation(x, 0, depth), rotationZ(angle)),
-        scaling(thickness, 0.6, thickness),
-    );
-    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, colour);
-}
-
-/// PPO's copy 0, on its own rail behind MPC's.
-fn drawPpo(s: *State, gl: *z.WgpuGl) void {
-    s.transform[0] = mulMat(translation(0, -0.06, ppo_depth), scaling(2 * rail_limit, 0.01, 0.06));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
-    const d: *const rbt.Data = &s.envs[0];
-    const x: f32 = d.pos[cart_slide];
-    s.transform[0] = mulMat(translation(x, 0, ppo_depth), scaling(0.2, 0.1, 0.1));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ppo_col);
-    drawPoleAt(s, gl, x, ppo_depth, d.pos[pole_hinge], 0.035, pole_col);
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -1252,7 +1140,123 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn drawPoleAt(
+    s: *State,
+    gl: *z.WgpuGl,
+    x: f32,
+    depth: f32,
+    angle: f32,
+    thickness: f32,
+    colour: Color,
+) void {
+    s.transform[0] = mulMat(
+        mulMat(translation(x, 0, depth), rotationZ(angle)),
+        scaling(thickness, 0.6, thickness),
+    );
+    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, colour);
+}
+
+/// One pole, drawn from its pivot rather than centred on it - the cylinder mesh spans [0, h]
+/// along Y, so rotating about the cart's origin puts the pivot where the hinge is.
+fn drawPole(
+    s: *State,
+    gl: *z.WgpuGl,
+    x: f32,
+    angle: f32,
+    thickness: f32,
+    colour: Color,
+) void {
+    drawPoleAt(s, gl, x, 0, angle, thickness, colour);
+}
+
+fn drawScene(s: *State, gl: *z.WgpuGl) void {
+    // The rail and its limits.
+    s.transform[0] = mulMat(translation(0, -0.06, 0), scaling(2 * rail_limit, 0.01, 0.06));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
+    inline for (.{ -rail_limit, rail_limit }) |edge| {
+        s.transform[0] = mulMat(translation(edge, 0.0, 0), scaling(0.02, 0.12, 0.08));
+        z.drawMeshInstanced(gl, &s.cube, &s.transform, limit_col);
+    }
+
+    // -- * THE PLAN, DRAWN AS GHOSTS. This is the demo's actual subject: the optimiser's
+    // intention, one faint pole per planned knot, sharpening as it converges. Every fourth
+    // knot, because sixty overlapping poles is a smear rather than a trajectory.
+    const ns: u32 = s.plan.nstate;
+    var knot: usize = 0;
+    while (knot <= s.plan.horizon) : (knot += 4) {
+        const px: f32 = s.plan.states[knot * ns + cart_slide];
+        const pa: f32 = s.plan.states[knot * ns + pole_hinge];
+        drawPole(s, gl, px, pa, 0.02, ghost_col);
+    }
+
+    // The robot itself, on top.
+    const x: f32 = s.data.pos[cart_slide];
+    const angle: f32 = s.data.pos[pole_hinge];
+    s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
+    drawPole(s, gl, x, angle, 0.035, pole_col);
+}
+
+/// PPO's copy 0, on its own rail behind MPC's.
+fn drawPpo(s: *State, gl: *z.WgpuGl) void {
+    s.transform[0] = mulMat(translation(0, -0.06, ppo_depth), scaling(2 * rail_limit, 0.01, 0.06));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
+    const d: *const rbt.Data = &s.envs[0];
+    const x: f32 = d.pos[cart_slide];
+    s.transform[0] = mulMat(translation(x, 0, ppo_depth), scaling(0.2, 0.1, 0.1));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ppo_col);
+    drawPoleAt(s, gl, x, ppo_depth, d.pos[pole_hinge], 0.035, pole_col);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    // 1. PLAN - bounded, every frame, whether or not the physics advances.
+    planWithinFrame(s, f.time.delta_time);
+    switch (s.kind) {
+        .ppo => runPpo(s, f.time.delta_time),
+        .sac => runSac(s, f.time.delta_time),
+        .supertrack => runSuperTrack(s, f.time.delta_time),
+    }
+
+    // 2. ACT - the simulation runs on its own clock, not the display's.
+    //
+    // * WHILE `warming`, THE ROBOT DOES NOT MOVE. A cold plan is nonsense for its first few
+    // iterations, and applying it would flail the cart around for a quarter of a second before
+    // the optimiser found anything. Holding still until the first solve converges makes the
+    // ghost trajectory readable and the start honest: you are watching it think, then act.
+    if (s.running and !s.warming) {
+        s.accumulator += @min(f.time.delta_time, 0.1);
+        while (s.accumulator >= sim_timestep) : (s.accumulator -= sim_timestep) {
+            // * `feedbackControl` RATHER THAN `plan.ctrl[0]`, and the difference is the whole
+            // reason MPC survives a slow solver. The plan in hand was linearised about a state
+            // the robot has since left - up to two sim steps ago, because physics runs at 100 Hz
+            // and planning at the display rate. `K_0*dx` is the backward pass's own answer to
+            // being somewhere else.
+            mpc.feedbackControl(&s.model, &s.data, &s.plan, s.applied);
+            @memcpy(s.data.ctrl, s.applied);
+            rbt.step(&s.model, &s.data);
+            // ** SHIFT AFTER STEPPING, NOT BEFORE. The plan is indexed from "now"; once the
+            // robot has advanced a tick, knot 1 is the new now. Shifting before the step
+            // applies knot 1's control to knot 0's state - off by one, every tick, compounding.
+            mpc.shift(&s.plan);
+        }
+    }
+
+    z.clearViewport(f, bg);
+    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
+    // * FRAME THE RAIL, NOT THE CART. The plan spans the full 4.8 m of track and the ghost
+    // trajectory is the thing worth seeing; a distance tuned to the robot alone crops it.
+    s.cam.distance = clamp(5.2 / @max(0.35, aspect), 4.0, 11.0);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.2, .max_distance = 9.0 });
+    z.beginMode3D(gl, cam);
+    drawScene(s, gl);
+    drawPpo(s, gl);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

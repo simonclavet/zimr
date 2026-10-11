@@ -107,7 +107,7 @@ Legend: ✅ have · ~ partial (exists but not as this) · ❌ missing → build 
 | pipeline_basic | ✅ | `wgpu_pipeline_basic` — custom WGSL/Zig pipeline + VAO + DrawArrays |
 | pipeline_uniforms | ✅ | `wgpu_pipeline_uniforms` — reflected uniform/texture/sampler bindings |
 | pipeline_instancing | ~ (engine instancing) | `wgpu_pipeline_instancing` — per-instance attrs, DrawIndexedInstanced |
-| pipeline_constants | ✅ | `wgpu_pipeline_constants` — pipeline-overridable `override` constants |
+| pipeline_constants | removed | a WGSL `override` demo; Zig's `comptime` specialises shaders on every backend |
 | pipeline_settings | ✅ | `wgpu_pipeline_settings` — blend/depth/cull/MSAA state, RT compare |
 | pipeline_spirv | ~ (whole path is SPIR-V) | `wgpu_pipeline_zig_shader` — a Zig shader AS a custom pipeline |
 | vao_multibuffer | ✅ | `wgpu_vao_multibuffer` — multiple vertex buffers, swap a buffer per attr |
@@ -147,7 +147,7 @@ Legend: ✅ have · ~ partial (exists but not as this) · ❌ missing → build 
 | models_gpu_skinning | ✅ | skinned_mesh (already GPU skinning) |
 | models_raytracing | ✅ | rt_shader, raytracer, models_raytracing |
 | models_obj | ✅ | codecs.obj + wgpu_obj_simple, wgpu_obj_bunny |
-| models_forwardkinematics | ✅ | wgpu_forward_kinematics (device-confirmed) |
+| models_forwardkinematics | removed | chain_ik, mocap_viewer and skinned_mesh show kinematic chains with Zig shaders |
 
 ### input_*
 | raygpu | zimr | target |
@@ -160,13 +160,13 @@ Legend: ✅ have · ~ partial (exists but not as this) · ❌ missing → build 
 |---|---|---|
 | shaders_basic | ~ | julia/rt_shader; subsumed by pipeline_basic |
 | shaders_lightmap | ❌ | optional `wgpu_lightmap` |
-| shader_inspection | ✅ | reflectWgslBindings + wgpu_shader_inspection |
+| shader_inspection | removed | reflected pasted WGSL, which the native host cannot run |
 | shaders_glsl / glsl_to_wgsl | 🚫 declined | zimr is Zig→WGSL; no GLSL front end (state this in readme) |
 
 ### compute / benchmark / misc
 | raygpu | zimr | note |
 |---|---|---|
-| compute | ✅ | compute_particles/smoke, fluid_gpu/sort (kompute) |
+| compute | ✅ | compute_particles/smoke, fluid_sort (kompute) |
 | benchmark_cubes | ❌ | `wgpu_benchmark_cubes` — many cubes + the profiler panel |
 | benchmark_tilemap | ~ (tile_smoke) | `wgpu_benchmark_tilemap` |
 | split_screen_camera3d | ✅ | split_screen |

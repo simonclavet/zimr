@@ -18,6 +18,7 @@
 //! for the paper's four knobs; reset = re-spawn the centre disk.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const float64 = zm.float64;
@@ -220,8 +221,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 /// columns don't lock, plus a small deterministic per-particle kick. Uploaded
 /// straight into the compute buffers; gravity does the rest. reset() re-runs it.
 fn spawnDamBreak(pipe: *z.Compute(fk), scratch: []Vec2) void {
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xf1a1d);
-    const rng: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0xf1a1d);
+    const rng: Random = prng.random();
     var i: u32 = 0;
     while (i < fk.num_particles) : (i += 1) {
         const ang: f32 = rng.float(f32) * 6.2831853;
@@ -251,7 +252,7 @@ fn spawnDamBreak(pipe: *z.Compute(fk), scratch: []Vec2) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
-    var pipe: z.Compute(fk) = try z.Compute(fk).initGpu(
+    var pipe: z.Compute(fk) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
@@ -266,14 +267,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const scratch: []Vec2 = try gpa.alloc(Vec2, fk.num_particles);
     const prev_stat_pos: []Vec2 = try gpa.alloc(Vec2, fk.num_particles);
     @memset(prev_stat_pos, .{ 0, 0 });
-    var cpu_pipe: z.Compute(fk) = z.Compute(fk).initCpu();
+    var cpu_pipe: z.Compute(fk) = .initCpu();
     cpu_pipe.element_count = fk.num_particles;
 
     spawnDamBreak(&pipe, scratch);
     spawnDamBreak(&cpu_pipe, scratch);
 
     const n_bytes: u64 = fk.num_particles * 8;
-    const discs: z.FluidDiscs = try z.FluidDiscs.init(
+    const discs: z.FluidDiscs = try .init(
         f.gpu,
         gpa,
         f.gpu.device,
@@ -458,17 +459,12 @@ fn update(f: *z.Frame, s: *State) void {
         }
     }
 
-    // ---- Diagnostics readback (centroid/bbox/rho/frozen) - GATED + THROTTLED.
-    // readLatest() copies EVERY GPU buffer to staging + submits + maps (a
-    // blocking GPU sync), and the CPU scans 20k elements. Doing all THREE
-    // readbacks every frame (for stats only visible in the `diagnostics` panel)
-    // pinned the GPU and - critically - added ~3 GPU stalls/frame that inflate
-    // ms_frame and distort the ms/sub reading. So only pay for it when the panel
-    // is open AND only once every `diag_every` frames; the stat_* fields persist
-    // between samples, so the panel still updates (~1x/sec) without taxing every
-    // frame. Measure perf with the panel CLOSED for the cleanest number.
-    // The probe: unconditional, throttled. One readback every 30 frames is cheap and it
-    // answers the only question that matters right now.
+    // ---- Readback: a probe every 30 frames. `readLatest` is asynchronous - each call returns the values that last
+    // arrived from the GPU, and starts the next copy when none is in flight - and a copy moves each field's live
+    // elements into a staging buffer, which the CPU then scans (20,000 positions). So the fluid samples rather than
+    // reading every frame: the fluid's extent and any non-finite position, the first grid cells, a density, and the
+    // parameters as the shader received them (`paramEcho` writes them into `scratch`). The diagnostics panel's
+    // statistics are sampled on the same period, and only while the panel is open.
     if (s.frame_no % 30 == 0) {
         if (pipe.readLatest(.pos)) |pos_now| {
             var mn: Vec2 = .{ 1e30, 1e30 };

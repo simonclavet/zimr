@@ -27,6 +27,9 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sortSlice = std.mem.sort;
+const zeroes = std.mem.zeroes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -58,9 +61,9 @@ const WidgetsState = struct {
     color_pick_layout: i32 = 0, // 0=bar, 1=wheel
     color_pick_rgba: [4]f32 = .{ 0.4, 0.85, 0.3, 1.0 },
     selected_index: i32 = 0,
-    name_buf: [64]u8 = std.mem.zeroes([64]u8),
+    name_buf: [64]u8 = zeroes([64]u8),
     name_len: usize = 0,
-    note_buf: [128]u8 = std.mem.zeroes([128]u8),
+    note_buf: [128]u8 = zeroes([128]u8),
     note_len: usize = 0,
     pos_xy: [2]f32 = .{ 0.5, 0.5 },
     velocity_xyz: [3]f32 = .{ 1, 2, 3 },
@@ -102,6 +105,7 @@ const Build = struct {
         return self.name_buf[0..self.name_len];
     }
 };
+
 const TablesState = struct {
     builds: [80]Build = undefined,
     initialized: bool = false,
@@ -112,10 +116,10 @@ const TablesState = struct {
 };
 
 const PlotsState = struct {
-    fps_hist: [120]f32 = std.mem.zeroes([120]f32),
+    fps_hist: [120]f32 = zeroes([120]f32),
     fps_idx: usize = 0,
     sine_phase: f32 = 0,
-    sine_hist: [120]f32 = std.mem.zeroes([120]f32),
+    sine_hist: [120]f32 = zeroes([120]f32),
     sine_idx: usize = 0,
     histogram_bins: [12]f32 = .{ 4, 7, 12, 18, 24, 31, 28, 21, 15, 9, 5, 2 },
 };
@@ -139,6 +143,7 @@ const Lane = enum {
         };
     }
 };
+
 const Chip = struct {
     id: u32,
     title_buf: [24]u8,
@@ -149,6 +154,7 @@ const Chip = struct {
         return self.title_buf[0..self.title_len];
     }
 };
+
 const ChipPayload = struct { chip_id: u32 };
 
 const DragDropState = struct {
@@ -210,8 +216,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, @embedFile("atkinson_mono_ttf"), 22);
     s.* = .{ .font = font, .ui_host = z.UiHost.init(gpa, font) };
     // Seed tables panel with 80 synthetic builds.
-    var rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xc1c1eaf);
-    const r: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(0xc1c1eaf);
+    const r: Random = rng.random();
     const branches = [_][]const u8{
         "main",
         "feature/x",
@@ -253,6 +259,10 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     }
     s.drag_drop.initialized = true;
 }
+
+// ============================================================================
+// Panel 1: Widgets - every interactive primitive in one tour.
+// ============================================================================
 
 fn panelWidgets(u: ui.Ui, s: *WidgetsState) void {
     u.text("Buttons + counters + tooltips", .{});
@@ -348,6 +358,10 @@ fn panelWidgets(u: ui.Ui, s: *WidgetsState) void {
     }
 }
 
+// ============================================================================
+// Panel 2: Tables - every Phase 1 feature exercised.
+// ============================================================================
+
 fn sortBuilds(
     specs: *const ui.TableSortSpecs,
     a: Build,
@@ -399,7 +413,7 @@ fn panelTables(u: ui.Ui, s: *TablesState) void {
 
         u.tableHeadersRow();
         if (u.tableGetSortSpecs()) |specs| {
-            std.mem.sort(Build, &s.builds, specs, sortBuilds);
+            sortSlice(Build, &s.builds, specs, sortBuilds);
         }
 
         for (s.builds) |b| {
@@ -429,6 +443,10 @@ fn panelTables(u: ui.Ui, s: *TablesState) void {
         u.endTable();
     }
 }
+
+// ============================================================================
+// Panel 3: Plots - plotLines, plotHistogram, beginTooltip block.
+// ============================================================================
 
 fn panelPlots(
     u: ui.Ui,
@@ -484,6 +502,10 @@ fn panelPlots(
     }
 }
 
+// ============================================================================
+// Panel 4: Drawing - every DrawList primitive in a single-row grid.
+// ============================================================================
+
 fn pack(c: Color) u32 {
     return @as(u32, c.r) | (@as(u32, c.g) << 8) | (@as(u32, c.b) << 16) | (@as(u32, c.a) << 24);
 }
@@ -526,7 +548,13 @@ fn panelDrawing(u: ui.Ui, s: *DrawingState) void {
 
     // Helper for cell-relative coords.
     const cellAt = struct {
-        fn at(o: Vec2, cw: f32, ch: f32, i: usize, ncols: usize) Vec2 {
+        fn at(
+            o: Vec2,
+            cw: f32,
+            ch: f32,
+            i: usize,
+            ncols: usize,
+        ) Vec2 {
             const c: f32 = float(i % ncols);
             const r: f32 = float(i / ncols);
             return .{ o[0] + c * cw, o[1] + r * ch };
@@ -633,6 +661,10 @@ fn panelDrawing(u: ui.Ui, s: *DrawingState) void {
         idx += 1;
     }
 }
+
+// ============================================================================
+// Panel 5: Drag-drop - 3-lane kanban-style pick-and-place.
+// ============================================================================
 
 fn panelDragDrop(u: ui.Ui, s: *DragDropState) void {
     u.text("Drag-drop pick-and-place - 3 lanes, 9 chips.  Drag any chip between lanes.", .{});
@@ -880,28 +912,9 @@ fn update(f: *z.Frame, s: *State) void {
 }
 
 // ============================================================================
-// Panel 1: Widgets - every interactive primitive in one tour.
-// ============================================================================
-
-// ============================================================================
-// Panel 2: Tables - every Phase 1 feature exercised.
-// ============================================================================
-
-// ============================================================================
-// Panel 3: Plots - plotLines, plotHistogram, beginTooltip block.
-// ============================================================================
-
-// ============================================================================
-// Panel 4: Drawing - every DrawList primitive in a single-row grid.
-// ============================================================================
-
-// ============================================================================
-// Panel 5: Drag-drop - 3-lane kanban-style pick-and-place.
-// ============================================================================
-
-// ============================================================================
 // Panel 6: Docking - overview + pointers to standalone demos.
 // ============================================================================
+
 // The dockspace itself is a top-level surface and doesn't compose
 // cleanly into a tab whose content vanishes when another tab is
 // active.  This panel describes the docking model and points at

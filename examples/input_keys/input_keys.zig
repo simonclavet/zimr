@@ -16,11 +16,16 @@
 //   - dt-scaled motion: raylib's source uses a fixed `+= 2.0f`
 //     per frame, we multiply by `60 * dt` so the speed feels the
 //     same whether the framerate is 60 or 144 fps.
+//   - `z.keyName`: keys are named by their position - W, A, S, D are
+//     where they sit on a US keyboard - and the prompt shows what the
+//     person's own layout prints on those keys: on a French keyboard,
+//     the same four keys read Z, Q, S, D.
 // Controls:
-//   ^ v <- ->  move the ball
+//   ^ v <- ->  move the ball, or the four keys at W A S D
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const bufPrint = std.fmt.bufPrint;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -66,23 +71,37 @@ fn update(f: *z.Frame, state: *State) void {
     const k: f32 = dt * 60.0;
     const step: f32 = speed_per_frame * k;
 
-    if (z.isKeyDown(f.input, .right)) {
+    if (z.isKeyDown(f.input, .right) or z.isKeyDown(f.input, .d)) {
         state.pos[0] += step;
     }
-    if (z.isKeyDown(f.input, .left)) {
+    if (z.isKeyDown(f.input, .left) or z.isKeyDown(f.input, .a)) {
         state.pos[0] -= step;
     }
-    if (z.isKeyDown(f.input, .up)) {
+    if (z.isKeyDown(f.input, .up) or z.isKeyDown(f.input, .w)) {
         state.pos[1] -= step;
     }
-    if (z.isKeyDown(f.input, .down)) {
+    if (z.isKeyDown(f.input, .down) or z.isKeyDown(f.input, .s)) {
         state.pos[1] += step;
     }
 
     // ---- Render -----------------------------------------------------------
     z.clearViewport(f, c.raywhite);
 
-    f.gl.text(.{ 10, 10 }, "move the ball with arrow keys", .{ .size = 20, .color = c.darkgray, .font = &state.font });
+    // The four keys at W A S D, by what the person's layout prints on them.
+    var label_bytes: [4][16]u8 = undefined;
+    const movement_keys = [4]z.KeyboardKey{ .w, .a, .s, .d };
+    var labels: [4][]const u8 = undefined;
+    for (movement_keys, 0..) |key, index| {
+        labels[index] = z.keyName(key, &label_bytes[index]) orelse "?";
+    }
+    var prompt_bytes: [96]u8 = undefined;
+    const prompt: []const u8 = bufPrint(&prompt_bytes, "move the ball with the arrows, or {s} {s} {s} {s}", .{
+        labels[0],
+        labels[1],
+        labels[2],
+        labels[3],
+    }) catch "move the ball with the arrows";
+    f.gl.text(.{ 10, 10 }, prompt, .{ .size = 20, .color = c.darkgray, .font = &state.font });
 
     f.gl.circle(state.pos, ball_radius, .{ .color = c.maroon, .segments = 16 });
     z.endDrawing(f.gl);

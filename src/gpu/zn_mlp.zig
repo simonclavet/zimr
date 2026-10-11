@@ -425,17 +425,18 @@ pub fn squash_logp(id: u32) void {
     b_acts[params.l_off + id] = logp;
 }
 
-/// y = r + gamma (1 - done)(min(q1', q2') - alpha log pi'): q1' at acts[y_off], q2' at
-/// acts[z_off], log pi' at acts[l_off], rewards then dones at acts[x_off]; y to acts[t_off].
+/// y = r + discount (min(q1', q2') - alpha log pi'): q1' at acts[y_off], q2' at acts[z_off], log pi'
+/// at acts[l_off], rewards then DISCOUNTS at acts[x_off] - the replay row's last column, gamma (1 - done)
+/// for a one-step row, gamma^k for an n-step one; y to acts[t_off].
 pub fn sac_target(id: u32) void {
     if (id >= params.rows) {
         return;
     }
     const q_next: f32 = @min(b_acts[params.y_off + id], b_acts[params.z_off + id]);
     const reward: f32 = b_acts[params.x_off + id];
-    const done: f32 = b_acts[params.x_off + params.rows + id];
+    const discount: f32 = b_acts[params.x_off + params.rows + id];
     const soft: f32 = q_next - alpha() * b_acts[params.l_off + id];
-    b_acts[params.t_off + id] = reward + params.gamma * (1.0 - done) * soft;
+    b_acts[params.t_off + id] = reward + discount * soft;
 }
 
 /// The actor loss's -mean(min(q1, q2)) gradient, routed WHOLE to the smaller critic (ties go to
@@ -485,7 +486,7 @@ pub fn squash_logstd_grad(id: u32) void {
     b_grads[params.w_off + id] = (acc - alpha()) * bound_slope;
 }
 
-/// Log alpha's gradient, -alpha (mean log pi + target entropy): `zn.Temperature.gradient`.
+/// Log alpha's gradient, -alpha (mean log pi + target entropy): `zrl.Temperature.gradient`.
 pub fn alpha_grad(id: u32) void {
     if (id != 0) {
         return;
@@ -671,6 +672,43 @@ pub fn lat_take(id: u32) void {
     b_dacts[params.dy_off + r * params.count + c] += b_dacts[params.dx_off + r * params.stride + c];
 }
 
+/// Exploration noise, identical on every device: an integer hash of (seed, row, column) - shifts,
+/// xors and wrapping multiplies, the same bits on any GPU - turned into four uniforms from its top 24
+/// bits (exact as floats), summed, centred and scaled by sqrt(3): mean 0, variance 1, bounded at
+/// +-3.46 (Irwin-Hall, rather than Box-Muller, whose log and cos GPUs may round differently). Plain
+/// Zig, so the CPU reference calls THIS function too - no copy to drift.
+// -------- The resident data's layouts --------
+//
+// Three parties have to agree on the shapes below, and only two of them exist today: the host packing
+// a record (`Resident.appendLatest`) and `lat_gather` reading one. The third arrives when the
+// simulator itself moves onto the GPU and a KERNEL writes the records instead of the host. Spelled out
+// once here - in the module both sides already import for `latNoise` - that day is one edit rather
+// than a hunt through every place the arithmetic was written out by hand.
+
+/// Floats in one record of the feature ring: a character's raw (unnormalised) features, the action it
+/// took on that step, and one more for which reference-table row it was aiming at.
+pub fn latRecordWidth(features: u32, actions: u32) u32 {
+    return features + actions + 1;
+}
+
+/// Where a record's reference-table row sits: the last column, kept as a float like everything else
+/// in the buffer and rounded back to an integer when read.
+pub fn latRecordTableRow(features: u32, actions: u32) u32 {
+    return features + actions;
+}
+
+/// Floats in one row of the reference tables: a frame's features, then the servo targets the fleet
+/// would aim at for it - everything a rollout needs about a reference frame, so a window can be built
+/// without the clips being on the device at all.
+pub fn latTableWidth(features: u32, references: u32) u32 {
+    return features + references;
+}
+
+/// Where a record's action begins. (Its features begin at nothing, so they need no name.)
+pub fn latRecordAction(features: u32) u32 {
+    return features;
+}
+
 /// A batch of training windows, assembled on the GPU from what is resident there: the feature ring
 /// (a record per character per step: raw features, action, table row), the reference tables (a row
 /// per clip frame: raw goal features, encoded targets) and the normaliser (means, then spreads).
@@ -753,41 +791,15 @@ pub fn lat_gather(id: u32) void {
     }
 }
 
-/// Exploration noise, identical on every device: an integer hash of (seed, row, column) - shifts,
-/// xors and wrapping multiplies, the same bits on any GPU - turned into four uniforms from its top 24
-/// bits (exact as floats), summed, centred and scaled by sqrt(3): mean 0, variance 1, bounded at
-/// +-3.46 (Irwin-Hall, rather than Box-Muller, whose log and cos GPUs may round differently). Plain
-/// Zig, so the CPU reference calls THIS function too - no copy to drift.
-// -------- The resident data's layouts --------
-//
-// Three parties have to agree on the shapes below, and only two of them exist today: the host packing
-// a record (`Resident.appendLatest`) and `lat_gather` reading one. The third arrives when the
-// simulator itself moves onto the GPU and a KERNEL writes the records instead of the host. Spelled out
-// once here - in the module both sides already import for `latNoise` - that day is one edit rather
-// than a hunt through every place the arithmetic was written out by hand.
-
-/// Floats in one record of the feature ring: a character's raw (unnormalised) features, the action it
-/// took on that step, and one more for which reference-table row it was aiming at.
-pub fn latRecordWidth(features: u32, actions: u32) u32 {
-    return features + actions + 1;
-}
-
-/// Where a record's action begins. (Its features begin at nothing, so they need no name.)
-pub fn latRecordAction(features: u32) u32 {
-    return features;
-}
-
-/// Where a record's reference-table row sits: the last column, kept as a float like everything else
-/// in the buffer and rounded back to an integer when read.
-pub fn latRecordTableRow(features: u32, actions: u32) u32 {
-    return features + actions;
-}
-
-/// Floats in one row of the reference tables: a frame's features, then the servo targets the fleet
-/// would aim at for it - everything a rollout needs about a reference frame, so a window can be built
-/// without the clips being on the device at all.
-pub fn latTableWidth(features: u32, references: u32) u32 {
-    return features + references;
+/// Chris Wellons' lowbias32: a well-mixed 32-bit integer hash.
+fn latHash(input: u32) u32 {
+    var x: u32 = input;
+    x ^= x >> 16;
+    x *%= 0x7feb352d;
+    x ^= x >> 15;
+    x *%= 0x846ca68b;
+    x ^= x >> 16;
+    return x;
 }
 
 pub fn latNoise(seed: u32, row: u32, column: u32) f32 {
@@ -804,17 +816,6 @@ pub fn latNoise(seed: u32, row: u32, column: u32) f32 {
 /// A different seed for every step of the rollout, from one seed per training step.
 pub fn latStepSeed(seed: u32, step: u32) u32 {
     return latHash(seed +% step *% 0x27d4eb2f);
-}
-
-/// Chris Wellons' lowbias32: a well-mixed 32-bit integer hash.
-fn latHash(input: u32) u32 {
-    var x: u32 = input;
-    x ^= x >> 16;
-    x *%= 0x7feb352d;
-    x ^= x >> 15;
-    x *%= 0x846ca68b;
-    x ^= x >> 16;
-    return x;
 }
 
 /// The policy's action into its row: `lat_scale * raw` into the wide row's action columns, so the

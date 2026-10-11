@@ -8,6 +8,7 @@
 
 const zm = @import("zm");
 const mulMatVec = zm.mulMatVec;
+const Vec3 = zm.Vec3;
 const shader_io = @import("decal_vs_io.zig");
 const shader_externs = @import("decal_vs_externs");
 
@@ -17,7 +18,7 @@ pub const Out = shader_externs.Out;
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
-    const p: zm.Vec3 = io_in.p;
+    const p: Vec3 = io_in.p;
     // No depth bias: the decal re-draws the SAME mesh that was drawn as the
     // receiver body, so decal fragment depth is bit-identical to the surface
     // depth. `less_equal` passes for the near surface (shows the decal) and

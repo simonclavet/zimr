@@ -40,6 +40,7 @@ const shader_introspect = @import("shader_introspect.zig");
 const renderer_2d = @import("renderer_2d.zig");
 
 const Allocator = std.mem.Allocator;
+const asBytes = std.mem.asBytes;
 const Renderer2D = renderer_2d.Renderer2D;
 
 /// A compiled user 2D shader, plus the uniform buffer it reads.
@@ -166,7 +167,7 @@ pub const Shader2D = struct {
 
     /// Update the shader's uniforms. Cheap enough to call every frame.
     pub fn setParams(self: *const Shader2D, params: Params) void {
-        wgpu.queueWriteBuffer(self.queue, self.params_buffer, 0, std.mem.asBytes(&params));
+        wgpu.queueWriteBuffer(self.queue, self.params_buffer, 0, asBytes(&params));
     }
 
     /// Free all six handles this shader created.

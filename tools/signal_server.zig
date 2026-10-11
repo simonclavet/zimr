@@ -52,8 +52,9 @@
 //!
 //! HOW TO RUN IT
 //! -------------
-//!   PORT=7777 zig run tools/signal_server.zig
-//! (PORT is optional; defaults to 7777. It's read from the environment because
+//!   zig build signal-server -- --port=7777
+//! (--port is optional; without it the PORT environment variable decides, then 7777 - hosting platforms set PORT,
+//! and this keeps working there. Before std's cli parser was vendored, PORT was the only way in, because
 //! the new std doesn't ship command-line arg parsing in this build.)
 //!
 //! WHY THE NEW `Io` MODEL
@@ -77,17 +78,24 @@
 //! ============================================================================
 
 const std = @import("std");
+const cli = @import("cli");
 const Io = std.Io;
-const net = std.Io.net; // the new Io-based networking: IpAddress, Server, Stream
-const ascii = std.ascii;
+// The WebSocket protocol - its frames and its opening handshake - shared with the other server and the engine's
+// native client (`net_core.websocket`).
+const websocket = @import("net_core").websocket;
+const Opcode = websocket.Opcode;
+const Frame = websocket.Frame;
+const readFrame = websocket.readFrame;
+const findHeaderValue = websocket.findHeaderValue;
+const computeAccept = websocket.computeAccept;
+const indexOfScalar = std.mem.indexOfScalar;
+const parseInt = std.fmt.parseInt;
+const net = Io.net; // the new Io-based networking: IpAddress, Server, Stream
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
-
-// The RFC 6455 "magic string." The WebSocket handshake proves the server
-// actually speaks WebSocket by concatenating the client's key with this exact
-// GUID and hashing it. It's the same constant for every WebSocket server on
-// Earth - it's in the spec, not a secret.
-const magic_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const ArrayList = std.ArrayList;
+const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
 
 const default_port = "7777";
 
@@ -146,7 +154,7 @@ const Peer = struct {
 const Registry = struct {
     mutex: Io.Mutex = .init,
     gpa: Allocator,
-    peers: std.ArrayList(*Peer) = .empty,
+    peers: ArrayList(*Peer) = .empty,
     next_id: u32 = 1,
 };
 
@@ -155,150 +163,14 @@ const Registry = struct {
 // (The lint normally frowns on mutable globals; this is the legit exception.)
 var registry: Registry = undefined; // lint:off module-var: server-wide peer registry, guarded by the async mutex
 
-// ----------------------------------------------------------------------------
-// WebSocket frame opcodes we care about.
-// ----------------------------------------------------------------------------
-// A WebSocket connection carries "frames," and the low nibble of the first byte
-// says what kind. We only ever send/expect text, and we answer pings so browsers
-// and proxies keep the connection alive. Everything else we ignore.
-const Opcode = struct {
-    const text: u8 = 0x1;
-    const close: u8 = 0x8;
-    const ping: u8 = 0x9;
-    const pong: u8 = 0xA;
-};
-
-const Frame = struct { opcode: u8, len: usize };
-
-// ----------------------------------------------------------------------------
-// Reading a WebSocket frame off the wire.
-// ----------------------------------------------------------------------------
-// The WebSocket frame layout (RFC 6455), which this function decodes byte by
-// byte:
-//
-//   byte 0:  FIN(1) RSV(3) OPCODE(4)      <- we only look at OPCODE (low nibble)
-//   byte 1:  MASK(1) LEN7(7)              <- top bit = "is masked", low 7 = length
-//   then, IF LEN7 == 126: 2 more bytes = the real 16-bit length
-//          IF LEN7 == 127: 8 more bytes = the real 64-bit length
-//          otherwise LEN7 (0..125) *is* the length
-//   then, IF MASK: 4 bytes of masking key
-//   then: <length> bytes of payload (XOR-masked with the key, if MASK was set)
-//
-// Frames sent by a CLIENT are ALWAYS masked (the spec requires it, to defeat
-// certain proxy attacks), so we always expect a mask on inbound frames and XOR
-// it back out. Frames WE send are never masked (server frames must not be).
-//
-// One sharp edge with the new reader: `reader.take(n)` hands back a slice that
-// points straight into the reader's internal buffer, and that view is only valid
-// until the very next read call (which may shuffle the buffer). So we copy out
-// anything we still need - the two header bytes, the 4 mask bytes - the instant
-// we have them, before taking again.
-fn readFrame(reader: *Io.Reader, out: []u8) !Frame {
-    // The two mandatory header bytes. take(n) fills the buffer as needed and
-    // blocks (well, awaits) until n bytes are available, or errors with
-    // EndOfStream if the peer closed. Copy the two bytes right away.
-    const header: []u8 = try reader.take(2);
-    const byte0: u8 = header[0];
-    const byte1: u8 = header[1];
-
-    const opcode: u8 = byte0 & 0x0F; // low nibble of byte 0
-    const masked: bool = (byte1 & 0x80) != 0; // top bit of byte 1
-    var len: usize = byte1 & 0x7F; // low 7 bits of byte 1
-
-    // The two "extended length" escapes. 126 means "the real length is the next
-    // 2 bytes, big-endian"; 127 means "the next 8 bytes." Anything 0..125 is the
-    // length as-is.
-    if (len == 126) {
-        const ext: []u8 = try reader.take(2);
-        len = (@as(usize, ext[0]) << 8) | ext[1];
-    } else if (len == 127) {
-        const ext: []u8 = try reader.take(8);
-        len = 0;
-        for (ext) |b| {
-            len = (len << 8) | b;
-        }
-    }
-
-    // Guard our fixed output buffer. A peer sending something huge just gets
-    // that frame refused rather than smashing memory.
-    if (len > out.len) {
-        return error.MessageTooLarge;
-    }
-
-    // The 4-byte masking key (client frames only). Copy it out immediately -
-    // taking the payload next would invalidate this view.
-    var mask: [4]u8 = .{ 0, 0, 0, 0 };
-    if (masked) {
-        const m: []u8 = try reader.take(4);
-        mask = m[0..4].*;
-    }
-
-    // The payload. Copy it into the caller's buffer before the next read can
-    // clobber the reader's internal view.
-    if (len > 0) {
-        const payload: []u8 = try reader.take(len);
-        @memcpy(out[0..len], payload);
-    }
-
-    // Unmask in place: each payload byte XOR the mask byte that cycles 0,1,2,3.
-    if (masked) {
-        for (out[0..len], 0..) |*byte, i| {
-            byte.* ^= mask[i % 4];
-        }
-    }
-
-    return .{ .opcode = opcode, .len = len };
-}
-
-// ----------------------------------------------------------------------------
-// Writing a WebSocket frame to the wire.
-// ----------------------------------------------------------------------------
-// The mirror image of readFrame, but simpler because server frames are never
-// masked. We build the little header (2, 4, or 10 bytes depending on how big the
-// payload is), write it, then write the payload.
-//
-// IMPORTANT: every caller of this holds the registry mutex, so two tasks can
-// never be halfway through writing to the SAME socket at once - their frames
-// would interleave into garbage otherwise.
-//
-// Also IMPORTANT: the new Io writer BUFFERS. writeAll alone may leave bytes
-// sitting in the buffer; `flush()` is what actually pushes them onto the socket.
-// Forgetting the flush was a real bug (the browser's handshake response never
-// arrived). So: writeAll, writeAll, flush.
-fn writeFrame(io: Io, stream: net.Stream, opcode: u8, payload: []const u8) !void {
-    var header: [10]u8 = undefined;
-    var header_len: usize = 0;
-
-    header[0] = 0x80 | opcode; // FIN bit set (this is a whole message) + opcode
-
-    if (payload.len < 126) {
-        // Small: the length fits in the 7 low bits of byte 1.
-        header[1] = @intCast(payload.len);
-        header_len = 2;
-    } else if (payload.len < 65536) {
-        // Medium: escape 126, then a 2-byte big-endian length.
-        header[1] = 126;
-        header[2] = @intCast((payload.len >> 8) & 0xFF);
-        header[3] = @intCast(payload.len & 0xFF);
-        header_len = 4;
-    } else {
-        // Large: escape 127, then an 8-byte big-endian length.
-        header[1] = 127;
-        var i: usize = 0;
-        while (i < 8) : (i += 1) {
-            header[2 + i] = @intCast((payload.len >> @intCast((7 - i) * 8)) & 0xFF);
-        }
-        header_len = 10;
-    }
-
-    // A writer with an empty buffer (&.{}) - writes go essentially straight
-    // through, and we flush at the end to be certain nothing is left behind.
-    var writer: net.Stream.Writer = stream.writer(io, &.{});
-    try writer.interface.writeAll(header[0..header_len]);
-    if (payload.len > 0) {
-        try writer.interface.writeAll(payload);
-    }
-    try writer.interface.flush();
+// Writes one whole message to a peer as a frame (`websocket.writeFrame`; a server's frames are never masked). Every
+// caller holds the registry mutex, so two tasks never interleave their frames on one socket. The frame gathers in
+// the writer's buffer and leaves in one write - a header written alone would hold its payload back until the peer
+// acknowledged it, tens of milliseconds a message - and the shared writeFrame flushes before returning.
+fn writeFrame(io: Io, stream: net.Stream, opcode: Opcode, payload: []const u8) !void {
+    var write_buffer: [4096]u8 = undefined;
+    var writer: net.Stream.Writer = stream.writer(io, &write_buffer);
+    try websocket.writeFrame(&writer.interface, opcode, payload, null);
 }
 
 // Convenience: send a text message to one peer. If the write fails (peer's
@@ -316,54 +188,21 @@ fn sendText(io: Io, peer: *Peer, text: []const u8) void {
 // ----------------------------------------------------------------------------
 // A WebSocket connection starts life as an ordinary HTTP GET with some special
 // headers. The browser sends a random "Sec-WebSocket-Key," and we must reply
-// with "Sec-WebSocket-Accept" = base64(sha1(key ++ magic_guid)). That proves to
+// with "Sec-WebSocket-Accept" = base64(sha1(key ++ websocket.magic_guid)). That proves to
 // the browser we really do speak WebSocket, and after our "101 Switching
 // Protocols" reply, both sides stop speaking HTTP and start exchanging frames.
-
-// Pull one header's value out of the raw HTTP head, matching the name
-// case-insensitively (HTTP header names aren't case-sensitive).
-fn findHeaderValue(head: []const u8, name_lower: []const u8) ?[]const u8 {
-    var lines = std.mem.splitSequence(u8, head, "\r\n");
-    while (lines.next()) |line| {
-        const colon: usize = std.mem.indexOfScalar(u8, line, ':') orelse continue;
-        const name: []const u8 = std.mem.trim(u8, line[0..colon], " \t");
-        if (ascii.eqlIgnoreCase(name, name_lower)) {
-            return std.mem.trim(u8, line[colon + 1 ..], " \t");
-        }
-    }
-    return null;
-}
-
-// Compute the Sec-WebSocket-Accept value: sha1 of (client key ++ magic), then
-// base64. Writes the base64 into `out` and returns the slice of it that's used.
-fn computeAccept(key: []const u8, out: []u8) []const u8 {
-    var hasher: std.crypto.hash.Sha1 = .init(.{});
-    hasher.update(key);
-    hasher.update(magic_guid);
-    var digest: [20]u8 = undefined;
-    hasher.final(&digest);
-    return std.base64.standard.Encoder.encode(out, &digest);
-}
 
 // Do the whole handshake on a freshly-accepted connection. Returns true if we
 // successfully upgraded to WebSocket, false if the request was malformed or the
 // peer hung up early. After this returns true, `reader` is positioned exactly at
 // the first WebSocket frame.
 fn handshake(io: Io, reader: *Io.Reader, stream: net.Stream) !bool {
-    // Read until we've seen the blank line ("\r\n\r\n") that ends the HTTP
-    // headers. fillMore() pulls in more bytes each time; if it ever makes no
-    // progress, the peer closed before finishing the request, so we bail.
-    while (std.mem.indexOf(u8, reader.buffered(), "\r\n\r\n") == null) {
-        const before: usize = reader.buffered().len;
-        reader.fillMore() catch return false;
-        if (reader.buffered().len == before) {
-            return false;
-        }
-    }
-
-    // The full request head is everything up to and including the blank line.
+    // Read until the blank line ("\r\n\r\n") that ends the HTTP headers
+    // (`websocket.readHead`, shared with the engine's native client); a peer that
+    // closes before finishing the request is turned away. The full request head is
+    // everything up to and including the blank line.
+    const head_end: usize = websocket.readHead(reader) orelse return false;
     const head_all: []const u8 = reader.buffered();
-    const head_end: usize = (std.mem.indexOf(u8, head_all, "\r\n\r\n") orelse return false) + 4;
 
     // Find the key the browser sent. No key => not a real WebSocket request.
     const key: []const u8 = findHeaderValue(head_all[0..head_end], "sec-websocket-key") orelse return false;
@@ -409,7 +248,7 @@ fn handleJoin(io: Io, peer: *Peer, room: []const u8) !void {
     // away with FULL instead of letting it join a mesh that can't hold it.
     var occupancy: usize = 0;
     for (registry.peers.items) |other| {
-        if (other.alive and std.mem.eql(u8, other.roomName(), room)) {
+        if (other.alive and eql(u8, other.roomName(), room)) {
             occupancy += 1;
         }
     }
@@ -422,7 +261,7 @@ fn handleJoin(io: Io, peer: *Peer, room: []const u8) !void {
     var welcome_buf: [1024]u8 = undefined;
     var used: usize = (try bufPrint(&welcome_buf, "WELCOME {d}", .{peer.id})).len;
     for (registry.peers.items) |other| {
-        if (other.alive and std.mem.eql(u8, other.roomName(), room)) {
+        if (other.alive and eql(u8, other.roomName(), room)) {
             // If we somehow overflow 1024 bytes of peer ids, just stop adding -
             // the welcome is still valid, merely truncated.
             const chunk: []u8 = bufPrint(welcome_buf[used..], " {d}", .{other.id}) catch break;
@@ -434,7 +273,7 @@ fn handleJoin(io: Io, peer: *Peer, room: []const u8) !void {
     var joined_buf: [32]u8 = undefined;
     const joined: []const u8 = try bufPrint(&joined_buf, "JOINED {d}", .{peer.id});
     for (registry.peers.items) |other| {
-        if (other.alive and std.mem.eql(u8, other.roomName(), room)) {
+        if (other.alive and eql(u8, other.roomName(), room)) {
             sendText(io, other, joined);
         }
     }
@@ -451,8 +290,8 @@ fn handleJoin(io: Io, peer: *Peer, room: []const u8) !void {
 fn handleSignal(io: Io, peer: *Peer, rest: []const u8) !void {
     // Split off just the first token (the destination id); everything after the
     // first space is the raw payload, spaces/newlines and all.
-    const space: usize = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
-    const to_id: u32 = std.fmt.parseInt(u32, rest[0..space], 10) catch return;
+    const space: usize = indexOfScalar(u8, rest, ' ') orelse return;
+    const to_id: u32 = parseInt(u32, rest[0..space], 10) catch return;
     const data: []const u8 = rest[space + 1 ..];
 
     // Reframe it as "FROM <sender-id> <raw...>". The blob can be a few KB, so we
@@ -468,7 +307,7 @@ fn handleSignal(io: Io, peer: *Peer, rest: []const u8) !void {
     registry.mutex.lockUncancelable(io);
     defer registry.mutex.unlock(io);
     for (registry.peers.items) |other| {
-        if (other.alive and other.id == to_id and std.mem.eql(u8, other.roomName(), peer.roomName())) {
+        if (other.alive and other.id == to_id and eql(u8, other.roomName(), peer.roomName())) {
             sendText(io, other, message);
             break;
         }
@@ -483,8 +322,8 @@ fn handleSignal(io: Io, peer: *Peer, rest: []const u8) !void {
 // only need the destination id. This keeps every session playable with no TURN
 // server, at the cost of routing those peers' packets through here.
 fn handleRelay(io: Io, peer: *Peer, rest: []const u8) !void {
-    const space: usize = std.mem.indexOfScalar(u8, rest, ' ') orelse return;
-    const to_id: u32 = std.fmt.parseInt(u32, rest[0..space], 10) catch return;
+    const space: usize = indexOfScalar(u8, rest, ' ') orelse return;
+    const to_id: u32 = parseInt(u32, rest[0..space], 10) catch return;
     const data: []const u8 = rest[space + 1 ..];
 
     const out: []u8 = try registry.gpa.alloc(u8, 32 + data.len);
@@ -496,7 +335,7 @@ fn handleRelay(io: Io, peer: *Peer, rest: []const u8) !void {
     registry.mutex.lockUncancelable(io);
     defer registry.mutex.unlock(io);
     for (registry.peers.items) |other| {
-        if (other.alive and other.id == to_id and std.mem.eql(u8, other.roomName(), peer.roomName())) {
+        if (other.alive and other.id == to_id and eql(u8, other.roomName(), peer.roomName())) {
             sendText(io, other, message);
             break;
         }
@@ -526,7 +365,7 @@ fn cleanupPeer(io: Io, peer: *Peer) void {
         var left_buf: [32]u8 = undefined;
         const left: []const u8 = bufPrint(&left_buf, "LEFT {d}", .{peer.id}) catch "LEFT 0";
         for (registry.peers.items) |other| {
-            if (other.alive and std.mem.eql(u8, other.roomName(), peer.roomName())) {
+            if (other.alive and eql(u8, other.roomName(), peer.roomName())) {
                 sendText(io, other, left);
             }
         }
@@ -590,7 +429,7 @@ fn handleConnection(io: Io, stream: net.Stream) void {
         }
         if (frame.opcode == Opcode.ping) {
             // Keep-alive: answer pings with a pong echoing the payload.
-            writeFrame(io, stream, Opcode.pong, msg_buf[0..frame.len]) catch break;
+            writeFrame(io, stream, Opcode.pong, msg_buf[0..frame.payload_len]) catch break;
             continue;
         }
         if (frame.opcode != Opcode.text) {
@@ -598,12 +437,12 @@ fn handleConnection(io: Io, stream: net.Stream) void {
         }
 
         // Dispatch on the verb at the front of the message.
-        const message: []const u8 = msg_buf[0..frame.len];
-        if (std.mem.startsWith(u8, message, "JOIN ")) {
+        const message: []const u8 = msg_buf[0..frame.payload_len];
+        if (startsWith(u8, message, "JOIN ")) {
             handleJoin(io, peer, message[5..]) catch break;
-        } else if (std.mem.startsWith(u8, message, "SIGNAL ")) {
+        } else if (startsWith(u8, message, "SIGNAL ")) {
             handleSignal(io, peer, message[7..]) catch break;
-        } else if (std.mem.startsWith(u8, message, "RELAY ")) {
+        } else if (startsWith(u8, message, "RELAY ")) {
             handleRelay(io, peer, message[6..]) catch break;
         }
         // Unknown verbs are silently ignored - be liberal in what you accept.
@@ -615,9 +454,21 @@ fn handleConnection(io: Io, stream: net.Stream) void {
 // ----------------------------------------------------------------------------
 // main - set up the io, bind the socket, and accept forever.
 // ----------------------------------------------------------------------------
+/// The command line (std's cli, `src/command_line.zig`).
+const ServerArgs = struct {
+    @"--port": ?u16 = null,
+};
+
+const server_cli: cli.Config(ServerArgs) = .{
+    .prog = "zig build signal-server --",
+    .description = "The WebSocket signaling server for zimr multiplayer: peers find each other through it.",
+    .args = .{ .@"--port" = .{ .description = "where to listen; without it, the PORT variable, then 7777" } },
+};
+
 pub fn main(init: std.process.Init) !void {
+    const args: ServerArgs = cli.args(&init, ServerArgs, server_cli);
     const port_text: []const u8 = init.environ_map.get("PORT") orelse default_port;
-    const port: u16 = try std.fmt.parseInt(u16, port_text, 10);
+    const port: u16 = args.@"--port" orelse try parseInt(u16, port_text, 10);
 
     // smp_allocator is the thread-safe global allocator, which is what we want
     // since green threads may run across real OS threads in the pool.
@@ -645,7 +496,7 @@ pub fn main(init: std.process.Init) !void {
     // accepting. 256 is far more than a friends-only signaling server will ever
     // need; the threads are almost always parked on a socket, not burning CPU.
     // ========================================================================
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{ .async_limit = .limited(256) });
+    var threaded: Io.Threaded = .init(std.heap.smp_allocator, .{ .async_limit = .limited(256) });
     const io: Io = threaded.io();
 
     const address: net.IpAddress = try .parseIp4("0.0.0.0", port);

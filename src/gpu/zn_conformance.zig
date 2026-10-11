@@ -22,14 +22,31 @@
 //! Rows that do accumulate - `sum`, `mean`, matmul - carry a real tolerance, because summation
 //! order differs between a serial CPU loop and a parallel reduction and the difference is
 //! arithmetic rather than error.
+//!
+//! ---- A MULTIPLY FEEDING AN ADD IS NOT EXACT EITHER ----
+//!
+//! SPIR-V without a `NoContraction` decoration lets the driver fuse `a * b + c` into one FMA,
+//! which rounds once where the CPU rounds twice. Zig emits no such decoration, and the host
+//! never fuses. On Windows (Vulkan) that put `polyak follow`, `tanh grad`, `sgd step` and `lerp`
+//! at 1.2e-7 to 4.8e-7 against bars of zero. An `@mulAdd` version of each, run over this
+//! fixture on the host, gives the same four numbers to the last digit. So any row whose kernel
+//! has a multiply feeding an add or subtract gets a ULPS bar, even when both sides run the same
+//! formula. A phone that does not fuse still matches them exactly.
 
 const std = @import("std");
 const zm = @import("zm");
 const zn = @import("zn");
+const zrl = @import("zrl");
 const inf = zm.inf;
 const isFinite = zm.isFinite;
+const nan = zm.nan;
 const expect = std.testing.expect;
 const eql = std.mem.eql;
+const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const float = zm.float;
+const floatEps = zm.floatEps;
+const tanh = zm.tanh;
 
 /// A tensor of the sweep's fixed element type, spelled once.
 // ---- THE SWEEP'S PROBLEM SIZE AND ITS FIXED PARAMETERS ----
@@ -74,7 +91,7 @@ pub const clamp_hi: f32 = 0.5;
 pub const Tn = zn.Tensor(f32);
 
 /// Which pipeline an entry belongs to, which is also which buffers it reads.
-pub const Kind = enum { binary, unary, matmul };
+pub const Kind = enum { binary, unary, matmul, rl_binary };
 
 /// One row of the sweep: everything that differs between kernels, in one place.
 ///
@@ -192,8 +209,10 @@ pub const cases = [_]Case{
     },
     .{
         .label = "polyak follow",
-        // A multiply and two adds - no accumulation and no transcendental, so a real zero.
+        // `target + follow * (online - target)` is a multiply feeding an add, which a GPU
+        // compiler may fuse (the header's FMA section). Measured 1.2e-7 on Windows.
         .tol = 0,
+        .ulps = 2,
         .kind = .binary,
         .entry = "polyak_follow",
         .cpu = struct {
@@ -247,12 +266,12 @@ pub const cases = [_]Case{
         // agree in the last bit. Claiming zero here would repeat this morning's mistake.
         .tol = 0,
         .ulps = 8,
-        .kind = .binary,
+        .kind = .rl_binary,
         .entry = "disc_reward",
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 for (o.data, a.data, b.data) |*out, logit, reward_scale| {
-                    out.* = zn.discriminatorReward(f32, logit * 20.0, reward_scale, 1.0e-4);
+                    out.* = zrl.discriminatorReward(f32, logit * 20.0, reward_scale, 1.0e-4);
                 }
             }
         }.f,
@@ -273,7 +292,7 @@ pub const cases = [_]Case{
         // advantage: a fixed `1e-5` would be loose at small advantages and tight at large ones.
         .tol = 0,
         .ulps = 8,
-        .kind = .binary,
+        .kind = .rl_binary,
         .entry = "ppo_clip",
         .cpu = struct {
             // Both sides call `ppoClipSample`. That is the point - a row whose CPU side re-derived
@@ -284,7 +303,7 @@ pub const cases = [_]Case{
             // differently. A nonzero bar here would be accepting a real disagreement.
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 for (o.data, a.data, b.data) |*out, log_ratio, advantage| {
-                    out.* = zn.ppoClipSample(f32, log_ratio, 0.0, advantage, 0.2);
+                    out.* = zrl.ppoClipSample(f32, log_ratio, 0.0, advantage, 0.2);
                 }
             }
         }.f,
@@ -301,7 +320,7 @@ pub const cases = [_]Case{
         // guarantees the same formula, never the same last bit.**
         .tol = 0,
         .ulps = 8,
-        .kind = .binary,
+        .kind = .rl_binary,
         .entry = "cartpole_pole",
         .cpu = struct {
             // Also tolerance zero, and for the same reason: the dynamics are a fixed sequence of
@@ -309,13 +328,13 @@ pub const cases = [_]Case{
             // same `zm` functions, so a difference is a bug rather than drift.
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 for (o.data, a.data, b.data) |*out, angle, force| {
-                    const start: zn.CartpoleState(f32) = .{
+                    const start: zrl.CartpoleState(f32) = .{
                         .cart = 0,
                         .cart_rate = 0,
                         .pole_rad = angle,
                         .pole_rate_rad = 0,
                     };
-                    out.* = zn.cartpoleContinuousStep(f32, start, force).state.pole_rad;
+                    out.* = zrl.cartpoleContinuousStep(f32, start, force).state.pole_rad;
                 }
             }
         }.f,
@@ -345,7 +364,7 @@ pub const cases = [_]Case{
     // `broadcastTo`. The two representations of broadcasting, checked against each other.
     .{ .label = "bcast add (bias)", .tol = 0, .kind = .binary, .entry = "bcast_add", .cpu = struct {
         fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
-            const row: Tn = try Tn.fromSlice(b.data[0..side], &.{ 1, side });
+            const row: Tn = try .fromSlice(b.data[0..side], &.{ 1, side });
             return zn.add(f32, o, a, try row.broadcastTo(&.{ side, side }));
         }
     }.f },
@@ -354,7 +373,9 @@ pub const cases = [_]Case{
             return zn.sigmoidGrad(f32, o, a, b);
         }
     }.f },
-    .{ .label = "tanh grad", .tol = 0, .kind = .binary, .entry = "tanh_grad", .cpu = struct {
+    // `tanh grad` (`1 - y*y`) and `sgd step` (`w - rate*g`) are each a multiply feeding a subtract,
+    // which a GPU compiler may fuse (the header's FMA section). `sigmoid grad` above has no such pair.
+    .{ .label = "tanh grad", .tol = 0, .ulps = 2, .kind = .binary, .entry = "tanh_grad", .cpu = struct {
         fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
             return zn.tanhGrad(f32, o, a, b);
         }
@@ -364,7 +385,7 @@ pub const cases = [_]Case{
             return zn.reluGrad(f32, o, a, b);
         }
     }.f },
-    .{ .label = "sgd step", .tol = 0, .kind = .binary, .entry = "sgd_step", .cpu = struct {
+    .{ .label = "sgd step", .tol = 0, .ulps = 2, .kind = .binary, .entry = "sgd_step", .cpu = struct {
         fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
             return zn.sgdStep(f32, o, a, b, learning_rate);
         }
@@ -416,7 +437,7 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const per_row: Tn = try Tn.fromSlice(o.data[0..side], &.{side});
+                const per_row: Tn = try .fromSlice(o.data[0..side], &.{side});
                 return zn.logSumExpAxis(f32, per_row, a, 1);
             }
         }.f,
@@ -460,8 +481,8 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const vec: Tn = try Tn.fromSlice(o.data[0..side], &.{side});
-                return zn.sumAxis(f32, vec, a, 0);
+                const output_row: Tn = try .fromSlice(o.data[0..side], &.{side});
+                return zn.sumAxis(f32, output_row, a, 0);
             }
         }.f,
     },
@@ -750,9 +771,9 @@ pub const cases = [_]Case{
             }
         }.f,
     },
-    // * All five have a tolerance of ZERO. The masks return literal 0 or 1; `clamp` is two
-    // selections; and `lerp` is exact at both endpoints and a single fused expression between
-    // them, evaluated identically on both sides. Nothing here rounds, so nothing needs a bar.
+    // * The masks return literal 0 or 1 and `clamp` is two selections: nothing rounds, so the bar
+    // is zero. `lerp` is the exception. Between its endpoints it is `x + t * (y - x)`, a multiply
+    // feeding an add that a GPU compiler may fuse (the header's FMA section), so it gets 2 ULPS.
     .{
         .label = "greater",
         .tol = 0,
@@ -789,6 +810,7 @@ pub const cases = [_]Case{
     .{
         .label = "lerp",
         .tol = 0,
+        .ulps = 2,
         .kind = .binary,
         .entry = "lerpf",
         .cpu = struct {
@@ -906,8 +928,8 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const vec: Tn = try Tn.fromSlice(o.data[0..side], &.{side});
-                return zn.maxAxis(f32, vec, a, 0);
+                const output_row: Tn = try .fromSlice(o.data[0..side], &.{side});
+                return zn.maxAxis(f32, output_row, a, 0);
             }
         }.f,
     },
@@ -921,8 +943,8 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const vec: Tn = try Tn.fromSlice(o.data[0..side], &.{side});
-                return zn.minAxis(f32, vec, a, 0);
+                const output_row: Tn = try .fromSlice(o.data[0..side], &.{side});
+                return zn.minAxis(f32, output_row, a, 0);
             }
         }.f,
     },
@@ -937,8 +959,8 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const vec: Tn = try Tn.fromSlice(o.data[0..side], &.{side});
-                return zn.meanAxis(f32, vec, a, 0);
+                const output_row: Tn = try .fromSlice(o.data[0..side], &.{side});
+                return zn.meanAxis(f32, output_row, a, 0);
             }
         }.f,
     },
@@ -1032,7 +1054,7 @@ pub const cases = [_]Case{
         .entry = "conv2d_same",
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
-                const kernel: Tn = try Tn.fromSlice(b.data[0..9], &.{ 3, 3 });
+                const kernel: Tn = try .fromSlice(b.data[0..9], &.{ 3, 3 });
                 return zn.conv2d(f32, o, a, kernel, .{ 1, 1 }, .{ 1, 1 });
             }
         }.f,
@@ -1048,8 +1070,8 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const vec: Tn = try Tn.fromSlice(o.data[0..side], &.{side});
-                return zn.varianceAxis(f32, vec, a, 0, .population);
+                const output_row: Tn = try .fromSlice(o.data[0..side], &.{side});
+                return zn.varianceAxis(f32, output_row, a, 0, .population);
             }
         }.f,
     },
@@ -1063,7 +1085,7 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const img: Tn = try Tn.fromSlice(o.data[0..pooled], &.{ side / 2, side / 2 });
+                const img: Tn = try .fromSlice(o.data[0..pooled], &.{ side / 2, side / 2 });
                 return zn.maxPool2d(f32, img, a, 2);
             }
         }.f,
@@ -1079,7 +1101,7 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const img: Tn = try Tn.fromSlice(o.data[0..pooled], &.{ side / 2, side / 2 });
+                const img: Tn = try .fromSlice(o.data[0..pooled], &.{ side / 2, side / 2 });
                 return zn.avgPool2d(f32, img, a, 2);
             }
         }.f,
@@ -1201,7 +1223,7 @@ pub const cases = [_]Case{
                 const Scratch = struct {
                     var mask: [count]f32 = @splat(0);
                 };
-                const mask: Tn = try Tn.fromSlice(&Scratch.mask, &.{ side, side });
+                const mask: Tn = try .fromSlice(&Scratch.mask, &.{ side, side });
                 try zn.greater(f32, mask, a, b);
                 return zn.where(f32, o, mask, a, b);
             }
@@ -1218,7 +1240,7 @@ pub const cases = [_]Case{
                 const Scratch = struct {
                     var velocity: [count]f32 = @splat(0);
                 };
-                const velocity: Tn = try Tn.fromSlice(&Scratch.velocity, &.{ side, side });
+                const velocity: Tn = try .fromSlice(&Scratch.velocity, &.{ side, side });
                 velocity.fill(0);
                 return zn.sgdMomentum(f32, o, a, b, velocity, learning_rate, momentum);
             }
@@ -1236,8 +1258,8 @@ pub const cases = [_]Case{
                     var first: [count]f32 = @splat(0);
                     var second: [count]f32 = @splat(0);
                 };
-                const first: Tn = try Tn.fromSlice(&Scratch.first, &.{ side, side });
-                const second: Tn = try Tn.fromSlice(&Scratch.second, &.{ side, side });
+                const first: Tn = try .fromSlice(&Scratch.first, &.{ side, side });
+                const second: Tn = try .fromSlice(&Scratch.second, &.{ side, side });
                 first.fill(0);
                 second.fill(0);
                 return zn.adamStep(f32, o, a, b, first, second, .{ .rate = learning_rate }, 1);
@@ -1468,7 +1490,7 @@ pub const cases = [_]Case{
         // one. Sixteen ULPs, like the other rows whose kernels transcend a builtin.
         .tol = 0,
         .ulps = 16,
-        .kind = .binary,
+        .kind = .rl_binary,
         .entry = "cartpole_step",
         // Four floats of state per environment, so the field is read as `side*side/4` rows.
         // Only the state block is judged; the reward and flag sit past it.
@@ -1477,16 +1499,16 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 const rows: usize = count / 4;
-                const states: Tn = try Tn.fromSlice(a.data[0..count], &.{ rows, 4 });
-                const next: Tn = try Tn.fromSlice(o.data[0..count], &.{ rows, 4 });
+                const states: Tn = try .fromSlice(a.data[0..count], &.{ rows, 4 });
+                const next: Tn = try .fromSlice(o.data[0..count], &.{ rows, 4 });
                 // The outcome goes in scratch, not past the end of `o` - see the kernel's note.
                 var scratch: [count / 4 * 2]f32 = undefined;
-                const outcome: Tn = try Tn.fromSlice(&scratch, &.{ rows, 2 });
+                const outcome: Tn = try .fromSlice(&scratch, &.{ rows, 2 });
                 var pushes: [count / 4]zn.Push = undefined;
                 for (&pushes, 0..) |*p, i| {
                     p.* = if (b.data[i] < 0) .left else .right;
                 }
-                return zn.cartpoleStepBatch(f32, next, outcome, states, &pushes);
+                return zrl.cartpoleStepBatch(f32, next, outcome, states, &pushes);
             }
         }.f,
     },
@@ -1501,7 +1523,7 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = b;
-                const narrow: Tn = try Tn.fromSlice(o.data[0 .. side * side / 2], &.{ side, side / 2 });
+                const narrow: Tn = try .fromSlice(o.data[0 .. side * side / 2], &.{ side, side / 2 });
                 return zn.materialise(f32, narrow, try a.slice(1, side / 2, side / 2));
             }
         }.f,
@@ -1514,8 +1536,8 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 // First half from `a`, second from `b`, both packed at half width.
-                const left: Tn = try Tn.fromSlice(a.data[0 .. side * side / 2], &.{ side, side / 2 });
-                const right: Tn = try Tn.fromSlice(b.data[0 .. side * side / 2], &.{ side, side / 2 });
+                const left: Tn = try .fromSlice(a.data[0 .. side * side / 2], &.{ side, side / 2 });
+                const right: Tn = try .fromSlice(b.data[0 .. side * side / 2], &.{ side, side / 2 });
                 return zn.concat(f32, o, left, right, 1);
             }
         }.f,
@@ -1535,10 +1557,10 @@ pub const cases = [_]Case{
                 // and the reference computed the wrong one - while the kernel computed the right
                 // one. The headless twin used two separate buffers and passed; **the twin
                 // verified a call the sweep never makes.**
-                const xs: Tn = try Tn.fromSlice(a.data[0..side], &.{side});
-                const ys: Tn = try Tn.fromSlice(a.data[0..side], &.{side});
+                const xs: Tn = try .fromSlice(a.data[0..side], &.{side});
+                const ys: Tn = try .fromSlice(a.data[0..side], &.{side});
                 var other: [count]f32 = undefined;
-                const grid_y: Tn = try Tn.fromSlice(&other, &.{ side, side });
+                const grid_y: Tn = try .fromSlice(&other, &.{ side, side });
                 return zn.meshGrid(f32, o, grid_y, xs, ys);
             }
         }.f,
@@ -1551,7 +1573,7 @@ pub const cases = [_]Case{
         .cpu = struct {
             fn f(o: Tn, a: Tn, b: Tn) anyerror!void {
                 _ = a;
-                const ys: Tn = try Tn.fromSlice(b.data[0..side], &.{side});
+                const ys: Tn = try .fromSlice(b.data[0..side], &.{side});
                 var walk: zn.Walk = .over(o.shape[0..o.rank]);
                 while (walk.next()) |at| {
                     try o.setAt(at, try ys.at(&.{at[0]}));
@@ -1709,7 +1731,7 @@ pub const cases = [_]Case{
             _ = a;
             _ = b;
             for (o.data) |*out| {
-                out.* = zm.nan(f32);
+                out.* = nan(f32);
             }
         }
     }.f },
@@ -1726,6 +1748,188 @@ pub const cases = [_]Case{
         }
     }.f },
 };
+
+/// The sweep's inputs, and every case's reference answer.
+///
+/// Built once. The inputs never change, so neither do the answers; a reference recomputed while a sweep runs could be
+/// compared with the readback of a different row - the previous dispatch's data, still in the mirror. Every slice is
+/// `count` floats - a `side` by `side` field, row-major - and all of them are parts of one allocation.
+pub const Fixture = struct {
+    /// Operand A: normally distributed noise, from a fixed seed.
+    a: []f32,
+    /// Operand B: one row - a ramp from -1 to 1 - repeated down the field.
+    b: []f32,
+    /// `|a| + 0.5`: positive everywhere, so `log` is defined on all of it (`|a|` alone reaches zero, and `log(0)` is
+    /// minus infinity).
+    positive: []f32,
+    /// `tanh(a)`: inside (-1, 1), the domain of `atanh`, by construction rather than by clamping, and spanning most of
+    /// that range.
+    unit: []f32,
+    /// The `where` kernel's selector, `a > b`: 1 or 0. The kernel reads it from its `c` buffer.
+    mask: []f32,
+    /// Magnitudes near 1e-6, alternating in sign (`fillTiny` says why a narrow band).
+    tiny: []f32,
+    /// One reference per case, in the order of `cases`.
+    references: [cases.len][]f32,
+    /// The allocation every slice above is part of.
+    storage: []f32,
+
+    /// The six inputs, then one reference per case.
+    const slice_count: usize = 6 + cases.len;
+
+    /// Fills the inputs and computes every reference.
+    pub fn build(gpa: Allocator) !Fixture {
+        const storage: []f32 = try gpa.alloc(f32, slice_count * count);
+        errdefer gpa.free(storage);
+        var fixture: Fixture = .{
+            .a = storage[0 * count ..][0..count],
+            .b = storage[1 * count ..][0..count],
+            .positive = storage[2 * count ..][0..count],
+            .unit = storage[3 * count ..][0..count],
+            .mask = storage[4 * count ..][0..count],
+            .tiny = storage[5 * count ..][0..count],
+            .references = undefined,
+            .storage = storage,
+        };
+        for (&fixture.references, 0..) |*reference, case_index| {
+            reference.* = storage[(6 + case_index) * count ..][0..count];
+        }
+        try fixture.fillOperands();
+        fixture.fillDerivedInputs();
+        try fixture.computeReferences();
+        return fixture;
+    }
+
+    pub fn deinit(fixture: *Fixture, gpa: Allocator) void {
+        gpa.free(fixture.storage);
+        fixture.* = undefined;
+    }
+
+    /// The input a case's operation reads (`Case.input`); binary and matmul cases read `a` and `b`.
+    pub fn inputFor(fixture: *const Fixture, case: Case) []f32 {
+        return switch (case.input) {
+            .noise => fixture.a,
+            .positive => fixture.positive,
+            .unit => fixture.unit,
+            .tiny => fixture.tiny,
+        };
+    }
+
+    /// Operand A from its seed, and operand B from its ramp row.
+    fn fillOperands(fixture: *Fixture) !void {
+        const shape = [_]usize{ side, side };
+        const rng: zn.Rng = .init(20260904);
+        rng.split(0).fillNormal(f32, fixture.a);
+        var ramp_row: [side]f32 = undefined;
+        for (&ramp_row, 0..) |*value, column| {
+            value.* = float(@as(u32, @intCast(column))) / float(side) * 2.0 - 1.0;
+        }
+        // The row broadcast down the field is a view with a stride of 0 on the row axis - no storage. A kernel binds
+        // a dense buffer, so the view is materialised by adding it to a zeroed field.
+        const row: Tn = try .fromSlice(&ramp_row, &.{ 1, side });
+        const stretched: Tn = try row.broadcastTo(&shape);
+        const b: Tn = try .fromSlice(fixture.b, &shape);
+        b.fill(0.0);
+        try zn.add(f32, b, b, stretched);
+    }
+
+    /// The inputs derived from operand A, and the mask from both operands.
+    fn fillDerivedInputs(fixture: *Fixture) void {
+        for (fixture.positive, fixture.a) |*slot, x| {
+            slot.* = @abs(x) + 0.5;
+        }
+        for (fixture.unit, fixture.a) |*slot, x| {
+            slot.* = tanh(x);
+        }
+        for (fixture.mask, fixture.a, fixture.b) |*slot, x, y| {
+            slot.* = if (x > y) 1 else 0;
+        }
+        fillTiny(fixture.tiny);
+    }
+
+    /// A narrow band of magnitudes near 1e-6, alternating in sign, spread by index so that the smallest are present
+    /// for certain. Narrow because of how a row is judged (`barFor`): against `ulps` units of precision at the row's
+    /// peak, its largest reference value. Over a field spanning eight decades, the peak comes from the largest
+    /// elements and the bar sits far above anything the smallest could fail - a `tanh` returning 0 where the answer
+    /// is `x` would pass:
+    ///
+    ///     eight decades:  peak 9.97e-2  worst 1.92e-8  bar 4.75e-8   passes, wrongly
+    ///     band near 1e-6: peak 1.79e-6  worst 2.67e-8  bar 8.52e-13  fails, rightly
+    ///
+    /// Inside one decade, the peak is the field's own scale, and the bar means something at that scale. 1e-6 is where
+    /// a cancelling f32 formula has lost most of its digits without yet collapsing to zero.
+    fn fillTiny(tiny: []f32) void {
+        for (tiny, 0..) |*slot, index| {
+            const step: f32 = @floatFromInt(index % 8);
+            const jitter: f32 = 1.0 + 0.9 * step / 8.0;
+            const magnitude: f32 = 1.0e-6 * jitter;
+            slot.* = if (index % 2 == 0) magnitude else -magnitude;
+        }
+    }
+
+    /// Every case's reference: its CPU function on its input (and on `b`), into a zeroed output - a reduction writes
+    /// only its first `out_len` values, and the rest must not be whatever the allocation held.
+    fn computeReferences(fixture: *Fixture) !void {
+        const shape = [_]usize{ side, side };
+        const b: Tn = try .fromSlice(fixture.b, &shape);
+        for (fixture.references, cases) |reference, case| {
+            const source: Tn = try .fromSlice(fixture.inputFor(case), &shape);
+            const output: Tn = try .fromSlice(reference, &shape);
+            output.fill(0);
+            try case.cpu(output, source, b);
+        }
+    }
+};
+
+/// The parameters each kernel file's pipeline runs the sweep with, one function per file. The caller passes the file's
+/// own `Params` type (`binaryParams(zn_binary.Params)`), so this file needs no import of the kernels, and a field a
+/// kernel lacks is a compile error.
+///
+/// The binary kernels: row-major strides for `bcast_add` - `a` a full field and `b` its first row stretched down, so
+/// `b_row = 0` is the broadcast, as `broadcastTo` makes it on the CPU; `repeat_count` for `repeat_each`, the only
+/// kernel that reads it; and `slice_start` and `left_columns`, fields of their own rather than the strides (see
+/// `zn_binary`).
+pub fn binaryParams(comptime Params: type) Params {
+    return .{
+        .count = count,
+        .scalar = learning_rate,
+        .cols = side,
+        .delta = huber_delta,
+        .momentum = momentum,
+        .a_row = side,
+        .repeat_count = 2,
+        .a_col = 1,
+        .b_row = 0,
+        .b_col = 1,
+        .slice_start = side / 2,
+        .left_columns = side / 2,
+    };
+}
+
+/// The matrix kernels: a `side` by `side` product. The tiled entry runs with the same thread count, as 4 by 4 tiles
+/// of 256 invocations.
+pub fn matmulParams(comptime Params: type) Params {
+    return .{ .m = side, .n = side, .kdim = side };
+}
+
+/// The unary kernels.
+pub fn unaryParams(comptime Params: type) Params {
+    return .{
+        .count = count,
+        .scalar = learning_rate,
+        .cols = side,
+        .epsilon = layernorm_epsilon,
+        .lo = clamp_lo,
+        .hi = clamp_hi,
+        .alpha = elu_alpha,
+        .pool = 2,
+    };
+}
+
+/// The reinforcement-learning kernels read only the count.
+pub fn rlBinaryParams(comptime Params: type) Params {
+    return .{ .count = count };
+}
 
 /// The worst absolute disagreement, and the largest reference magnitude, over the pair.
 ///
@@ -1773,6 +1977,12 @@ pub fn compare(gpu: []const f32, cpu: []const f32) Comparison {
         }
     }
     return .{ .worst = if (mismatched) inf(f32) else worst, .peak = peak };
+}
+
+/// The bar a row is judged against: its absolute allowance (`tol`) plus `ulps` units in the last place of its own peak
+/// magnitude.
+pub fn barFor(case: Case, peak: f32) f32 {
+    return case.tol + case.ulps * peak * floatEps(f32);
 }
 
 // ---- THE TABLE'S OWN INVARIANTS, CHECKED WITHOUT A DEVICE ----
@@ -1831,4 +2041,22 @@ test "zn conformance: compare reports infinity when finiteness disagrees" {
     const cpu_inf = [_]f32{ 1.0, inf(f32) };
     try expect(isFinite(compare(&gpu, &cpu_same).worst));
     try expect(!isFinite(compare(&gpu, &cpu_inf).worst));
+}
+
+test "zn-conformance: the fixture's inputs keep the domains their operations need" {
+    var fixture: Fixture = try .build(testing_allocator);
+    defer fixture.deinit(testing_allocator);
+    for (fixture.positive) |value| {
+        try expect(value >= 0.5);
+    }
+    for (fixture.unit) |value| {
+        try expect(value > -1.0 and value < 1.0);
+    }
+    for (fixture.mask, fixture.a, fixture.b) |selector, x, y| {
+        const expected: f32 = if (x > y) 1.0 else 0.0;
+        try expect(selector == expected);
+    }
+    for (fixture.tiny) |value| {
+        try expect(@abs(value) >= 1.0e-6 and @abs(value) < 2.0e-6);
+    }
 }

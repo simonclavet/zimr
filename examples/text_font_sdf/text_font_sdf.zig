@@ -54,7 +54,7 @@ const State = struct {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const ui_font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
-    const sdf_shader: z.Shader2D = try z.Shader2D.init(
+    const sdf_shader: z.Shader2D = try .init(
         gpa,
         f.gpu.device,
         f.gpu.queue,
@@ -78,6 +78,31 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.ui_font);
     s.sdf_shader.deinit();
     s.ui_host.deinit();
+}
+
+/// Draw `word` horizontally centred in a row band. If `shader` is non-null,
+/// wrap the text in begin/endShaderMode so it renders through that shader.
+fn drawCentered(
+    f: *z.Frame,
+    font: z.Font,
+    word: []const u8,
+    size: f32,
+    fw: f32,
+    band_top: f32,
+    band_h: f32,
+    tint: Color,
+    shader: ?*const z.Shader2D,
+) void {
+    const dim: Vec2 = z.measureText(font, word, size);
+    const tx: f32 = @max(12.0, (fw - dim[0]) * 0.5);
+    const ty: f32 = band_top + @max(0.0, (band_h - dim[1]) * 0.5);
+    if (shader) |sh| {
+        z.beginShaderMode(f.gl, sh.*);
+        f.gl.text(.{ tx, ty }, word, .{ .size = size, .color = tint, .font = &font });
+        z.endShaderMode(f.gl);
+    } else {
+        f.gl.text(.{ tx, ty }, word, .{ .size = size, .color = tint, .font = &font });
+    }
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -148,31 +173,6 @@ fn update(f: *z.Frame, s: *State) void {
         "SDF: one distance-field atlas stays sharp at any zoom - z.loadFontSdf + src/shaders/text_sdf_fs.zig",
     );
     z.endDrawing(f.gl);
-}
-
-/// Draw `word` horizontally centred in a row band. If `shader` is non-null,
-/// wrap the text in begin/endShaderMode so it renders through that shader.
-fn drawCentered(
-    f: *z.Frame,
-    font: z.Font,
-    word: []const u8,
-    size: f32,
-    fw: f32,
-    band_top: f32,
-    band_h: f32,
-    tint: Color,
-    shader: ?*const z.Shader2D,
-) void {
-    const dim: Vec2 = z.measureText(font, word, size);
-    const tx: f32 = @max(12.0, (fw - dim[0]) * 0.5);
-    const ty: f32 = band_top + @max(0.0, (band_h - dim[1]) * 0.5);
-    if (shader) |sh| {
-        z.beginShaderMode(f.gl, sh.*);
-        f.gl.text(.{ tx, ty }, word, .{ .size = size, .color = tint, .font = &font });
-        z.endShaderMode(f.gl);
-    } else {
-        f.gl.text(.{ tx, ty }, word, .{ .size = size, .color = tint, .font = &font });
-    }
 }
 
 /// Descriptor-only: the runner/launcher drives begin/end (no offscreen pass).

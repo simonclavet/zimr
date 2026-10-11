@@ -5,9 +5,11 @@
 //! adds no module edge and leaves the file as extractable as it was.
 // spv2wgsl.zig - minimal SPIR-V to WGSL converter.
 //
+
 // =============================================================================
 // * ZIG -> SPIR-V COMPILER INTERFACE - read this when a compiler bump breaks shaders *
 // =============================================================================
+
 // zimr builds its shaders by compiling Zig -> SPIR-V and translating that here to
 // WGSL. The Zig->SPIR-V half is a moving, lightly-documented compiler surface;
 // this block is the survival summary so the knowledge is never lost. FULL
@@ -85,9 +87,11 @@
 // MOVE HISTORY (expect more): std.gpu->std.spirv; bare-enum->struct callconv;
 //   the "t" asm-constraint discovery; reflection types now in lib/std/lang.zig.
 //
+
 // =============================================================================
 // Scope and intent
 // =============================================================================
+
 //
 // This file converts SPIR-V binaries to WGSL source. It targets the SPIR-V
 // that glslangValidator -V emits from straightforward GLSL vertex/fragment/
@@ -115,9 +119,11 @@
 //      with a precise error pointing at the SPIR-V id, instead of letting
 //      tint reject the WGSL with a confusing "unknown identifier" message.
 //
+
 // =============================================================================
 // Architecture
 // =============================================================================
+
 //
 // The conversion runs in four passes over the same []const u32:
 //
@@ -130,9 +136,11 @@
 // arena allocator. Nothing leaks: when the arena is destroyed, all our
 // allocations go with it.
 //
+
 // =============================================================================
 // Zig 0.16 API notes
 // =============================================================================
+
 //
 // We use the unmanaged ArrayList form: `ArrayList(T){}` zero-init, methods
 // like `append(allocator, value)` and `toOwnedSlice(allocator)` that take the
@@ -146,51 +154,74 @@
 // little verbosity in the emit helpers - worth it for portability.
 
 const std = @import("std");
+
 const allocPrint = std.fmt.allocPrint;
+
 const assert = std.debug.assert;
+
 const endsWith = std.mem.endsWith;
+
 const expect = std.testing.expect;
+
 const expectEqual = std.testing.expectEqual;
+
 const expectEqualStrings = std.testing.expectEqualStrings;
+
 const expectError = std.testing.expectError;
+
 const startsWith = std.mem.startsWith;
+
 const builtin = @import("builtin");
+
 const Allocator = std.mem.Allocator;
+
 const ArrayList = std.ArrayList;
+
+const Io = std.Io;
+
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+
+const StringHashMap = std.StringHashMap;
+
+const ArenaAllocator = std.heap.ArenaAllocator;
+
+const testing_allocator = std.testing.allocator;
+
+const indexOf = std.mem.indexOf;
+
+const indexOfPos = std.mem.indexOfPos;
+
+const indexOfScalar = std.mem.indexOfScalar;
+
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+
+const sliceAsBytes = std.mem.sliceAsBytes;
+
+const splitScalar = std.mem.splitScalar;
+
+const trim = std.mem.trim;
+
+const parseInt = std.fmt.parseInt;
 
 // =============================================================================
 // SPIR-V opcodes + spec enums
 // =============================================================================
+
 //
-// Phase 1.1 of the rewrite (`src/notes/archive/spv2wgsl-rewrite-plan.md`):
-// these were `const types.Op = enum(u32) { ... };` and friends inline in
-// this file (~250 LOC of enum body).  They now live in
-// `src/spv2wgsl/types.zig` so the per-section 3.8 module layout has a real
-// owner for SPIR-V enum data.  The local `const types.Op = types.Op;`
-// pattern keeps every call site (`types.Op.Label`, `@intFromEnum(types.StorageClass.Function)`,
-// etc.) byte-identical - file-private rebinding via the import.
-
-// Shared SPIR-V word helpers live in types.zig (single source of truth).
-
-// Structured-CFG reconstruction is the structured-IR path
-// (`ir_build.zig` builds the nested Block/If/Loop/Switch tree;
-// `ir_emit.zig` lowers it to WGSL).  The original recursive
-// `walker.zig` was deleted in F5 (2026-05-31) - the IR path is the
-// sole driver, and a CFG shape it can't structure is a hard error,
-// not a fallback.  `block_table` is still imported by `ir_build.zig`.
-/// Structured IR for the Tint-style CFG/phi rewrite (P0; builder +
-/// emitter land in later phases).  Exposed so its decls + tests are
-/// reachable from the spv2wgsl test root.  See
-/// `src/notes/spv2wgsl_ir_rewrite.md`.
-/// SPIR-V -> structured IR builder (F2; complete).
-/// Sparse conditional constant propagation + dead-guard/dead-block
-/// elimination, run as a SPIR-V prepass (finishing_webgpu.md section 0 #1).
-/// Structured IR -> WGSL emitter (F3).
+// The SPIR-V enumerations spv2wgsl reads - opcodes, storage classes, decorations and the
+// rest - live in the `types` namespace below, the one source of SPIR-V enum data and of the
+// word helpers every pass shares.
+//
+// Control flow is rebuilt through a structured IR: `sccp` runs first, propagating constants
+// and removing the guards and blocks they make dead; `ir_build` turns each function's blocks
+// (recorded by `block_table`) into a nested Block / If / Loop / Switch tree; `ir_emit` lowers
+// that tree to WGSL. A control-flow shape the builder cannot structure is a hard error, never
+// a fallback.
 
 // =============================================================================
 // Per-id table
 // =============================================================================
-// =============================================================================
+
 //
 // SPIR-V is SSA with a flat id space: every result-producing instruction
 // gets an id, and ids form a single contiguous range [0, bound). We allocate
@@ -237,6 +268,7 @@ const IdInfo = struct {
 // =============================================================================
 // Decorations
 // =============================================================================
+
 //
 // SPIR-V decorations apply to an id (or to a struct member). We collect the
 // ones we care about into a sparse table sized to id-bound. Most ids have no
@@ -296,7 +328,6 @@ fn bprint(
 pub const types = struct {
     // src/spv2wgsl/types.zig - SPIR-V enum constants.
     //
-    // Phase 1.1 of the spv2wgsl rewrite (`src/notes/archive/spv2wgsl-rewrite-plan.md`).
     // Pure data: every type here is an `enum(u32)` covering a SPIR-V
     // enum we map to WGSL.  Non-exhaustive so `switch` against opcode
     // / storage class / etc. retains its default branch for unhandled
@@ -427,7 +458,6 @@ pub const types = struct {
         // HACK(zig-0.16-spirv): the FUnord* variants get emitted by Zig
         // even when there's no NaN-sensitive reason.  We alias them to
         // their FOrd* equivalents - correct for all non-NaN inputs.
-        // See docs/zig-spirv-quirks.md Quirk 4.
         FUnordEqual = 181,
         FOrdNotEqual = 182,
         FUnordNotEqual = 183,
@@ -446,6 +476,10 @@ pub const types = struct {
         BitwiseXor = 198,
         BitwiseAnd = 199,
         Not = 200,
+        ControlBarrier = 224,
+        AtomicLoad = 227,
+        AtomicStore = 228,
+        AtomicIAdd = 234,
         Phi = 245,
         LoopMerge = 246,
         SelectionMerge = 247,
@@ -641,25 +675,13 @@ fn bstr(
     try buf.appendSlice(arena, s);
 }
 
-/// One Tint-style phi assignment to be emitted before a predecessor
-/// block's terminator.  See docs/tint-vs-spv2wgsl.md item 5.
-const PhiAssignment = struct {
-    phi_id: u32,
-    value_id: u32,
-};
-
-const PhiAssignList = ArrayList(PhiAssignment);
-
-const PhiAssignMap = std.AutoHashMapUnmanaged(u32, PhiAssignList);
-
 /// Bounds-checked, kind-checked id lookup.
-/// When an id is referenced before declaration, this used to panic.
-/// In practice user shaders hit this mode commonly (any unhandled
-/// opcode that produces a result-id leaves downstream refs orphaned),
-/// so we degrade gracefully: lazy-register the id with a placeholder
-/// value-name + emit a warning.  The output WGSL won't compile if the
-/// reference matters (the `checkOutputClosure` pass still catches that)
-/// but the transpiler keeps making progress instead of aborting.
+/// An id referenced before any declaration is common in practice - any
+/// unhandled opcode that produces a result id leaves later references
+/// orphaned - so the lookup degrades gracefully: it registers the id
+/// lazily with a placeholder value name and emits a warning. The WGSL
+/// will not compile if the reference matters (`checkOutputClosure`
+/// reports it), but translation continues instead of aborting.
 //
 // lookupId/lookupType/hasEntryOutputs are State's lookup helpers (parameterised
 // by *State), and State's own methods call them back - a mutual State<->accessor
@@ -774,7 +796,7 @@ const State = struct {
 
     /// Bit patterns already given a `var<private>` by `nonFiniteName`, so a module
     /// using NaN in five places declares it once.
-    nonfinite_emitted: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    nonfinite_emitted: AutoHashMapUnmanaged(u32, void) = .empty,
     body_buf: ArrayList(u8) = .empty,
 
     /// Structural struct dedup: emitted struct BODY (the `{ ... }` text) -> the
@@ -802,19 +824,13 @@ const State = struct {
     debug_current_opcode: u32 = 0,
     debug_current_offset: u32 = 0,
 
-    // The recursive structured-CFG walker's per-block body emitter
-    // needs to look up phi assignments for the current block.  Set
-    // by `emitFunctionBody` before the walker call; cleared via
-    // `defer` after.
-    phi_assigns_ref: ?*const PhiAssignMap = null,
-
     // Tracks whether the function currently being emitted is an entry
-    // point.  Set by `emitFunctionBody` for the duration of the walker
-    // call.  Used by:
+    // point.  Set by `emitFunctionBody` while the function's body is
+    // emitted.  Used by:
     //   - `isEntryFunctionContext()` - to route Output stores through
     //     the `outputs.<name> = ...` form.
-    //   - `currentFunctionIsEntry()` (duck-typed accessor) - for the
-    //     walker's emitTerminator to emit `return outputs;` vs
+    //   - `currentFunctionIsEntry()` (duck-typed accessor) - for
+    //     `ir_emit`'s emitTerminator to emit `return outputs;` vs
     //     `return;`.
     is_current_entry: bool = false,
 
@@ -852,17 +868,17 @@ const State = struct {
     next_auto_binding: u32 = 0,
 
     /// Atomic-binding taint set: the set of top-level storage-buffer variable
-    /// ids that are the target of any atomic helper call (`zatomicAdd` /
-    /// `zatomicLoad` / `zatomicStore`).  Filled by `markAtomicBindings` (a
-    /// pre-pass over the reachable function bodies).  A variable in this set
+    /// ids that an atomic instruction (`OpAtomicIAdd` / `OpAtomicLoad` /
+    /// `OpAtomicStore`) reaches.  Filled by `markAtomicBindings` (a pre-pass
+    /// over the module).  A variable in this set
     /// is emitted as `array<atomic<u32>>` and EVERY access to it (load /
     /// store / atomic call) is routed through a WGSL atomic builtin - WGSL
     /// forbids plain `[]` load/store on an `atomic<T>`.  Sparse, sized to
     /// id-bound; indexed by variable id.
     atomic_var: []bool = &.{},
 
-    /// Look up the WGSL name of a SPIR-V id.  Used by the recursive
-    /// walker's duck-typed `idName` helper.
+    /// Look up the WGSL name of a SPIR-V id, for `ir_emit`'s duck-typed
+    /// `idName` helper.
     pub fn wgslNameOf(self: *State, id: u32) []const u8 {
         return lookupId(self, id).wgsl_name;
     }
@@ -882,7 +898,7 @@ const State = struct {
         return "";
     }
 
-    /// Duck-typed accessor used by the walker's `emitTerminator` to
+    /// Duck-typed accessor used by `ir_emit`'s `emitTerminator` to
     /// pick between `return outputs;` (entry with outputs) and
     /// `return;` (everything else).
     pub fn currentFunctionIsEntry(self: *State) bool {
@@ -1026,6 +1042,7 @@ const State = struct {
 // =============================================================================
 // Guard rails
 // =============================================================================
+
 //
 // These are the assertions and logs the docs above advertise. They run only
 // in debug builds (or always, if you want; the cost is trivial). They turn
@@ -1070,6 +1087,16 @@ fn warnUnhandled(
 // =============================================================================
 // Small utilities
 // =============================================================================
+
+/// Whether `type_id` names a HANDLE type: an image (texture), a sampler, or a sampled image (the two
+/// together). A value of handle type is never bound to a name (see `emitLoad`). The text-level twin,
+/// for checking emitted WGSL, is `isHandleType`.
+fn isHandleTypeId(s: *State, type_id: u32) bool {
+    return switch (lookupId(s, type_id).kind) {
+        .type_image, .type_sampler, .type_sampled_image => true,
+        else => false,
+    };
+}
 
 /// Allocate the standard SSA temporary name for a result id.
 fn tempName(arena: Allocator, id: u32) ![]const u8 {
@@ -1450,8 +1477,8 @@ fn pass2_decorations(s: *State) !void {
                     // buffers sampled through one `inline` helper keep `src`/`dst`
                     // rather than both becoming the param name `buf`.
                     const existing: []const u8 = s.ids[target].wgsl_name;
-                    const name_is_kbuf: bool = std.mem.startsWith(u8, name, "kbuf_");
-                    const existing_is_kbuf: bool = std.mem.startsWith(u8, existing, "kbuf_");
+                    const name_is_kbuf: bool = startsWith(u8, name, "kbuf_");
+                    const existing_is_kbuf: bool = startsWith(u8, existing, "kbuf_");
                     if (name_is_kbuf or !existing_is_kbuf) {
                         s.ids[target].wgsl_name = name;
                     }
@@ -1695,7 +1722,7 @@ test "renderConstant: a whole-valued float keeps its fractional part" {
     // intermediate `{d}` spelling and leaves it for the arena rather than freeing it, so a
     // checking allocator reports a leak production does not have. It reported exactly one
     // byte - the "1" of the "1.0" case below.
-    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    var arena_state: ArenaAllocator = .init(testing_allocator);
     defer arena_state.deinit();
     const arena: Allocator = arena_state.allocator();
 
@@ -1849,7 +1876,7 @@ fn storageArrayType(arena: Allocator, t: []const u8, is_atomic: bool) !?[]const 
     const size_comma: ?usize = std.mem.lastIndexOfScalar(u8, t, ',');
     if (is_atomic) {
         const elem_end: usize = size_comma orelse (t.len - 1);
-        const elem: []const u8 = std.mem.trim(u8, t["array<".len..elem_end], " ");
+        const elem: []const u8 = trim(u8, t["array<".len..elem_end], " ");
         return try allocPrint(arena, "array<atomic<{s}>>", .{elem});
     }
     if (size_comma) |comma| {
@@ -1865,13 +1892,12 @@ fn storageArrayType(arena: Allocator, t: []const u8, is_atomic: bool) !?[]const 
 /// its own Location (or be a BuiltIn). Anything missing fails the build here, with the
 /// variable named - instead of being quietly numbered by `resolveBinding`'s fallback.
 ///
-/// Why this exists: that fallback (group 0, next free binding) is what turned Zig
-/// 0.17.0-dev.2307 dropping every asm `OpDecorate` into a device-only failure. All 69
-/// shaders came out at @group(0), twenty with two resources on one slot, and nothing in
-/// the sandbox complained - the WGSL was perfectly valid, it just no longer matched the
-/// host's bind-group layouts. Dawn then rejected every pipeline. A graphics shader in
-/// zimr never has a legitimate reason to lack a decoration: the generator puts one on
-/// every `@extern` it emits (src/notes/spirv_2307_decorations_plan.md).
+/// Why: that fallback (group 0, the next free binding) turns a missing decoration into WGSL
+/// that is perfectly valid and no longer matches the host's bind-group layouts. The shader
+/// compiles everywhere; every pipeline built from it is rejected on the device. A compiler
+/// that dropped `OpDecorate` instructions would renumber every shader that way, two resources
+/// sometimes landing on one slot. A graphics shader in zimr never has a legitimate reason to
+/// lack a decoration: the generator puts one on every `@extern` it emits.
 ///
 /// COMPUTE IS EXEMPT, on purpose. kompute's `kbuf_*` / `P` externs carry no decoration;
 /// they take the auto-numbered binding, and `compute_host.parseBindings` reads those
@@ -1928,6 +1954,29 @@ fn checkGraphicsInterfaceDecorated(s: *State) !void {
     if (undecorated_count > 0) {
         return error.UndecoratedShaderInterface;
     }
+}
+
+/// Find the type id of the Nth member of an OpTypeStruct.
+fn advanceStructMember(
+    s: *State,
+    struct_type_id: u32,
+    member: u32,
+) ?u32 {
+    for (s.inst_off.items) |io| {
+        const w0: u32 = s.spirv[io];
+        if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(w0)))) != .TypeStruct) {
+            continue;
+        }
+        const t_ops: []const u32 = types.operandsAt(s.spirv, io);
+        if (t_ops[0] != struct_type_id) {
+            continue;
+        }
+        if (1 + member >= t_ops.len) {
+            return null;
+        }
+        return t_ops[1 + member];
+    }
+    return null;
 }
 
 fn emitModuleVariable(s: *State, ops: []const u32) !void {
@@ -2143,6 +2192,7 @@ fn pass3_types_globals(s: *State) !void {
 // =============================================================================
 // Pass 4: function bodies
 // =============================================================================
+
 //
 // For each function we:
 //   1. Find OpFunction ... OpFunctionEnd as a block.
@@ -2158,29 +2208,6 @@ fn pass3_types_globals(s: *State) !void {
 // Control-flow recovery is intentionally lossy: it trusts glslang to emit
 // well-nested structured-control hints. DXC-style flattened CFGs need a real
 // relooper, which is out of scope here.
-
-/// Name stems that identify the kompute atomic helpers (see kompute.zig).  A
-/// call whose callee's (sanitized) name contains one of these is an atomic
-/// operation: the helper body is a dummy and must NOT be emitted; the call is
-/// lowered to the corresponding WGSL builtin, and arg0's root storage variable
-/// is atomic-tainted.
-const atomic_add_stem = "zatomicAdd";
-const atomic_load_stem = "zatomicLoad";
-const atomic_store_stem = "zatomicStore";
-const barrier_stem = "zworkgroupBarrier";
-
-/// True if `name` is the workgroup-barrier helper (kompute.zig). Lowered to the
-/// WGSL `workgroupBarrier()` builtin; the helper function itself is deleted.
-fn isBarrierHelperName(name: []const u8) bool {
-    return std.mem.indexOf(u8, name, barrier_stem) != null;
-}
-
-/// True if `name` is one of the atomic helper functions.
-fn isAtomicHelperName(name: []const u8) bool {
-    return std.mem.indexOf(u8, name, atomic_add_stem) != null or
-        std.mem.indexOf(u8, name, atomic_load_stem) != null or
-        std.mem.indexOf(u8, name, atomic_store_stem) != null;
-}
 
 /// Walk the SPIR-V def chain of `id` back to the OpVariable it ultimately
 /// roots at (through OpAccessChain / OpLoad / OpCopyObject / OpInBoundsAccess
@@ -2210,17 +2237,129 @@ fn rootVariableOf(s: *State, def_off: []const u32, start_id: u32) u32 {
     return 0;
 }
 
-/// Durable guard (learned from the shared-memory smoke FAIL on the Adreno): a
-/// `workgroupBarrier()` must be in UNIFORM control flow - EVERY invocation must
-/// reach it. The most common violation is a data-dependent early `return`
-/// BEFORE the barrier: lanes that return never reach it. On real drivers this
-/// COMPILES but the barrier silently fails to synchronise - shared-memory reads
-/// come back zero (the smoke test failed 1023/1024 this way). naga does NOT
-/// flag it, so we catch it here, at transpile time, as a hard error. Rule:
-/// within a function, no OpReturn may PRECEDE a barrier-helper call.
-/// Fix in the kernel: dispatch an exact multiple of the workgroup size and
-/// guard the per-lane WORK (`if (in_range) { ... }`) instead of early-returning
-/// before the barrier. See kompute.zig `workgroupBarrier`.
+/// The return type of a function signature line (`fn f(...) -> T {`), or null for any other line.
+fn returnTypeOf(line: []const u8) ?[]const u8 {
+    if (indexOf(u8, line, "fn ") == null) {
+        return null;
+    }
+    const arrow: usize = indexOf(u8, line, "-> ") orelse return null;
+    const rest: []const u8 = line[arrow + "-> ".len ..];
+    const end: usize = std.mem.indexOfAny(u8, rest, " {") orelse rest.len;
+    return rest[0..end];
+}
+
+/// The declared type of a `let name: T = ...;`, or null.
+fn localLetTypeOf(trimmed: []const u8) ?[]const u8 {
+    if (!startsWith(u8, trimmed, "let ")) {
+        return null;
+    }
+    const colon: usize = indexOfScalar(u8, trimmed, ':') orelse return null;
+    const rest: []const u8 = trimmed[colon + 1 ..];
+    const end: usize = indexOfScalar(u8, rest, '=') orelse rest.len;
+    return rest[0..end];
+}
+
+/// The declared type of a function-scope `var name: T;` (or `var name: T = ...;`), or null.
+fn localVarTypeOf(trimmed: []const u8) ?[]const u8 {
+    if (!startsWith(u8, trimmed, "var ")) {
+        return null;
+    }
+    const colon: usize = indexOfScalar(u8, trimmed, ':') orelse return null;
+    const rest: []const u8 = trimmed[colon + 1 ..];
+    const end: usize = std.mem.indexOfAny(u8, rest, ";=") orelse rest.len;
+    return rest[0..end];
+}
+
+/// A WGSL handle type: a texture of any kind, or a sampler. Exact names, not substrings - a
+/// struct or a variable that merely contains the letters is not a handle.
+fn isHandleType(type_text: []const u8) bool {
+    const t: []const u8 = trim(u8, type_text, " ");
+    const is_texture: bool = startsWith(u8, t, "texture_");
+    const is_sampler: bool = std.mem.eql(u8, t, "sampler") or std.mem.eql(u8, t, "sampler_comparison");
+    return is_texture or is_sampler;
+}
+
+/// Refuse WGSL that treats a texture or sampler HANDLE as an ordinary value: returned from a
+/// function (`-> texture_2d<f32>`), held in a function-scope `var`, or bound with `let`. WGSL allows a
+/// handle only as a module-scope binding or a function parameter. The `let` case is the subtle one:
+/// the specification requires a `let`'s type to be constructible or a pointer, which a handle is not.
+/// Safari enforces it ("'texture_2d<f32>' cannot be used as the type of a 'let'"); Chrome and Firefox
+/// accept `let _1: texture_2d<f32> = texture0;`. `emitLoad` binds no name for a handle, and this check
+/// refuses any output that does, so the translator's WGSL is what the strictest browser accepts.
+///
+/// Such WGSL would come from a shader that CALLS a function returning an `@extern` handle at runtime
+/// (e.g. `shader_builtins.texture2D(...)` inside `main`) instead of declaring the handle at file scope:
+/// the SPIR-V is valid, the WGSL is not.
+///
+/// Text-level, like `checkNonFiniteConstants`, and it reads only the TYPE: the text after `->` of a
+/// function signature, and after the `:` of an indented `var` or `let`. A local merely NAMED
+/// `sampler_count` or `texture_uv` (spv2wgsl carries Zig locals' names over) is therefore not taken
+/// for a handle. A module-scope binding is at column 0 and legal.
+fn checkNoHandleValues(wgsl: []const u8) !void {
+    var lines = splitScalar(u8, wgsl, '\n');
+    while (lines.next()) |line| {
+        const trimmed: []const u8 = std.mem.trimStart(u8, line, " ");
+        const is_indented: bool = trimmed.len < line.len;
+        const return_type: ?[]const u8 = returnTypeOf(line);
+        const var_type: ?[]const u8 = if (is_indented) localVarTypeOf(trimmed) else null;
+        const let_type: ?[]const u8 = if (is_indented) localLetTypeOf(trimmed) else null;
+        const returns_handle: bool = if (return_type) |t| isHandleType(t) else false;
+        const holds_handle: bool = if (var_type) |t| isHandleType(t) else false;
+        const binds_handle: bool = if (let_type) |t| isHandleType(t) else false;
+        if (returns_handle or holds_handle) {
+            std.log.warn("spv2wgsl: texture/sampler handle used as a value: `{s}`. Declare the " ++
+                "handle as a file-scope `@extern` instead of calling a function for it.", .{trimmed});
+            return error.WgslHandleUsedAsValue;
+        }
+        if (binds_handle) {
+            std.log.warn("spv2wgsl: texture/sampler handle bound with `let`: `{s}`. WGSL forbids it " ++
+                "(Safari rejects it); this is a translator bug - see `emitLoad`.", .{trimmed});
+            return error.WgslHandleUsedAsValue;
+        }
+    }
+}
+
+test "checkNoHandleValues: a handle returned, held in a function var or bound with let is refused" {
+    const saved_log_level: std.log.Level = std.testing.log_level;
+    std.testing.log_level = .err;
+    defer std.testing.log_level = saved_log_level;
+    // The two shapes the runtime-called `texture2D()` probe actually produced.
+    try expectError(
+        error.WgslHandleUsedAsValue,
+        checkNoHandleValues("fn f() -> texture_2d<f32> {\n  return t;\n}\n"),
+    );
+    try expectError(
+        error.WgslHandleUsedAsValue,
+        checkNoHandleValues("fn g() {\n  var _25: sampler;\n}\n"),
+    );
+    // A local merely NAMED like a handle is not one, and passes.
+    try checkNoHandleValues(
+        "fn f() -> vec4<f32> {\n  var sampler_count: u32;\n  var texture_uv: vec2<f32> = vec2<f32>(0.0);\n" ++
+            "  return vec4<f32>(0.0);\n}\nfn sampler_weight() -> f32 {\n  return 1.0;\n}\n",
+    );
+    // A `let` of a handle: Chrome accepts it; the specification and Safari do not. It is the shape a
+    // texture load would take if `emitLoad` bound handles to names.
+    try expectError(
+        error.WgslHandleUsedAsValue,
+        checkNoHandleValues(
+            "fn h() -> vec4<f32> {\n  let _1: texture_2d<f32> = texture0;\n  return vec4<f32>(0.0);\n}\n",
+        ),
+    );
+    try expectError(
+        error.WgslHandleUsedAsValue,
+        checkNoHandleValues("fn h() {\n  let _2: sampler = texture0_sampler;\n}\n"),
+    );
+    // The legal shapes: module-scope bindings used directly, a handle passed as a parameter, and a
+    // `let` whose name merely mentions a handle.
+    try checkNoHandleValues(
+        "@group(1) @binding(0) var texture0: texture_2d<f32>;\n" ++
+            "@group(1) @binding(1) var texture0_sampler: sampler;\n" ++
+            "fn sampleAt(t: texture_2d<f32>, s: sampler, uv: vec2<f32>) -> vec4<f32> {\n" ++
+            "  let texture_scale: f32 = 1.0;\n  return textureSample(t, s, uv * texture_scale);\n}\n" ++
+            "fn h() -> vec4<f32> {\n  return sampleAt(texture0, texture0_sampler, vec2<f32>(0.0));\n}\n",
+    );
+}
+
 /// Read the emitted WGSL back and refuse to hand over something a device will reject.
 ///
 /// ---- WHY THIS EXISTS: THREE DEVICE ROUND-TRIPS ----
@@ -2244,94 +2383,6 @@ fn rootVariableOf(s: *State, def_off: []const u32, start_id: u32) u32 {
 /// the bare token is - the fold happens before anyone asks whether a device could cope. Only a
 /// value that reaches the bitcast through runtime storage survives, which is why `nonFiniteName`
 /// emits a function with a `var` in it.
-/// Refuse WGSL that treats a texture or sampler HANDLE as an ordinary value: returned from a
-/// function (`-> texture_2d<f32>`) or held in a function-scope `var`. WGSL forbids both - a
-/// handle can only be a module-scope binding, passed as a parameter, or bound with `let`.
-///
-/// How it gets emitted: a shader that CALLS a function returning an `@extern` handle at
-/// runtime (e.g. `shader_builtins.texture2D(...)` inside `main`) instead of declaring the
-/// handle at file scope. The SPIR-V is fine; the WGSL is not, and Tint would reject it at
-/// pipeline creation with a message naming neither the function nor the fix.
-///
-/// Text-level, like `checkNonFiniteConstants`, and it reads only the TYPE: the text after `->` of a
-/// function signature, and after the `:` of an indented `var`. Matching anywhere on the line was the
-/// first version's bug - a local merely NAMED `sampler_count` or `texture_uv` (spv2wgsl carries Zig
-/// locals' names over) would have failed the build. A module-scope binding is at column 0 and legal.
-fn checkNoHandleValues(wgsl: []const u8) !void {
-    var lines = std.mem.splitScalar(u8, wgsl, '\n');
-    while (lines.next()) |line| {
-        const trimmed: []const u8 = std.mem.trimStart(u8, line, " ");
-        const is_indented: bool = trimmed.len < line.len;
-        const return_type: ?[]const u8 = returnTypeOf(line);
-        const var_type: ?[]const u8 = if (is_indented) localVarTypeOf(trimmed) else null;
-        const returns_handle: bool = if (return_type) |t| isHandleType(t) else false;
-        const holds_handle: bool = if (var_type) |t| isHandleType(t) else false;
-        if (returns_handle or holds_handle) {
-            std.log.warn("spv2wgsl: texture/sampler handle used as a value: `{s}`. Declare the " ++
-                "handle as a file-scope `@extern` instead of calling a function for it.", .{trimmed});
-            return error.WgslHandleUsedAsValue;
-        }
-    }
-}
-
-/// A WGSL handle type: a texture of any kind, or a sampler. Exact names, not substrings - a
-/// struct or a variable that merely contains the letters is not a handle.
-fn isHandleType(type_text: []const u8) bool {
-    const t: []const u8 = std.mem.trim(u8, type_text, " ");
-    const is_texture: bool = std.mem.startsWith(u8, t, "texture_");
-    const is_sampler: bool = std.mem.eql(u8, t, "sampler") or std.mem.eql(u8, t, "sampler_comparison");
-    return is_texture or is_sampler;
-}
-
-/// The return type of a function signature line (`fn f(...) -> T {`), or null for any other line.
-fn returnTypeOf(line: []const u8) ?[]const u8 {
-    if (std.mem.indexOf(u8, line, "fn ") == null) {
-        return null;
-    }
-    const arrow: usize = std.mem.indexOf(u8, line, "-> ") orelse return null;
-    const rest: []const u8 = line[arrow + "-> ".len ..];
-    const end: usize = std.mem.indexOfAny(u8, rest, " {") orelse rest.len;
-    return rest[0..end];
-}
-
-/// The declared type of a function-scope `var name: T;` (or `var name: T = ...;`), or null.
-fn localVarTypeOf(trimmed: []const u8) ?[]const u8 {
-    if (!std.mem.startsWith(u8, trimmed, "var ")) {
-        return null;
-    }
-    const colon: usize = std.mem.indexOfScalar(u8, trimmed, ':') orelse return null;
-    const rest: []const u8 = trimmed[colon + 1 ..];
-    const end: usize = std.mem.indexOfAny(u8, rest, ";=") orelse rest.len;
-    return rest[0..end];
-}
-
-test "checkNoHandleValues: a handle returned or held in a function var is refused" {
-    const saved_log_level: std.log.Level = std.testing.log_level;
-    std.testing.log_level = .err;
-    defer std.testing.log_level = saved_log_level;
-    // The two shapes the runtime-called `texture2D()` probe actually produced.
-    try expectError(
-        error.WgslHandleUsedAsValue,
-        checkNoHandleValues("fn f() -> texture_2d<f32> {\n  return t;\n}\n"),
-    );
-    try expectError(
-        error.WgslHandleUsedAsValue,
-        checkNoHandleValues("fn g() {\n  var _25: sampler;\n}\n"),
-    );
-    // A local merely NAMED like a handle is not one - the first version of this check refused these.
-    try checkNoHandleValues(
-        "fn f() -> vec4<f32> {\n  var sampler_count: u32;\n  var texture_uv: vec2<f32> = vec2<f32>(0.0);\n" ++
-            "  return vec4<f32>(0.0);\n}\nfn sampler_weight() -> f32 {\n  return 1.0;\n}\n",
-    );
-    // The legal shapes every real shader has: a module-scope binding, and a `let` of one.
-    try checkNoHandleValues(
-        "@group(1) @binding(0) var texture0: texture_2d<f32>;\n" ++
-            "@group(1) @binding(1) var texture0_sampler: sampler;\n" ++
-            "fn h() -> vec4<f32> {\n  let _1: texture_2d<f32> = texture0;\n" ++
-            "  let _2: sampler = texture0_sampler;\n  return textureSample(_1, _2, vec2<f32>(0.0));\n}\n",
-    );
-}
-
 fn checkNonFiniteConstants(wgsl: []const u8) !void {
     // 1. A bare `nan` / `inf` / `-inf` where a value belongs. Anchored on `return ` and `= ` so
     //    an identifier that merely CONTAINS the letters - `nan_helper`, `infinity_mask` - does
@@ -2342,7 +2393,7 @@ fn checkNonFiniteConstants(wgsl: []const u8) !void {
         " nan)",       " inf)",       " -inf)",
     };
     for (bare) |needle| {
-        if (std.mem.indexOf(u8, wgsl, needle) != null) {
+        if (indexOf(u8, wgsl, needle) != null) {
             return error.WgslNonFiniteLiteral;
         }
     }
@@ -2353,7 +2404,7 @@ fn checkNonFiniteConstants(wgsl: []const u8) !void {
     //    because the operand is then an identifier rather than a literal.
     const marker: []const u8 = "bitcast<f32>(";
     var at: usize = 0;
-    while (std.mem.indexOfPos(u8, wgsl, at, marker)) |hit| {
+    while (indexOfPos(u8, wgsl, at, marker)) |hit| {
         const arg_start: usize = hit + marker.len;
         at = arg_start;
         var end: usize = arg_start;
@@ -2363,7 +2414,7 @@ fn checkNonFiniteConstants(wgsl: []const u8) !void {
         if (end == arg_start) {
             continue; // not a literal - an identifier or an expression, which is the good case
         }
-        const bits: u32 = std.fmt.parseInt(u32, wgsl[arg_start..end], 10) catch continue;
+        const bits: u32 = parseInt(u32, wgsl[arg_start..end], 10) catch continue;
         const value: f32 = @bitCast(bits);
         if (!std.math.isFinite(value)) {
             return error.WgslNonFiniteConstExpr;
@@ -2397,10 +2448,19 @@ test "checkNonFiniteConstants: the two spellings a device has actually rejected"
     try checkNonFiniteConstants("fn f() -> f32 {\n  return nan_helper();\n}\n");
 }
 
+/// A `workgroupBarrier()` must be in uniform control flow: every invocation of
+/// the workgroup must reach it. The usual violation is a data-dependent early
+/// `return` before the barrier - the lanes that return never reach it. Drivers
+/// compile such a shader, and the barrier then fails to synchronise: reads of
+/// shared memory return zero. The WGSL validators (naga among them) do not flag
+/// it, so spv2wgsl refuses it at build time. Rule: within a function, no
+/// OpReturn may come before an OpControlBarrier. The fix, in the kernel: dispatch
+/// an exact multiple of the workgroup size and guard each lane's work
+/// (`if (in_range) { ... }`) instead of returning before the barrier (see
+/// kompute.zig `workgroupBarrier`).
 fn checkBarrierUniformity(s: *State) !void {
     var i: usize = 0;
     var in_func: bool = false;
-    var is_helper: bool = false;
     var saw_return: bool = false;
     while (i < s.inst_off.items.len) : (i += 1) {
         const off: u32 = s.inst_off.items[i];
@@ -2409,39 +2469,29 @@ fn checkBarrierUniformity(s: *State) !void {
             .Function => {
                 in_func = true;
                 saw_return = false;
-                // Read the name DIRECTLY (function kinds aren't registered until
-                // pass4, so lookupId would return an `__unresolved__` placeholder
-                // here - same reason markAtomicBindings reads s.ids directly).
-                const fres: u32 = types.operandsAt(s.spirv, off)[1];
-                const fname: []const u8 = if (fres < s.ids.len) s.ids[fres].wgsl_name else "";
-                is_helper = isBarrierHelperName(fname);
             },
             .FunctionEnd => {
                 in_func = false;
             },
             .Return, .ReturnValue => {
-                if (in_func and !is_helper) {
+                if (in_func) {
                     saw_return = true;
                 }
             },
-            .FunctionCall => {
-                if (in_func and !is_helper) {
-                    const ops: []const u32 = types.operandsAt(s.spirv, off);
-                    const callee: []const u8 = if (ops.len >= 3 and ops[2] < s.ids.len) s.ids[ops[2]].wgsl_name else "";
-                    if (isBarrierHelperName(callee) and saw_return) {
-                        // `std.log.warn`, not `std.debug.print`: the latter bypasses `std_options`
-                        // and its raw-stderr writer traps under ReleaseSmall on wasm - and spv2wgsl
-                        // itself runs inside the wasm transpiler. The other diagnostics in this
-                        // file already use `std.log.warn`.
-                        std.log.warn(
-                            "spv2wgsl: workgroupBarrier() is preceded by an early `return` " ++
-                                "— non-uniform control flow. The barrier will not synchronise on " ++
-                                "real GPUs (shared reads return zero). Restructure the kernel so no " ++
-                                "lane returns before the barrier (see kompute.zig workgroupBarrier).",
-                            .{},
-                        );
-                        return error.BarrierInNonUniformControlFlow;
-                    }
+            .ControlBarrier => {
+                if (in_func and saw_return) {
+                    // `std.log.warn`, not `std.debug.print`: the latter bypasses `std_options`
+                    // and its raw-stderr writer traps under ReleaseSmall on wasm - and spv2wgsl
+                    // itself runs inside the wasm transpiler. The other diagnostics in this
+                    // file already use `std.log.warn`.
+                    std.log.warn(
+                        "spv2wgsl: workgroupBarrier() is preceded by an early `return` " ++
+                            "— non-uniform control flow. The barrier will not synchronise on " ++
+                            "real GPUs (shared reads return zero). Restructure the kernel so no " ++
+                            "lane returns before the barrier (see kompute.zig workgroupBarrier).",
+                        .{},
+                    );
+                    return error.BarrierInNonUniformControlFlow;
                 }
             },
             else => {},
@@ -2450,10 +2500,10 @@ fn checkBarrierUniformity(s: *State) !void {
 }
 
 /// Pre-pass (runs after decorations, before type/global emission): find every
-/// storage variable that is the target of an atomic helper call and mark it in
-/// `s.atomic_var`.  This is what drives `array<atomic<u32>>` emission and the
-/// load/store->atomic rerouting.  arg0 of an atomic call is the storage array
-/// pointer; its root OpVariable is the binding to taint.
+/// storage variable an atomic instruction reaches and mark it in `s.atomic_var`.
+/// This is what drives `array<atomic<u32>>` emission and the load/store->atomic
+/// rerouting.  The instruction's pointer operand is the element's address; its
+/// root OpVariable is the binding to taint.
 fn markAtomicBindings(s: *State) !void {
     // Build an id -> defining-instruction-offset map (sparse, id-bound).
     const def_off: []u32 = try s.arena.alloc(u32, s.ids.len);
@@ -2483,28 +2533,20 @@ fn markAtomicBindings(s: *State) !void {
         }
     }
 
-    // Scan every OpFunctionCall; if the callee is an atomic helper, taint
-    // arg0's root variable.
+    // Scan every atomic instruction and taint its pointer's root variable. The
+    // pointer is operand 2 of OpAtomicIAdd and OpAtomicLoad ([result-type,
+    // result-id, pointer, scope, semantics, ...]) and operand 0 of OpAtomicStore
+    // ([pointer, scope, semantics, value]).
     for (s.inst_off.items) |off| {
         const w0: u32 = s.spirv[off];
-        if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(w0)))) != .FunctionCall) {
-            continue;
-        }
+        const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(w0)));
         const ops: []const u32 = types.operandsAt(s.spirv, off);
-        // ops = [result-type, result-id, callee, args...]
-        if (ops.len < 4) {
-            continue;
-        }
-        // Read the callee's name DIRECTLY (not via lookupId): lookupId would
-        // overwrite a still-`.unknown` function id with an `__unresolved_N__`
-        // placeholder (function kinds aren't registered until pass4), which
-        // would both corrupt the name and defeat this match.
-        const callee_name: []const u8 = if (ops[2] < s.ids.len) s.ids[ops[2]].wgsl_name else "";
-        if (!isAtomicHelperName(callee_name)) {
-            continue;
-        }
-        const arg0: u32 = ops[3];
-        const root: u32 = rootVariableOf(s, def_off, arg0);
+        const pointer: u32 = switch (op) {
+            .AtomicIAdd, .AtomicLoad => if (ops.len >= 3) ops[2] else continue,
+            .AtomicStore => if (ops.len >= 1) ops[0] else continue,
+            else => continue,
+        };
+        const root: u32 = rootVariableOf(s, def_off, pointer);
         if (root != 0 and root < s.atomic_var.len) {
             s.atomic_var[root] = true;
         }
@@ -2521,7 +2563,7 @@ fn computeReachableFunctions(s: *State) ![]const bool {
 
     // callees[fn_id] = list of function ids it directly calls.  Built by
     // scanning each function body for OpFunctionCall.
-    var callees: std.AutoHashMapUnmanaged(u32, ArrayList(u32)) = .empty;
+    var callees: AutoHashMapUnmanaged(u32, ArrayList(u32)) = .empty;
     var cur_fn: u32 = 0;
     for (s.inst_off.items) |off| {
         const op: types.Op = @fromBackingInt(@intCast(types.opcodeOf(s.spirv[off])));
@@ -2712,17 +2754,15 @@ fn emitEntrySignature(s: *State) !void {
 
 pub const ir = struct {
     // src/spv2wgsl/ir.zig - a small structured IR for spv2wgsl's
-    // control-flow + phi lowering (the Tint-style rewrite; see
-    // `src/notes/spv2wgsl_ir_rewrite.md`).
+    // control-flow + phi lowering, which lowers phis the way Tint does.
     //
     // WHY THIS EXISTS
-    // The legacy walker lowers OpPhi by emitting `phiN = value` at the
-    // single SPIR-V predecessor block, then flushing at that block's
-    // terminator.  That drops a copy whenever a branch reaches a merge
-    // THROUGH a nested construct (the merge's true-side predecessor is
-    // an inner merge block, and the assignment never lands on that
-    // path).  Concretely it left the mandelbrot loop-exit phi unset on
-    // the iterating path -> the loop broke on iteration 1 -> blank fractal.
+    // Lowering OpPhi by emitting `phiN = value` in the SPIR-V predecessor
+    // block, just before its terminator, drops a copy whenever a branch
+    // reaches a merge THROUGH a nested construct (the merge's true-side
+    // predecessor is an inner merge block, and the assignment never lands
+    // on that path). A loop-exit phi left unset on the iterating path makes
+    // the loop break on its first iteration.
     //
     // THE MODEL (mirrors Tint, scoped to CFG/phi)
     // Tint turns each OpPhi into a block parameter and carries the value
@@ -2906,9 +2946,8 @@ pub const ir = struct {
 
     pub const ValidateError = error{
         /// An exit edge supplies a different number of phi args than the
-        /// construct it targets declares params.  This is exactly the
-        /// shape of the legacy walker bug (a branch reaching a merge
-        /// without supplying the merge's phi values).
+        /// construct it targets declares params: a branch reaching a merge
+        /// without supplying the merge's phi values.
         PhiArityMismatch,
         /// An exit terminator had no matching enclosing construct of its
         /// kind (malformed IR - a `break` outside a loop, etc.).
@@ -3079,7 +3118,8 @@ pub const ir = struct {
     /// Build the mandelbrot's failing shape AS IR: a loop whose body is
     /// `if (i < limit) { if (i < max) { if (!escaped) {...} } }`, i.e. the
     /// outer-merge phi's true-side predecessor is itself an inner merge.
-    /// This is the exact case the legacy walker mis-handled.
+    /// A lowering that assigns phis only in the SPIR-V predecessor block gets
+    /// this case wrong.
     fn buildMandelShape(
         a: Allocator,
         /// when true, the inner `if`'s TRUE branch supplies the merge
@@ -3153,7 +3193,7 @@ pub const ir = struct {
     }
 
     test "validate accepts a well-formed nested-if-in-loop (phi on every exit)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -3162,7 +3202,7 @@ pub const ir = struct {
     }
 
     test "validate REJECTS the legacy bug shape (true-branch drops the phi copy)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -3174,7 +3214,7 @@ pub const ir = struct {
     }
 
     test "collectParams gathers header + all merge phis" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -3186,7 +3226,7 @@ pub const ir = struct {
     }
 
     test "DanglingExit when an exit has no matching enclosing construct" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
         const entry = try a.create(Block);
@@ -3198,9 +3238,6 @@ pub const ir = struct {
 
 pub const block_table = struct {
     // src/spv2wgsl/block_table.zig - basic-block metadata table.
-    //
-    // Phase 1.3 of the spv2wgsl rewrite
-    // (`src/notes/archive/spv2wgsl-rewrite-plan.md` section 2.1, section 4 Phase 1).
     //
     // For each basic block in a SPIR-V function, build a `BlockInfo`
     // record describing:
@@ -3214,8 +3251,8 @@ pub const block_table = struct {
     //   - `continue_id`: loops only - the loop's continue target
     //   - `kind`: plain / selection_header / loop_header / switch_header
     //
-    // The table is built ONCE per function in a pre-pass.  Phase 2's
-    // walker uses it to dispatch on block kind without re-scanning the
+    // The table is built ONCE per function in a pre-pass. `ir_build`
+    // uses it to dispatch on block kind without re-scanning the
     // instruction stream.
     //
     // Cite: `parser.cc:1827 GetLoopMergeInst` for the loop-merge lookup
@@ -3258,7 +3295,7 @@ pub const block_table = struct {
         kind: BlockKind = .plain,
     };
 
-    pub const BlockTable = std.AutoHashMapUnmanaged(u32, BlockInfo);
+    pub const BlockTable = AutoHashMapUnmanaged(u32, BlockInfo);
 
     // =============================================================================
     // Construction
@@ -3456,7 +3493,7 @@ pub const block_table = struct {
         // OpLabel %10
         // OpReturn
         // OpFunctionEnd
-        var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_state: ArenaAllocator = .init(testing.allocator);
         defer arena_state.deinit();
         const arena: Allocator = arena_state.allocator();
 
@@ -3491,7 +3528,7 @@ pub const block_table = struct {
         // OpLabel %40                  <- merge (plain)
         //   OpReturn
         // OpFunctionEnd
-        var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_state: ArenaAllocator = .init(testing.allocator);
         defer arena_state.deinit();
         const arena: Allocator = arena_state.allocator();
 
@@ -3542,7 +3579,7 @@ pub const block_table = struct {
         // OpLabel %40                  <- merge
         //   OpReturn
         // OpFunctionEnd
-        var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_state: ArenaAllocator = .init(testing.allocator);
         defer arena_state.deinit();
         const arena: Allocator = arena_state.allocator();
 
@@ -3574,9 +3611,9 @@ pub const block_table = struct {
         const b20: BlockInfo = table.get(20).?;
         try testing.expectEqual(BlockKind.plain, b20.kind);
         // body's terminator is a BranchConditional but it's NOT a
-        // selection_header (no OpSelectionMerge precedes it).  Phase 2's
-        // walker recognizes this as an "unstructured conditional"
-        // (parser.cc:3672 falls through to that path when merge is null).
+        // selection_header (no OpSelectionMerge precedes it): an
+        // "unstructured conditional", as Tint's parser (parser.cc:3672)
+        // classifies a conditional whose merge is null.
         try testing.expect(b20.merge_inst_idx == null);
 
         const b30: BlockInfo = table.get(30).?;
@@ -3598,7 +3635,7 @@ pub const block_table = struct {
         // OpLabel %40
         //   OpReturn
         // OpFunctionEnd
-        var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_state: ArenaAllocator = .init(testing.allocator);
         defer arena_state.deinit();
         const arena: Allocator = arena_state.allocator();
 
@@ -3644,7 +3681,7 @@ pub const block_table = struct {
         // OpLabel %60                  <- loop merge (post-loop)
         //   OpReturn
         // OpFunctionEnd
-        var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_state: ArenaAllocator = .init(testing.allocator);
         defer arena_state.deinit();
         const arena: Allocator = arena_state.allocator();
 
@@ -3684,8 +3721,8 @@ pub const block_table = struct {
 
         const b30: BlockInfo = table.get(30).?;
         // The "break OUT of loop" branch.  Plain block ending in OpBranch
-        // to the LOOP MERGE (not the inner if's merge).  Phase 2's walker
-        // will resolve this through stop_set.get(60) -> loop_break.
+        // to the LOOP MERGE (not the inner if's merge): a break out of the
+        // loop.
         try testing.expectEqual(BlockKind.plain, b30.kind);
 
         const b40: BlockInfo = table.get(40).?;
@@ -3699,9 +3736,8 @@ pub const block_table = struct {
     }
 
     test "block_table scaffold compiles" {
-        // The scaffold-smoke test kept from Phase 1.1 - make sure picking
-        // up tests via the broader `scaffold compiles` filter still
-        // surfaces this file even now that real content lives here.
+        // Keeps this section's tests reachable through the broader
+        // `scaffold compiles` test filter.
         try testing.expect(true);
     }
 
@@ -3720,16 +3756,16 @@ pub const block_table = struct {
         // Expected: 2 blocks total.  One is a selection_header whose
         // merge_id is the other; the other is plain with no merge.
         // We assert structurally - ids are whatever spirv-as numbered them.
-        var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_state: ArenaAllocator = .init(testing.allocator);
         defer arena_state.deinit();
         const arena: Allocator = arena_state.allocator();
 
         const path: []const u8 = "tests/fixtures/external/tint/branch_BranchConditional_Empty.spv";
-        var threaded: std.Io.Threaded = std.Io.Threaded.init(testing.allocator, .{});
+        var threaded: Io.Threaded = .init(testing.allocator, .{});
         defer threaded.deinit();
-        const io: std.Io = threaded.io();
+        const io: Io = threaded.io();
 
-        var f: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        var f: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 std.log.warn("(fixture {s} not present; skipping)", .{path});
                 return;
@@ -3737,13 +3773,13 @@ pub const block_table = struct {
             else => return err,
         };
         defer f.close(io);
-        const st: std.Io.File.Stat = try f.stat(io);
+        const st: Io.File.Stat = try f.stat(io);
         const bytes: []u8 = try arena.alloc(u8, st.size);
         _ = try f.readPositionalAll(io, bytes, 0);
 
         // Reinterpret as words.
         const words_aligned: []align(@alignOf(u32)) u32 = try arena.alignedAlloc(u32, .of(u32), bytes.len / 4);
-        @memcpy(std.mem.sliceAsBytes(words_aligned), bytes);
+        @memcpy(sliceAsBytes(words_aligned), bytes);
 
         // Scan instructions starting at word 5 (after the 5-word module
         // header).  This mirrors pass1_walk in src/spv2wgsl.zig.
@@ -3810,16 +3846,15 @@ pub const block_table = struct {
 
 pub const ir_build = struct {
     // src/spv2wgsl/ir_build.zig - reconstruct the structured `ir` for
-    // one SPIR-V function (the Tint-style rewrite, P0 step 2).
+    // one SPIR-V function, lowering control flow the way Tint does.
     //
-    // Consumes the same inputs the legacy walker does - the flat
-    // instruction-offset index plus the SPIR-V words - and the per-block
+    // Consumes the flat instruction-offset index, the SPIR-V words, and
+    // the per-block
     // metadata from `block_table.registerBlocks` (merge/continue ids and
     // block kind).  Produces an `ir.FnBody`: the nested
     // Block/If/Loop/Switch tree with phi args carried on every exit.
     //
-    // RECONSTRUCTION PLAN (mirrors the proven legacy traversal in
-    // `walker.zig`, retargeted from emitting text to building IR):
+    // RECONSTRUCTION:
     //   - Walk from the function's entry block.
     //   - Dispatch on `BlockInfo.kind`:
     //       plain            -> a `body` item, then follow the terminator.
@@ -3835,19 +3870,16 @@ pub const ir_build = struct {
     //     so the phi lands on EVERY exit edge.  `ir.validate` then
     //     guarantees no edge was missed.
     //
-    // STATUS: entry point + the straight-line base case are implemented
-    // and tested.  Control flow currently returns
-    // `error.IrBuildUnsupported` (handled incrementally next); callers
-    // must treat that as "fall back to the legacy walker", which is
-    // exactly how the P1 `-Dwalker=ir` flag will be wired.
+    // It is the only path from SPIR-V control flow to WGSL: what it cannot
+    // build, it reports as `error.IrBuildUnsupported`.
 
     // Shared SPIR-V word helpers live in types.zig (single source of truth).
     const BlockInfo = block_table.BlockInfo;
 
     pub const BuildError = error{
         /// The function uses a CFG shape the builder does not yet
-        /// reconstruct.  Not a hard failure: the caller falls back to the
-        /// legacy walker.  Removed incrementally as shapes are covered.
+        /// reconstruct. A hard error naming the shader: there is no other
+        /// path to fall back to.
         IrBuildUnsupported,
         /// Malformed input (no entry block, etc.).
         MalformedFunction,
@@ -3882,9 +3914,8 @@ pub const ir_build = struct {
         return .{ .entry = builder.terminateOrChain(entry_blk) };
     }
 
-    /// Which structured-exit terminator a branch to a given block produces.
-    /// Mirrors the legacy walker's `StopKind`, but as the IR terminator
-    /// tag rather than a WGSL statement.
+    /// Which structured-exit terminator a branch to a given block produces,
+    /// as the IR's terminator tag.
     const ExitKind = enum { exit_if, exit_loop, exit_switch, cont };
 
     const Stop = struct {
@@ -3953,7 +3984,7 @@ pub const ir_build = struct {
         /// Every `*ir.Block` we create, keyed by the SPIR-V block id whose
         /// terminator it carries.  Step-4 phi attachment looks up a phi's
         /// predecessor block id here to find the terminator to push onto.
-        by_id: std.AutoHashMapUnmanaged(u32, *ir.Block),
+        by_id: AutoHashMapUnmanaged(u32, *ir.Block),
 
         /// Maps a SPIR-V block id whose terminator is `OpBranchConditional`
         /// to the `ir.If` we reconstructed for it.  Mirrors Tint's
@@ -3965,7 +3996,7 @@ pub const ir_build = struct {
         /// since the merge block folds into the same enclosing IR block.
         /// Used by the merge-phi attach passes to route cross-construct phi
         /// edges (`phi_Phi_Loop_FromIfBreak`, `phi_Phi_Switch_*_InDefault`).
-        cond_to_if: std.AutoHashMapUnmanaged(u32, *ir.If),
+        cond_to_if: AutoHashMapUnmanaged(u32, *ir.If),
 
         /// Resolve, for one merge OpPhi operand `(value, pred_id)`, the IR
         /// terminator the value should be appended to - following Tint's
@@ -4321,8 +4352,8 @@ pub const ir_build = struct {
         /// `header_params` (each `init` = the pre-loop edge value; the
         /// continue-edge value collected into `iter_args`), and loop-merge
         /// OpPhis become `results` attached to the `exit_loop`/`break_if`
-        /// edges.  Still deferred (returns `IrBuildUnsupported`, caller
-        /// falls back to the legacy walker): single-block loops
+        /// edges.  Not yet built (they return `IrBuildUnsupported`, a hard
+        /// error naming the shader): single-block loops
         /// (continue == header) and non-canonical header phis (not exactly
         /// one pre-loop + one continue edge).
         fn buildLoop(
@@ -4914,16 +4945,16 @@ pub const ir_build = struct {
         /// an `OpBranchConditional`, which `buildLoop` already rejects up
         /// front (it requires a plain `OpBranch` header), so for valid
         /// structured SPIR-V this branch is currently UNREACHABLE.  We still
-        /// handle it defensively: defer to the legacy walker
-        /// (`IrBuildUnsupported`) rather than hard-failing the whole
-        /// translation (`MalformedFunction`) - so that IF a future change to
-        /// `buildLoop` (adding header-conditional loops) ever routes such a
-        /// shape here before giving the header break-edge a real `exit_loop`
-        /// block, we degrade gracefully instead of erroring.  (When adding
+        /// handle it defensively: report `IrBuildUnsupported` (a shape the
+        /// builder does not handle) rather than `MalformedFunction` (invalid
+        /// input) - so that IF a future change to `buildLoop` (adding
+        /// header-conditional loops) ever routes such a shape here before
+        /// giving the header break-edge a real `exit_loop` block, the error
+        /// names the missing support instead of blaming the input.  (When adding
         /// header-conditional loops, route the header break-edge the way
         /// `attachExitArg` routes a one-sided-if header edge.)
         ///
-        /// NOTE (audited turn 809): across the entire current shader corpus,
+        /// NOTE: across the entire current shader corpus,
         /// no loop-merge block has any OpPhi, so this routine returns empty
         /// for every real shader today.  The handled path (break-from-body,
         /// pred in `by_id`) is covered by the "loop-merge phi (value escaping
@@ -4938,7 +4969,7 @@ pub const ir_build = struct {
         /// terminator (a conditional where one edge continued and the other
         /// broke) is redirected to the enclosing If's `exit_loop` branch.
         ///
-        /// NOTE (audited turn 809): across the live shader corpus, no
+        /// NOTE: across the live shader corpus, no
         /// loop-merge block carries an OpPhi, so this returns empty for every
         /// production shader today; the Tint fixtures exercise the phi paths.
         fn attachLoopMergePhis(
@@ -4952,8 +4983,8 @@ pub const ir_build = struct {
 
             // All phis at this merge route their (value, pred) pairs in the
             // SAME order, so each exit block's args stay positionally aligned
-            // with `params` (the results) - the alignment invariant whose
-            // violation was the turn-808 If-merge bug.
+            // with `params` (the results): a misaligned arg would assign one
+            // phi's value to another.
             var k: usize = merge_info.label_inst_idx + 1;
             while (k < merge_info.terminator_inst_idx) : (k += 1) {
                 const off: u32 = self.inst_off[k];
@@ -5446,7 +5477,7 @@ pub const ir_build = struct {
     }
 
     // -----------------------------------------------------------------------------
-    // SPIR-V word helpers (kept local, matching block_table.zig / walker.zig).
+    // SPIR-V word helpers (kept local, matching block_table's).
     // -----------------------------------------------------------------------------
 
     // =============================================================================
@@ -5476,7 +5507,7 @@ pub const ir_build = struct {
     }
 
     test "build lowers a single-block void function to FnBody{ret}" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5502,7 +5533,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a one-sided if (header branches to merge)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5544,7 +5575,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a diamond if/else with a merge phi on both exits" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5584,7 +5615,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a simple no-phi loop" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5623,7 +5654,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a header-conditional while-loop (guard-if at body top)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5665,7 +5696,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a single-block infinite loop whose header conditional never breaks" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5695,7 +5726,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs an infinite loop whose header conditional breaks from the body" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5734,7 +5765,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a loop whose continuing block breaks conditionally" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5769,7 +5800,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a degenerate loop whose header breaks on both edges" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5806,7 +5837,7 @@ pub const ir_build = struct {
     }
 
     test "build attaches a loop-merge phi fed by an in-loop if-break" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5849,7 +5880,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a single-block conditional loop (break_if in continuing)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5881,7 +5912,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a loop whose continuing block contains an if" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5936,7 +5967,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs the mandelbrot break-out-of-loop pattern" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -5982,7 +6013,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a loop-header phi (init + iter split)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6029,7 +6060,7 @@ pub const ir_build = struct {
     }
 
     test "build reconstructs a loop-merge phi (value escaping the loop)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6073,7 +6104,7 @@ pub const ir_build = struct {
     }
 
     test "build resolves a continue nested inside an if to the loop (stop-stack by target)" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6118,7 +6149,7 @@ pub const ir_build = struct {
         try ir.validate(&body);
     }
     test "build reconstructs a switch with cases, default, and a merge phi" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6167,7 +6198,7 @@ pub const ir_build = struct {
     }
 
     test "build dedups switch selectors that share a case body" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6201,17 +6232,14 @@ pub const ir_build = struct {
 };
 
 pub const ir_emit = struct {
-    // src/spv2wgsl/ir_emit.zig - emit WGSL from the structured `ir`
-    // (the F3 step of the Tint-style rewrite; see
-    // `src/notes/spv2wgsl_ir_rewrite.md`).
+    // src/spv2wgsl/ir_emit.zig - emit WGSL from the structured `ir`.
     //
     // WHAT THIS DOES
     // Walks an `ir.FnBody` and writes the function BODY (the statements
     // between the `{` and `}` of the WGSL function) into `out`.  The
     // hoisted `var phi{id}: T;` declarations are NOT emitted here - the
-    // existing `pass4_functions` prepass in `spv2wgsl.zig` already
-    // declares every phi var at function entry, independent of which
-    // walker runs.  This emitter only renders:
+    // `pass4_functions` prepass already declares every phi var at
+    // function entry.  This emitter only renders:
     //   - each block's straight-line body, via the caller-supplied
     //     `emitBlockBody` callback (the existing id-table text emitter,
     //     `emitBlockBodyOnly`);
@@ -6754,7 +6782,7 @@ pub const ir_emit = struct {
     }
 
     test "emit renders a diamond if/else with merge phi on both branches" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6784,15 +6812,15 @@ pub const ir_emit = struct {
         const w: []const u8 = out.items;
 
         // The phi must be assigned on BOTH branches (the dropped-copy fix).
-        try testing.expect(std.mem.indexOf(u8, w, "if (v10) {") != null);
-        try testing.expect(std.mem.indexOf(u8, w, "v20 = v21;") != null); // true branch
-        try testing.expect(std.mem.indexOf(u8, w, "v20 = v22;") != null); // false branch
-        try testing.expect(std.mem.indexOf(u8, w, "} else {") != null);
-        try testing.expect(std.mem.indexOf(u8, w, "return;") != null);
+        try testing.expect(indexOf(u8, w, "if (v10) {") != null);
+        try testing.expect(indexOf(u8, w, "v20 = v21;") != null); // true branch
+        try testing.expect(indexOf(u8, w, "v20 = v22;") != null); // false branch
+        try testing.expect(indexOf(u8, w, "} else {") != null);
+        try testing.expect(indexOf(u8, w, "return;") != null);
     }
 
     test "emit renders a loop with header-phi init + continuing iter update" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6823,15 +6851,15 @@ pub const ir_emit = struct {
         try emit(&fs, &out, a, &body, fakeBlockBody);
         const w: []const u8 = out.items;
 
-        const init_at: ?usize = std.mem.indexOf(u8, w, "v30 = v31;");
-        const loop_at: ?usize = std.mem.indexOf(u8, w, "loop {");
-        const iter_at: ?usize = std.mem.indexOf(u8, w, "v30 = v32;");
-        const contin_at: ?usize = std.mem.indexOf(u8, w, "continuing {");
+        const init_at: ?usize = indexOf(u8, w, "v30 = v31;");
+        const loop_at: ?usize = indexOf(u8, w, "loop {");
+        const iter_at: ?usize = indexOf(u8, w, "v30 = v32;");
+        const contin_at: ?usize = indexOf(u8, w, "continuing {");
         try testing.expect(init_at != null and loop_at != null and iter_at != null and contin_at != null);
         // init before the loop; iter update inside continuing (after it).
         try testing.expect(init_at.? < loop_at.?);
         try testing.expect(contin_at.? < iter_at.?);
-        try testing.expect(std.mem.indexOf(u8, w, "continue;") != null);
+        try testing.expect(indexOf(u8, w, "continue;") != null);
     }
 
     test "emit suppresses the unreach return after a loop body that always diverges" {
@@ -6839,7 +6867,7 @@ pub const ir_emit = struct {
         // arms diverge, so the body's `.unreach` tail is genuinely unreachable.
         // Dawn/Tint rejects a `return T();` there as unreachable code, so the
         // emitter must NOT emit it (naga is equally happy: no path falls off).
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6869,17 +6897,17 @@ pub const ir_emit = struct {
         try emit(&fs, &out, a, &body, fakeBlockBody);
         const w: []const u8 = out.items;
 
-        try testing.expect(std.mem.indexOf(u8, w, "continue;") != null);
-        try testing.expect(std.mem.indexOf(u8, w, "break;") != null);
+        try testing.expect(indexOf(u8, w, "continue;") != null);
+        try testing.expect(indexOf(u8, w, "break;") != null);
         // The unreachable fall-through return must be gone.
-        try testing.expect(std.mem.indexOf(u8, w, "UNREACH_RETURN;") == null);
+        try testing.expect(indexOf(u8, w, "UNREACH_RETURN;") == null);
     }
 
     test "emit keeps the unreach return when an if arm falls through" {
         // Only ONE arm diverges; the other falls through, so control CAN reach
         // the block's `.unreach` tail. naga needs the return there and it is not
         // unreachable to Dawn, so the emitter MUST keep it.
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6910,11 +6938,11 @@ pub const ir_emit = struct {
         const w: []const u8 = out.items;
 
         // The false arm falls through (exit_if), so the unreach return stays.
-        try testing.expect(std.mem.indexOf(u8, w, "UNREACH_RETURN;") != null);
+        try testing.expect(indexOf(u8, w, "UNREACH_RETURN;") != null);
     }
 
     test "emit renders a switch with cases, default, and break per case" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6946,15 +6974,15 @@ pub const ir_emit = struct {
         try emit(&fs, &out, a, &body, fakeBlockBody);
         const w: []const u8 = out.items;
 
-        try testing.expect(std.mem.indexOf(u8, w, "switch (v99) {") != null);
-        try testing.expect(std.mem.indexOf(u8, w, "case 1: {") != null);
-        try testing.expect(std.mem.indexOf(u8, w, "case 2, 3: {") != null); // dedup'd selectors
-        try testing.expect(std.mem.indexOf(u8, w, "default: {") != null);
-        try testing.expect(std.mem.indexOf(u8, w, "break;") != null);
+        try testing.expect(indexOf(u8, w, "switch (v99) {") != null);
+        try testing.expect(indexOf(u8, w, "case 1: {") != null);
+        try testing.expect(indexOf(u8, w, "case 2, 3: {") != null); // dedup'd selectors
+        try testing.expect(indexOf(u8, w, "default: {") != null);
+        try testing.expect(indexOf(u8, w, "break;") != null);
     }
 
     test "emit reinterprets a signed switch case literal as i32" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6981,12 +7009,12 @@ pub const ir_emit = struct {
         var fs: FakeState = .{ .arena = a, .signed_selector = true };
         var out: EmitList = .empty;
         try emit(&fs, &out, a, &body, fakeBlockBody);
-        try testing.expect(std.mem.indexOf(u8, out.items, "case -294967296: {") != null);
-        try testing.expect(std.mem.indexOf(u8, out.items, "4000000000") == null);
+        try testing.expect(indexOf(u8, out.items, "case -294967296: {") != null);
+        try testing.expect(indexOf(u8, out.items, "4000000000") == null);
     }
 
     test "emit renders return outputs for an entry function" {
-        var arena_inst: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var arena_inst: ArenaAllocator = .init(testing.allocator);
         defer arena_inst.deinit();
         const a: Allocator = arena_inst.allocator();
 
@@ -6997,7 +7025,7 @@ pub const ir_emit = struct {
         var fs: FakeState = .{ .arena = a, .is_entry = true };
         var out: EmitList = .empty;
         try emit(&fs, &out, a, &body, fakeBlockBody);
-        try testing.expect(std.mem.indexOf(u8, out.items, "return outputs;") != null);
+        try testing.expect(indexOf(u8, out.items, "return outputs;") != null);
     }
 };
 
@@ -7036,6 +7064,16 @@ fn emitLoad(
     const ptr_info: *const IdInfo = lookupId(s, ops[2]);
     const ptr: []const u8 = ptr_info.wgsl_name;
     const t: *const IdInfo = lookupType(s, tid);
+    // A texture or a sampler is a HANDLE, and WGSL lets no `let` and no function-scope `var` hold one:
+    // the type of a `let` must be constructible or a pointer. Chrome accepts
+    // `let _1: texture_2d<f32> = texture0;`; Safari follows the specification and rejects it
+    // ("'texture_2d<f32>' cannot be used as the type of a 'let'"). So a handle load binds nothing: the
+    // result id names the module-scope variable itself (or the indexed expression, for an array of
+    // textures), and every use substitutes that name - `textureSample(texture0, texture0_sampler, uv)`.
+    if (isHandleTypeId(s, tid)) {
+        setId(s, result, .{ .kind = .value, .type_id = tid, .wgsl_name = ptr });
+        return;
+    }
     const name: []const u8 = try tempName(s.arena, result);
     setId(s, result, .{ .kind = .value, .type_id = tid, .wgsl_name = name });
     try bindLhs(out, s, result, name, t.wgsl_name);
@@ -7049,29 +7087,6 @@ fn emitLoad(
     try bprint(out, s.arena, "{s};\n", .{ptr});
 }
 
-/// Find the type id of the Nth member of an OpTypeStruct.
-fn advanceStructMember(
-    s: *State,
-    struct_type_id: u32,
-    member: u32,
-) ?u32 {
-    for (s.inst_off.items) |io| {
-        const w0: u32 = s.spirv[io];
-        if (@as(types.Op, @fromBackingInt(@intCast(types.opcodeOf(w0)))) != .TypeStruct) {
-            continue;
-        }
-        const t_ops: []const u32 = types.operandsAt(s.spirv, io);
-        if (t_ops[0] != struct_type_id) {
-            continue;
-        }
-        if (1 + member >= t_ops.len) {
-            return null;
-        }
-        return t_ops[1 + member];
-    }
-    return null;
-}
-
 /// Build a string like "base.field_0[idx]" for the access-chain id, so later
 /// loads and stores through it work as plain text substitution.
 fn emitAccessChain(
@@ -7082,9 +7097,8 @@ fn emitAccessChain(
     // OpAccessChain doesn't emit a statement to `out` - it stashes the
     // built access-path expression as the result id's `wgsl_name` for
     // later use by emitLoad/emitStore.  `out` is kept in the signature
-    // for walker uniformity: every body-instruction helper takes the
-    // same shape so the walker can dispatch without per-opcode special-
-    // casing.
+    // for uniformity: every body-instruction helper takes the same
+    // shape, so the dispatch needs no per-opcode special-casing.
     _ = out;
     const tid: u32 = ops[0];
     const result: u32 = ops[1];
@@ -7165,15 +7179,8 @@ fn emitStore(
     try bprint(out, s.arena, "  {s} = {s};\n", .{ ptr.wgsl_name, val });
 }
 
-/// Stub: the walker doesn't track "are we emitting an entry function"
-/// context yet.  `emitStore` uses this only for the entry-output
-/// `outputs.field = X;` shape - and in the walker, the walker isn't
-/// driving entry functions yet (Phase 3b feature-flags the walker on
-/// for selection_header CFGs only; entry functions tend to be small
-/// linear blocks).  Returning false matches the safe default.
-///
-/// Phase 3c (planned post-cutover hardening): plumb is_entry through
-/// the walker if any entry function ends up with a selection_header.
+/// Whether the function being emitted is the entry point: `emitStore`
+/// routes Output stores through the `outputs.field = X;` form there.
 fn isEntryFunctionContext(s: *State) bool {
     return s.is_current_entry;
 }
@@ -7268,7 +7275,7 @@ fn emitSampledImage(
 ) !void { // lint:off useless-error-return: shape uniform with the 18-arm emit* dispatch
     // OpSampledImage doesn't emit a statement - it pairs an image with
     // a sampler.  We stash both ids on the result and let emitImageSample
-    // read them.  `out` kept for walker uniformity (see emitAccessChain).
+    // read them.  `out` kept for uniformity (see emitAccessChain).
     _ = out;
     const result: u32 = ops[1];
     const image_id: u32 = ops[2];
@@ -7371,42 +7378,86 @@ fn emitImageFetch(
     });
 }
 
-/// Lower a call to an atomic helper (zatomicAdd/Load/Store) to the WGSL
-/// builtin.  `args` = [array_ptr, index] for load, [array_ptr, index, value]
-/// for add/store.  The array pointer's wgsl_name is the path to the storage
-/// array (a binding name like `kbuf_grid_counts`, or an access-chain text);
-/// the element reference is `&<array>[<index>]`.
-fn emitAtomicCall(
+/// The atomic instructions kompute emits.
+const AtomicOp = enum { add, load, store };
+
+/// Lower an atomic instruction to its WGSL builtin. The pointer operand is the address of one storage element - its
+/// wgsl_name is the element's path (`kbuf_grid_counts.items[cell]`) - so the builtin's reference is `&<path>`. Add and
+/// load yield a u32, bound with `let`; store is a statement. The scope and memory-semantics operands are not written:
+/// WGSL's atomics are relaxed and device-wide, which is what kompute's are (`kompute.atomic_scope`,
+/// `kompute.atomic_semantics`).
+fn emitAtomicOp(
     s: *State,
     out: *ArrayList(u8),
-    callee: []const u8,
-    tid: u32,
-    result: u32,
-    args: []const u32,
+    ops: []const u32,
+    kind: AtomicOp,
 ) !void {
-    const arr: []const u8 = lookupId(s, args[0]).wgsl_name;
-    const idx: []const u8 = if (args.len >= 2) lookupId(s, args[1]).wgsl_name else "0u";
-    const elem_ref: []const u8 = try allocPrint(s.arena, "&{s}[{s}]", .{ arr, idx });
-
-    if (std.mem.indexOf(u8, callee, atomic_store_stem) != null) {
-        // atomicStore(&arr[idx], val);  - a void statement.
-        const val: []const u8 = if (args.len >= 3) lookupId(s, args[2]).wgsl_name else "0u";
-        try bprint(out, s.arena, "  atomicStore({s}, {s});\n", .{ elem_ref, val });
+    // The operand counts: [pointer, scope, semantics, value] for the store; [result-type, result-id, pointer, scope,
+    // semantics] for the load, and the value after them for the add.
+    const operand_count: usize = switch (kind) {
+        .store => 4,
+        .load => 5,
+        .add => 6,
+    };
+    if (ops.len < operand_count) {
+        return error.MalformedSpirv;
+    }
+    if (kind == .store) {
+        const element: []const u8 = try allocPrint(s.arena, "&{s}", .{lookupId(s, ops[0]).wgsl_name});
+        const value: []const u8 = lookupId(s, ops[3]).wgsl_name;
+        try bprint(out, s.arena, "  atomicStore({s}, {s});\n", .{ element, value });
         return;
     }
-
-    // add / load both yield a u32 value bound with `let`.
+    const tid: u32 = ops[0];
+    const result: u32 = ops[1];
+    const element: []const u8 = try allocPrint(s.arena, "&{s}", .{lookupId(s, ops[2]).wgsl_name});
     const t: *const IdInfo = lookupType(s, tid);
     const name: []const u8 = try tempName(s.arena, result);
     setId(s, result, .{ .kind = .value, .type_id = tid, .wgsl_name = name });
     try bindLhs(out, s, result, name, t.wgsl_name);
-    if (std.mem.indexOf(u8, callee, atomic_add_stem) != null) {
-        const val: []const u8 = if (args.len >= 3) lookupId(s, args[2]).wgsl_name else "0u";
-        try bprint(out, s.arena, "atomicAdd({s}, {s});\n", .{ elem_ref, val });
+    if (kind == .add) {
+        const value: []const u8 = lookupId(s, ops[5]).wgsl_name;
+        try bprint(out, s.arena, "atomicAdd({s}, {s});\n", .{ element, value });
     } else {
-        // load
-        try bprint(out, s.arena, "atomicLoad({s});\n", .{elem_ref});
+        try bprint(out, s.arena, "atomicLoad({s});\n", .{element});
     }
+}
+
+/// SPIR-V's workgroup scope (`Scope.Workgroup`).
+const workgroup_scope: u32 = 2;
+
+/// The memory semantics of a workgroup barrier: acquire-release (0x8) on workgroup memory (0x100).
+const workgroup_barrier_semantics: u32 = 0x8 | 0x100;
+
+/// The value of the integer constant `id`, or null when `id` is not a constant (constants keep their first literal
+/// word in `extra_a`, see `emitConstant`).
+fn constantValue(s: *State, id: u32) ?u32 {
+    const info: *const IdInfo = lookupId(s, id);
+    return if (info.kind == .constant) info.extra_a else null;
+}
+
+/// Lower OpControlBarrier ([execution scope, memory scope, semantics], each an id of a constant). kompute's barrier -
+/// workgroup execution and memory scopes, acquire-release on workgroup memory (`kompute.gpuWorkgroupBarrier`) - is
+/// WGSL's `workgroupBarrier()`. Any other barrier is refused by name rather than written as a different one: WGSL's
+/// `storageBarrier()` and `textureBarrier()` cover other memory, and nothing emits them yet.
+fn emitControlBarrier(s: *State, out: *ArrayList(u8), ops: []const u32) !void {
+    if (ops.len < 3) {
+        return error.MalformedSpirv;
+    }
+    const execution: ?u32 = constantValue(s, ops[0]);
+    const memory: ?u32 = constantValue(s, ops[1]);
+    const semantics: ?u32 = constantValue(s, ops[2]);
+    const is_workgroup_barrier: bool = execution == workgroup_scope and memory == workgroup_scope and
+        semantics == workgroup_barrier_semantics;
+    if (!is_workgroup_barrier) {
+        std.log.warn(
+            "spv2wgsl: an OpControlBarrier with execution scope {?d}, memory scope {?d} and semantics {?x} " ++
+                "(hexadecimal) - only the workgroup barrier (scopes 2 and 2, semantics 108) is translated",
+            .{ execution, memory, semantics },
+        );
+        return error.UnsupportedBarrier;
+    }
+    try bprint(out, s.arena, "  workgroupBarrier();\n", .{});
 }
 
 fn emitFunctionCall(
@@ -7418,26 +7469,6 @@ fn emitFunctionCall(
     const result: u32 = ops[1];
     const callee: []const u8 = lookupId(s, ops[2]).wgsl_name;
     const args: []const u32 = ops[3..];
-
-    // ---- Atomic helper intercept (see kompute.zig + markAtomicBindings) ----
-    // A call to zatomicAdd/Load/Store is lowered to the WGSL atomic builtin.
-    // arg0 is the storage array pointer: its wgsl_name is the access path to
-    // the array (the binding name for a whole-array pointer, or
-    // `field[i]`-style for an access chain).  arg1 is the element index; for
-    // add/store arg2 is the value.  The helper FUNCTION itself is never
-    // emitted (skipped in emitOneFunction), so no dummy body leaks out.
-    if (isAtomicHelperName(callee)) {
-        try emitAtomicCall(s, out, callee, tid, result, args);
-        return;
-    }
-
-    // ---- Workgroup-barrier helper intercept (see kompute.zig) ----
-    // A call to zworkgroupBarrier() (void, no args) becomes the WGSL builtin.
-    // The helper FUNCTION is skipped in emitOneFunction, so no body leaks out.
-    if (isBarrierHelperName(callee)) {
-        try bprint(out, s.arena, "  workgroupBarrier();\n", .{});
-        return;
-    }
 
     const t: *const IdInfo = lookupType(s, tid);
     // A void-returning call is a bare statement - WGSL has no value to
@@ -7630,9 +7661,9 @@ fn emitIntBin(
         b = try cmpOperand(s, ib.wgsl_name, tb, null, ta);
     } else {
         // Sign-agnostic arithmetic: align both operands to the result type.
-        const rsign: ?CmpSign = if (std.mem.indexOf(u8, t.wgsl_name, "u32") != null)
+        const rsign: ?CmpSign = if (indexOf(u8, t.wgsl_name, "u32") != null)
             .unsigned
-        else if (std.mem.indexOf(u8, t.wgsl_name, "i32") != null)
+        else if (indexOf(u8, t.wgsl_name, "i32") != null)
             .signed
         else
             null;
@@ -7847,10 +7878,9 @@ fn emitUnhandledPlaceholder(
     );
 }
 
-/// Body of the per-opcode switch.  Extracted so both the linear
-/// emitter (`emitFunctionBody`) and the recursive walker callback
-/// (`emitBlockBodyOnly`) can use it.  Returns true if the opcode
-/// produced a placeholder (unhandled-opcode comment).
+/// Body of the per-opcode switch, used by `emitBlockBodyOnly` for each
+/// straight-line instruction.  Returns true if the opcode produced a
+/// placeholder (unhandled-opcode comment).
 fn emitOnePerOpcode(
     s: *State,
     out: *ArrayList(u8),
@@ -7864,10 +7894,9 @@ fn emitOnePerOpcode(
         .Load => try emitLoad(s, out, ops),
         .CopyObject, .CopyLogical => try emitLoad(s, out, ops),
         .AccessChain, .InBoundsAccessChain => try emitAccessChain(s, out, ops),
-        // Store needs is_entry context; the walker passes through s.
-        // For Phase 3b, we look it up via the EntryPoint slot - Store
-        // only writes to user globals, which is is_entry-agnostic in
-        // the existing helper's body.  Re-check after corpus run.
+        // Store routes an entry point's Output writes through the
+        // `outputs.<name> = ...` form, so it needs to know whether the
+        // function being emitted is the entry point.
         .Store => try emitStore(s, out, ops, isEntryFunctionContext(s)),
 
         .CompositeExtract => try emitCompositeExtract(s, out, ops),
@@ -7880,6 +7909,10 @@ fn emitOnePerOpcode(
         .ImageFetch => try emitImageFetch(s, out, ops),
 
         .FunctionCall => try emitFunctionCall(s, out, ops),
+        .AtomicIAdd => try emitAtomicOp(s, out, ops, .add),
+        .AtomicLoad => try emitAtomicOp(s, out, ops, .load),
+        .AtomicStore => try emitAtomicOp(s, out, ops, .store),
+        .ControlBarrier => try emitControlBarrier(s, out, ops),
 
         .FAdd => try emitBinOp(s, out, ops, "+"),
         .IAdd => try emitIntBin(s, out, ops, "+", null, false),
@@ -7956,36 +7989,30 @@ fn emitOnePerOpcode(
     }
 }
 
-/// Walk the instructions between OpFunction and OpFunctionEnd, emitting one
-/// WGSL statement per opcode.
-/// Phase 3b of the rewrite (`src/notes/archive/spv2wgsl-rewrite-plan.md`):
-/// emit one block's body - instructions between OpLabel and the
-/// terminator, plus pre-terminator phi assignments - to `out`.
+/// Emit one block's body - the instructions between OpLabel and the
+/// terminator, plus the phi assignments due before the terminator - to
+/// `out`, one WGSL statement per opcode.
 ///
-/// The walker (`src/spv2wgsl/walker.zig`) calls this as its
-/// per-block body callback.  It DOES NOT emit the terminator
-/// (Branch / BranchConditional / Return / etc.) - the walker
-/// dispatches on the terminator itself, since that's where the
-/// structural decisions live.
+/// `ir_emit` calls this for each block of the structured IR. It does NOT
+/// emit the terminator (Branch / BranchConditional / Return / etc.): the
+/// structured IR already decided the control flow, and lowers it itself.
 ///
 /// Iterates instructions in the block:
 ///   1. Skip header instructions (FunctionParameter / Variable / Phi
 ///      already handled in pass 3; Line / Nop / Name / etc. are
 ///      debug-only).
 ///   2. Stop at the terminator (Branch / BranchConditional / Switch /
-///      Return / ReturnValue / Kill), but emit any registered phi
-///      assignments for this block first.
-///   3. Otherwise, dispatch through the same per-opcode helpers the
-///      linear emitter uses.  All those helpers already take `out`
-///      as a parameter (Phase 1.2 refactor), so the walker can pass
-///      its own sub-buffer through.
+///      Return / ReturnValue / Kill).
+///   3. Otherwise, dispatch through the per-opcode helpers, each of which
+///      takes the output buffer `out` as a parameter, so a block's text
+///      can go into a sub-buffer of the caller's.
 fn emitBlockBodyOnly(
     s: *State,
     out: *ArrayList(u8),
     block_id: u32,
 ) anyerror!void {
-    // Find the block's OpLabel in inst_off.  The walker passed us
-    // the id; we need the instruction index.  This is O(n) per block
+    // Find the block's OpLabel in inst_off: the caller passes the
+    // block's id, and this needs its instruction index.  This is O(n) per block
     // - fine for correctness; if it becomes hot, cache on first call.
     var label_idx: ?usize = null;
     for (s.inst_off.items, 0..) |off, k| {
@@ -8022,37 +8049,25 @@ fn emitBlockBodyOnly(
             else => {},
         }
 
-        // Hit a terminator: emit pre-terminator phi assignments for
-        // THIS block, then stop.  The walker emits the terminator
+        // Hit a terminator: stop. The structured IR lowers terminators
         // itself.  `OpUnreachable` (255) is also a block terminator
         // per the SPIR-V spec - Zig emits it for unreachable code
         // (e.g. after all branches of an if/else return).
         switch (op) {
             .Branch, .BranchConditional, .Return, .ReturnValue, .Kill, .Switch => {
-                if (s.phi_assigns_ref) |pmap| {
-                    if (pmap.get(block_id)) |list| {
-                        for (list.items) |pa| {
-                            const phi_name: []const u8 = lookupId(s, pa.phi_id).wgsl_name;
-                            const val_name: []const u8 = lookupId(s, pa.value_id).wgsl_name;
-                            try bprint(out, s.arena, "  {s} = {s};\n", .{ phi_name, val_name });
-                        }
-                    }
-                }
-                return; // terminator handled by walker
+                return; // the structured IR lowers the terminator
             },
             else => {
-                // OpUnreachable (255) is also a terminator.  We don't have
-                // an enum variant for it (since the linear emitter never
-                // needed to handle it explicitly), so check the raw value.
+                // OpUnreachable (255) is also a terminator. The opcode
+                // enumeration has no variant for it, so check the raw value.
                 if (@backingInt(op) == 255) {
                     return;
                 }
             },
         }
 
-        // SelectionMerge / LoopMerge are scaffolding instructions -
-        // they tell the linear emitter what's coming.  The walker
-        // already has this information from BlockInfo.  Skip silently.
+        // SelectionMerge / LoopMerge declare structure, which the
+        // structured IR already holds (from BlockInfo). Skip them.
         switch (op) {
             .SelectionMerge, .LoopMerge => continue,
             else => {},
@@ -8075,8 +8090,7 @@ fn emitBlockBodyOnly(
 /// Attempt to emit the current function's body via the structured-IR
 /// path.  Builds the IR into a scratch buffer first and only appends
 /// to `s.body_buf` on full success, so a mid-build
-/// `IrBuildUnsupported` leaves `body_buf` untouched and the caller can
-/// cleanly fall back to the legacy walker.
+/// `IrBuildUnsupported` leaves `body_buf` untouched.
 fn tryEmitViaIr(
     s: *State,
     fn_k: usize,
@@ -8085,74 +8099,40 @@ fn tryEmitViaIr(
     const body: ir.FnBody = try ir_build.build(s.arena, fn_k, end_k, s.inst_off.items, s.spirv);
     // Safety net: if the reconstructed IR is internally inconsistent
     // (e.g. an exit's phi-arg count != its construct's result count),
-    // do NOT emit it - surface as IrBuildUnsupported so the caller
-    // falls back to the legacy walker.  Emitting malformed IR produces
+    // do NOT emit it - surface as IrBuildUnsupported, a build error naming
+    // the shader.  Emitting malformed IR would produce
     // type-crossed / arity-mismatched WGSL that the browser's WGSL
     // frontend rejects at pipeline-creation time.
     ir.validate(&body) catch return error.IrBuildUnsupported;
     // The IR path owns phi lowering entirely: merge phis become per-exit
     // `phi = arg` assignments (attach*MergePhis), and loop-header phis
     // become init-before-loop + iter-at-end-of-continuing emissions.
-    // The legacy `phi_assigns_ref` mechanism (which emitBlockBodyOnly
-    // consults to inject `phi = val` at each block terminator) would
-    // DOUBLE-emit those assignments, so disable it for the duration of
-    // this emit and restore it for the legacy fallback path.
-    const saved_phi_ref: ?*const PhiAssignMap = s.phi_assigns_ref;
-    s.phi_assigns_ref = null;
-    defer s.phi_assigns_ref = saved_phi_ref;
     var scratch: ArrayList(u8) = .empty;
     try ir_emit.emit(s, &scratch, s.arena, &body, emitBlockBodyOnly);
     try s.body_buf.appendSlice(s.arena, scratch.items);
 }
 
+/// Emit the body of one SPIR-V function (between OpFunction and
+/// OpFunctionEnd) into `s.body_buf`, through the structured IR: `ir_build`
+/// turns the blocks into selection, loop and switch constructs, and
+/// `ir_emit` writes them, each phi assigned on the paths into its merge.
 fn emitFunctionBody(
     s: *State,
     fn_k: usize,
     end_k: usize,
     is_entry: bool,
-    phi_assigns: *PhiAssignMap,
 ) !void {
     s.is_current_entry = is_entry;
     defer s.is_current_entry = false;
-    s.phi_assigns_ref = phi_assigns;
-    defer s.phi_assigns_ref = null;
 
-    // Structured-IR path (the only path since F5 deleted the recursive
-    // `walker.zig`).  `ir_build.build` constructs its own block table
-    // and entry-block lookup internally, so there is nothing to set up
-    // here.  A CFG shape the builder can't structure is a HARD error
-    // (`IrBuildUnsupported`) surfaced to the caller - no fallback.
+    // `ir_build.build` constructs its own block table and entry-block
+    // lookup, so there is nothing to set up here. A control-flow shape the
+    // builder cannot structure is a HARD error (`IrBuildUnsupported`),
+    // surfaced to the caller with no fallback.
     return tryEmitViaIr(s, fn_k, end_k);
 }
 
-/// Emit the body of one SPIR-V function (between OpFunction and
-/// OpFunctionEnd) into `s.body_buf`.  Routes through the recursive
-/// structured-CFG walker in `src/spv2wgsl/walker.zig`.  The walker
-/// handles plain blocks, selection / loop / switch headers, the
-/// one-sided-if phi-routing fix, and pre-terminator phi assignments.
-///
-/// This function used to fork on `s.use_recursive_walker` between
-/// the recursive walker and a ~1100-LOC linear emitter; the linear
-/// emitter was deleted in Phase 5c (2026-05-29) once the walker
-/// drove every shader correctly.  See the rewrite plan at
-/// `docs/archive/spv2wgsl-rewrite-plan.md`.
-/// Append the operand positions of `ops` that are <id> references to
-/// VALUES (not type ids, not literals, not label/block ids) for opcode
-/// `op`, into `list`.  Conservative: only opcodes whose value-operand
-/// positions are known are classified; an unrecognized opcode appends
-/// nothing (it just won't trigger a hoist - safe, since over-conservatism
-/// only risks LEAVING a value un-hoisted, never miscompiling).  This is
-/// the operand-kind knowledge needed to scan uses without mistaking a
-/// case literal / shuffle index / storage-class enum for a value id.
-/// One place that records the SPIR-V operand semantics the hoist
-/// analysis needs, so the def-side (`bodyResultId`) and use-side
-/// (`appendValueOperands`) facts live together and cannot drift apart.
-///
-/// SPIR-V value ops are laid out `[result_type, result_id, operands...]`;
-/// terminators/stores/etc. have no result and start at operand 0.  For
-/// the hoist analysis we only need to know, per opcode:
-///   - does it DEFINE a hoistable value? (result at ops[1]), and
-///   - which operands are value <id> references (vs literals/labels)?
+/// Where an instruction's value operands lie, by opcode: the table `appendValueOperands` reads.
 const OpShape = struct {
     /// True if this op produces a hoistable value result (at ops[1]).
     /// Matches `bodyResultId`'s old denylist by inverting it: the
@@ -8175,6 +8155,7 @@ const OpShape = struct {
     const Custom = enum { composite_extract, vector_shuffle };
 };
 
+/// The value-operand layout of `op`.
 fn opShape(op: types.Op) OpShape {
     return switch (op) {
         // Value ops, result at [1], all operands from [2] are <id>s.
@@ -8263,6 +8244,13 @@ fn opShape(op: types.Op) OpShape {
         .Switch => .{ .value_from = 0, .value_count = 1 }, // selector
         .ReturnValue => .{ .value_from = 0, .value_count = 1 }, // value
 
+        // Atomics: add and load have a result at [1] and their pointer at [2]; the store has no result, its pointer
+        // at [0] and its value at [3]. The scope and semantics operands are constants, never hoisted.
+        .AtomicIAdd, .AtomicLoad => .{ .has_value_result = true, .value_from = 2 },
+        .AtomicStore => .{ .value_from = 0 },
+        // A barrier: no result, and only constant operands.
+        .ControlBarrier => .{},
+
         // No value result AND no value operands: terminators with only
         // labels, merges, labels, debug, and the already-fn-scope decls
         // (Variable/Phi).  Phi operands are handled specially by the
@@ -8309,6 +8297,23 @@ fn bodyResultId(
     return null;
 }
 
+/// Append the operand positions of `ops` that are <id> references to
+/// VALUES (not type ids, not literals, not label/block ids) for opcode
+/// `op`, into `list`.  Conservative: only opcodes whose value-operand
+/// positions are known are classified; an unrecognized opcode appends
+/// nothing (it just won't trigger a hoist - safe, since over-conservatism
+/// only risks LEAVING a value un-hoisted, never miscompiling).  This is
+/// the operand-kind knowledge needed to scan uses without mistaking a
+/// case literal / shuffle index / storage-class enum for a value id.
+/// One place that records the SPIR-V operand semantics the hoist
+/// analysis needs, so the def-side (`bodyResultId`) and use-side
+/// (`appendValueOperands`) facts live together and cannot drift apart.
+///
+/// SPIR-V value ops are laid out `[result_type, result_id, operands...]`;
+/// terminators/stores/etc. have no result and start at operand 0.  For
+/// the hoist analysis we only need to know, per opcode:
+///   - does it DEFINE a hoistable value? (result at ops[1]), and
+///   - which operands are value <id> references (vs literals/labels)?
 fn appendValueOperands(
     op: types.Op,
     ops: []const u32,
@@ -8386,6 +8391,12 @@ fn markHoistedResults(
             continue;
         }
         if (bodyResultId(op, ops)) |rid| {
+            // A handle-typed result binds no name (see `emitLoad`), so it is never hoisted into a
+            // function-scope `var` - which could not hold it either. Left out of `def_block`, it is
+            // treated like a module-scope variable.
+            if (isHandleTypeId(s, ops[0])) {
+                continue;
+            }
             if (@as(usize, rid) < def_block.len) {
                 def_block[rid] = cur_block;
                 // result-type is ops[0] for these value ops.
@@ -8469,16 +8480,10 @@ fn emitOneFunction(
     // Collect parameters and phis up front.
     var params: ArrayList(u32) = .empty;
     var phis: ArrayList(u32) = .empty;
-    // Tint-style phi lowering: collect assignments-to-emit-at-predecessor.
-    // For each OpPhi at block L with operand pairs (value_id, pred_block_id),
-    // register an assignment of `phi_var = value` at the END of pred_block_id
-    // (before its terminator).  See docs/tint-vs-spv2wgsl.md item 5 and
-    // Tint's BlockInfo::phi_assignments field.
-    //
-    // Without this, the hoisted `var phiN: T;` stays at its default value
-    // (zero), making any loop whose exit condition depends on a phi
-    // appear non-terminating to WGSL's behavior analysis.
-    var phi_assigns: PhiAssignMap = .empty;
+    // Name the function's parameters and its phis. A phi becomes a `var phiN`, declared at the
+    // top of the function; the structured IR emits its assignments - a merge's phis on the
+    // paths into the merge, a loop header's phis as an initialisation before the loop and an
+    // update at the end of its continuing block.
     {
         var p_idx: usize = fn_k + 1;
         while (p_idx < end_k) : (p_idx += 1) {
@@ -8508,19 +8513,6 @@ fn emitOneFunction(
                         .type_id = popnds[0],
                         .wgsl_name = pname,
                     });
-                    var i: usize = 2;
-                    while (i + 1 < popnds.len) : (i += 2) {
-                        const value_id: u32 = popnds[i];
-                        const pred_block: u32 = popnds[i + 1];
-                        const gop: PhiAssignMap.GetOrPutResult = try phi_assigns.getOrPut(s.arena, pred_block);
-                        if (!gop.found_existing) {
-                            gop.value_ptr.* = .empty;
-                        }
-                        try gop.value_ptr.append(s.arena, .{
-                            .phi_id = phi_id,
-                            .value_id = value_id,
-                        });
-                    }
                 },
                 else => {},
             }
@@ -8543,7 +8535,7 @@ fn emitOneFunction(
     // catches (a runtime black screen). Params/phis/hoisted keep their names
     // (signature ties / already-unique generated names) and are recorded here as
     // taken; only OpVariables are renamed against this set. Scoped per function.
-    var used_local_names = std.StringHashMap(void).init(s.arena);
+    var used_local_names = StringHashMap(void).init(s.arena);
 
     if (is_entry) {
         try emitEntrySignature(s);
@@ -8562,9 +8554,9 @@ fn emitOneFunction(
         // a function-scope `var <name> = <name>_param;` below, so every
         // existing `OpStore`/`OpLoad`/access-chain that spells the
         // pointer as `<name>` keeps working unchanged.  (All such helper
-        // functions in Zig's output are uncalled - see finishing_webgpu.md
-        // section 2 slice (b) PART 2 - so the by-value vs by-reference
-        // distinction is moot for correctness; only naga-validity matters.
+        // functions in Zig's output are uncalled, so the by-value vs
+        // by-reference distinction is moot for correctness; only
+        // naga-validity matters.
         // If a called one ever appears, the faithful lowering is a real
         // `ptr<function,T>` param + `&local` arg at the call site.)
         var ptr_params: ArrayList(u32) = .empty;
@@ -8689,8 +8681,8 @@ fn emitOneFunction(
         }
     }
 
-    // Walk the body emitting one instruction at a time.
-    try emitFunctionBody(s, fn_k, end_k, is_entry, &phi_assigns);
+    // Emit the body, through the structured IR.
+    try emitFunctionBody(s, fn_k, end_k, is_entry);
 
     try bstr(&s.body_buf, s.arena, "}\n\n");
 }
@@ -8749,7 +8741,7 @@ fn pass4_functions(s: *State) !void {
     // likewise only walks structurally-reachable code.  Emitting them
     // would produce WGSL naga rejects, so we skip them entirely - this
     // is the principled analogue of Tint's reachability front-end
-    // (finishing_webgpu.md section 2 step 1).  Entry-reachable functions are
+    // - it never emits a function the entry point cannot reach.  Entry-reachable functions are
     // unaffected.
     const reachable: []const bool = try computeReachableFunctions(s);
 
@@ -8775,16 +8767,6 @@ fn pass4_functions(s: *State) !void {
         }
 
         const fn_result: u32 = types.operandsAt(s.spirv, off)[1];
-        // Atomic helper bodies are dummies (see kompute.zig) - their calls are
-        // lowered to WGSL builtins in emitAtomicCall, so the function itself
-        // must NOT be emitted (a `var<storage>` array passed by value would be
-        // illegal WGSL anyway).  Skip by name even though it's "reachable".
-        if (isAtomicHelperName(lookupId(s, fn_result).wgsl_name) or
-            isBarrierHelperName(lookupId(s, fn_result).wgsl_name))
-        {
-            k = end_k + 1;
-            continue;
-        }
         if (fn_result < reachable.len and reachable[fn_result]) {
             try emitOneFunction(s, k, end_k);
         }
@@ -8793,7 +8775,7 @@ fn pass4_functions(s: *State) !void {
 }
 
 test "cmpOperand: signedness reconciliation (the t1178 fluid bug)" {
-    var arena_state: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state: ArenaAllocator = .init(testing_allocator);
     defer arena_state.deinit();
     var s: State = undefined;
     s.arena = arena_state.allocator();
@@ -8821,6 +8803,7 @@ test "cmpOperand: signedness reconciliation (the t1178 fluid bug)" {
 // =============================================================================
 // Output identifier closure check
 // =============================================================================
+
 //
 // Scan the produced WGSL for `_N` SSA-temp references and verify every one
 // has a matching `let _N` or `var _N` (or function-parameter) declaration.
@@ -8840,7 +8823,7 @@ fn parseTempId(tok: []const u8) ?u32 {
             return null;
         }
     }
-    return std.fmt.parseInt(u32, tok[1..], 10) catch null;
+    return parseInt(u32, tok[1..], 10) catch null;
 }
 
 /// Pure closure check: verify every `_N` SSA-temp REFERENCED in `wgsl`
@@ -8890,10 +8873,6 @@ fn checkOutputClosure(
 }
 
 // =============================================================================
-// Public entry point
-// =============================================================================
-
-// =============================================================================
 // SAMPLER-UNIFORMITY GATE
 // =============================================================================
 
@@ -8905,14 +8884,14 @@ fn checkOutputClosure(
 ///     note: reading from module-scope private variable 'o_normal' may result
 ///           in a non-uniform value
 ///
-/// This bit us repeatedly, and neither existing guard could catch it:
+/// Two simpler checks cannot catch it:
 ///
-///   * The source-level `[sampler-in-branch]` lint reads the ZIG.  But decal_fs's
-///     Zig samples unconditionally at the top of `shaderMain` - perfectly flat.
-///     The branch was manufactured INSIDE a zm helper: scalar `clamp01` used to be
-///     `if (v < 0) 0 else if (v > 1) 1 else v`, and its condition derived from a
-///     varying.  The branch exists only in the EMITTED code, so no amount of
-///     reading the source will ever find it.
+///   * The source-level `[sampler-in-branch]` lint reads the ZIG. A shader can
+///     sample unconditionally at the top of `shaderMain` - perfectly flat - and
+///     still sample under a branch made INSIDE a zm helper it calls: a scalar
+///     clamp written `if (v < 0) 0 else if (v > 1) 1 else v` branches on its
+///     argument, and when that derives from a varying, the branch is non-uniform.
+///     It exists only in the EMITTED code, so no reading of the source finds it.
 ///
 ///   * "Is the sample nested?" on the emitted WGSL is the WRONG question.  The
 ///     structurizer emits dead `if (73u == 73u)` phi-dispatch guards, and a
@@ -8925,7 +8904,7 @@ fn checkOutputClosure(
 /// (the varyings that later become the module-scope privates Dawn complains about).
 ///
 /// DELIBERATE LIMITS.  A false POSITIVE breaks a legal build; a false negative
-/// only leaves us where we already were.  So this errs toward silence:
+/// only leaves the failure to the device, where it surfaces anyway.  So this errs toward silence:
 ///   * Taint flows only through a whitelist of data opcodes; an unlisted opcode
 ///     propagates nothing.  Widen `taints` when a gap shows up.
 ///   * Only SELECTIONS (`OpSelectionMerge` + `OpBranchConditional`) are checked.
@@ -9120,9 +9099,9 @@ pub const sampler_uniformity = struct {
         }
 
         // ---- function parameter + call tables (interprocedural taint) -----------
-        var params: std.AutoHashMapUnmanaged(u32, []u32) = .empty;
-        var calls: std.AutoHashMapUnmanaged(u32, []u32) = .empty;
-        var samples_in: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        var params: AutoHashMapUnmanaged(u32, []u32) = .empty;
+        var calls: AutoHashMapUnmanaged(u32, []u32) = .empty;
+        var samples_in: AutoHashMapUnmanaged(u32, void) = .empty;
         {
             var cur: u32 = 0;
             var plist: ArrayList(u32) = .empty;
@@ -9157,7 +9136,7 @@ pub const sampler_uniformity = struct {
         var grew: bool = true;
         while (grew) {
             grew = false;
-            var it: std.AutoHashMapUnmanaged(u32, []u32).Iterator = calls.iterator();
+            var it: AutoHashMapUnmanaged(u32, []u32).Iterator = calls.iterator();
             while (it.next()) |e| {
                 if (samples_in.contains(e.key_ptr.*)) {
                     continue;
@@ -9196,7 +9175,7 @@ pub const sampler_uniformity = struct {
         //   * control taint: a phi at the merge block of a selection whose condition is
         //     tainted becomes tainted, which re-arms the data pass, which taints the
         //     next guard, ... until the chain reaches the branch that guards the sample.
-        var tainted_merge: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        var tainted_merge: AutoHashMapUnmanaged(u32, void) = .empty;
         var outer: u32 = 0;
         var outer_changed: bool = true;
         while (outer_changed and outer < 16) : (outer += 1) {
@@ -9210,8 +9189,7 @@ pub const sampler_uniformity = struct {
                     const ops: []const u32 = types.operandsAt(spirv, off);
                     const op: u32 = types.opcodeOf(spirv[off]);
 
-                    // TAINT FLOWS THROUGH MEMORY, and this is where the first version of
-                    // this gate had a hole big enough to miss the bug it was written for.
+                    // TAINT FLOWS THROUGH MEMORY, which a walk over SSA values alone misses.
                     // The IoT entry point LOADS the varying, STORES it into a local struct,
                     // then passes that struct to `shaderMain`:
                     //
@@ -9400,7 +9378,7 @@ pub const sampler_uniformity = struct {
                                 \\    "'textureSample' must only be called from uniform control flow".
                                 \\
                                 \\  The branch is probably NOT in your Zig.  Look at the helpers the shader
-                                \\  calls: a `zm` function written with `if` (scalar clamp01/step used to be)
+                                \\  calls: a `zm` function written with `if` (a scalar clamp or step, say)
                                 \\  emits a REAL branch, and every sample downstream of it lands inside it.
                                 \\
                                 \\  FIX, in order of preference:
@@ -9428,17 +9406,17 @@ pub const sccp = struct {
     // a `continue`/`break` lowers to a numeric phi-state machine, and the
     // code after the loop ends up under a guard like
     // `if (phi867 == 482u) { ... }` whose condition is ALWAYS true (the loop
-    // has a single non-`continue` exit state).  spirv-opt used to fold that
-    // guard away (mem2reg + const-prop + dead-branch-elim); since we dropped
-    // spirv-opt from the WGSL path (finishing_webgpu.md section 2.2) the guard
-    // survives, and because its condition is a phi data-derived from a
-    // non-uniform loop, Tint rejects any `textureSample` under it
-    // ("must only be called from uniform control flow" - the PBR demo bug).
+    // has a single non-`continue` exit state).  spirv-opt would fold that
+    // guard away (mem2reg, constant propagation, dead-branch elimination),
+    // but the WGSL path does not run spirv-opt, so the guard survives - and
+    // because its condition is a phi data-derived from a non-uniform loop,
+    // Tint rejects any `textureSample` under it ("must only be called from
+    // uniform control flow").
     //
-    // This pass is the principled fix: it discovers that the guard's
-    // condition is a compile-time constant, so a later rewrite can fold the
-    // branch, drop the dead arm, and lift the post-loop code to uniform
-    // scope (-> faithful implicit-LOD `textureSample` again).
+    // This pass discovers that the guard's condition is a compile-time
+    // constant, so a later rewrite can fold the branch, drop the dead arm,
+    // and lift the post-loop code to uniform scope, where an implicit-LOD
+    // `textureSample` is legal again.
     //
     // WHY ON SPIR-V (not the IR)
     // `ir.zig` models only control flow - values are raw SPIR-V ids and the
@@ -9550,9 +9528,15 @@ pub const sccp = struct {
         bottom,
 
         pub fn meet(a: Lattice, b: Lattice) Lattice {
-            if (a == .top) return b;
-            if (b == .top) return a;
-            if (a == .bottom or b == .bottom) return .bottom;
+            if (a == .top) {
+                return b;
+            }
+            if (b == .top) {
+                return a;
+            }
+            if (a == .bottom or b == .bottom) {
+                return .bottom;
+            }
             return if (a.konst == b.konst) a else .bottom; // both konst
         }
         pub fn eql(a: Lattice, b: Lattice) bool {
@@ -9571,13 +9555,13 @@ pub const sccp = struct {
     pub const Analysis = struct {
         arena: Allocator,
         /// value id -> lattice (absent => `top`).
-        values: std.AutoHashMapUnmanaged(u32, Lattice) = .empty,
+        values: AutoHashMapUnmanaged(u32, Lattice) = .empty,
         /// reachable block ids.
-        reachable: std.AutoHashMapUnmanaged(u32, void) = .empty,
+        reachable: AutoHashMapUnmanaged(u32, void) = .empty,
         /// block id -> its single live successor, IFF that block's terminator
         /// is a constant-folded BranchConditional/Switch (its selector is a
         /// known constant).  These are the spurious guards a rewrite folds.
-        folded: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+        folded: AutoHashMapUnmanaged(u32, u32) = .empty,
 
         pub fn isReachable(self: *const Analysis, id: u32) bool {
             return self.reachable.contains(id);
@@ -9607,7 +9591,7 @@ pub const sccp = struct {
         blocks: *const bt.BlockTable,
         a: Analysis,
         /// executable (from->to) edges.
-        edges: std.AutoHashMapUnmanaged(u64, void) = .empty,
+        edges: AutoHashMapUnmanaged(u64, void) = .empty,
         changed: bool = false,
 
         /// Lower a value's lattice cell to `lat`. Records `changed` so the
@@ -9921,31 +9905,26 @@ pub const sccp = struct {
         return offs.toOwnedSlice(arena);
     }
 
-    /// True if the construct whose merge is `merge_id` has an `OpPhi` at that merge
-    /// block. Folding a selection/switch whose merge carries a phi is unsafe: the
-    /// fold drops the OpSelectionMerge, but the merge-phi survives and is then
-    /// orphaned (no construct declares the merge, so the IR builder never lowers
-    /// the phi -> a `phiN` read with no assignment -> garbage). spirv-opt emits
-    /// degenerate constant-selector switches (a body wrapped in a no-op switch
-    /// whose merge holds the function's return-value phi); folding those is correct
-    /// CFG-wise but breaks the phi, so we skip the fold and let buildSwitch lower
-    /// the (harmless) switch + its merge-phi normally. Mirrors Tint, which always
-    /// lowers a phi by its result id regardless of whether its construct survives.
-    /// Would folding a selection whose merge is `merge_id` ORPHAN a phi there?
+    /// Would folding a selection or switch whose merge is `merge_id` lose code? It
+    /// would whenever that merge carries an `OpPhi`, so such a construct is never
+    /// folded: true means "do not fold".
     ///
-    /// Folding drops the folded block's `OpSelectionMerge`. That is only a problem
-    /// when the merge block BOTH (a) carries an `OpPhi` AND (b) is ITSELF a construct
-    /// header (has its own OpSelectionMerge/OpLoopMerge): then the merge-phi is left
-    /// with no construct to lower it -> an orphaned `phiN` read -> garbage WGSL.
+    /// Folding rewrites the construct's branch into an unconditional one and drops
+    /// its merge declaration. With a phi at the merge, two things go wrong. When the
+    /// merge is itself a construct header, the phi is orphaned: no construct is left
+    /// to lower it, so its `phiN` is read but never assigned. And in every case, the
+    /// arm no longer branched to becomes unreachable, taking everything it dominated
+    /// with it (the comment inside shows how).
     ///
-    /// A merge that is NOT a header - a plain join before a return, say - folds fine:
-    /// its phi is collapsed by edge-pruning.
-    ///
-    /// This used to test (a) ONLY, which quietly disabled folding almost everywhere:
-    /// Zig lowers a branchy helper into a numeric phi STATE MACHINE, so essentially
-    /// every selection it emits merges into a block carrying the state phi. That left
-    /// dead `if (73u == 73u)` guards standing all over the output - provably-true
-    /// branches SCCP had already solved but was then forbidden to remove.
+    /// The cost is folds not made. Zig lowers a branchy helper into a numeric phi
+    /// STATE MACHINE, so many of its selections merge into a block carrying the state
+    /// phi; those keep provably true guards (`if (73u == 73u)`) in the output - a
+    /// comparison each, where a lost block would cost correctness. The folds the pass
+    /// exists for - lifting `textureSample` into uniform control flow - sit at
+    /// phi-free merges and still happen. spirv-opt's degenerate constant-selector
+    /// switches (a body wrapped in a no-op switch whose merge holds the function's
+    /// return-value phi) are left for `buildSwitch` to lower normally, as Tint lowers
+    /// a phi by its result id whether or not its construct survives.
     fn mergeBlockPhiWouldOrphan(
         spirv: []const u32,
         inst_off: []const u32,
@@ -9956,34 +9935,25 @@ pub const sccp = struct {
             return false;
         }
         const merge_info: bt.BlockInfo = table.get(merge_id) orelse return false;
-        // IF THE MERGE CARRIES A PHI, DO NOT FOLD. Full stop.
+        // IF THE MERGE CARRIES A PHI, DO NOT FOLD.
         //
-        // There used to be a second condition here: the merge also had to be a construct
-        // HEADER itself, on the reasoning that a non-header merge "folds fine - its phi is
-        // collapsed by edge-pruning". Pruning does collapse the phi. What it does not do is
-        // keep the BLOCK the folded branch used to guard.
+        // Requiring the merge to also be a construct header is not enough. Edge-pruning
+        // does collapse a non-header merge's phi; it does not keep the BLOCK the folded
+        // branch guarded. Folding rewrites the OpBranchConditional into an unconditional
+        // branch and drops the OpSelectionMerge; when the merge carries a phi, the arm no
+        // longer branched to becomes unreachable, and everything it dominated goes with
+        // it - an entire loop, say - while its condition is still computed:
         //
-        // Folding a selection rewrites its OpBranchConditional into an unconditional branch
-        // and drops the OpSelectionMerge. When the merge carries a phi, the arm that is no
-        // longer branched to stops being reachable - and everything it dominated goes with
-        // it. In `sort_min.computeForce` that was the ENTIRE innermost neighbour loop: the
-        // SPIR-V had 86 memory ops, the emitted WGSL had 3. No error, no `// ERROR:` marker.
-        // The condition was still computed -
+        //     let _4940: bool = phi4936 == 138u;   // computed...
+        //     let _5545: u32 = phi4936;            // ...and never used
         //
-        //     let _4940: bool = phi4936 == 138u;   // COMPUTED...
-        //     let _5545: u32 = phi4936;            // ...and DISCARDED. Never used.
+        // and the `if (_4940) { ... }` it existed for is never emitted. The one-armed
+        // collapse leaves the output WELL-FORMED, so `checkPhiClosure` cannot see the loss
+        // (`checkBufferAccessSurvival` can).
         //
-        // - and the `if (_4940) { ... }` it existed for was simply never emitted. The kernel
-        // ran, read its own density, wrote a correction of zero, and produced a fluid that
-        // could not settle. The one-armed collapse made the result WELL-FORMED, which is why
-        // `checkPhiClosure` stayed green and nothing anywhere complained: a visible bug had
-        // been traded for an invisible one.
-        //
-        // The collapse is still right and still needed, for the folds we DO perform. But it
-        // is not a licence to fold a phi-carrying merge. Refusing those costs a few folds
-        // (the pass exists to hoist textureSample into uniform control flow, and those
-        // guards sit at phi-free merges) and buys back the guarantee that a fold never
-        // deletes code.
+        // The collapse is still right, and still needed, for the folds this pass does
+        // perform; it is not a licence to fold a phi-carrying merge. Refusing those costs a
+        // few folds and guarantees that a fold never deletes code.
         var k: usize = merge_info.label_inst_idx + 1;
         while (k < merge_info.terminator_inst_idx) : (k += 1) {
             if (opAt(spirv, inst_off[k]) == TestOp.phi) {
@@ -10054,7 +10024,7 @@ pub const sccp = struct {
         spirv: []const u32,
         inst_off: []const u32,
         table: *const bt.BlockTable,
-        out_back_edge: *std.AutoHashMapUnmanaged(u32, void),
+        out_back_edge: *AutoHashMapUnmanaged(u32, void),
     ) !void {
         var hit: bt.BlockTable.Iterator = table.iterator();
         while (hit.next()) |entry| {
@@ -10066,7 +10036,7 @@ pub const sccp = struct {
             const header_id: u32 = header.id;
             const merge_id: u32 = header.merge_id;
 
-            var visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
+            var visited: AutoHashMapUnmanaged(u32, void) = .empty;
             try visited.put(arena, cont_id, {});
             try visited.put(arena, header_id, {});
             if (merge_id != 0) {
@@ -10085,7 +10055,7 @@ pub const sccp = struct {
                         a: Allocator,
                         succ: u32,
                         hdr: u32,
-                        vis: *std.AutoHashMapUnmanaged(u32, void),
+                        vis: *AutoHashMapUnmanaged(u32, void),
                         wl: *ArrayList(u32),
                         flag: *bool,
                     ) !void {
@@ -10130,8 +10100,8 @@ pub const sccp = struct {
     /// emits) without modelling the loop's iteration, and folding the latch to its
     /// "exit" edge collapses the loop to a SINGLE iteration - the body runs once,
     /// every loop-carried value (n, z, escape state) is wrong, and the result
-    /// degenerates (the turn-901 mandelbrot WHITE bug: folding %404's
-    /// `CondBr %405, ->continue, ->merge` dropped the back-edge).
+    /// degenerates (folding a latch's `CondBr %c, ->continue, ->merge`
+    /// drops the back-edge).
     ///
     /// We seed from each loop's continue block and walk PREDECESSORS: a block is a
     /// latch if a continue block is reachable from its conditional's true OR false
@@ -10142,10 +10112,10 @@ pub const sccp = struct {
         spirv: []const u32,
         inst_off: []const u32,
         table: *const bt.BlockTable,
-        out_latch: *std.AutoHashMapUnmanaged(u32, void),
+        out_latch: *AutoHashMapUnmanaged(u32, void),
     ) !void {
         // Gather the loop continue blocks.
-        var cont_blocks: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        var cont_blocks: AutoHashMapUnmanaged(u32, void) = .empty;
         var hit: bt.BlockTable.Iterator = table.iterator();
         while (hit.next()) |entry| {
             const h: bt.BlockInfo = entry.value_ptr.*;
@@ -10187,10 +10157,10 @@ pub const sccp = struct {
         spirv: []const u32,
         inst_off: []const u32,
         table: *const bt.BlockTable,
-        cont_blocks: *const std.AutoHashMapUnmanaged(u32, void),
+        cont_blocks: *const AutoHashMapUnmanaged(u32, void),
         start: u32,
     ) !bool {
-        var visited: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        var visited: AutoHashMapUnmanaged(u32, void) = .empty;
         var cur: u32 = start;
         while (true) {
             if (cont_blocks.contains(cur)) {
@@ -10223,9 +10193,9 @@ pub const sccp = struct {
         spirv: []const u32,
         inst_off: []const u32,
         table: *const bt.BlockTable,
-        folds: *const std.AutoHashMapUnmanaged(u32, u32),
+        folds: *const AutoHashMapUnmanaged(u32, u32),
         entry: u32,
-        out_reachable: *std.AutoHashMapUnmanaged(u32, void),
+        out_reachable: *AutoHashMapUnmanaged(u32, void),
     ) !void {
         var stack: ArrayList(u32) = .empty;
         try out_reachable.put(arena, entry, {});
@@ -10279,7 +10249,7 @@ pub const sccp = struct {
     fn pushSucc(
         arena: Allocator,
         succ: u32,
-        seen: *std.AutoHashMapUnmanaged(u32, void),
+        seen: *AutoHashMapUnmanaged(u32, void),
         stack: *ArrayList(u32),
     ) !void {
         if (!seen.contains(succ)) {
@@ -10302,8 +10272,8 @@ pub const sccp = struct {
         // never collide across functions). `reachable` accumulates every live
         // block; `selection_folds` maps a foldable guard block -> its one live
         // target (loop headers are deliberately excluded below).
-        var reachable: std.AutoHashMapUnmanaged(u32, void) = .empty;
-        var selection_folds: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+        var reachable: AutoHashMapUnmanaged(u32, void) = .empty;
+        var selection_folds: AutoHashMapUnmanaged(u32, u32) = .empty;
 
         var k: usize = 0;
         while (k < inst_off.len) {
@@ -10321,17 +10291,17 @@ pub const sccp = struct {
                 // Blocks carrying a loop back-edge: their conditional must not fold
                 // (it would break the loop's single back-edge) unless the fold
                 // target is the loop header. (SPIRV-Tools dead_branch_elim rule.)
-                var back_edge_blocks: std.AutoHashMapUnmanaged(u32, void) = .empty;
+                var back_edge_blocks: AutoHashMapUnmanaged(u32, void) = .empty;
                 try collectBackEdgeBlocks(arena, spirv, inst_off, &table, &back_edge_blocks);
 
-                var loop_latch_blocks: std.AutoHashMapUnmanaged(u32, void) = .empty;
+                var loop_latch_blocks: AutoHashMapUnmanaged(u32, void) = .empty;
                 try collectLoopLatchBlocks(arena, spirv, inst_off, &table, &loop_latch_blocks);
 
                 // Collect this function's selection folds. Excluded: loop headers
                 // (folding destroys loop structure) and back-edge blocks whose fold
                 // target isn't their containing loop header. Merge survivors into
                 // the module-wide `selection_folds` the emit pass consults.
-                var fn_folds: std.AutoHashMapUnmanaged(u32, u32) = .empty;
+                var fn_folds: AutoHashMapUnmanaged(u32, u32) = .empty;
                 var fold_it: @TypeOf(analysis.folded).Iterator = analysis.folded.iterator();
                 while (fold_it.next()) |fold| {
                     const block_id: u32 = fold.key_ptr.*;
@@ -10344,7 +10314,7 @@ pub const sccp = struct {
                     // the loop iterates). Its condition may look constant to SCCP
                     // (it's built from the structured-CFG state-machine label phis),
                     // but folding it collapses the loop to one iteration. See
-                    // collectLoopLatchBlocks. (turn-902 fix for mandelbrot WHITE.)
+                    // collectLoopLatchBlocks.
                     if (loop_latch_blocks.contains(block_id)) {
                         continue;
                     }
@@ -10476,17 +10446,15 @@ pub const sccp = struct {
                 // If/Loop/Switch merge (`resolveMergePhiTarget`). A surviving OpPhi in a
                 // block that is no longer anyone's merge is therefore never assigned: WGSL
                 // zero-inits the `var phiN`, and every branch reading it takes the wrong
-                // arm. That is how a serial `while` loop came out running its body exactly
-                // once, and it silently wrecked ~9 kernels (density, force, viscosity,
-                // prefixSum, ...) while leaving the loop-free ones (double_it, clearGrid,
-                // predict) perfect - which is why the smoke test never caught it.
+                // arm, and a serial `while` loop runs its body exactly once - a fault that
+                // kernels without loops never show.
                 //
                 // `mergeBlockPhiWouldOrphan` prevents this by refusing to fold any selection
                 // whose merge carries a phi. This collapse handles the phis that survive the
-                // folds we DO perform. It is NOT a licence to fold a phi-carrying merge -
-                // that was tried, and it silently deleted the block the branch guarded (see
-                // the note on `mergeBlockPhiWouldOrphan`). Well-formed output is not the same
-                // thing as correct output.
+                // folds that ARE performed. It is not a licence to fold a phi-carrying merge:
+                // that would delete the block the branch guarded (see
+                // `mergeBlockPhiWouldOrphan`). Well-formed output is not the same thing as
+                // correct output.
                 //
                 // OpCopyObject is exactly equivalent to a one-armed phi, and the emitter
                 // already lowers it (`.CopyObject, .CopyLogical => emitLoad`).
@@ -10583,7 +10551,7 @@ pub const sccp = struct {
     }
 
     test "folds a constant-true guard; false arm unreachable" {
-        var ar: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var ar: ArenaAllocator = .init(testing.allocator);
         defer ar.deinit();
         const a: Allocator = ar.allocator();
         // %20 = OpConstantTrue ; entry %5: SelectionMerge %8 / BranchConditional
@@ -10642,7 +10610,7 @@ pub const sccp = struct {
         // Because the only LIVE predecessor of %20 is %5 (we never enter %21),
         // %st = meet(konst 482 over live edge) = 482, so %c == (482==482) = true,
         // and the guard folds to %23 with %24 unreachable.
-        var ar: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var ar: ArenaAllocator = .init(testing.allocator);
         defer ar.deinit();
         const a: Allocator = ar.allocator();
         var m: ArrayList(u32) = .empty;
@@ -10686,7 +10654,7 @@ pub const sccp = struct {
     test "varying guard does NOT fold (both arms stay reachable)" {
         // entry %5: %v = OpFunctionCall (varying) ; %c = IEqual %v %C0 ;
         //           SelectionMerge %25 ; BranchConditional %c %23 %24 ...
-        var ar: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var ar: ArenaAllocator = .init(testing.allocator);
         defer ar.deinit();
         const a: Allocator = ar.allocator();
         var m: ArrayList(u32) = .empty;
@@ -10719,7 +10687,7 @@ pub const sccp = struct {
     }
 
     test "rewrite folds the PBR-shape guard: dead arm removed, nothing left to fold" {
-        var ar: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(testing.allocator);
+        var ar: ArenaAllocator = .init(testing.allocator);
         defer ar.deinit();
         const a: Allocator = ar.allocator();
         // Same module as the analysis PBR-shape test: a state phi resolving to
@@ -10808,8 +10776,7 @@ pub const sccp = struct {
 ///
 /// Runs on the ORIGINAL SPIR-V, before SCCP folds. Checking the FOLDED module is useless: the
 /// fold is what deletes the block, so the access is missing from both sides and the guard sees
-/// a matching pair. (That was the first version. Re-introducing the bug to test it produced a
-/// silent pass - a guard that could not see the thing it was written for.)
+/// a matching pair.
 ///
 /// Membership, not count: emission legitimately merges accesses (CSE, hoisting), so demanding
 /// the same NUMBER would fire on healthy shaders. But a buffer touched in the SPIR-V and never
@@ -10831,12 +10798,12 @@ fn checkBufferAccessSurvival(
     const op_in_bounds_access_chain: u32 = 66;
 
     const Fn = struct {
-        touches: std.AutoHashMapUnmanaged(u32, void) = .empty,
-        calls: std.AutoHashMapUnmanaged(u32, void) = .empty,
+        touches: AutoHashMapUnmanaged(u32, void) = .empty,
+        calls: AutoHashMapUnmanaged(u32, void) = .empty,
     };
 
-    var names: std.AutoHashMapUnmanaged(u32, []const u8) = .empty;
-    var fns: std.AutoHashMapUnmanaged(u32, *Fn) = .empty;
+    var names: AutoHashMapUnmanaged(u32, []const u8) = .empty;
+    var fns: AutoHashMapUnmanaged(u32, *Fn) = .empty;
     var entry_fn: u32 = 0;
     var cur: ?*Fn = null;
 
@@ -10851,10 +10818,10 @@ fn checkBufferAccessSurvival(
         switch (op) {
             op_name => {
                 if (wc >= 3) {
-                    const bytes: []const u8 = std.mem.sliceAsBytes(spirv[i + 2 .. i + wc]);
-                    const end_z: usize = std.mem.indexOfScalar(u8, bytes, 0) orelse bytes.len;
+                    const bytes: []const u8 = sliceAsBytes(spirv[i + 2 .. i + wc]);
+                    const end_z: usize = indexOfScalar(u8, bytes, 0) orelse bytes.len;
                     const nm: []const u8 = bytes[0..end_z];
-                    if (std.mem.startsWith(u8, nm, "kbuf_")) {
+                    if (startsWith(u8, nm, "kbuf_")) {
                         try names.put(arena, spirv[i + 1], nm);
                     }
                 }
@@ -10862,8 +10829,8 @@ fn checkBufferAccessSurvival(
             op_entry_point => {
                 // [execution model, function id, name...]. Match the entry we emitted.
                 if (wc >= 4) {
-                    const bytes: []const u8 = std.mem.sliceAsBytes(spirv[i + 3 .. i + wc]);
-                    const end_z: usize = std.mem.indexOfScalar(u8, bytes, 0) orelse bytes.len;
+                    const bytes: []const u8 = sliceAsBytes(spirv[i + 3 .. i + wc]);
+                    const end_z: usize = indexOfScalar(u8, bytes, 0) orelse bytes.len;
                     if (std.mem.eql(u8, bytes[0..end_z], entry)) {
                         entry_fn = spirv[i + 2];
                     }
@@ -10909,8 +10876,8 @@ fn checkBufferAccessSurvival(
     }
 
     // Union the buffers touched anywhere in the entry's call graph.
-    var touched: std.AutoHashMapUnmanaged(u32, void) = .empty;
-    var seen: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    var touched: AutoHashMapUnmanaged(u32, void) = .empty;
+    var seen: AutoHashMapUnmanaged(u32, void) = .empty;
     var stack: ArrayList(u32) = .empty;
     try stack.append(arena, entry_fn);
     while (stack.pop()) |fid| {
@@ -10919,11 +10886,11 @@ fn checkBufferAccessSurvival(
         }
         try seen.put(arena, fid, {});
         const f: *Fn = fns.get(fid) orelse continue;
-        var t: std.AutoHashMapUnmanaged(u32, void).Iterator = f.touches.iterator();
+        var t: AutoHashMapUnmanaged(u32, void).Iterator = f.touches.iterator();
         while (t.next()) |e| {
             try touched.put(arena, e.key_ptr.*, {});
         }
-        var c: std.AutoHashMapUnmanaged(u32, void).Iterator = f.calls.iterator();
+        var c: AutoHashMapUnmanaged(u32, void).Iterator = f.calls.iterator();
         while (c.next()) |e| {
             try stack.append(arena, e.key_ptr.*);
         }
@@ -10931,12 +10898,12 @@ fn checkBufferAccessSurvival(
 
     // The WGSL BODY only. The `@binding` declarations name every buffer in the module
     // whether this kernel uses it or not, so searching the whole file would be vacuous.
-    const body_start: usize = std.mem.indexOf(u8, wgsl, "@compute") orelse
-        std.mem.indexOf(u8, wgsl, "@fragment") orelse
-        std.mem.indexOf(u8, wgsl, "@vertex") orelse 0;
+    const body_start: usize = indexOf(u8, wgsl, "@compute") orelse
+        indexOf(u8, wgsl, "@fragment") orelse
+        indexOf(u8, wgsl, "@vertex") orelse 0;
     const body: []const u8 = wgsl[body_start..];
 
-    var it: std.AutoHashMapUnmanaged(u32, []const u8).Iterator = names.iterator();
+    var it: AutoHashMapUnmanaged(u32, []const u8).Iterator = names.iterator();
     while (it.next()) |e| {
         if (!touched.contains(e.key_ptr.*)) {
             continue; // this entry genuinely does not use it - fine.
@@ -10950,8 +10917,8 @@ fn checkBufferAccessSurvival(
         // a longer name by prefix (`[` and `.` cannot appear inside an identifier).
         const indexed_directly: []const u8 = try allocPrint(arena, "{s}[", .{nm});
         const through_block: []const u8 = try allocPrint(arena, "{s}.", .{nm});
-        const is_accessed: bool = std.mem.indexOf(u8, body, indexed_directly) != null or
-            std.mem.indexOf(u8, body, through_block) != null;
+        const is_accessed: bool = indexOf(u8, body, indexed_directly) != null or
+            indexOf(u8, body, through_block) != null;
         if (!is_accessed) {
             std.log.err(
                 "spv2wgsl [{s}]: `{s}` is ACCESSED in the SPIR-V but never in the emitted WGSL.\n" ++
@@ -10970,25 +10937,25 @@ fn checkPhiClosure(arena: Allocator, wgsl: []const u8) !void {
     var declared: std.StringHashMapUnmanaged(void) = .empty;
     var assigned: std.StringHashMapUnmanaged(void) = .empty;
 
-    var lines = std.mem.splitScalar(u8, wgsl, '\n');
+    var lines = splitScalar(u8, wgsl, '\n');
     while (lines.next()) |raw| {
-        const line: []const u8 = std.mem.trim(u8, raw, " \t\r");
+        const line: []const u8 = trim(u8, raw, " \t\r");
 
         // `var phiN: T;` - a declaration.
-        if (std.mem.startsWith(u8, line, "var phi")) {
+        if (startsWith(u8, line, "var phi")) {
             const rest: []const u8 = line["var ".len..];
-            const end: usize = std.mem.indexOfScalar(u8, rest, ':') orelse continue;
-            try declared.put(arena, std.mem.trim(u8, rest[0..end], " \t"), {});
+            const end: usize = indexOfScalar(u8, rest, ':') orelse continue;
+            try declared.put(arena, trim(u8, rest[0..end], " \t"), {});
             continue;
         }
         // `phiN = ...;` - an assignment. (A `var phiN` decl never reaches here.)
-        if (std.mem.startsWith(u8, line, "phi")) {
-            const eq: usize = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        if (startsWith(u8, line, "phi")) {
+            const eq: usize = indexOfScalar(u8, line, '=') orelse continue;
             // Reject `==` so a comparison is never mistaken for an assignment.
             if (eq + 1 < line.len and line[eq + 1] == '=') {
                 continue;
             }
-            try assigned.put(arena, std.mem.trim(u8, line[0..eq], " \t"), {});
+            try assigned.put(arena, trim(u8, line[0..eq], " \t"), {});
         }
     }
 
@@ -11008,6 +10975,10 @@ fn checkPhiClosure(arena: Allocator, wgsl: []const u8) !void {
     }
 }
 
+// =============================================================================
+// Public entry point
+// =============================================================================
+
 /// Entry-filtered translation: when `entry` is non-null, only the matching
 /// OpEntryPoint is emitted (the multi-kernel path translates a module once
 /// per kernel). See `State.wanted_entry`.
@@ -11020,8 +10991,8 @@ pub fn convertSpirvToWgslEntry(
     // post-loop `if (phi == K)` Zig's un-optimized SPIR-V leaves), drop the
     // now-dead blocks, prune dead OpPhi operands - so the structurizer sees
     // clean control flow and post-loop texture samples sit at uniform scope.
-    // Falls back to the raw module on any rewrite error, so it can never
-    // regress availability (worst case = no folding, identical to before).
+    // Any rewrite error falls back to the raw module, so folding can only
+    // help: at worst, nothing is folded.
     const folded_spirv: []const u32 = sccp.rewrite(arena, spirv) catch spirv;
 
     // THE SAMPLER-UNIFORMITY GATE. Runs on the FOLDED module, so the dead
@@ -11050,88 +11021,62 @@ pub fn convertSpirvToWgslEntry(
     try final.appendSlice(arena, state.body_buf.items);
     const out: []const u8 = try final.toOwnedSlice(arena);
 
-    // ---- A HARD CHECK, UNLIKE `checkOutputClosure` BELOW ----
+    // ---- HARD CHECKS: OUTPUT NO BROWSER COMPILES ----
     //
-    // That one runs only in debug and only WARNS, returning the bad WGSL anyway on the grounds
-    // that "the browser's WGSL frontend rejects it at pipeline creation if it actually matters".
-    // It does matter, and the rejection names no cause: this exact reasoning is how three device
-    // round-trips were spent on a NaN literal. There is no use for WGSL that cannot compile, so
-    // this one fails the build, in every mode.
+    // A non-finite constant (a NaN or an infinity literal) and a texture or sampler held as an
+    // ordinary value are WGSL that browsers refuse - and the refusal comes at pipeline creation,
+    // on the device, naming no cause. There is no use for WGSL that cannot compile, so both fail
+    // the build, in every mode, with the shader named. (`checkOutputClosure`, below, only warns.)
     try checkNonFiniteConstants(out);
-    // Same kind of hard check: a texture/sampler handle returned from a function or held in
-    // a function-scope `var` is WGSL no device will compile.
     try checkNoHandleValues(out);
 
-    // ---------------------------------------------------------------------------
-    // GUARD RAIL: every `var phiN` declared must be ASSIGNED at least once.
+    // ---- GUARD: EVERY MERGE VARIABLE IS ASSIGNED ----
     //
-    // A phi is how the structurizer carries a value across a control-flow join. WGSL
-    // zero-initialises a `var`, so a phi that is declared and READ but never WRITTEN does
-    // not fail to compile - it silently reads 0. Every branch that tests it then takes the
-    // wrong arm, and a `while` loop runs its body exactly once and breaks.
+    // A phi is how the structurizer carries a value across a control-flow join: a `var phiN`,
+    // assigned on the paths into the join and read after it. WGSL zero-initialises a `var`, so a
+    // phi that is declared and read but never assigned still compiles - and silently reads 0.
+    // Every branch that tests it then takes the wrong arm, and a `while` loop runs its body exactly
+    // once. Kernels without loops are untouched by the fault, so a test of only those cannot see
+    // it; this check can.
     //
-    // That shipped. It wrecked ~9 kernels at once (density, densityTiled, force, viscosity,
-    // prefixSum, ...) - a fluid sim where no particle ever found a neighbour, and a counting
-    // sort whose prefix scan never ran - while leaving every loop-FREE kernel (double_it,
-    // clearGrid, predict) perfect. So the compute smoke test stayed green and the bug hid
-    // behind it for an entire arc.
-    //
-    // The invariant is purely syntactic, needs no GPU, and costs one pass over the output.
-    // It is checked in EVERY mode (not just Debug): a silently-wrong shader is worse than a
-    // failed build, and unlike the `_N` closure check above there is no known-limitation
-    // escape hatch that can trip it.
+    // The invariant is purely syntactic, needs no GPU, and costs one pass over the output. It is
+    // checked in every mode, not only Debug: a silently wrong shader is worse than a failed build,
+    // and unlike the `_N` closure check below, no known limitation can trip it.
     try checkPhiClosure(arena, out);
 
-    // ---------------------------------------------------------------------------
-    // GUARD RAIL: every storage buffer the SPIR-V ACCESSES must be accessed in the WGSL.
+    // ---- GUARD: EVERY STORAGE BUFFER THE SPIR-V USES IS STILL USED ----
     //
-    // `checkPhiClosure` proves the structurizer never leaves a phi unassigned. It cannot
-    // prove the structurizer never DROPS A BLOCK - and it did, silently, for months.
+    // `checkPhiClosure` proves no phi is left unassigned; it cannot prove that no BLOCK was
+    // dropped. A block can be: SCCP folds a selection whose condition is constant, and when the
+    // merge carries a phi, a fold that deletes the wrong arm takes everything that arm dominated
+    // with it - a whole loop, say - while the condition is still computed and the output stays
+    // well formed:
     //
-    // SCCP folds a selection whose condition is constant. When the merge carried a phi, the
-    // fold deleted the arm the branch used to guard, and everything that arm dominated went
-    // with it. In `sort_min.computeForce` that was the entire innermost neighbour loop: the
-    // SPIR-V had 86 memory ops, the emitted WGSL had 3. The condition was still computed -
+    //     let _4940: bool = phi4936 == 138u;   // computed...
+    //     let _5545: u32 = phi4936;            // ...and never used: its `if` is gone
     //
-    //     let _4940: bool = phi4936 == 138u;   // COMPUTED...
-    //     let _5545: u32 = phi4936;            // ...and DISCARDED.
+    // A dropped block takes its memory operations with it. So if a function reads or writes
+    // `kbuf_starts` in the SPIR-V, the WGSL emitted for it must read or write `kbuf_starts` too:
+    // a buffer that stops appearing means code vanished. Cheap to notice, and no GPU needed.
     //
-    // - and the `if` it existed for was never emitted. No error, no `// ERROR:` marker, and
-    // the one-armed-phi collapse had made the output perfectly WELL-FORMED, so every check
-    // we had went green. The kernel ran, wrote a pressure correction of zero, and produced a
-    // fluid that could not settle. It took a CPU-vs-GPU differential harness to find.
+    // It is a MEMBERSHIP test, not a count: emission legitimately merges accesses (common
+    // subexpressions, hoisting), so requiring the same NUMBER would fire on healthy shaders.
     //
-    // This is the invariant that catches it directly. If a function reads or writes
-    // `kbuf_starts` in the SPIR-V, the WGSL emitted for it must read or write `kbuf_starts`
-    // too. A dropped block takes its memory operations with it, so the buffer simply stops
-    // appearing - which is cheap to notice, needs no GPU, and would have caught this in one
-    // build instead of a day of bisecting a fluid.
-    //
-    // It is deliberately a MEMBERSHIP test, not a count. Emission legitimately merges
-    // accesses (CSE, hoisting), so requiring the same NUMBER would fire on healthy shaders.
-    // But a buffer touched in SPIR-V and never mentioned in the output means code vanished.
-    // THE ORIGINAL SPIR-V, not the folded one. The fold is what DELETES the block, so a
-    // buffer dropped by a bad fold is missing from the folded module too - checking that
-    // against the WGSL compares the crime scene with itself and finds nothing. (I wrote it
-    // that way first, re-introduced the bug to test it, and watched it stay silent.)
-    //
-    // Against the ORIGINAL, a legitimate fold is still fine: SCCP only removes provably dead
-    // arms, and a kernel touches its buffers on the live path, so no buffer loses its LAST
-    // access to a correct fold. A buffer that disappears entirely means a live block went
-    // with it.
+    // It compares with the ORIGINAL SPIR-V, not the folded one: the fold is what deletes the
+    // block, so the folded module lacks the dropped buffer too, and comparing it with the WGSL
+    // would find nothing. Against the original, a correct fold still passes - SCCP removes only
+    // provably dead arms, and a kernel touches its buffers on its live path, so no buffer loses
+    // its last access to a correct fold.
     try checkBufferAccessSurvival(arena, spirv, out, entry orelse "shader");
 
-    // Guard rail: every `_N` referenced in the output must have been declared.
-    // Originally this returned `error.OutputIdentifierMissing` to catch the
-    // "opcode handler forgot to set ids[N].wgsl_name" bug class.  In
-    // integration that fail-fast turned out to be too strict - when the
-    // transpiler hits any unhandled opcode that produces a result-id, the
-    // lazy placeholder in `lookupId` registers the id as a name only, and
-    // checkOutputClosure (correctly) flags the missing declaration.  We log
-    // the diagnostic but still return the WGSL; the browser's WGSL frontend
-    // will reject the bad output if it actually matters at runtime.  The
-    // function itself still returns the error for callers (like tests) that
-    // want the strict behavior.
+    // ---- DIAGNOSTIC: EVERY `_N` THE OUTPUT REFERENCES IS DECLARED ----
+    //
+    // An opcode handler that forgets to name its result (`ids[N].wgsl_name`) leaves an undeclared
+    // `_N` behind. This check reports it, in Debug builds, and returns the WGSL anyway: an opcode
+    // the translator does not handle registers its result id as a bare name (the lazy placeholder
+    // in `lookupId`), so an undeclared `_N` downstream of an emitted `// ERROR:` marker is
+    // expected, and the marker is the real diagnostic. `checkOutputClosure` itself returns the
+    // error, for callers (tests) that want the strict behaviour.
     if (builtin.mode == .debug) {
         var missing: u32 = 0;
         checkOutputClosure(arena, out, &missing) catch {
@@ -11144,7 +11089,7 @@ pub fn convertSpirvToWgslEntry(
             // bug class this guard exists to catch - log at `err`.  The
             // WGSL is returned either way; the browser's WGSL frontend
             // rejects it at pipeline creation if it actually matters.
-            if (std.mem.indexOf(u8, out, "// ERROR:") != null) {
+            if (indexOf(u8, out, "// ERROR:") != null) {
                 std.log.warn(
                     "spv2wgsl: output references _{d} with no declaration, " ++
                         "downstream of an emitted // ERROR: marker (known limitation).",
@@ -11194,16 +11139,16 @@ test "sampler-uniformity gate: fires on a sample under a non-uniform branch" {
     // This pins BOTH halves of the analysis. Data taint alone does NOT catch it: the
     // branch that actually guards the sample tests `phi == 55u`, where every value the
     // phi merges is a CONSTANT. It is non-uniform only because the control flow
-    // SELECTING between those constants is non-uniform. The first version of this gate
-    // had exactly that hole and sailed straight past the bug it was written for.
+    // SELECTING between those constants is non-uniform, so a gate tracking data taint
+    // alone would pass it.
     const bytes: []const u8 = @embedFile("tests/fixtures/uniformity/sampler_nonuniform.spv");
 
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     // @embedFile is byte-aligned; SPIR-V is a u32 stream. Copy into an aligned buffer
     // rather than @alignCast-ing (which trips the alignment safety check).
     const words: []u32 = try arena.allocator().alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
+    @memcpy(sliceAsBytes(words), bytes[0 .. words.len * 4]);
 
     try expectError(
         error.SamplerInNonUniformControlFlow,
@@ -11218,10 +11163,10 @@ test "sampler-uniformity gate: a sample at uniform scope is accepted" {
     // be flagged; effect_ascii_fs samples three `if`s deep and is perfectly valid.
     const bytes: []const u8 = @embedFile("tests/fixtures/uniformity/sampler_uniform.spv");
 
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const words: []u32 = try arena.allocator().alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
+    @memcpy(sliceAsBytes(words), bytes[0 .. words.len * 4]);
 
     try sampler_uniformity.check(arena.allocator(), words, "decal_fs (fixed)");
 }
@@ -11235,10 +11180,10 @@ test "graphics-interface gate: fires on the ssao_blur module 2307 shipped undeco
     // leftovers from @group(0) and Dawn rejected the pipeline. This must be a build error.
     const bytes: []const u8 = @embedFile("tests/fixtures/decorations/ssao_blur_2307_undecorated.spv");
 
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const words: []u32 = try arena.allocator().alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
+    @memcpy(sliceAsBytes(words), bytes[0 .. words.len * 4]);
 
     // The gate names each undecorated variable at `warn`; that is the diagnostic working, not
     // noise, but a passing test must print nothing - so raise the bar for this one call only.
@@ -11254,33 +11199,33 @@ test "graphics-interface gate: the same shader with @extern decorations is accep
     // host layout expects it - or the gate is just a build-breaker.
     const bytes: []const u8 = @embedFile("tests/fixtures/decorations/ssao_blur_decorated.spv");
 
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const words: []u32 = try arena.allocator().alloc(u32, bytes.len / 4);
-    @memcpy(std.mem.sliceAsBytes(words), bytes[0 .. words.len * 4]);
+    @memcpy(sliceAsBytes(words), bytes[0 .. words.len * 4]);
 
     const wgsl: []const u8 = try convertSpirvToWgsl(arena.allocator(), words);
-    try expect(std.mem.indexOf(u8, wgsl, "@group(2) @binding(0) var<uniform> u:") != null);
-    try expect(std.mem.indexOf(u8, wgsl, "@group(1) @binding(0) var src: texture_2d<f32>;") != null);
-    try expect(std.mem.indexOf(u8, wgsl, "@group(1) @binding(1) var src_sampler: sampler;") != null);
+    try expect(indexOf(u8, wgsl, "@group(2) @binding(0) var<uniform> u:") != null);
+    try expect(indexOf(u8, wgsl, "@group(1) @binding(0) var src: texture_2d<f32>;") != null);
+    try expect(indexOf(u8, wgsl, "@group(1) @binding(1) var src_sampler: sampler;") != null);
 }
 
 test "rejects non-spirv input" {
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const bad = [_]u32{ 0xdeadbeef, 0, 0, 0, 0 };
     try expectError(error.NotSpirv, convertSpirvToWgsl(arena.allocator(), &bad));
 }
 
 test "rejects truncated header" {
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const bad = [_]u32{ 0x07230203, 0, 0 };
     try expectError(error.MalformedSpirv, convertSpirvToWgsl(arena.allocator(), &bad));
 }
 
 test "minimal module with just void type" {
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     // magic, version 1.0, generator, bound=3, schema=0, then OpTypeVoid %1.
     const word0 = (@as(u32, 2) << 16) | @backingInt(types.Op.TypeVoid);
@@ -11308,7 +11253,7 @@ test "parseTempId handles real and fake names" {
 }
 
 test "checkOutputClosure catches undeclared reference" {
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     // _5 is referenced but never declared.
     const bad: []const u8 =
@@ -11320,7 +11265,7 @@ test "checkOutputClosure catches undeclared reference" {
 }
 
 test "checkOutputClosure accepts well-formed output" {
-    var arena: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena: ArenaAllocator = .init(testing_allocator);
     defer arena.deinit();
     const good: []const u8 =
         \\fn foo() {
@@ -11516,20 +11461,19 @@ pub const wgsl_check = struct {
     // -- Known-bug pattern scanners --------------------------------------
 
     /// Report of suspected bugs in WGSL output.  These are LEXICAL
-    /// fingerprints, not proofs.  They exist to catch regressions of
-    /// previously-fixed bugs.  Phase 5 cutover target: zero hits across
-    /// the full corpus.
+    /// fingerprints, not proofs: each is the signature of a known way the
+    /// translation can go wrong, and every shader of the corpus must show
+    /// zero hits.
     pub const BugScan = struct {
-        /// The phi-overwrite-after-if pattern that drove this whole
-        /// rewrite.  Mandelbrot diagnostic, May 2026.  See
-        /// docs/spv2wgsl-flow-guards.md for the worked example.
+        /// A phi's `var` assigned again after the `if` that chose its value,
+        /// overwriting the choice.
         phi_overwrite_after_if: u32 = 0,
 
         /// Count of `phiN` variables that are READ but never assigned (`phiN =`)
         /// anywhere - an orphaned phi. This is the bug where a merge construct is
         /// dropped (e.g. a folded case-less switch) but its OpPhi survives, leaving
-        /// `out_color = phiN` with no `phiN = value` -> garbage. Catches the
-        /// turn-896 mandelbrot bug class at its symptom. See docs.
+        /// `out_color = phiN` with no `phiN = value`, and WGSL reads the
+        /// zero-initialised `var`. Catches that class of fault at its symptom.
         phi_read_before_write: u32 = 0,
 
         /// Count of `__unresolved_N__` markers.  These indicate a
@@ -11570,10 +11514,10 @@ pub const wgsl_check = struct {
         // Count `// ERROR:` and `UNHANDLED` lines.
         i = 0;
         while (i < wgsl.len) {
-            const nl: usize = std.mem.indexOfScalarPos(u8, wgsl, i, '\n') orelse wgsl.len;
+            const nl: usize = indexOfScalarPos(u8, wgsl, i, '\n') orelse wgsl.len;
             const line: []const u8 = wgsl[i..nl];
-            if (std.mem.indexOf(u8, line, "// ERROR:") != null or
-                std.mem.indexOf(u8, line, "UNHANDLED") != null)
+            if (indexOf(u8, line, "// ERROR:") != null or
+                indexOf(u8, line, "UNHANDLED") != null)
             {
                 out.error_markers += 1;
             }
@@ -11612,9 +11556,9 @@ pub const wgsl_check = struct {
     /// report tokens with no matching assignment. Bounded by a small fixed cap on
     /// distinct phi ids (more than enough for any real shader).
     fn countPhiReadBeforeWrite(wgsl: []const u8) u32 {
-        const MAX_IDS: usize = 1024;
-        var seen: [MAX_IDS]u32 = undefined; // distinct phi ids encountered (read or written)
-        var written: [MAX_IDS]bool = undefined;
+        const max_ids: usize = 1024;
+        var seen: [max_ids]u32 = undefined; // distinct phi ids encountered (read or written)
+        var written: [max_ids]bool = undefined;
         var n_ids: usize = 0;
 
         var i: usize = 0;
@@ -11647,13 +11591,13 @@ pub const wgsl_check = struct {
                             break;
                         }
                     }
-                    if (!found and n_ids < MAX_IDS) {
+                    if (!found and n_ids < max_ids) {
                         seen[n_ids] = id;
                         written[n_ids] = false;
                         idx = n_ids;
                         n_ids += 1;
                     }
-                    if (found or n_ids <= MAX_IDS) {
+                    if (found or n_ids <= max_ids) {
                         if (is_assign and idx < n_ids) {
                             written[idx] = true;
                         }
@@ -11681,7 +11625,7 @@ pub const wgsl_check = struct {
 
     fn countPhiOverwriteAfterIf(wgsl: []const u8) u32 {
         var count: u32 = 0;
-        var lines = std.mem.splitScalar(u8, wgsl, '\n');
+        var lines = splitScalar(u8, wgsl, '\n');
         // Materialize line slices for backward scanning.  Lines are
         // unmodified substrings of `wgsl`; no allocation.
         var line_starts: [4096]usize = undefined;
@@ -11713,7 +11657,7 @@ pub const wgsl_check = struct {
             }
 
             // Extract the phi name (up to ` = `).
-            const eq = std.mem.indexOf(u8, cur, " = ") orelse continue;
+            const eq = indexOf(u8, cur, " = ") orelse continue;
             const phi_name: []const u8 = cur[0..eq];
             // Must be entirely phi[0-9]+
             if (phi_name.len < 4) {
@@ -11804,7 +11748,7 @@ pub const wgsl_check = struct {
         if (startsWith(u8, line, "if (")) {
             return true;
         }
-        if (std.mem.indexOf(u8, line, " if (") != null) {
+        if (indexOf(u8, line, " if (") != null) {
             return true;
         }
         return false;
@@ -11824,7 +11768,7 @@ pub const wgsl_check = struct {
         const start: usize = starts[idx];
         const end: usize = if (idx + 1 < count) starts[idx + 1] - 1 else wgsl.len;
         const raw: []const u8 = wgsl[start..end];
-        return std.mem.trim(u8, raw, " \t\r");
+        return trim(u8, raw, " \t\r");
     }
 
     /// Structural tripwire for the spv2wgsl struct-dedup invariant: report the
@@ -11845,7 +11789,7 @@ pub const wgsl_check = struct {
         var n: usize = 0;
         var i: usize = 0;
         const kw: []const u8 = "struct ";
-        while (std.mem.indexOfPos(u8, wgsl, i, kw)) |kw_at| {
+        while (indexOfPos(u8, wgsl, i, kw)) |kw_at| {
             // Require a token boundary so `mystruct`/`structish` don't match.
             const boundary_ok: bool = kw_at == 0 or !isIdentChar(wgsl[kw_at - 1]);
             const name_start: usize = kw_at + kw.len;
@@ -11856,7 +11800,7 @@ pub const wgsl_check = struct {
             var ne: usize = name_start;
             while (ne < wgsl.len and isIdentChar(wgsl[ne])) : (ne += 1) {}
             const name: []const u8 = wgsl[name_start..ne];
-            const open: usize = std.mem.indexOfPos(u8, wgsl, ne, "{") orelse break;
+            const open: usize = indexOfPos(u8, wgsl, ne, "{") orelse break;
             // Match the closing brace (our bodies have none nested, but count
             // anyway).  A malformed unbalanced body stops the scan cleanly.
             var depth: u32 = 0;

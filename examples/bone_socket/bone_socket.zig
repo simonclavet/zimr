@@ -19,6 +19,8 @@
 //! `compose(local, parentWorld)`, and a skin matrix is `compose(inverseBind, jointWorld)`.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const common = @import("example_common");
@@ -42,6 +44,7 @@ const greenman_glb = @embedFile("greenman.glb");
 const sword_glb = @embedFile("greenman_sword.glb");
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 const bufPrint = std.fmt.bufPrint;
+const eql = std.mem.eql;
 
 const max_nodes: usize = 32;
 const max_joints: usize = 16;
@@ -205,7 +208,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     var socket_node: usize = 0;
     for (doc.nodes[0..node_count], 0..) |n, ni| {
         if (n.name) |nm| {
-            if (std.mem.eql(u8, nm, "socket_hand_R")) {
+            if (eql(u8, nm, "socket_hand_R")) {
                 socket_node = ni;
             }
         }
@@ -215,13 +218,13 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     var anim_index: usize = doc.animations.len - 1; // last = attack
     for (doc.animations, 0..) |a, ai| {
         if (a.name) |nm| {
-            if (std.mem.eql(u8, nm, "3_attack")) {
+            if (eql(u8, nm, "3_attack")) {
                 anim_index = ai;
             }
         }
     }
     const anim: z.codecs.gltf.Animation = doc.animations[anim_index];
-    var tracks: std.ArrayListUnmanaged(Track) = .empty;
+    var tracks: ArrayListUnmanaged(Track) = .empty;
     errdefer tracks.deinit(gpa);
     var duration: f32 = 0;
     for (anim.channels) |chn| {
@@ -380,7 +383,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.char_skinned[vi * 3 + 1] = acc[1];
         s.char_skinned[vi * 3 + 2] = acc[2];
     }
-    z.updateMeshBuffer(s.char_model.meshes[0], 0, std.mem.sliceAsBytes(s.char_skinned), 0);
+    z.updateMeshBuffer(s.char_model.meshes[0], 0, sliceAsBytes(s.char_skinned), 0);
 
     // ---- 4. socket: rigidly transform the sword by the hand bone's world ----
     const socket: Mat = world[s.socket_node];
@@ -392,7 +395,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.sword_skinned[si * 3 + 1] = q[1];
         s.sword_skinned[si * 3 + 2] = q[2];
     }
-    z.updateMeshBuffer(s.sword_model.meshes[0], 0, std.mem.sliceAsBytes(s.sword_skinned), 0);
+    z.updateMeshBuffer(s.sword_model.meshes[0], 0, sliceAsBytes(s.sword_skinned), 0);
 
     // ---- 5. draw ----
     const cam: Camera3D = s.cam.update(f, false, .{ .fovy_deg = 55 });

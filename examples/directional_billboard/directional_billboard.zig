@@ -51,44 +51,10 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.ui_host.deinit();
 }
 
-fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
-    const img: z.Image = try makeAtlas(gpa);
-    const atlas: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
-    defer z.unloadImage(gpa, img);
-    var cam: z.OrbitCamera = z.OrbitCamera.init(pointVec(0, 0.5, 0), 4.0);
-    cam.yaw = 0.8;
-    cam.pitch = 0.35;
-    s.* = .{
-        .font = font,
-        .ui_host = z.UiHost.init(gpa, font),
-        .cam = cam,
-        .atlas = atlas,
-    };
-}
-
-/// Build the 4x8 procedural sprite atlas: for each (direction, frame) cell,
-/// draw a simple robot whose body orientation and a walk-bob depend on the cell.
-fn makeAtlas(gpa: Allocator) !z.Image {
-    const w: u32 = anims * cell;
-    const h: u32 = dirs * cell;
-    const img: z.Image = try z.genImageColor(gpa, @intCast(w), @intCast(h), .{ .r = 0, .g = 0, .b = 0, .a = 0 });
-    const px: [*]u8 = @ptrCast(img.data.?);
-
-    var d: u32 = 0;
-    while (d < dirs) : (d += 1) {
-        // Facing angle for this row (0 = toward viewer, sweeping around).
-        const facing: f32 = 2.0 * pi * float(d) / float(dirs);
-        // How much we see the "front" of the robot (1 = front, -1 = back).
-        const frontness: f32 = @cos(facing);
-        var a: u32 = 0;
-        while (a < anims) : (a += 1) {
-            // Walk bob: legs swing, body lifts a touch, per frame.
-            const swing: f32 = sinTurns(float(a) / float(anims));
-            paintRobot(px, w, a * cell, d * cell, frontness, swing);
-        }
-    }
-    return img;
+fn inDisc(u: f32, v: f32, cx: f32, cy: f32, r: f32) bool {
+    const dx: f32 = u - cx;
+    const dy: f32 = v - cy;
+    return dx * dx + dy * dy <= r * r;
 }
 
 /// Paint one robot cell at pixel offset (ox, oy). `frontness` in [-1,1] shades
@@ -147,10 +113,60 @@ fn paintRobot(
     }
 }
 
-fn inDisc(u: f32, v: f32, cx: f32, cy: f32, r: f32) bool {
-    const dx: f32 = u - cx;
-    const dy: f32 = v - cy;
-    return dx * dx + dy * dy <= r * r;
+/// Build the 4x8 procedural sprite atlas: for each (direction, frame) cell,
+/// draw a simple robot whose body orientation and a walk-bob depend on the cell.
+fn makeAtlas(gpa: Allocator) !z.Image {
+    const w: u32 = anims * cell;
+    const h: u32 = dirs * cell;
+    const img: z.Image = try z.genImageColor(gpa, @intCast(w), @intCast(h), .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    const px: [*]u8 = @ptrCast(img.data.?);
+
+    var d: u32 = 0;
+    while (d < dirs) : (d += 1) {
+        // Facing angle for this row (0 = toward viewer, sweeping around).
+        const facing: f32 = 2.0 * pi * float(d) / float(dirs);
+        // How much we see the "front" of the robot (1 = front, -1 = back).
+        const frontness: f32 = @cos(facing);
+        var a: u32 = 0;
+        while (a < anims) : (a += 1) {
+            // Walk bob: legs swing, body lifts a touch, per frame.
+            const swing: f32 = sinTurns(float(a) / float(anims));
+            paintRobot(px, w, a * cell, d * cell, frontness, swing);
+        }
+    }
+    return img;
+}
+
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22);
+    const img: z.Image = try makeAtlas(gpa);
+    const atlas: z.WgpuTexture = z.loadTextureFromImage(f.gl, img);
+    defer z.unloadImage(gpa, img);
+    var cam: z.OrbitCamera = .init(pointVec(0, 0.5, 0), 4.0);
+    cam.yaw = 0.8;
+    cam.pitch = 0.35;
+    s.* = .{
+        .font = font,
+        .ui_host = z.UiHost.init(gpa, font),
+        .cam = cam,
+        .atlas = atlas,
+    };
+}
+
+fn norm3(v: [3]f32) [3]f32 {
+    const l: f32 = @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (l < 1.0e-6) {
+        return .{ 0, 0, 1 };
+    }
+    return .{ v[0] / l, v[1] / l, v[2] / l };
+}
+
+fn cross3(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    };
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -216,22 +232,6 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
     common.caption(f.gl, s.font, "WebGPU 3D - directional billboard (orbit to see other sides)");
     s.ui_host.render(f);
-}
-
-fn norm3(v: [3]f32) [3]f32 {
-    const l: f32 = @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-    if (l < 1.0e-6) {
-        return .{ 0, 0, 1 };
-    }
-    return .{ v[0] / l, v[1] / l, v[2] / l };
-}
-
-fn cross3(a: [3]f32, b: [3]f32) [3]f32 {
-    return .{
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
 }
 
 pub const app: z.AppSpec(State) = .{

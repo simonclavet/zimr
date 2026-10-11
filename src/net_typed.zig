@@ -26,6 +26,7 @@
 //! fields later without breaking peers still on the older message format.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const serialize = @import("serialize.zig");
 
 /// Largest typed message this layer will build on the stack. Structured game
@@ -90,6 +91,6 @@ pub fn payload(bytes: []const u8) []const u8 {
 /// Decode a received message's payload as `T`. `gpa` is used only if `T` has
 /// slice/string fields (scalar-only structs don't allocate); free the result
 /// with the matching serialize teardown if so.
-pub fn decode(comptime T: type, bytes: []const u8, gpa: std.mem.Allocator) !T {
+pub fn decode(comptime T: type, bytes: []const u8, gpa: Allocator) !T {
     return serialize.decode(T, payload(bytes), gpa);
 }

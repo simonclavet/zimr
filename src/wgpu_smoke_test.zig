@@ -20,6 +20,7 @@ const std = @import("std");
 const gpu = @import("gpu.zig");
 const expect = std.testing.expect;
 const Allocator = std.mem.Allocator;
+const indexOf = std.mem.indexOf;
 const wgpu = @import("wgpu.zig");
 const render_pass = wgpu.render_pass;
 const BindGroupCache = @import("BindGroupCache.zig");
@@ -89,11 +90,11 @@ pub const App = struct {
         const fmt: wgpu.TextureFormat = wgpu.getSurfaceFormat(surface);
 
         // Step 2: allocate caches
-        var pc: gpu.PipelineCache = gpu.PipelineCache.init(gpa, device);
-        var bgc: BindGroupCache = BindGroupCache.init(gpa, device);
+        var pc: gpu.PipelineCache = .init(gpa, device);
+        var bgc: BindGroupCache = .init(gpa, device);
 
         // Step 3: build GpuFrame
-        const f: gpu.GpuFrame = gpu.GpuFrame.init(device, queue, surface, fmt, &pc, &bgc);
+        const f: gpu.GpuFrame = .init(device, queue, surface, fmt, &pc, &bgc);
 
         var app: App = .{
             .f = f,
@@ -113,7 +114,6 @@ pub const App = struct {
         // straight to `createShaderModuleWgsl`; the typed
         // `loadShader` path is exercised by the engine + user code,
         // not by the smoke harness.
-        _ = gpa;
         self.triangle_shader_module = wgpu.createShaderModuleWgsl(
             self.f.device,
             triangle_wgsl,
@@ -194,10 +194,10 @@ pub const App = struct {
 
 test "triangle_wgsl is non-empty and contains @vertex" {
     try expect(triangle_wgsl.len > 100);
-    try expect(std.mem.indexOf(u8, triangle_wgsl, "@vertex") != null);
-    try expect(std.mem.indexOf(u8, triangle_wgsl, "@fragment") != null);
-    try expect(std.mem.indexOf(u8, triangle_wgsl, "vs_main") != null);
-    try expect(std.mem.indexOf(u8, triangle_wgsl, "fs_main") != null);
+    try expect(indexOf(u8, triangle_wgsl, "@vertex") != null);
+    try expect(indexOf(u8, triangle_wgsl, "@fragment") != null);
+    try expect(indexOf(u8, triangle_wgsl, "vs_main") != null);
+    try expect(indexOf(u8, triangle_wgsl, "fs_main") != null);
 }
 
 test "App.init / deinit type-checks against the host harness" {

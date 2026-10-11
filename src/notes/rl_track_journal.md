@@ -2410,3 +2410,1969 @@ testing details, war stories or development anecdotes (Simon's standing preferen
   under the new rule; robot_latent 442; every Geno page smoked green and leak-free; F3 re-measured (1.53 vs 1.52 s,
   reward 0.499 vs 0.527). Plan v4 written (v3 archived): the done work summarised; what remains in stages A-H with
   the BENCH (a deterministic CPU learning curve) moved ahead of every recipe decision.
+- **Sep 27 — A1: the policy sees what it is applying (CPU).** `LearnerOptions.sees_applied` (default false). The
+  action applied BEFORE a decision - the filter's state - is a third input to the policy's first layer, through
+  `Learner.applied_block`: actions x hidden, ZERO at the start (made after the seven from no random numbers, so the
+  seven and the random stream behind them are bit for bit a blind learner's), with its own Adam; `stepAdam` steps the
+  seven and the block together, so no update path can leave the block out and the two Adams count in lockstep. Where
+  it is read: the training graph (`applied` as it stands before each decision - a Var, so the gradient also reaches
+  the decisions that made it), `decideInto` (the slot; the episode-start reset now happens BEFORE the policy reads it),
+  `modelLoss` and `diagnose` (their filter state), and cloning (`appliedBefore` per recorded step, so a cloned policy
+  is the function the learner acts with). `policyOnGraph` / `policyWith` take it as one optional value (`AppliedInput`,
+  `AppliedRow`: weights and action together); the kit's call sites pass null. Known answers: at zero the block is
+  invisible - the same raw action whatever it is told, the same first update (loss and all seven tensors exactly),
+  only the block moving; graph-vs-rows parity with the block planted; a decision reads its planted slot (and not what
+  a slot-ignoring decision would blend), and rest at an episode's first step; cloning's loss equals the rows'. Negative
+  control: two planted bugs in one build - the graph fed the window's STARTING applied action at every decision, and
+  `decideInto` reading the slot before the reset. The reset bug failed its test at once; the graph bug PASSED the
+  parity test, because at the untrained output layer's 0.01 scale a wrong action moves the loss far below 1e-5 - F6a's
+  test had the same blind spot. Fixed: the helper now plants the output layer too and compares the graph's applied
+  action at EVERY step (`step_actions`) with the rows', beside the loss; re-planted, the graph bug fails it (L14).
+  robot_latent 8 of 8 (the clock, the filter, the four A1s, diagnose, the normaliser); the kit's three policy tests
+  green at defaults.
+- **Sep 27 — A1 landed (the turn that wrote it stalled before replying).** Recovered from its logs: the code, the
+  tests, the tutorial paragraph (11.11) and the plan were all in the tree; `check` had gone red on ONE line (a
+  123-column comment in `robot_latent_kit_tests.zig`), rewrapped. Re-verified from the binaries themselves: robot_latent
+  9 pass / 2 skip (the two `robot_track_st` measurements, skipped by design) - all four A1s OK; the kit 17 of 17; both
+  pages that import robot_latent (`geno_train`, `track_train`) smoke green, example 0 -> 0 bytes. Simon ran geno_train
+  on his phone: 4 characters, 1456 rounds, 1211 character-steps a second, 1574 s of motion in 74 s, the servo alone
+  2.67 s there - then it throttled and crashed (he will try a desktop; Phase R's self-healing and checkpoints are
+  what answers an unattended crash). A2 (the recipe as one value) is next.
+- **Sep 27 — A2: the recipe as one value.** `robot_geno.supertrack_recipe`: 0.6 rad a unit, sigma 0.1, a decision
+  every 2 steps, the filter at 0.2, sees applied, the normaliser from the clips - every other learner option at its
+  default (sizes are the bench's and the probe's). Typed `SuperTrackRecipe` (the fleet's `action_scale` + a
+  `LearnerOptions`) rather than the plan's bare `LearnerOptions`: the scale is the fleet's, and a recipe without it
+  would let a bench build its fleet at the fleet's default 0.2 rad. Known answers, each against its REASON: the clock
+  and the filter equal `robot_policy.Controller.Options`' defaults (DReCon's, P5); filtered implies `sees_applied`;
+  the scale equals `supertrack_action_scale` (what geno_train reads until Stage G); `std.meta.eql` against the
+  defaults with the plan's five changes (no stray override). And read back at the point of use: a learner built from
+  it on Geno's dance (sizes shrunk, the bench's override) has 30 decisions a second on the model's own timestep, the
+  applied block, and the clip's normaliser bit for bit. `supertrack_action_scale`'s doc no longer says SuperTrack
+  lacks the filter. Tutorial 11.11 gained a paragraph. Next: B1, the bench.
+- **Sep 27 — B1 built: `zig build st-bench`.** `src/robot_st_bench.zig` (rooted in `src/` like robot-bench and
+  clip-bake; ReleaseFast like the training chunks; installed to `tools/zig-out/bin/st_bench` like `measure`, since a
+  step cannot forward arguments). Geno on `dance_5_15`, fleet and learner built from `supertrack_recipe` at CPU sizes
+  (8 characters x 4 steps an iteration, replay 256 each = 34 s; policy and world 64 wide, batch 32; window 16),
+  SuperTrack's rhythm (collect, one world update, one policy update); a LOOK every `every` iterations (default 100):
+  the judge's 20 starts + `diagnose` -> one CSV row written at once (iteration, wall, samples, both losses, MTTF,
+  share to the end, reward, trust, exploitation), provenance lines read back from the built objects. Options are
+  refused when misspelt. The recipe gained `training_grace_steps` (48, the paper's minimum episode) and
+  `trainingTask()` (grace = max(48, window)); the A2 test checks the trained task is Geno's own but for the grace.
+  Known answers: the servo line reads 1.532 s / 1 of 20 / 0.4987 (F1's baseline); iteration 0 reads 1.52 s (the
+  untrained policy ~ the servo); the same seed twice gives identical rows (wall aside), seed 2 differs. Rate on this
+  box: 3.2 iterations/s - collect 12 ms, world 82 ms, POLICY 222 ms an iteration: the policy update is 70% of the time
+  (risk 1's knob). First 40 iterations: MTTF 1.52 -> 1.17 s while exploitation rose 0.02 -> 4.9 - the policy exploits a
+  world model 40 updates old, the curve's job to show whether that turns. Next: the 10-minute run, then B2's 30.
+- **Sep 27 — deep review of A1-B1: one real bug in the bench, three hazards cleared by measurement.**
+  1. BUG: a setting the learner REFUSES still RAN. The bench was ReleaseFast, where `assertf` is stripped - with the
+     default mode's `assert_log` it logs one line and carries on - so `--filter=0` printed "assert failed" and ran to
+     exit 0, writing a plausible CSV: a policy that can never move reads exactly like the servo, so an A/B arm with a
+     bad setting would have reported "no effect". Fixed twice over: `LearnerOptions.problem()` is now the ONE
+     definition of valid learner settings (`Learner.init` asserts it; `!(x > lo)` so NaN fails too), and the bench
+     refuses with it in words before building anything, plus its own: a non-positive action scale, a replay no
+     longer than a window (that network would never update and its curve would sit flat). Six bad settings, six
+     refusals. And the bench now builds ReleaseSafe.
+  2. MEASURED - ReleaseSafe costs this workload 1.7x, not the ~15% claude.md quotes for tools: 3.2 -> 1.9
+     iterations/s (policy update 221 -> 375 ms). The rows are BITWISE IDENTICAL in both modes (same seed, 40
+     iterations), so the speed/safety choice changes no number, only whether a fault stops the run. Put to Simon.
+  3. MEASURED - looking does not touch training: the row at iteration 40 is identical with a look every 20 or every
+     40 iterations. (The determinism check could not show this: both runs looked at the same iterations.)
+  Cleared by reading: nothing outside robot_track copies the replay (so `episode_steps` cannot be dropped); the
+  block's Adam is built and stepped exactly as the seven's (same `AdamSet`, same rate, stepped together). Hazard kept
+  for Stage G: the kit's `packPolicy` takes `[7]Tensor`, so a learner with A1's block would lose it there - today only
+  tests call it, all at defaults.
+- **Sep 27 — the bench's build: option C (Simon).** Two builds of `src/robot_st_bench.zig` from `zig build st-bench`:
+  `st_bench` (ReleaseFast, 3.2 it/s) for long runs, `st_bench_safe` (ReleaseSafe, 1.9 it/s) to CLEAR a configuration -
+  its first stretch run Safe, then `st_bench --compare=safe.csv,fast.csv`, which checks every configuration line but
+  the build's and every shared row but the wall clock, and says how far agreement reaches. In both builds an
+  error-level log is FATAL (`std_options.logFn = fatalLog`, pinned by a comptime check to std's `defaultLog` type):
+  ReleaseFast strips a failed assert to a log line, and that line now stops the run. Expected outcomes are EXIT CODES
+  (0 ran/agree, 1 disagree, 2 refused), not errors - std logs an error returned from `main`, which the hook would turn
+  into a panic. Every CSV names its build (`# build: fast|safe`). Controls: a Safe 40-iteration prefix and a Fast
+  60-iteration run agree (3 rows, rc 0); another arm's CSV is refused on its configuration line (rc 1); one digit
+  changed in the sixth decimal of one loss is caught (rc 1); `--prove-fatal-log=1` kills both builds (rc 134, the
+  planted line printed first); a refused filter exits 2 without a panic.
+- **Sep 27 — review of the last turns (A1 recovered, A2): four bugs, each now with a test that fails without its fix.**
+  1. The learner's action SLOTS started UNINITIALISED: `fleet_actions` came from `owned.alloc` and was read before its
+     first write - held on a clock's odd steps, blended into by the filter (F6a), read by A1's policy. Fresh arena
+     pages are zero, so every test passed. Now each slot starts as what its character was last applying (the
+     replay's newest record) when the fleet is mid-episode, rest otherwise - which also makes the hand-over record
+     agree with `appliedBefore`.
+  2. `appliedBefore` GUESSED rest in two places F6a had documented as simplifications, and A1 made the policy READ
+     the guess: across a SHOVE (a shove ends a segment, not an episode - the filter carries through) and at the
+     oldest record of a full ring (the step before it is gone). The replay now records each step's place in its
+     episode (`Replay.appendStep`, `episodeStepAt`; `append` records null: not a rollout step); `appliedBefore` is exact
+     across shoves and reports UNKNOWN (NaN into `out`) at the ring's edge; the learner draws through `drawWindow`
+     (redraws an unknown start when it matters: a filter, or a policy that sees it - identical to `sampleWindow` at
+     defaults), `trainPolicyOn` refuses (`error.UnknownAppliedAction`) before filling anything, cloning too.
+  3. CLONING under a filter or a clock regressed the raw ask onto blended or held records - A1's cloning test even ran
+     it at filter 0.2 and called it right. `cloneStep` refuses (`error.CloningNeedsRawActions`); A1's test clones
+     without a filter. No production caller cloned with either (the D-phase learners run at defaults).
+  4. A2's second test had two checks true by construction (the learner's copied options, the fleet built from the
+     value) - removed (claude.md: a self-referential check is not a check).
+  Known answer for 1 and 2 - COLLECTION ITSELF: the slot every character was about to decide from, recorded before
+  each step with shoves every 7 steps, episodes capped at 50 and the ring wrapped; every record in the ring agrees
+  (the hand-over included), the oldest is unknown, training refuses a window there, 1000 draws all known. Negative
+  controls, one build each: the old segment rule planted -> fails; the old zero start planted -> fails (the hand-over
+  check). robot_latent 11 pass / 2 skip; the A2 tests; the kit 17 of 17. Tutorial 11.7: a segment is not an episode.
+- **Sep 28 — B1 DONE: the 10-minute run (`st_bench --minutes=10`, seed 1, the recipe's CPU sizes).** 1,659
+  iterations in 600 s on this ONE-core sandbox (2.8 it/s: collect 9 + world 90 + policy 255 ms an iteration); 18
+  judged rows in `src/notes/bench/b1_10min_seed1.csv`, the curve beside it (`.png`). Known answer: iteration 0 is the
+  untrained policy, judged like the servo (MTTF 1.52 s vs the servo's 1.53). Then:
+  - MTTF FALLS under that baseline within 100 iterations (0.62 s) and stays there (0.50-0.64 s, 0.56 at the end);
+    no start reaches the end after iteration 100; reward 0.50 -> ~0.17.
+  - TRUST (the model's error following the policy's real path, over the trivial "it tracks" predictor's) goes
+    3.14 -> 0.23, monotone after iteration 200: the WORLD MODEL learns - by 10 minutes it is four times better than
+    assuming the character tracks.
+  - EXPLOITATION (the gain the model promises the policy over doing nothing, minus the real one, per unit of the
+    real zero-action loss) jumps to 299 at iteration 100 and stays at 90-136: the policy optimises through the
+    model into states where the model is wrong in its favour. Trust is measured on the policy's RECORDED actions;
+    exploitation on the policy acting INSIDE the model - the model is right where the policy went, wrong where the
+    policy would take it.
+  Reading (B2's own rule, read early): the world half works, the coupling does not - the policy exploits the
+  model. So B2's 30-minute baseline will likely show the same flat curve; it is still the curve every Stage C A/B is
+  judged against, and C's adoption rule ("exploitation bounded") is the one this run says matters most.
+- **Sep 28 — I1: noise on the world model's predictions, built and measured (Simon: work on the ingredients).**
+  `LearnerOptions.world_noise` (and `world_noise_draw`, the tests' deterministic stand-in, like `noise`): after every
+  predicted step of the policy's training rollout, `z += world_noise * eps` - eps a [batch, features] constant per
+  step, refilled each call; drawn from the learner's stream only when the knob is on, so a learner without it draws
+  exactly the stream it always did. `problem()` refuses a negative or NaN value; `st_bench --world-noise` and the
+  CSV's configuration line carry it. Known answers: the parity test (graph vs rows, now over a `Variation`) with the
+  noise, with and without A1's input - the rows add the same draws after `stepRow`; negative control: the graph's
+  noise planted at HALF size fails exactly that test; zero noise reproduces B1's rows 0 and 100 in every column but
+  wall time. Bench, 4 minutes at 0.2 (678 iterations) against B1's rows:
+
+      iteration   MTTF base / noise   trust base / noise   exploitation base / noise
+         200        0.68 / 0.46          0.99 / 0.86            78 / 132
+         300        0.55 / 0.32          0.62 / 0.72           131 / 297
+         400        0.50 / 0.32          0.47 / 0.56           136 / 289
+         500        0.53 / 0.30          0.40 / 0.48           136 / 291
+         600        0.59 / 0.32          0.34 / 0.39           128 / 177
+
+  HARMFUL at 0.2: exploitation about doubles, MTTF falls by 40%, the model learns a little slower (from a worse
+  policy's data). The mechanism the numbers fit: every knock is an error the policy is scored on, and the cheapest
+  way to shrink it is a harder correction - the action the model believes and the body cannot deliver. Kept, off.
+  Next for it: 0.05 (is the harm monotone?), noise scaled to the model's per-feature error, and the window length.
+  Tutorial: a paragraph on the knob beside the others that fight exploitation.
+- **Sep 28 — I1b: two world models and their disagreement (Simon's idea), built and measured.** `twin_world` trains a
+  second `LatentWorld` (seed + 1, or `twin_seed`) on the same replay - its own stream, so its own batches too; the
+  normalisers match because both are measured from the same replay. In the policy graph both step from the SAME
+  state and the rollout goes on from their average `(p + o) * 0.5`; `w_disagree` prices `|p - o|^2` per feature on
+  every step, held or not - the gap written `p + (-o)` so its gradient reaches BOTH predictions. `modelStepRow` is the
+  one row-level step (`modelLoss` and `diagnose` go through it), `trainWorld` trains both. `problem()` refuses a
+  price without a twin. Known answers: the parity test over twin + price, and over every ingredient at once (A1,
+  world noise, twin); a SAME-seed twin with a price gives the single model's loss to the bit; negative control -
+  the twin stepped but not averaged fails exactly the parity test; twin off reproduces B1's rows. Bench, 4 minutes,
+  w_disagree 1 (436 iterations at 1.9 it/s: world 155 ms, policy 372 ms - both carry a second model):
+
+      iteration   MTTF base / twin   reward base / twin   exploitation base / twin
+         100        0.62 / 1.06        0.217 / 0.260          299 /  48
+         200        0.68 / 0.52        0.203 / 0.187           78 / -62
+         300        0.55 / 0.63        0.173 / 0.209          131 /  86
+         400        0.50 / 0.54        0.155 / 0.226          136 /  94
+
+  PROMISING, where I1's noise was harmful: exploitation lower at every look (briefly NEGATIVE - pessimistic, the
+  direction the price pushes), reward up to 45% higher, MTTF modestly better - and better at equal wall time too
+  (4 minutes: reward 0.226 against the baseline's ~0.17). Still far from the goal (MTTF under the untrained 1.52 s);
+  one seed. Next: stronger prices (3, 10), then a second seed. Chart: `src/notes/bench/i1b_twin_vs_noise.png`.
+  Found on the way: `zbuild` reports a missing `zig` on PATH as a bare `error: FileNotFound` - worth a real message.
+- **Sep 28 — I1 removed (Simon: "we know model noise was a bad idea").** `world_noise`, its draw hook, the per-step
+  constants, the injection, the draws, its parity test and the bench's `--world-noise` are gone; the all-ingredients
+  parity case keeps the twin with A1's input. The measurements stay (`src/notes/bench/i1_*`) and the lesson is L14.
+- **Sep 28 — I1b's price, at 3 and 10 (4 minutes each, seed 1).** Same iterations, MTTF / reward / exploitation:
+
+      iteration   baseline             w 1                  w 3                  w 10
+         100      0.62 0.217  299      1.06 0.260   48      0.89 0.320   45      0.52 0.262  218
+         200      0.68 0.203   78      0.52 0.187  -62      0.36 0.172 1796      0.55 0.230   97
+         300      0.55 0.173  131      0.63 0.209   86      0.28 0.098  642      0.80 0.215   96
+
+  Last rows: w 1 at 436 - 0.59 s; w 3 at 392 - 0.31 s, exploitation 468; w 10 at 392 - 0.69 s, the best of any arm.
+  Not a dose curve: the collapse at 3 sits between two working prices, so one seed cannot tell a dose effect from a
+  run that took one bad excursion (bad data, then both models learning from it). Next: seeds 2 and 3 for each price.
+  Chart `src/notes/bench/i1b_prices_seed1.png`. Also this turn: `zbuild` says why a build could not start
+  ("could not start `zig build`: FileNotFound - is `zig` on PATH?") instead of a bare error name.
+- **Sep 28 — I1b, seed 2 (3-minute arms: the baseline and w 1, 3, 10). The seed matters more than the price.**
+  MTTF / reward / exploitation:
+
+      iteration   baseline             w 1                  w 3                  w 10
+         100      1.24 0.328    8      1.08 0.359   15      1.22 0.322   15      1.30 0.357   13
+         200      1.16 0.292    7      1.00 0.357    4      1.20 0.362    7      0.97 0.284   38
+         300      0.84 0.238   17      1.15 0.229   14      1.19 0.357    2      0.83 0.251   56
+      last look  0.41 at 634          0.38 at 360          1.37 at 355          0.89 at 350
+
+  Mean MTTF over looks 100-300 - seed 1: base 0.62, w1 0.74, w3 0.51, w10 0.62; seed 2: base 1.08, w1 1.08, w3 1.20,
+  w10 1.03; the two seeds' mean: 0.85 / 0.91 / 0.86 / 0.83. The same configuration moves 0.46 s between seeds, the
+  prices move the mean 0.06 s at most, and each price wins one seed and loses or ties the other - w 3 collapsed on
+  seed 1 and is seed 2's best arm. Exploitation fell in 4 of 6 seed-price pairs, a hint in the twin's direction and
+  no more. What both seeds share: MTTF drifts DOWN in every arm as training goes on (seed 2's baseline 1.24 -> 0.41
+  by iteration 634). Chart `src/notes/bench/i1b_two_seeds.png`; CSVs `i1b_seed2_w*_3min.csv`. Plan: seed 3, and B3 -
+  a bench that can resolve 0.1 s (a run's summary, seeds per arm, the judge's own noise).
+- **Sep 28 — Simon: "avoid getting stuck with benchmarks; continue with the fundamentals".** B3 deferred. Surveyed
+  what exists for the SAC half of the mixes: `robot_gym.SacAgent` (S1, on the gym's humanoid and cartpole), zimrnum's
+  DroQ/CrossQ primitives (never assembled - S3), PPO on the tracking task (`robot_ppo_track`), whose environment was
+  woven into its trainer. So the foundation first: **`src/robot_track_env.zig`, `TrackEnv`** - the decision-level
+  tracking environment every learner will step through (observe; `decide`: clamp, hold `decimation` steps, credit the
+  reward up to the first end, classify the end, read a cut's terminal observation before the filter is forgotten).
+  Known answer: twin fleets - one in a PPO trainer, one in a TrackEnv - driven by PPO's own draws for 48 decisions x
+  4 characters with a 40-step cap and bootstrapped clip ends: observations, rewards, ends and every cut's bootstrap
+  identical (exact f32). Negative control: the cap planted as a stop fails exactly that test. `EndKind` and
+  `ClipEnd` are still PPO's; they move, and PPO's copy of the logic goes, next turn.
+- **Sep 28 — PPO steps through `TrackEnv`; its own copy of the task's logic is gone.** The trainer holds `env:
+  TrackEnv` (plus its outcomes and terminal buffers) where it held the fleet, subset, controller, views, scratch state,
+  applied action and episode counters; `collectOne` is: observe and draw for every character, one `env.decide`, then
+  PPO's bookkeeping from the outcomes - a cut's bootstrap valued from the env's terminal capture after the decision
+  (nothing the value reads moves inside one). `EndKind` and `ClipEnd` live in the env; PPO re-exports them. Known
+  answer - a fingerprint recorded BEFORE the change (two iterations, normalisation on, bootstrapped clip ends, a
+  30-step cap: every learning array hashed, the weights after each update, the stats): after it, iteration 0
+  identical in everything, iteration 1 identical in arrays, weights and every integer stat; the mean reward moved in
+  its 7th digit (0.5777777 -> 0.5777775), as predicted before the edit - the batch's reward sum is now added per
+  character instead of per step (a statistic nothing learns from). The trap the plan names bit exactly as it says:
+  both pages read `s.trainer.fleet` to draw the characters (`check` does not compile pages) - updated, both smoked in
+  release; one test read `trainer.fleet` too. PPO's test root: 509 pass, 75 skip.
+- **Sep 28 — SAC on the dance (plan I3): `src/robot_sac_track.zig`, `SacTrack`.** `robot_gym.SacAgent` (S1's SAC)
+  learning from `TrackEnv`'s decisions - one decision for the whole fleet per `step`: SAC draws (uniform in its
+  warm-up), `TrackEnv.decide`, then each transition into the replay - the observation before, the action drawn, the
+  credited reward; next = where the next decision starts, except a CUT, whose next is the terminal capture with done
+  FALSE (SAC bootstraps from where it ended); done TRUE only on a STOP. Then `updates_per_decision` updates. Known
+  answers: every replay row of 40 decisions x 4 characters held field by field against a twin `TrackEnv` driven by
+  the actions the replay recorded (30-step cap -> cuts; a radian per unit of action in the uniform warm-up -> stops;
+  both exercised); negative control - a cut stored as a termination fails exactly that test; a smoke - past a
+  64-transition warm-up, updates run, the actor's weights move, the critic's loss is finite (both tests: 2 s). Raw
+  DReCon observations for now - normalising a replay's rows is its own decision.
+- **Sep 28 — studied roxie's TD4 (Simon: "we really want all ingredients available").** roxie (JAX, seven agents
+  on MuJoCo) - TD4 = TD3's machinery (target actor, target smoothing, policy delay, deterministic tanh actor) with
+  D4PG's categorical critics, twinned: the target distribution comes from the twin with the lower mean per sample,
+  optionally blended with the other along quantile functions (a Wasserstein interpolation, reprojected - mixing
+  densities would smear the support); categorical TD (C51 projection + cross-entropy); 5-step returns that stop at
+  terminations and bootstrap at truncations; observations normalised at SAMPLE time from running sums (raw replay
+  rows - the answer to SacTrack's open question); layer norm in actor and critics; global grad-norm clip 1; Gaussian
+  exploration 0.4 -> 0.1. Headline: HumanoidWalk 989; in their grid the categorical critics lead on CPU physics, and
+  TD4 collapsed on one task on GPU physics (Stand, 38). Our HAVE list is long (graph ops, Adam, polyak, clipGradNorm,
+  ObsNormalizer, ReplayBuffer, twin critics, TrackEnv's stop/cut + terminal observation); the MISSING pieces are plan
+  I5's T1-T8: n-step transitions, sample-time normalisation, the categorical projection, a soft cross-entropy graph
+  primitive, the categorical twin critic with its quantile blend, the deterministic actor family, the assembled agent
+  (cartpole, then TrackEnv), GPU parity.
+- **Sep 28 — T1, first half: the replay's last column is the bootstrap DISCOUNT.** `SacAgent.remember(..., done)`
+  keeps its interface and stores gamma * (1 - done) - the product the target used to form, in the same order;
+  `rememberDiscounted` takes a discount directly (n-step rows); the target is reward + discount * soft on the CPU and
+  in the kit's `sac_target` kernel (the host copies the column unchanged, so one kernel line moves the GPU with the
+  CPU); the kit parity test's rows carry discounts (0 where they said done, 0.99 otherwise). Known answers: SAC on the
+  walk clip, 40 decisions past a 64-transition warm-up, fingerprinted BEFORE the change and after - 25 updates, actor
+  and both critics hashing identically (5d93ec50ee66cc6e); the kit's SAC update still SacAgent's, update for update;
+  the row test now reads the discount column. Next: the n-step accumulator itself.
+- **Sep 28 — T1 done: `TrackEnv.NStep`, and SAC on n-step rows.** Per environment, a ring of n pending decisions:
+  the episode goes on and the ring is full - the oldest goes out, its return over n decisions, bootstrapping from the
+  observation after the newest at gamma^n; a CUT - every pending decision goes out, returns to the end, the terminal
+  observation, gamma^k for its own k; a STOP - all out at zero. So a window never crosses an episode's end and nothing
+  is dropped at one. Returns summed newest-first (Horner), so at n = 1 the return is the reward with no arithmetic and
+  the discount gamma itself. Known answers: planted rewards 1, 2, 4, 8, 16 at gamma 0.5 (every sum exact) - windows
+  3 and 6, a cut emitting 12, 16, 16 at 1/8, 1/4, 1/2, a stop at zero, a first-decision cut at gamma; n = 1 against
+  the one-step rows bit for bit; a cut's discount planted off by one fails both tests. `SacTrack.Options.n_step`:
+  its row test passes unchanged at n = 1 through NStep, and SAC learns at n = 1 and 5. `robot_track_env.zig` joins
+  the robot family's test root and gets its own `zn-robot_track_env` step; `robot_sac_track.zig` is compiled there.
+
+- **Sep 28 — T2 done, and a review of everything since TrackEnv (Simon: "simplify, hunt for bugs, improve
+  comments, more descriptive names"; in small turns after one response failed to generate).** T2 - built by the
+  interrupted turn and found intact: `SacOptions.normalize_observations`, training actions feed an f64
+  `ObsNormalizer`, `sampleBatch` normalises each batch's copy, the replay stays raw. The review, file by file:
+  `robot_track_env.zig` (NStep's names - oldest/pending, next_obs/terminal_obs, completed, windowFrom, gammaPower -
+  and why n-step helps; `push` now asserts room for n; `heldSteps()` the one definition of a decision's length; two
+  subtleties written down - an early end lets the old decision drive the fresh episode for the rest of the hold, and
+  `failures` counts every held step), `robot_sac_track.zig` (`done` was a COUNT - now `completed_count`; header
+  rewritten for discount rows and the normaliser), `SacAgent` (act documented; `feedNormalizer` / `normalized` /
+  `widen`; `updateWith`'s doc said done), PPO (`taskOptions`, `batch_row`, the lockstep test renamed for what it tests
+  now). Bugs: none in behaviour. A TEST gap: T2's test could not see storage-time normalising (it snapshotted after
+  storing) - it now checks rows are the raw inputs, and the planted bug fails it.
+- **Sep 28 — Simon: fold titles showed "\\25b8\\00a0 name \\2014 source".** `tools/docfmt.zig`'s stylesheet is a Zig
+  MULTILINE string literal, which escapes nothing - and its three fold rules were written with doubled backslashes
+  (right for an ordinary "..." string, wrong here), so the CSS reached every styled page as an escaped backslash and the
+  browser printed the code. Fixed to single backslashes; a new `docfmt` test in `tools-test` (so in `check`) forbids
+  a doubled backslash anywhere in the stylesheet - written first, it failed on the broken CSS.
+- **Sep 28 — T3 done: `zimrnum.categoricalProject`.** C51's projection on an evenly spaced support: every atom of the
+  next state's distribution moved to reward + discount * z, clamped to the support, its mass split between its two
+  nearest atoms by closeness - which keeps the mean (so Q still obeys Bellman) and always the mass. Known answers on
+  five atoms one apart (exact shares): a point mass stays, a quarter-way atom splits 3/4 - 1/4, beyond the ends it
+  clamps, discount 0 collapses onto the reward, mass and mean kept, bad shapes refused. Negative control: the
+  textbook floor/ceil neighbours (an exact landing loses its mass) fail exactly the point-mass and clamping tests.
+- **Sep 28 — T4 done: soft cross-entropy, as row functions and as a graph operation.** The categorical critic's loss
+  (-sum target_j log softmax_j, in log space; gradient predicted - target over rows). Row known answers: one-hot
+  targets give the hard-label loss and gradient exactly; at prediction = target the gradient is zero and the loss the
+  target's entropy; central differences agree. Graph: `softCrossEntropy(logits, targets)` wired like `mseLoss` - the
+  target is data (TD4's comes from frozen target networks); `checkGradient` passes alone, through a layer, under a
+  scale, and after the target is refilled. Negative controls: the gradient without its /rows fails the row tests; the
+  backward ignoring the incoming gradient fails exactly the composition test.
+- **Sep 28 — Plan section 10, "Recent advancements", opened with R1: EfficientTDMPC** (Evers et al., arXiv
+  2605.16692v4 - Simon: "add to the plan everything necessary to be able to reproduce this"). BMPC's base written out
+  component by component (the paper's Table 1-2; details it only references to TD-MPC2 / BMPC tagged "base, verify"
+  against github.com/wertyuilife2/bmpc), the four changes with their equations (per-step insertion + horizon 6 +
+  1/8 reanalyze; the multi-horizon mean; four dynamics heads trained value-equivalently with TS-infinity and the
+  variance of the mean; beta sigma pessimism in reanalyze on early-terminating tasks), the protocol, twelve missing
+  pieces in build order each with a known answer, the open questions, and how it carries to the dance. Two links to
+  our own work: T3's projection of a point mass IS TD-MPC2's two-hot target, and their Appendix C.1 (a single-head
+  planner promises more than the simulator delivers; the ensemble mean less, and delivers more) is I1b's exploitation
+  finding measured their way.
+- **Sep 28 — BMPC's code read (`bmpc-main`), and the design that makes the TD-MPC class native to zimrnum.** Plan R1.1
+  now states BMPC exactly as its code does it - every "base, verify" tag replaced - with the paper-vs-code
+  differences listed: the KL runs policy-first (the paper writes the reverse); the policy target is a DRAWN elite's
+  first action with the final std, not the planner's mean; reanalyze's policy trajectories use the exploration std;
+  iterations +2 at >= 20 action dimensions; the policy trains on detached ROLLED-OUT latents; the value target rolls
+  the policy through the model with MODEL rewards; the KL is divided by a percentile running scale; loss weights
+  20 / 0.1 / 0.1. The design (R1.5): a network = its parameters + ONE builder bound into any graph (`constant()`
+  wraps the caller's tensor, so a frozen binding reads the live weights - BMPC's live / detached / target trio is
+  three bindings of two tensor sets); planning = `recompute` of a graph built by the SAME rollout builder as training
+  (one definition of the model's arithmetic for learning and search); an ensemble = an array of members, not a new
+  rank; a small vocabulary (linear, normedLinear, mlp) plus three new ops (simNorm, gaussianKL, CategoricalScalar);
+  SliceReplay, Mppi, RunningScale around them. Build order N1-N9, each with its known answer.
+- **Sep 28 — BMPC-jax read (`bmpc-jax-main`): its speed is structural, and two of its tricks simplify our design.**
+  Faster by: one planner call for every environment (any leading batch shape - acting and reanalyze share it);
+  reanalyze and the policy reusing the update's own encodings and rollouts; one encoder pass (targets cut by a
+  stop-gradient); all planner noise drawn once; a per-environment ring of whole transition rows with O(1) window
+  sampling and `finished` masks instead of episode-bounded windows; per-step insertion; an update-to-data knob.
+  Behaves differently by: a CONTINUE head for terminations (hard in planning, soft in targets - TrackEnv's falls
+  need it); the policy distilled toward the planner's MEAN (std x 1.5, floor 0.1); rho normalised to sum 1; 5 value
+  heads. Into the design (plan R1.5): a `detach` op (the single encoder pass), `SequenceReplay` replacing
+  `SliceReplay`, the planning graph's rows = states x samples (every character in one recompute), and "nothing
+  computed twice"; the behaviour differences become N6 options, each a bench question.
+- **Sep 28 — N1 done: `zimrnum.Params(T)`.** A network's tensors as one set: `bind(graph, .trained)` enters them as
+  parameters (an `Optimizer` on the returned values steps them in place), `bind(graph, .frozen)` as constants - the
+  SAME tensors, since `Graph.constant` wraps without copying - and a target is a `clone` moved by `follow` (polyak
+  per tensor, exact at 0 and 1). BMPC's live / detached / target trio is two sets and a choice at `bind`; the
+  encoder's 0.3x rate is its own `Optimizer`. Known answers: an SGD step in the training graph is seen by a frozen
+  binding in another graph at its next recompute, unrebuilt; no gradient reaches a frozen binding (`gradOf` refuses,
+  its tensors are bit-identical after a step) while the trained one passes `checkGradient`; a target at 0 stays, at
+  1/2 lands halfway, at 1 is the live set bit for bit, and a clone is a copy. Negative control: a frozen binding
+  that copies its tensors fails exactly the live-read test.
+- **Sep 28 — N2 begins: `Graph.detach`, the stop-gradient.** The value is a copy of its input's (through `scale` by
+  exactly 1 - correct for any view), refreshed by `recompute`; `backward` stops there; `gradientOf` gets an explicit,
+  exact case (a stop-gradient contributes nothing) rather than its unsupported-op error. What it enables: BMPC-jax's
+  single encoder pass, targets cut from it. Known answers (finite differences cannot check a stop-gradient on its own
+  input - perturbing x does move detach(x) - so they are exact statements): the value equals the input, the input's
+  gradient through it is exactly zero while the other path passes `checkGradient`; with two paths, one detached, the
+  input's gradient is the undetached path's alone, bit for bit; recompute refreshes the copy. Negative control: a
+  detach that lets the gradient through fails exactly the zero-gradient and two-path tests.
+- **Sep 28 — N2: `simNorm`.** Plain `simNormRows` / `simNormRowsGrad` (each group's max subtracted; the gradient a
+  softmax Jacobian applied group by group) and `Graph.simNorm(x, group)`, the group size in the node's geometry.
+  Known answers: every group of two rows x two groups of four is a probability vector; one group spanning the row
+  equals `softmaxRows` and `softmaxBackward`; adding 100 to one group's inputs changes no output (groups are separate
+  softmaxes); widths that are not whole groups are refused; `checkGradient` through a layer into SimNorm. Negative
+  control: the gradient's weighted sum taken over the whole ROW (softmax's rule) passes the one-group test - where
+  the two coincide - and fails exactly `checkGradient`.
+- **Sep 28 — Review (Simon: "verbose names, intermediate locals, comments equivalent to reading the papers, perfect
+  and beautiful"), part 1: `Params` and `detach`.** `Params`: its doc now explains the design in full - a network's
+  numbers kept apart from its arithmetic, the three roles one network plays in the TD-MPC family (trained, frozen,
+  target), why target networks exist (DQN's self-chasing target, DDPG's Polyak form, what tau = 0.01 means). A real
+  defect found and fixed: `init` and `clone` leaked on a part-way allocation failure and there was no `deinit` -
+  harmless only under an arena; now `deinit`, and cleanup on failure in `init`, `clone` and `bind`. Known answer:
+  `std.testing.checkAllAllocationFailures` over a set's whole life - every allocation failing in turn, nothing
+  leaked; removing `init`'s cleanup fails it with the 384-byte leak named. `detach`: its doc now carries the
+  argument from self-predictive learning (TD-MPC's consistency loss compares two outputs of ONE encoder; without a
+  stop-gradient the cheapest fix is collapse - BYOL, SimSiam, SPR detach the target side for exactly this).
+  The tests' short names (sgd, x, y, live, target...) made verbose; a regex rename briefly broke the optimizer's
+  `.sgd` union tag and two comments - caught by reading the result before running it.
+- **Sep 28 — Review, part 2: `simNorm` and the soft cross-entropy.** No arithmetic defect. `simNorm`: its doc now
+  carries the paper (Lavoie et al., simplicial embeddings) and why the TD-MPC family ends its encoder and dynamics
+  with it - a latent rolled through itself must stay bounded; 64 groups of 8 act as soft categorical choices; no
+  temperature, unlike the original - and the gradient is DERIVED in the doc (the softmax Jacobian, applied group by
+  group without forming it). Names: input / output / output_gradient / group_start / feature, named intermediates.
+  A promise the doc made but no test checked - "out may be the input itself" - now has a known answer: in place is
+  bit for bit the out-of-place result, forward and gradient. Soft cross-entropy: its doc now covers BOTH uses in the
+  family (a distributional critic's projected target; regression as classification - DreamerV3 / TD-MPC2 / BMPC's
+  reward and value heads over 101 two-hot bins in symlog space), why a scalar is predicted as a distribution (the
+  gradient, predicted - target, is bounded whatever the reward's scale; squared error's grows with the error), and
+  cross-entropy = KL + the target's entropy; the builder's values are named. Six and six tests pass; check green.
+- **Sep 28 — N2: the Gaussian KL - found already here, generalised instead of duplicated.** Checking before writing
+  `gaussianKL` turned up `Graph.klGaussianDiag`: KL(policy || reference) - BMPC's own direction - composed from tested
+  ops, the reference passed as tensors (data). Its one gap: both log-stds had to be [1, D] (PPO's state-independent
+  spread); BMPC's policy and planner targets carry one per ROW. Now either, for both sides; the shared case's
+  arithmetic is untouched (its existing test passes unchanged). The doc now teaches the KL: what it measures, the
+  closed form read as three pieces, why the direction is a design decision (mode-seeking vs mass-covering - KL(N(0,1)
+  || N(0,4)) = 0.318 against 0.807 the other way), BMPC's code against its paper, sum vs BMPC's mean over dimensions,
+  the exponentials' safe domain. New known answers: per-row spreads against the closed form with `checkGradient`
+  through each row's spread; a shared spread bit-identical to the same spread repeated per row; the direction numbers.
+  Negative control: the log term's sign flipped fails the three formula tests (the path-equivalence test rightly
+  passes - both paths carry the same flip).
+- **Sep 28 — R3 (turn 1 of 5): DR-EfficientTDMPC, a proposal, read critically and added to plan section 10.** An
+  unreviewed proposal with no experiments, composing DR-SAC's KL-robust Bellman objective with R1 plus consistency
+  distillation, BatchEnsemble/MIMO, an evidential value head and adaptive compute - read as a menu, not a recipe.
+  The core idea fits us unusually well: with the family's DETERMINISTIC dynamics heads the nominal transition is N
+  atoms, a KL ball can only reweight them, and the robust value is a soft minimum over heads - delta = 0 the mean
+  (R1), delta >= log N the minimum (TD3); beta* a 1-D concave maximisation, so DR-SAC's dual NETWORK is unneeded; small
+  delta ~ mean - sqrt(2 delta) std, which makes R1's beta sigma look like its expansion (to verify in turn 2). The rest
+  triaged with reasons: consistency dynamics mislabelled and in conflict with R1's multi-horizon objective;
+  BatchEnsemble saves parameters, not arithmetic, and weakens disagreement; evidential variance poorly calibrated as
+  epistemic; theory assumes finite actions. What robustness needs that the plan lacks: a shifted-dynamics benchmark.
+- **Sep 28 — R3 turn 2 of 5: DR-SAC's code read, and Simon's use for robustness.** DR-SAC (`DR-SAC-master`): the dual
+  keeps its -beta delta term (the README drops it); the expectation runs over 200 next states SAMPLED from a
+  generative model (VAE / diffusion / flow / score) - our deterministic ensemble gives its atoms directly, so none of
+  that machinery is needed; the robust value is a drop-in in the TD target; beta* comes from a dual network or a
+  per-sample search bounded to [1e-4, 1] - a hidden cap that keeps the value near the sample minimum for large
+  returns; delta 0.1; offline. Its test suite (parameter-factor shifts, five observation noises, reward shifts,
+  random forces / friction / observation-only "teleports") is the model for ours. Simon's idea - larger physics
+  step, fewer solver iterations, fewer observation dimensions: messier transitions, which is what the KL ball
+  absorbs - becomes the benchmark "train messy, run accurate" (plan R3.6): our knobs exist (`opt.timestep`,
+  `opt.solver.max_iterations`; a larger step also softens contacts), hold the decision rate by lowering the
+  decimation, check the servo stays stable first, measure the sim gap, domain randomisation as the baseline to
+  beat, delta chosen by validation in the accurate physics, and P0 - profile first: cheap physics buys wall-clock
+  only if physics is a large share of an iteration.
+- **Sep 28 — R3 turn 3 of 5: the maths verified; turn 1's scope corrected.** A sandbox script (kept as
+  `src/notes/bench/r3_kl_robust_check.py`) computes the KL-robust value two independent ways - the dual, and a generic
+  constrained optimiser over reweightings that knows nothing of duality: equal to 1.7e-7 of the spread. Limits exact
+  (delta -> 0 the mean, delta >= log N exactly the minimum); small delta ~ mean - sqrt(2 delta) std (ratio 0.9994 at
+  1e-5); gradient = the tilted weights (3e-9); concave in beta - after a first check on a LOG-beta grid proved
+  malformed (concavity in beta is not in log beta). Two findings: R1's beta = 10 lands BELOW the worst head in 100% of
+  draws - it is a variance-averse ranking, not a KL-robust value; DR-SAC's beta <= 1 cap pulls the value next to the
+  minimum. And a correction: deterministic heads carry MODEL uncertainty only - the messy world's transition spread
+  (aliased observations) is averaged away inside each head, so R3.6 needs probabilistic heads (noise before SimNorm),
+  with the same aggregation over N x M sampled atoms. Theory: standard where it matters, vacuous where it bounds.
+  Efficiency: BatchEnsemble saves memory, MIMO arithmetic (at the cost of independence).
+- **Sep 28 — R3 turn 4 of 5: re-centred on OUR problem (Simon: partial observation over solver drift, no problems
+  we do not have, distillation for rollout cost, speed and quality for diverse animations).** The key simplification:
+  in simulation the full state is free at training time, so the partial observation lives only in the POLICY (what
+  runs in the game) while the world model keeps the full state - asymmetric actor-critic carried into SuperTrack. The
+  model stays deterministic and accurate; the policy's gradient through it averages over the states consistent with
+  its view; and turn 3's probabilistic heads become unnecessary. Plan R3.8, in value order: V1 asymmetric observation
+  (a differentiable feature selection between the model's state and the policy; full selection = today bit for bit);
+  V2 diverse animations - one multi-clip policy trained directly, or per-clip teachers distilled into a reduced-
+  observation student by DAgger, on a benchmark with held-out clips; V3 the KL-robust primitive aimed at the measured
+  exploitation - a soft maximum of the policy's cost over K world models, delta from I1b's twin average to the worst
+  member, the gradient a constant-weighted sum (envelope theorem, no new op); V4 distillation for rollout cost -
+  planner into policy (no search at run time), a small student world model for training rollouts, a whole-window
+  student for the kit; V5 speed measured first, and the runtime cost per character. Deprioritised: cheap physics,
+  shifted dynamics, DR theory, probabilistic heads, BatchEnsemble / MIMO / evidential / adaptive compute.
+- **Sep 28 — R3 turn 5 of 5: the consistency pass.** Section 6.0 is new: ONE order across the four tracks
+  (SuperTrack's learner, R1's BMPC, TD4's critics, R3.8's value items) - measure the time (V5), asymmetric
+  observation (V1), many clips (V2a), the robust ensemble (V3), the vocabulary both new agents share (N2's rest),
+  then distillation (V2b, V4b), BMPC (N3-N8), TD4 and the mixes, the kit - with why: the working learner first,
+  aimed at the goal; shared parts built once; new agents last, their value for our task still a hypothesis. Section
+  3.9 records what Sep 28 added; R1.4's inventory and N2's text are current (N2 had been mangled by an earlier edit);
+  I1b points at V3; section 9 names the new files; five over-long lines from earlier edits rewrapped. R3 complete.
+- **Sep 28 — Back to the building blocks (Simon: "we don't need to measure things now ... have all the necessary
+  ingredients ... building blocks, verifying they work ... native to zimrnum and nice to look at").** Plan 6.0
+  reordered: blocks first, assemblies after, measurements when a decision needs one. N2 resumed where the new ideas
+  came in: `symlog` / `symexp` (through zimrmath's accurate `log1p` / `expm1` - std.math is banned outside zimrmath)
+  and `CategoricalScalar` (regression as classification: symlog or identity axis, `encode` / `decode` and their row
+  forms, `check`). The two-hot's split was already `categoricalProject`'s, so it became ONE helper,
+  `addPointMassToGrid`, used by both (the projection's six answers still pass). Known answers: symexp(symlog(x)) = x,
+  odd, identity near zero; two neighbouring bins summing to 1, one-hot on a bin, clamped; encode = the projection of a
+  point mass; decode(encode(x)) = x on and between bins, tiny and huge, both axes; rows = the single values. Negative
+  control: the textbook floor/ceil split planted in the shared helper fails exactly four tests - two of each user.
+- **Sep 28 — N2: the layers, first half - on zimrnum's own `Dense` template, not beside it.** Checking before
+  writing found `Dense` (a layer owns its weight and bias; `attach` records it on any graph; deliberately no
+  `Sequential` - "a struct holding two of these IS the composition") and `InitScheme`. So: `Dense.attachAs(graph,
+  input, binding)` - `.frozen` enters the SAME tensors as constants, what planners and targets need (`attach` =
+  `.trained`, unchanged for its callers); a `LayerNorm` layer on the same template (gain and bias; `mul` wants equal
+  shapes, so the gain is spread by the graph's `copyToEveryRow`, now public); and TD-MPC2's initialiser read from
+  BMPC's `init.py` - a "truncated" normal of std 0.02 whose +-2 bounds are ABSOLUTE, so it never truncates. Known
+  answers: a frozen Dense computes bit-identical outputs and asks for no gradient; LayerNorm at gain 1 / bias 0 IS
+  `layerNormRows`, and a planted gain / bias match the hand computation; `checkGradient` through gain, bias and the
+  layer below. A lesson (L15) from the negative control: with the gain planted UNUSED, the plain `checkGradient`
+  still passed - an unconnected parameter's two gradients are both zero and agree - so the test now also requires
+  every checked parameter's gradient to be non-zero, and the planted bug fails both tests.
+- **Sep 29 — N2 complete: the layers' second half, on `Dense`'s template.** `Activation` (a union: none / relu /
+  mish / SimNorm with a group) and `Graph.activate`, one place that knows which op each is; `initNormal` and
+  `InitScheme.small_normal` (TD-MPC2's std 0.02 - PyTorch's "truncated" bounds are absolute, never binding; both
+  layers that switch on the scheme got the case; `Dense.init` now frees its weight if the bias fails); `NormedDense`
+  (Dense, dropout only when an rng is handed in, LayerNorm, the activation - four tensors, `overTensors` for a copy
+  over other storage); `Mlp` from a `Spec` (hidden NormedDense layers, a plain or normed last layer, `zero_last` for
+  heads and refused for a normed last layer whose norm would undo it, dropout on the first hidden layer only, a
+  derived rng per layer), with `attachAs` (every handle for an `Optimizer`), `params` / `withParams` (a target
+  network in two lines) and `deinit`, cleanup on every failure path. Six known answers pass, among them
+  `checkGradient` through three layers ending in SimNorm with every parameter connected (L15) and every output group
+  a simplex, and `checkAllAllocationFailures` over a full life. Negative control: the last layer attached without its
+  activation fails exactly the simplex test. Two locals named `norm` shadowed zimrnum's `norm` - renamed.
+- **Sep 29 — N3, first half: bind once / apply many, and `LatentRollout`.** A rollout applies the dynamics H times,
+  and `attachAs` bound a layer's tensors at every call - H bindings of one tensor would be H parameters to the graph,
+  each holding a slice of the gradient, an optimiser on one missing the rest. So every layer now separates its
+  binding from its arithmetic: `applyBound` (Dense, LayerNorm, NormedDense), `Mlp.bind` + `Mlp.apply`, `attachAs` =
+  both, one `bindTensor` for the trained-or-frozen choice; every existing test passes unchanged. `LatentRollout`:
+  the window's observations encoded in ONE pass (BMPC-jax) and sliced per step, targets detached, z_0 with gradient,
+  the dynamics over one set of handles, the consistency loss rho^t / H. Four known answers pass (rolled latents =
+  the step-by-step application bit for bit; the loss by hand; the dynamics by `checkGradient` and every parameter
+  connected; the encoder's gradient against a graph with a FROZEN second encoder pass for the targets; batch = each
+  character's rollout). A test written wrong first: `checkGradient` on the ENCODER - nudging its weights also moves
+  the detached targets, the very dependence the stop-gradient removes - replaced by the no-leak comparison. Negative
+  control: the rollout started from the detached z_0 fails exactly the encoder-gradient test.
+- **Sep 29 — N3 complete: `WorldModelLoss`.** On the rollout: the reward head on each rolled latent with its action,
+  every value head on each rolled latent (heads as an array of `Mlp`s with their own handles, dropout from an
+  optional rng per head), both scored by `softCrossEntropy` against two-hot targets the builder allocates as
+  constants and hands back as tensors (fill with `CategoricalScalar.encodeRows`, `recompute`), rho^t over the steps,
+  the value term averaged over the heads as well, BMPC's total 20 c + 0.1 r + 0.1 v; the logits exposed. Known
+  answers: the terms equal a hand computation that re-applies the heads to the ROLLED latents' values in a second
+  graph (which is what catches heads reading the targets); refilled targets read at the next recompute and only
+  then, the new value by hand; `checkGradient` through the reward head, both value heads and the dynamics, every
+  parameter of every network connected. Negative control: value heads on the detached targets fail exactly the
+  rolled-latents test. (Rng seeds are u32 - a u64 cast slipped in and the compiler caught it.)
+- **Sep 29 — Review (3 turns, with the tutorial), turn 1: the layers, and the tutorial's ground.** `NormedDense`'s
+  arithmetic now names its four handles and says what each step is for (the linear map; dropout, and why; the norm;
+  the activation on a normalised signal); `overTensors` -> `withTensors` (matching `Mlp.withParams`); `Mlp`'s
+  counters and flowing value named (`bound_parameters`, `bound_count`, `parameters_used`, `activations`,
+  `tensors_used`, `gathered_count`). Every layer, rollout and loss test passes unchanged. The tutorial: zimrnum's
+  own (chapters 16 / 17 / 18 / 18b / 18c already build an RL arc) gets a new chapter, 18d, after diffusion; its
+  existing folds are hand copies (no data-src), so the new chapter's folds will be GENERATED - zimrnum-tutorial.html
+  joined `doc_folds`' page list (it only touches blocks with data-src; the old ones are left alone).
+- **Sep 29 — Review turn 2: the rollout and the loss; the tutorial's chapter 18d, first half.** `LatentRollout` and
+  `WorldModelLoss` renamed through (`encoded_window`, `encoded_step`, `step_weight` for rho^t, `step_count`,
+  `consistency_sum`, `reward_loss_sum`, `value_loss_sum`, `reward_share`, `heads_part`) with comments on WHY: the
+  one-pass encoding's two copies of step 0 (one the encoder learns through, one it cannot), rho^t as trust in deeper
+  predictions, BMPC's 20 / 0.1 / 0.1 (the latent space first). Tests unchanged (4, 3). zimrnum's tutorial gains
+  "18d. World models: learning to imagine" - the introduction, 18d.1 (a network is its numbers plus its arithmetic:
+  trained / frozen / target), 18d.2 (the layers: why a layer norm in every layer, SimNorm, bind once / apply many,
+  `Mlp`, TD-MPC2's initialisation), 18d.3 (a number as a distribution: the bounded cross-entropy gradient, symlog,
+  the two-hot, one split shared with the projection) - each with a short example checked against the real
+  signatures and GENERATED folds (8: Params, Mlp, NormedDense, LayerNorm, Activation, CategoricalScalar, symlog,
+  addPointMassToGrid), which `check` now verifies. The table of contents gains 18c (missing before) and 18d.
+- **Sep 29 — Review turn 3: chapter 18d complete.** 18d.4 the latent rollout (the value-equivalent idea, the
+  consistency loss, why its targets are detached and its start is not, rho^t, the step-by-step layout, the dynamics
+  bound once), 18d.5 the world model's loss (why the heads read the ROLLED latents, the value heads as an ensemble
+  with optional dropout, targets refilled per update, BMPC's weights), 18d.6 one update end to end (fill the window
+  and the two-hots, recompute, backward, the optimisers, the targets follow; where value targets come from). Ten
+  generated folds in all, verified by `check`. A final pass over the chapter checked every example call against its
+  real signature and every stated number; one claim corrected - TD-MPC2 builds every network's HIDDEN layers from
+  the normed layer (a head's last layer is a plain linear).
+- **Sep 29 — N4, first half: `LatentPlanScorer` (Simon, standing: "update the tutorial as you go; the comments must
+  stand on their own").** The planner's objective as a graph: each state encoded once, its latent copied to its
+  candidates' rows by a constant 0/1 product (exact), the dynamics rolled over the actions the planner writes into
+  constants, the reward head's probabilities per step and every value head's at the end; `score` recomputes and reads
+  the bins back with `decodeRows`, summing r_t discounted by gamma^t and the heads' mean value by gamma^H. Built once
+  from FROZEN bindings - planning reads the live weights and never trains them - for states x candidates rows
+  (acting: a state per character; reanalyze: every replayed state). Known answers: each row's score = a hand
+  computation in a separate graph that encodes the row's state alone and rolls its own actions (1e-12); one
+  candidate's rewritten actions move only its score. Negative control: every row starting from state 0 fails exactly
+  the hand computation. Tutorial: 18d.7 "Scoring plans by imagination", its fold generated.
+- **Sep 29 — N4 complete: `Mppi`.** The caller drives the loop (no callbacks, no anytype): `begin` / `sample` /
+  score / `refit` / `choose`, with `plan` for a `LatentPlanScorer`. zimrnum's counter-based `Rng` makes BMPC-jax's
+  "draw all noise up front" unnecessary - the noise for (iteration, state, candidate, step, dimension) is a pure
+  function of its index, and a plan is reproducible from its seed. Elites ranked by the existing `argsort`; the
+  best elite weighs exactly 1 before normalising, so the weights never sum to zero; a non-finite score counts 0.
+  The convergence test's tolerance came from a 200-seed simulation of the same rule (worst 0.016; tested at 0.06).
+  Six known answers pass. The negative control taught something: inverted weights still CONVERGE (choosing the
+  elites does most of the work) and are caught only by the exact refit - which is why the suite has both. Two names
+  (`floor`, `outer`) shadowed zimrnum declarations; renamed. Tutorial 18d.8 "Searching for the best plan: MPPI".
+- **Sep 29 — Aside (Simon): `std.mem.eql` -> bare `eql`.** `const eql = std.mem.eql;` beside zimrnum's other std
+  aliases; all 54 uses replaced; nothing in the file was named `eql`, so nothing collided. While there: a duplicate
+  alias I had added (`scalarIsFinite`, when `isFinite = zm.isFinite` already existed) removed. Running the WHOLE
+  zimrnum suite (280 tests, 65 s) - a filter would only compile the tests it matches - exposed a failure that
+  predates the refactor: the reference-table test, failing since `categoricalProject` because every public
+  declaration from T3 on had no row, and my filtered runs and `check` never run that suite. Fixed at the source:
+  52 notes added to `tools/zimrnum_ref.zig`, five shared-name notes (`init`, `deinit`, `sample`, `bind`, `apply`)
+  rewritten to cover every type that uses them, the table regenerated (739 rows), a typo in the test fixed. 280/280
+  pass. LESSON (L16): run the full zimrnum suite before closing any turn that adds a public declaration.
+- **Sep 29 — The aliases, and a tutorial incident found and repaired.** Eleven more bare aliases in zimrnum
+  (`testing_allocator` 228 uses, `ArenaAllocator` 115, `indexOf` / `indexOfPos` / `indexOfScalar` /
+  `indexOfScalarPos` / `startsWith`, `sortSlice` + `ascending` - not `sort` / `asc`: zimrnum's `sort` is the
+  tensor one - `readInt`, `writeInt`); collisions checked as whole words anywhere (only comments said
+  "ascending"); 280/280. INCIDENT: zimrnum's tutorial folds are GENERATED by `zimrnum_ref` (from the `zn.` names
+  each example uses; each run strips `<div class="zn-source">` .. `</div><!--/zn-source-->` and regenerates) - I
+  had wrongly called them hand copies and given chapter 18d `doc_folds` blocks closed by a plain `</div>`. The
+  previous turn's `zimrnum-ref` run stripped from 18d.1's block to the next generated close tag: 18d.2 - 18d.8 and
+  the Recipes heading were deleted, and neither `check` nor the page build looks at prose - so the tutorial
+  presented that turn was damaged. Repaired: restored from snapshot 62, my blocks removed, the examples now name
+  what they show (`zn.Activation`, `zn.NormedDense`, `zn.LayerNorm`, `zn.symlog` added), the page taken off
+  `doc_folds`' list (one generator per page). Verified by CONTENT: all sections present, 12 folds in 18d, a second
+  generator run changes nothing, and the page's prose equals the good snapshot's but for the three intended edits.
+- **Sep 29 - no-qualified-std, and the migration's first batch (not yet compiled, by agreement).** zimrlint: the
+  zm alias machinery generalised (QualifiedMember, AliasFamily, fileScopeBinds, markCanonicalInits, bareUseFix;
+  no-qualified-zm pinned first by three characterisation tests, unchanged after); `no-qualified-std` (opt-in,
+  ADVISORY - the linter's first: printed, counted apart, never failing; 28-entry vocabulary counted from zimr's
+  code - `ascending` / `descending` dropped as too rare, and zimrnum's `ascending` reverted to `std.sort.asc`);
+  it opens pointer / optional / array types itself. Found: `childNodes` has no case for those types, so every
+  rule is blind inside them - widening it exposed 20 hidden `prefer-vec` spellings (`[4]@Vector(4, f32)`) and 10
+  `fn-args-multiline` reports on fn-pointer TYPES; reverted, a decision for Simon. 76 zimrlint tests, `check` OK.
+  MIGRATION: `scripts/migrate_std_aliases.py` - sites from the linter (never text search), each verified to be
+  exactly `std.<path>` at its column, replaced right to left, bindings into the header's std alias block; per
+  file `zig fmt`, `zig ast-check`, and a per-rule lint comparison (no-qualified-std to zero, nothing else grows),
+  else restored. Order: most-imported files first (488 files, ~6400 uses in all). Batch 1: zimrmath, shader_
+  interface, codecs, command_line, robot, wgpu, mjcf - 378 uses, all verified. zimr.zig RESTORED by the net:
+  its std import is at line 955, after its uses, so new bindings there grow decl-order ("used before its
+  declaration") - moving its std import to the top is Simon's call.
+- **Sep 29 - The std-alias migration, batches 2 and 3, and the first compile.** Batch 2 (robot_mjcf,
+  robot_dance, robot_track, zimrphysics, compute_host, gpu, text2d, gpu_iface, ui, raster, image; web.zig had
+  nothing) 1388 uses; batch 3 (runtime, robot_physics, shader_introspect, robot_gym, robot_latent,
+  shader_runtime_wgpu, shapes2d, wgpu_texture, spv2wgsl, robot_maximal, renderer_2d, entities, raster_shader,
+  BindGroupCache) 439 uses - every file dry-run first (zero skips, insertion points reviewed), then applied and
+  verified (fmt, ast-check, per-rule lint). Running total 2205 uses in 32 files. A first batch-2 run found no
+  `zig` on PATH: every file failed its fmt step and was RESTORED byte-exact; the script now refuses to start
+  without its tools. CORRECTION: `check` is the wgpu-migration audit plus lint and fmt - NOT a compile of src/;
+  earlier "check passes" meant that. The compile proof: `test-fast` exceeds 5 minutes, so the per-module steps
+  instead - zn-zimrmath, command_line, mjcf, robot, robot_physics, robot_mjcf, robot_dance, robot_track,
+  robot_gym, robot_latent, robot_maximal: all pass (3698 tests). Not yet compiled: the graphics / web files
+  (ui, raster, spv2wgsl, text2d, gpu, wgpu, runtime, ...) - `test` or `test-windows` next.
+- **Sep 29 - Migration: batches 1-3 proven on the graphics side; batch 4.** `test-windows` is broken on its own
+  (74 errors, all module wiring - `zm` and `build_options` missing from its test root; none names an alias) - a
+  finding, not a proof. `test` (engine suites + tier-A example pages, which compile ui / raster / spv2wgsl /
+  text2d / gpu / wgpu / runtime / ...): 431/431 steps, 2639 tests (95 skipped) - batches 1-3 compile everywhere.
+  The script's insertion rule improved: when a header line itself gets a replacement (`const Writer =
+  std.Io.Writer;` -> `Io.Writer`), new bindings go right after the std import, above their first use. Batch 4:
+  14 files, 512 uses, verified (robot_geno 226, draw3d 121, sound 50, urdf 25, ...); 5 files had nothing; cli.zig
+  RESTORED - like zimr.zig its std import is near the end (line ~1250), so bindings grow decl-order. Running
+  total 2717 uses in 46 files; batch 4 not yet compiled.
+- **Sep 29 - Simon: "yes to all".** (1) Late std imports moved to the top: zimr.zig (after its //! doc) and
+  cli.zig (its five-line import block), matched by exact text; decl-order fell (6 -> 4, 5 -> 0); both then
+  migrated (2 + 12 uses). (2) zimrlint's `childNodes` widened: pointer, optional and array types are opened for
+  every rule (no-qualified-std's own descent removed - the walker does it now; 76/76 zimrlint tests). The 29
+  findings it exposed fixed by `fix_exposed.py` (verify-at-position, restore-on-failure, the targeted rule must
+  fall by exactly the fixes): 19 prefer-vec (`[4]@Vector(4, f32)` -> `[4]Vec` in shader IO structs and
+  examples, `?@Vector(2, f32)` -> `?Vec2`; `zm` / `Vec` bindings added where missing - 85 of 97 IO files already
+  imported zm), 10 fn-args-multiline on fn-pointer TYPES (a trailing comma, then one parameter per line). The
+  robot-mocap and zimrnum tutorials' generated folds regenerated (both verified by content: all sections, zero
+  prose lines changed). `check` OK. Still to do from "yes": test-windows' module wiring.
+- **Sep 30 - A failed response, cleaned up; test-windows fixed.** The previous response died mid-turn, leaving
+  a half-finished build.zig restructuring (~70 lines of the host-test wiring removed) and a background loop
+  still running `zig build test` against it. Restored build.zig from snapshot 68 (byte-identical; whole tree
+  matched the snapshot), stopped the loop (a `pgrep -f` that matched its own command line was a false alarm).
+  Then the fix, small: `test-windows` compiles the same root as the host tests (src/tests.zig) but got ONE
+  import where the host module gets ~80 lines (engine shader embeds, per-shader externs modules,
+  shader_interface, zm, zn, a SPIR-V fixture, build_options). The block moved verbatim into
+  `wireHostTestImports(b, test_mod, target, wiring)` - one definition, both steps call it (the externs modules
+  take the caller's target; zm / zn / shader_interface / shader_builtins are target-free). `test-windows`:
+  306/306 steps, both Windows binaries compile. The host `test` still to re-prove (step 3).
+- **Sep 30 - Compile proof for everything since the last one.** `zig build test` (engine suites + tier-A
+  examples; two runs, the second resuming from the first's cache): 431/431 steps - batch 4, the moved std
+  imports (zimr.zig, cli.zig), the shader IO `Vec` fixes, the fn-pointer types and the shared host-test wiring
+  all compile and pass. (The second run's 2027/2033 counts only what it re-ran; cached steps are ones that
+  passed.) Still to prove: the per-module steps for batch 4's robot files, then batches 5 and 6.
+- **Sep 30 - Batch 4's per-module steps.** zn-robot_policy (438 pass, 29 skip), zn-robot_track_env (2),
+  zn-robot_scene (133), zn-urdf (173, 4 skip), zn-cli (cached - already passed inside `test`),
+  zn-robot_supertrack (compiles; its 2 tests are the gated slow ones, both skipped), zn-robot_geno (476, 68
+  skip): all 5/5 steps. With `test` (431/431), everything migrated so far - 2731 uses in 48 files - is compiled
+  and tested. Next: batches 5 and 6.
+- **Sep 30 - Migration batches 5 and 6.** Batch 5: 16 files, 339 uses (robot_control 71, robot_latent_kit_tests
+  68, robot_ppo_track_tests 57, zimrphysics2d 53, robot_mpc 29, robot_mocap_tutorial 25, ...). Batch 6: 20 files,
+  186 uses (robot_world, gpu_learn_tests, docfmt, wgsl_reflect, the src/tests/* suites, three GPU-kernel example
+  files, ...). All dry-run first (zero skips, insertion points reviewed), applied, verified (fmt, ast-check,
+  per-rule lint). The work list's bookkeeping had fused two paths (an append onto a file with no trailing
+  newline) - both files already migrated; repaired. The robot-mocap tutorial's folds (14) regenerated: 124
+  sections, zero prose lines changed; the page build compiled the migrated docfmt.zig. Running total 3256 uses in
+  84 files; batches 5 and 6 not yet compiled.
+- **Sep 30 - Batches 5 and 6 proven.** `test`: 431/431 steps, 2639/2734 tests (95 skipped) - the second run
+  re-ran every test. Per-module, all 5/5: zn-robot_world (compiles; 2 gated tests skipped), robot_urdf 305,
+  kit_mlp 57, robot_control 416, robot_mocap_tutorial 434, robot_track_resident_tests 502, gpu_learn_tests 458,
+  robot_latent_kit_tests 499, robot_ppo_track_tests 514, robot_mpc 389 (skips as usual). Everything migrated -
+  3256 uses in 84 files - compiled and tested. Next: batches 7 onward (~420 files, nearly all small).
+- **Sep 30 - The migration's last pass, and a second failed response cleaned up.** Simon: "do it all carefully,
+  test only once at the end". The response died mid-way, but its migration run had completed: 394 files, 161
+  migrated and verified, 230 with nothing to change, 3 restored - and it was mid-way through its final tests,
+  which were stopped. Checked rather than trusted: (1) the 3 "restored" files were NOT the originals - the turn had
+  hand-edited them and a second pass backed up the edited versions; put back to the snapshot, then deliberate
+  pre-fixes, each verified to change no lint count: wgpu_smoke_test.zig had a PRE-EXISTING ast-check error (a
+  discard of a parameter it uses - no build step compiles that file); doc_folds.zig and lafan_db.zig bound `Io`
+  after the aliases that would use it (one line moved up); then migrated by the script. (2) Every other changed
+  file PROVEN to be the migration's transformation, line by line against the snapshot (every added line a
+  vocabulary binding, every changed line a pure substitution): 160 exactly, and net_mesh_test.zig with `zig fmt`'s
+  own `@intFromEnum` -> `@backingInt` canonicalisation (first misread as a hand edit - the original is not
+  fmt-clean in this toolchain). The std-alias migration is COMPLETE: 248 files. The final test run: next.
+- **Sep 30 - The final test run.** After the repairs: zimrnum-ref, doc-folds, `check` (358/358), `test` (431/431),
+  `test-windows` (306/306) - cache hits, which are proofs (Zig caches by exact input content, and caches test
+  results only when they pass), doc-pages 30/30; both tutorials verified by content (124 and 192 sections, zero
+  prose lines changed). NOT proven: `all-examples`. The previous run died silently because the sandbox's DISK
+  QUOTA was full (~19 GB); freeing regenerable outputs gave 2.6 GB, but all-examples installs every example (314
+  dirs + a 1 GB smoke set in 130 s) and a watchdog stopped it at 246 MB free - with no compile errors up to then.
+  /dev/shm is RAM (3 GB total), so no room there either. To finish: all-examples on Simon's machine, or the
+  migrated examples' own app steps in small groups, clearing outputs between groups.
+- **Sep 30 - no-qualified-std graduated; decl-order measured.** The rule now fails the build like the others:
+  advisory flag dropped (the doc says it started advisory and graduated), `no_qualified_std` added to build.zig's
+  `LintRule` and `zimr_lint_rules`, messages no longer say "advisory". The advisory mechanism keeps its own test
+  (`isAdvisoryIn` / `failingCountIn` on a small table) since no real rule is advisory now. The enforced rule
+  immediately caught the test I had just written (qualified `std.heap.ArenaAllocator` in a file that binds it).
+  76/76 zimrlint tests, `check` OK with the rule on across the tree. decl-order (lint_autofix.md: tier A2/A3, "move
+  blocks"): 1158 violations in 152 files of zimr's own code (build.zig's "~1100" still right) - 111 files with 1-5,
+  31 with 6-20, 10 with 21+ (zimrnum 114, robot 95, zimrphysics2d_demo/scenes 91, ui 51, zimrphysics2d 49, build.zig
+  45, zimrmath 44, geno_dance 38, robot_geno 36, mjcf 29). Functions count; mutual recursion needs a per-site
+  lint:off. Estimate given to Simon: about 10-14 turns (see the reply).
+- **Sep 30 - decl-order, Phase 1 begun: the reorder core in zimrlint.** Found the existing toolkit and plan
+  (tools/decl_deps.zig + tools/decl_reorder.py, src/notes/decl_order_plan.md, claude.md's history: ui.zig stays
+  in FEATURE order by Simon's decision; the old tools break code). Built per the plan, in Zig (claude.md: no
+  Python): `reorderDecls` - blocks from the syntax tree WITH the terminating `;`, plus the `///` / `//` lines
+  directly above (a blank line stops the walk, so the //! header and banners stay); the HOIST strategy (each
+  forward-referenced declaration to just above the declaration holding its earliest use, then its own
+  dependencies in turn, using decl-order's exact notion of a forward reference); a file that has not settled
+  after one move per declaration is a cycle and is refused; guards: same non-blank lines (a permutation),
+  `compilesClean` (parse + AstGen), none left - or nothing is written. Five fixtures with exact outputs (simple
+  hoist; doc comment travels, header and banner stay; multiline string with its `;`; a chain; a refused cycle and
+  a byte-identical ordered file): 81/81. Negative control: the old tool's bug planted (the `;` left behind) fails
+  exactly the multiline-string fixture. Next: `--reorder-decls [--dry-run]` on the command line, then the easy
+  files. Also flagged to Simon: scripts/migrate_std_aliases.py is Python, against the tooling purge.
+- **Sep 30 - `zimrlint --reorder-decls [--dry-run]`, and the first 44 files.** Wired as a mode (LintCli
+  `--reorder-decls`, Args `reorder_decls`, `runReorderDecls`: per file "already in order" / "moved N
+  declaration(s), M line(s)" / "refused - why"; writes unless --dry-run; exit 1 if any file refused). Dry run
+  over the 67 files with 1-2 violations: 64 reorder cleanly (2023 lines in all - 44 files <= 30 lines, 16 at
+  31-100, 4 above 100: sound 178, raster_shader 160, four_ways 122, zimrphysics2d_demo 105), 3 refused as cycles
+  (examples/robot_demo/scenes.zig, tools/c2js.zig, tools/cheatsheet.zig - explained lint:offs, by hand). Applied
+  the 44 mild files, each verified beyond the tool's own guards (fmt --check, ast-check, per-rule lint against a
+  backup: decl-order 0, nothing grown): 44/44, none restored. Not yet compiled. Simon asked whether the std-alias
+  script could be a zimrlint autofix: yes - the missing half (insert the binding when the name is free) fits
+  the fix loop's passes and its AstGen rollback; planned next, then the Python script goes.
+- **Sep 30 - The std-alias migration becomes a zimrlint autofix; the Python script is gone.** no-qualified-std
+  now carries a fix on an UNBOUND use too: insert the vocabulary's binding line (built at compile time, so a fix
+  owns no memory) at the start of the line after the header's last std alias - or right after the std import
+  when a header line uses the name. That placement is decided per NAME, not per use: a first version decided it
+  per use, a header use and a signature use of `std.Io` asked for two different spots, both landed, and the
+  duplicate `const Io` sank the pass (the AstGen rollback caught it, and the test said so). `collectFixes` now
+  keeps one of identical edits (several uses of one missing name each ask for the same insertion). One pass adds
+  the binding, the next - now bound - rewrites every use. Three end-to-end fix-loop tests (binding then use; a
+  header line gets its binding above it; three uses make one binding): 84/84. The linter then held its author to
+  the house rules (an untyped comptime tuple, a 3-parameter signature, a qualified expectEqualStrings) - fixed;
+  `check` OK. scripts/migrate_std_aliases.py deleted (claude.md: tooling is all Zig).
+- **Sep 30 - decl-order: the 20 larger easy files.** Previewed first on scratch copies. A line diff misreports
+  which side of a reorder moved (a lone `}` "moving", a test that never moves), so the preview compares the
+  SEQUENCE of top-level declarations before and after: those outside their longest common subsequence are what
+  moved. Every file: 1-2 small hoists - mostly `update` above the example's `pub const app = .{ .update = update
+  ... }` spec (the spec now follows what it names), and helpers above their users (drawScene, statsTable,
+  beginDrag, isIdentByte, createBuffer, ...). Applied and verified (fmt, ast-check, per-rule lint against a
+  backup): 20/20, byte-identical to the reviewed previews. decl-order total so far: 64 of the 67 easy files
+  clean; left: 3 cycles, the 31 medium files, the 10 large ones. Not yet compiled (batch 1 + 2).
+- **Sep 30 - decl-order: the remaining files measured; a real bug found and fixed.** Simon: very hard files
+  (ui.zig) may take a file-level `//! lint:off decl-order` at first (the mechanism exists:
+  fileSuppressedByDirective). Dry-run of all 87 remaining files one at a time (a single run over all of them
+  timed out: every hoist re-parses the file, minutes on 40k lines): ~62 move <= 500 lines; the hard ~16 are
+  cycles (build.zig, bridge, serialize, robot_physics, profiler, spv2wgsl, robot_demo/scenes, c2js, cheatsheet),
+  60-second timeouts (robot, zimrmath, wgpu_app), very large moves (robot_mjcf 2884, geno_dance 2529,
+  zimrphysics2d_demo/scenes 1832, mjcf 898, urdf 780, humanoid 659), and ui.zig. THE BUG: robot_mjcf and
+  geno_dance were refused "does not parse" - a throwaway debug build showed a `///` left behind (separated from
+  its declaration by a blank line - Zig attaches doc comments across blank lines, the upward LINE walk stopped
+  at the blank) landing above a moved-in `test` (test_doc_comment). Fixed from the syntax tree: a block starts
+  at the doc_comment tokens right before its declaration. Also guarded: a field's user sends the declaration
+  above the FIRST field (Zig rejects declarations between fields - checked). Two fixtures; 85/85. The 64 files
+  already reordered were re-run from their originals with the fixed tool: all 64 identical - untouched by the bug.
+- **Sep 30 - decl-order at ZERO across zimr's code (not yet compiled, not yet gated).** (1) 23 file-level
+  exemptions, one explained `//! lint:off decl-order: <why>` header line each (Simon: very hard files take one
+  at first): 9 reference cycles (build.zig, bridge, profiler, robot_physics, serialize, spv2wgsl,
+  robot_demo/scenes, c2js, cheatsheet), 7 too slow for --reorder-decls to plan in 60 s (robot, wgpu_app,
+  zimrmath, zimrnum, zimrphysics, zimrphysics2d, zimrlint), 6 very large moves (robot_mjcf 2884, geno_dance 2529,
+  zimrphysics2d_demo/scenes 1832, mjcf 898, urdf 780, humanoid 659), and ui.zig (FEATURE order by decision) -
+  669 of the 1158 violations; each verified (fmt, ast-check, decl-order 0, nothing grown). (2) The other 65
+  files (each <= 500 lines moved) reordered with the fixed tool and verified: 65/65. Tree-wide
+  `--decl-order-only`: 0. Its exit 1 came from one import-cycle report, cli.zig <-> cli/test.zig - PRE-EXISTING
+  (already in snapshot 73), outside the build's lint scope; a finding for later. Next: compile everything
+  reordered, then add `.decl_order` to zimr_lint_rules.
+- **Sep 30 - Every lint rule opt-in; zimrmath passes decl-order for real.** (1) zimrlint: the `opt_in` flag gone -
+  a rule runs only when `--enable` names it; `--enable` takes every rule; `--list-rules` marks advisory rules
+  only; allRulesArgs enables all; the two-tier tests rewritten (catch-suppression reports nothing until enabled;
+  canonical-alias's test helper now enables its rule). build.zig: `LintRule` lists all 53 rules (each commented
+  with its title, generated from rule_notes), `zimr_lint_rules` 52 (all but decl_order - the same set as
+  before); template/build.zig lists its 52 explicitly (its old set: the formerly always-on rules + its 10, still
+  without no_qualified_std). The tree lints clean with the explicit list. (2) Disk full again: freeing it by
+  deleting 62 cached test binaries BROKE the build - this dev Zig errors ("checking cache failed:
+  FileNotFound") instead of missing, and zbuild's own advice (`rm -rf .zig-cache/tmp`) breaks configuration
+  unless the dir is recreated. Removed the 61 manifests naming deleted outputs; three steps of `check` still fail
+  on the same paths (references elsewhere, likely .zig-cache/z) - OPEN. (3) zimrmath (Simon: "before more tests,
+  get zimrmath to pass decl order"): the reorder tool timed out because `tokenLocation(0, tok)` counts lines from
+  the top every call - now a line-start table + binary search (>280 s -> 9 s). It then REFUSED: one real cycle,
+  computeCosSin2 <-> Rot2 (found with tools/decl_deps + Tarjan). The tool now honours decl-order's own
+  suppressions (a declaration whose earliest forward use is lint:off'd is not a forward reference - an
+  explained cycle and a file-level exemption are left alone; fixture; 86/86; a 0- vs 1-based line bug caught by
+  it). zimrmath: file-level exemption removed, the cycle's edge explained
+  (`// lint:off decl-order: Rot2.fromAngle calls this - a cycle`), reordered (45 hoists, 558 of 11203 lines,
+  ~40 of 687 declarations - helpers above their users), verified with ALL 53 rules (a first verification had
+  enabled NONE: my helper looked for the "(opt-in" marker this very change removed): decl-order 0, nothing else.
+- **Sep 30 - The build cache repaired; `check` green.** Why it stayed broken after removing the manifests that
+  named deleted outputs: a COMPILE step's manifest does not record its output directory (the `o/` name is derived
+  from the inputs), so the compile step reported a hit without checking its output existed, and the run step then
+  failed opening `o/<digest>/test`. Removing the manifests that name the failing tests' roots (tools/serve,
+  example_source, docfmt: 5 manifests) made them ordinary misses: tools-test 7/7 steps, 6/6 tests; `check` rc 0.
+  The same repair applies to any other test step whose binary was deleted (sandbox cache only - the tree is
+  fine). build.zig's low-disk advice corrected: `rm -rf .zig-cache/tmp && mkdir .zig-cache/tmp` (the build needs
+  the dir), and a warning never to delete single entries under .zig-cache/o.
+- **Sep 30 - The order treatment for more files: 10 exemptions removed.** Procedure per file (a driver in /tmp):
+  a scratch copy without the file-level exemption; its declaration graph (tools/decl_deps) and Tarjan's
+  strongly connected groups; every `--decl-order-only` report whose use AND used declaration sit in the same
+  group gets an explained standalone directive above it (`// lint:off decl-order: X and Y reference each other -
+  a cycle` - a comment line is valid anywhere and never lengthens code); then --reorder-decls, which honours those
+  directives. Applied with a backup and verified with ALL 53 rules (fmt, ast-check, decl-order 0 without the
+  exemption, nothing grown): robot_demo/scenes (1 edge, no move), bridge (5 edges, no move), spv2wgsl (50 lines),
+  profiler (4 edges, 113), robot_physics (1 edge, 124), serialize (4 edges - encode/decode/free message<->field
+  recursion - 170), wgpu_app (200), cheatsheet (1 edge, 74), c2js (47), zimrphysics (1 edge, 8): 10/10. Left
+  exempt: build.zig (its cycle's forward edge is not among the reports - needs a look), zimrnum (the dry run did
+  not finish in 10 min: one re-parse of 37k lines per hoist - batch hoists per pass next), zimrlint (not reached),
+  ui.zig (feature order by decision), and seven that need no cycle directive but would move a lot: robot 5105
+  lines, robot_mjcf 2884, geno_dance 2529, zimrphysics2d 2405, zimrphysics2d_demo/scenes 1832, mjcf 898, urdf 780,
+  humanoid 659 - Simon's call.
+- **Sep 30 - --reorder-decls hoists in batches.** One re-parse per pass instead of per hoist: `forwardReferences`
+  returns every (unsuppressed) forward reference, earliest use first; each pass takes every hoist that disturbs
+  no other (a block may not both move and receive, nor move twice - those wait for the next pass, exactly when
+  one-at-a-time would have done them) and `hoistBlocks` applies them in one sweep, blocks bound for one target in
+  earliest-use order. The cycle budget still counts single hoists. 87/87 (a new fixture: two blocks, one user, one
+  pass). Re-run from the originals of the 64 earlier easy-file reorders: 64/64 byte-identical. zimrlint's dry run
+  now takes 2 s (moves 1360 lines - big-move group), zimrnum's 83 s (was: unfinished after 10 min) - and REFUSED:
+  its cycles (mod/rem/DivideWay/divideBy; bindTensor/Params), like build.zig's (App/AppContext), have a member
+  whose earliest use is OUTSIDE the cycle, so hoisting pulls it away from its partners and the cycle chases
+  itself. Next: the tool treats each strongly connected group as one unit (hoisted together, members in order)
+  and lists the in-group forward edges that need an explained lint:off, instead of refusing.
+- **Sep 30 - Cycles verified one by one (Simon: "keep one only if there is no other way; lint:off as a last
+  resort").** Test per directive: remove it alone and ask --reorder-decls (the rule's own notion) to order the
+  file. (1) bridge.zig: all 5 of the directives I had added were NOT needed - decl_deps (which placed them) counts
+  enum field names as references; removed, the file reordered (5 moves). zimrphysics.zig:5426 (an OLDER directive,
+  "World<->ContactListener hub") not needed either - removed with its now-false justification. (2) Fixed by
+  DESIGN: zimrmath's computeCosSin2 <-> Rot2 - the algorithm's only caller was Rot2.fromAngle, which just
+  forwarded; the body now IS Rot2.fromAngle (docs merged, Box2D citation kept; the local renamed folded_radians -
+  `angle` would shadow Rot2.angle; one long line split without regrouping - the port's exact evaluation order is
+  the point). zimrnum's bindTensor <-> Params - `Binding` lived inside the generic Params(T), a separate type per
+  element type; now one file-scope `zn.Binding` (8 signatures), the nested copy gone. (3) A RULE false positive:
+  `enum { floor, mod, rem }` parses bare names as tuple-like fields with identifier "types", so decl-order saw
+  DivideWay's field names as uses of the functions mod and rem. `enumFieldNameNodes` (shared by the rule and the
+  tool) skips them; a test both ways; 88/88. zimrnum now orders with NO directive (137 declarations, ~7.1k of 37k
+  lines - big-move group, Simon's call). Tool: a scratch arena per pass (zimrnum's trees had exhausted memory:
+  exit 137). zimrnum tutorial folds regenerated (192 sections, prose unchanged). 18 real cycles left for design
+  review: profiler 4 (Zone <-> endZone/annotate*), serialize 4 (message <-> field recursion), bridge 4 older
+  (toH<->tupleToH, Value<->g, g, Element<->Document), zimrphysics 3 (handleOf<->World, ShapeStore<->buildCompound,
+  CharacterVirtual<->listener), robot_physics (Bridge<->onContact), robot_demo/scenes (ArmSpec<->Arm), cheatsheet
+  (scopeOfExpr<->declOfExpr). Not yet compiled: zimrmath, zimrnum.
+- **Sep 30 - zimrmath and zimrnum compiled; profiler's four cycles removed by design.** zn-zimrmath 171/171
+  (Rot2.fromAngle now holds Box2D's algorithm), zn-zimrnum 280/280 (the file-scope `zn.Binding`). profiler: each
+  public `Zone` method was an `inline` forwarder (gated on `enabled`, so a profiler-less build folds it to
+  nothing) to a private free function taking the Zone - two spellings of one operation, and the four "cycles".
+  The bodies are now Zone's own out-of-line private methods (recordEnd / recordText / recordValue /
+  recordColor): same codegen (callers still pay one call, not a copy of the body), members of one struct may
+  refer to each other in any order, and the four free functions and four lint:offs are gone. decl-order 0 with
+  no move, nothing grown (53 rules); zn-robot 127/127 compiles recordEnd with the profiler on (the other three
+  are compiled by `test`, run after the review). 14 real cycles left: serialize 4, bridge 4 (older), zimrphysics
+  3, robot_physics, robot_demo/scenes, cheatsheet.
+- **Sep 30 - serialize's cycles: one removed by design, three kept as the format's own recursion.** freeDecoded <->
+  freeFieldValue was one idea written twice: freeFieldValue already freed any decoded type, its struct case
+  handing back to freeDecoded, which looped the fields handing back to it. Now ONE self-recursive `freeDecoded`
+  (any decoded type; a struct's fields freed by the same call) - the public signature unchanged, freeFieldValue
+  gone. The other three (size, encode, decode: message <-> field) are the protobuf grammar itself - a message is
+  its fields, a field may hold a message, and only the field level has a tag - so a single function would need a
+  message-or-field parameter; kept, each directive now saying so (`a field may hold a message - the format
+  recurses`). `zig test src/serialize.zig` 8/8; in order; nothing grown (53 rules). 10 real cycles left: bridge 4
+  (older), zimrphysics 3, robot_physics, robot_demo/scenes, cheatsheet.
+- **Sep 30 - bridge.zig's page singleton examined: one link cut, the real cycle mapped.** `Value` (the base JS-handle
+  wrapper) used exactly one thing from `g`: `g.scratch.call_args`, a 16-handle buffer for marshalling one call's
+  arguments to JS. Now a local `[n]Handle` in that method (n is comptime) - JS reads it during the synchronous
+  call, and a call that re-enters Zig and calls again gets its own buffer instead of overwriting a shared one;
+  the field and its doc bullet are gone. Value no longer touches g. But the tool still refuses without directives:
+  a 32-declaration strongly connected group - `BridgeGlobals` (g's type) EMBEDS state types living inside
+  behaviour namespaces (ZimrBoot.EvRec, css.Sheet, UserFile, ...) whose code uses g; and Value <-> toH/objToH
+  (Value's methods marshal through them, they build Values). The two directives are back with the TRUE reasons.
+  The clean design (Simon's call - a real refactor of a 7k-line file): g's type holds data records only, declared
+  early, behaviour namespaces after g. `check` OK (compiles bridge); decl-order 0; nothing grown (53 rules).
+- **Sep 30 - Three more cycles: two dissolved by design, one kept with its reason.** robot_demo/scenes: `ArmSpec`
+  (the arm's model, built from Arm.upper / Arm.lower) lived outside `Arm`, which built its specs from it - a
+  type's own construction outside the type. Now `Arm.modelSpec(actuated)`, beside the dimensions it uses; no
+  directive. robot_physics: `onContact` cast its context to *Bridge, called self.robotBodyOf, read
+  Bridge.not_a_robot_body, and only Bridge.listen used it - Bridge's callback in all but location. Moved into
+  Bridge (a private fn with the same callback signature), with `default_friction`, which only it used; no
+  directive. cheatsheet: scopeOfExpr <-> declOfExpr is name resolution itself (`a.b` is looked up in the scope `a`
+  opens onto, and `a` is a name) - KEPT, the directive now says so. Verified (53 rules: decl-order 0, nothing
+  grown); zn-robot_physics 401 pass (7 skipped); `zig build robot-demo cheatsheet` 321/321. Left: zimrphysics 3,
+  and bridge's big group (Simon's call on the refactor).
+- **Sep 30 - zimrphysics' cycles, by Simon's rule ("don't make the code more complicated to satisfy the rule -
+  unless it becomes better, simpler, flatter, more linear, just lint off").** handleOf: a one-line accessor over
+  World's own bodies table, called 9 times as `handleOf(world, idx)` - now World's private method,
+  `world.handleOf(idx)`, same signature and body (World's methods name their receiver `world`). That exposed
+  the REAL cycle handleOf's directive had been masking: World is the hub - its methods call dozens of feature
+  functions defined before it, which take *World - so the castRayVehicleFloor directive I removed earlier (on a
+  necessity test skewed by that mask) is back, with the true reason. buildCompound (public geometry: volume, COM,
+  inertia; reads the store) and CharacterVirtual <-> its listener (callbacks receiving their owner): KEPT, the
+  latter's directive now saying why. 53 rules: decl-order 0, nothing grown. `test` hit the sandbox's stale cache
+  again (two test-fast roots): removed the manifests naming the 19 test-fast roots not rebuilt this session;
+  the compile proof for zimrphysics is next.
+- **Sep 30 - requireGraphicsSink: the shape of `sink` at the front door.** Simon: a function taking anytype should
+  make its argument's expected shape trivial to know - a `require` first line, even one that is mostly a pointer
+  to examples; where that gets hard (the Zig team's warnings), do nothing. Survey: 614 anytype parameters in 48
+  files - interfaces (`gl` 138, `sink` 30), numeric shapes (~110 in zimrmath), tuples, callables. The precedent,
+  renderer_trait's `assertIsGlContext`, is only called from WgpuGl's self-checks and its list has DRIFTED (11
+  methods the 2D code calls are missing, 7 listed ones unused there: `gl` is two surfaces under one name) - the
+  risk made concrete. The plot sink is the clean case: one consumer (plot.zig), two real implementations
+  (SvgSink, plot_ui.DrawListSink), a contract of six methods (line, text, fillRect, triangleFilled, circleFilled,
+  texturedQuad - pushClip / popClip are DrawListSink's own). `pub fn requireGraphicsSink(sink: anytype)`: its doc
+  lists the six signatures and names the two sinks to copy; its body checks the names with @hasDecl through a
+  pointer. First line of all 27 public sink-taking functions. Tests: SvgSink passes (plot.zig, compiled directly:
+  1/1); DrawListSink's test sits in plot_ui.zig (runs with `test`). Negative control: a sink without texturedQuad
+  fails at compile time with `plot: a graphics sink needs `texturedQuad`, and ...HalfSink has none (see
+  requireGraphicsSink)`, traced to the caller. Lint clean (53 rules). The deferred `test` run is next.
+- **Sep 30 - `test` green: 431/431 steps.** The compile proof for the cycle review and requireGraphicsSink
+  (zimrphysics, profiler, robot_physics, serialize, zimrmath, zimrnum, bridge's call_args, plot + DrawListSink's
+  test). Four resuming attempts (the repaired roots recompiled); the last ran 2029/2035 (6 skipped), the rest
+  cached passes. It found one real thing on the way: a test-only capture sink (`Cap`, in "plotImage maps data
+  bounds to a pixel rect") implemented just texturedQuad - all plotImage calls - and the six-method contract
+  refused it. Kept ONE contract (a single shape to know; per-function method lists would be 27 lists to keep in
+  step with their bodies - the drift problem): Cap got the five other methods as documented no-ops. plot.zig's own
+  57 tests pass directly. Disk watched across attempts (freed ~160 MB of old temporary linter builds).
+- **Sep 30 - The big-move files, judged by LOCALITY (Simon: without breaking anything or hurting locality and
+  understandability).** "Lines moved" sums block sizes, so it says nothing about locality; measured instead, per
+  moved declaration, how far it travels and whether it leaves its banner-delimited section (/tmp/big/locality.py:
+  the declaration sequence before/after, its longest common subsequence, banners). Applied (no declaration leaves
+  its section): humanoid (an example, one section - helpers above their callers) and urdf (hullPoints,
+  resolveMeshes, applyTensor, rotateInertia, quatFromRpy now sit together right above `Reader`, the XML reader
+  that uses them; requireIdentifier within the emitter section). Verified (53 rules) and `zig build zn-urdf
+  humanoid` 319/319 (urdf 173 pass, 4 skipped). Measured: robot_mjcf 0 cross-section (candidate), zimrphysics2d 1
+  of 49 (check it), geno_dance 16 (one banner - coarse; look), mjcf 16 (its sections are CHRONOLOGICAL - "The body
+  tree - turn 7", "Actuators... - turn 8", Tests in the middle; hoisting would gather the data-model types above
+  the model, arguably better, but the banners would need conceptual titles - a proposal for Simon),
+  zimrphysics2d_demo/scenes 29 of 33 and robot 82 of 122 (keep exempt: a reorder would scatter feature-organized
+  code; the exemption text should say so). zimrnum and zimrlint not measured yet.
+- **Sep 30 - The organizing principle, and mjcf laid out by it.** Simon: organize so that reading linearly from
+  the top builds understanding bottom-up and reading from the bottom gives it top-down - i.e. LAYERS: vocabulary
+  at the top, entry points at the bottom, tests last; a section marks a layer, not a turn. mjcf (sections were
+  chronological - "turn 7", "turn 8" - with Tests in the middle): laid out as (1) The model - what reading an MJCF
+  file produces (Joint, Geom, Inertial, Body, Actuator, Site, Sensor, Equality, ..., Robot last), (2) Reading
+  attributes - defaults and classes, units, numbers, orientations, (3) Reading elements - one reader per MJCF
+  element, (4) Reading a robot - the entry point (readRobot), (5) Tests. A layout script (/tmp/big/layout.py)
+  splits the file into top-level blocks (doc comments attached across blank lines), rebuilds it from an explicit
+  section list, asserts every declaration placed exactly once and the lines unchanged but for the banners; the
+  reorder tool then made 10 fix-ups, every one inside its layer except AngleUnit and Compiler moving into the
+  model (Robot keeps the compiler settings it was read with - correct). Exemption removed; 53 rules: decl-order 0,
+  nothing grown; zn-mjcf 180 pass (4 skipped).
+- **Sep 30 - robot_mjcf and zimrphysics2d ordered.** robot_mjcf: `Imported` (the result type) rises above
+  build / buildScene (the entry points) - type first, then use; tests stay interleaved near the code they
+  check. zimrphysics2d is already layered (geometry -> collision queries -> bodies -> broad phase -> contacts ->
+  solver -> joints -> islands -> events -> world); its big move is ONE cohesive cluster, the SIMD wide solver
+  (simd_width, FloatW, Vec2W, WideConstraint, buildWideBlocks, warmStartWide, solveWide, applyRestitutionWide),
+  rising intact above the step code that uses it. The tool's one cross-section move was wrong: it would have put
+  `Shape` (defined in "World") into "Contacts" above its first user. Moved by hand to its real home, right after
+  `Body` in "Bodies" (everything Shape names is declared before Body - no new forward reference); afterwards
+  exactly one declaration changed section: Shape, World -> Bodies. Both verified (53 rules); zn-robot_mjcf 354
+  pass (7 skipped); `zig build zimrphysics2d-demo` 315/315 (zimrphysics2d's own tests run with `test`, after the
+  rest).
+- **Sep 30 - geno_dance ordered: the layers fell out of the hoist.** No real sections (the "16 cross-section"
+  count came from a separator that is not a section), and `update`, the frame entry point, sat in the middle.
+  After the hoist the file reads in layers with every feature group intact: the data (Character, State) ->
+  rendering resources (constants, uniform layouts, shaders) -> setup (makeCharacter, init*, deinit) -> posing
+  (retarget map, robot twists and map, poseCharacter, poseRobot) -> drawing (passes, robot and skeleton views,
+  drawScene, the UI panel tabs, drawPanel) -> update -> app (the app spec, last). Verified (53 rules);
+  `zig build geno-dance` 315/315.
+- **Sep 30 - robot.zig reorganized by layer, not scattered.** Already layered (spatial algebra -> the model spec ->
+  Model -> Data -> the pipeline's phases -> stepping -> tests -> retargeting); the hoist would have scattered 82
+  declarations across its 19 sections. Instead, each of the 20 declarations used above its section was given its
+  true home: vocabulary up to its layer (Stage beside SensorKind; EqualitySpec, SolverOptions - what the user
+  writes - into the spec; Equality, Anchor and its helpers into Model; ConstraintKind and Contact above Data;
+  normalizeQuat and Pose into spatial algebra; siteIndex beside Model; tendonLengths into kinematics;
+  constraintKey beside the rows), functions filed too early down to theirs (geomLowestPoint, bodyLowestPoints,
+  lowestPoint, restOnFloor - they run on a BUILT model and step it - into a new section, "Placing a built robot"),
+  and two whole sections into dependency order ("Spec() - the comptime layer" after Model; "Position coordinates"
+  before Stepping). A mover (/tmp/big/mover.py: banners WITH their prose paragraphs move as one; non-blank lines
+  asserted unchanged but for the new banner), then the tool's fix-ups - 85 inside their sections, 6 dependencies
+  following their users. Against the original: 24 declarations in a different section, every one deliberate.
+  Exemption removed; 53 rules: decl-order 0, nothing grown; zn-robot 127/127.
+- **Sep 30 - The physics-2D demo's scenes: one registry moved, not 99 declarations.** Nearly every
+  "used above its section" was one user: `list`, the table of every scene, sitting mid-file inside "Issues"; and
+  the banner titled "Registry" headed scene functions, not the registry. Layered: spawn helpers at the top (now
+  with makeRagdoll, a helper used by scenes in several sections), the scenes section by section, and a new last
+  section "Registry - every scene, by category: the demo's menu" holding list, categories, categoryIndex,
+  firstInCategory - read from the bottom, the menu first. The misleading banner now names what it holds ("Scenes
+  - robustness, bodies, continuous, joints, shapes, benchmarks, showcase"). After those moves the file was ALREADY
+  in order (the tool: nothing to do; the plain hoist had wanted 99 moves). Only the two banner titles changed;
+  53 rules clean; `zig build zimrphysics2d-demo` 315/315.
+- **Sep 30 - zimrnum, step 1 of its reorganization: its own layer order.** The header has always declared the
+  rule ("TABLE OF CONTENTS (downward-only: a symbol may call its own layer or a LOWER one)"), and the sections
+  are numbered layers - but were laid out L00 L01 L02 TESTS L03 L06 L07 L09 L08 L15 L16 L14 L13 L11a L11b L12
+  L11 L10 GATE, and 104 references went UP a layer. Step 1 (a pure permutation): the 19 sections, each whole with
+  its prose and its interleaved tests, in layer order (L00 .. L16, the TESTS helpers after L02, THE TUTORIAL GATE
+  last), and the stride walkers (Walk, Walk2, advance - tensor iteration used from L03 up, filed under
+  OPTIMISERS) moved into L03 TENSOR. Non-blank lines identical as a multiset; 53 rules clean; the exemption kept
+  until step 2 makes the file pass for real. What the tool would still move across sections fell from 104
+  upward references to 32 - step 2's worklist: statistics' users still in L06 (describe, medianAbsDev,
+  coefficientOfVariation, ...), losses / activations outside L07 (softmaxRows, the simNorm family,
+  ppoClipObjective, mseLoss), something in L08 using Graph (likely a test - it drags autograd and its backward
+  kernels into statistics), Params toward the layers, ComplexNumber toward eig, and convolution -> L10a, below
+  autograd, which calls its kernels.
+- **Sep 30 - zimrnum, step 2: it keeps its own promise, with no exemption.** Each misfiled declaration to its true
+  layer: L06 gets scale, dotAll, norm and the row kernels (gatherRows, scatterAddRows, fillRowMaxAndMask); L07 the
+  activations and losses (Activation, softmaxRows, softmaxBackward, the simNorm family, fillDropoutMask, mseLoss,
+  ppoClipObjective, ppoClipSample); L08 the statistics (describe, medianAbsDev, coefficientOfVariation,
+  standardError, correlationMatrix, quantile, quantileSorted, median, DiagGaussian); L09 determinant,
+  ComplexNumber, hessenberg, eig; L11 autograd how tensors enter a graph (Binding, bindTensor, Params,
+  ownedTensor) and the two Graph.softCrossEntropy tests that sat in statistics (they had been dragging autograd
+  and its kernels into L08). Convolution renumbered L10a and moved below autograd, which calls its kernels
+  (conv2dBackward with it). One SIMPLIFICATION on the way: `layerNormBackward` was a leftover shim (it dropped
+  `y` and forwarded to layerNormRowsBackward, after an earlier de-duplication) - deleted, its one call site now
+  calls layerNormRowsBackward. Upward references: 104 -> 32 after step 1 -> 0 now; the tool's 97 remaining moves
+  all stay inside their layer. Exemption removed; 53 rules: decl-order 0, nothing grown; zn-zimrnum 280/280,
+  zn-rl-gpu (zimrnum's RL arithmetic for SPIR-V) 7/7 steps; the tutorial's reference regenerated in layer order
+  (192 sections, prose unchanged, 888 rows).
+- **Sep 30 - zimrlint ordered; the rewriting machinery gets its own section.** Only ONE declaration was used above
+  its section: compilesClean (parse + AstGen), filed under "Per-file mtime cache", used by reorderDecls - which
+  I had put beside the decl-order rule inside the walker section, though it is a DRIVER mode, like --fix. Now:
+  a banner "Rewriting files - `--fix` and `--reorder-decls`." above compilesClean (the fix cluster: compilesClean,
+  applyFixes, collectFixes, FixOutcome, runFixLoop), and the whole reorder block (DeclBlock ... joinLines, its
+  own sub-header with it) right after runFixLoop, before main. The tool's remaining 23 moves are short and stay
+  in their sections (the largest: the advisory helpers end up directly after the rule-notes table they read).
+  Exemption removed; 53 rules: decl-order 0, nothing grown; zimrlint 88/88; `check` (the linter built from this
+  source, linting the tree) OK - after one fix of my own: plot.zig's test sink's no-op triangleFilled had 5
+  parameters on one line (fn-args-multiline); `test` does not lint, so it had slipped through.
+- **Sep 30 - build.zig: `build` last.** The App <-> AppContext cycle is the callback shape (an app's `configure` hook
+  receives the context; the context's buildAppModule takes the App) - breaking it (a free function after both)
+  would not be simpler, so it KEEPS an explained directive on the hook field. The file's 45 reports had one
+  cause: `pub fn build`, the entry point, sat at the TOP and called everything defined after it - the classic
+  build.zig layout, the inverse of the layering. One move: `build` to the end (now lines 2887-7278); the pair then
+  fell into place, and the tool made 11 small helper moves (ComputeKernel above the App that holds it,
+  ShaderPipeline above AppContext, the wgpu app builders in calling order). File-level exemption removed; 53
+  rules: decl-order 0, nothing grown; `check` OK (configures from this file). Disk at 940 MB.
+- **Sep 30 - decl_order ON: zimr's build enforces it.** `.decl_order` added to `zimr_lint_rules` (in LintRule order;
+  its doc says why it joined last); the template already enabled it. The first enforced `check` found 17
+  violations my sweeps had never covered - webtests/transpiler_corpus.zig (9) and webtests/wgpu_smoke.zig (8),
+  two harnesses whose helpers now sit above the main that calls them (verified, nothing grown). `check` OK.
+  ui.zig is the ONLY file-level exemption left; bridge.zig needs none (0 reports - its two real cycles carry
+  explained per-site directives). Simon's question - how many per-line lint:offs would ui need instead, keeping
+  its organization: 51 forward-referenced declarations as it stands (50 crossing its 178 feature sections),
+  dominated by the two core types (UiContext, 1078 lines, used by 76 sections; Ui, 4392 lines, 48 sections) and
+  ~25 widget implementations defined after their public wrappers (buttonImpl, inputTextImpl, plotImpl, ...).
+- **Sep 30 - ui.zig keeps its exemption (Simon: its wrapper <-> impl pairs reference each other); work toward
+  linear reading instead.** zimr_lint_rules' doc corrected (only ui.zig is exempt). ui.zig mapped: foundations
+  (stacks, public types, ID hashing, draw list, flags, tab bar, debug log, UiContext @5625), the widget API (Ui
+  @14461, ~4400 lines; option structs), widget implementations (22880-28763), tests (28763-40381), then two
+  INLINED former modules - "Dock layer" (40381) and "Persistence layer" (41126). Neither is self-contained:
+  docking is spread over FOUR places (DockRequest / DockContext ~4700, DockNodeFlags / SplitResult / undock ~8600-
+  8900, the layer at 40381, the dockSpace widget at 24635), and DockContext holds the layer's DockNode;
+  persistence over THREE (its Persisted* types ~4640, its code at the end using UiContext / Window / Ui, `apply`
+  ~22288). Plan: gather each topic in layered order - dock vocabulary (Dir, DockNode, small enums) beside
+  DockContext; dock algorithms + tests just before the dockSpace widget; the persistence layer beside "layout
+  persistence". Measure: forward references (51 today) must only go down.
+- **Sep 30 - ui.zig reorganized for locality (it keeps its exemption).** Three moves, each measured by the
+  forward-reference count (51 -> 50 -> 50 -> 50: the count is dominated by UiContext and Ui, used by sections
+  above them, and by the wrapper <-> impl pairs - none of which these moves touch), kept for LOCALITY: (1) the
+  dock tree's vocabulary (intro, enums and small types, DockNode) now sits right before DockRequest / DockContext,
+  which UiContext holds; (2) the dock tree's algorithms (mutation primitives, layout, request processing, tests)
+  sit directly before the `dockSpace` widget that drives them; (3) persistence is one contiguous stretch - layout
+  persistence, the "Persistence integration" section (which holds the persistence API: current_version,
+  makeTabBarKey, apply - under a "tests" title), then the persistence layer and its tests. The file no longer ends
+  with two pasted-in former modules. The dock module's numbered "SECTION 1..8" banners, now in two places,
+  retitled by content ("Dock tree - DockNode", ..., "Dock tree - request processing"). Exactly 9 lines changed
+  (the banner titles); 53 rules: nothing grown; `zig build zimrphysics2d-demo` 315/315 (compiles ui). ui's own
+  tests: with the full `test`, next.
+- **Sep 30 - The template enables every rule; what a project's lint covers.** template/build.zig now lists all 53
+  (no_qualified_std added, after no_qualified_zm, its comment from the rule's title). Its one finding - myproject1
+  used `std.Random` qualified - fixed by zimrlint's own --fix (two passes: the binding, then the use). Simon's
+  question, answered from the code: a project's lint (zimr.Project, `lint.dirs`, default {"src"}, relative to the
+  PROJECT root) checks ONLY the project's own .zig files, never zimr's; the linter is compiled once from the
+  dependency (tools/zimrlint.zig + the cli parser), then per-file stamps in the project's cache skip unchanged
+  files; it runs in `zig build lint`, `check` and every `<app>-standalone` - a plain `zig build` never waits on it.
+  Project.Lint.enable's doc (still "on top of the always-on set") corrected. Disk full again (the build's guard
+  refused at 0.5 GB): removed the WHOLE .zig-cache (8 GB - safe, unlike single entries; costs one cold rebuild);
+  8.9 GB free. `check` OK; `template-check` 2/2 (cold).
+- **Sep 30 - `test` green after the whole reorganization: 431/431 steps.** From a cold cache (three resuming
+  attempts; the last ran 2039/2045, 6 skipped; the rest cached passes). Covers everything reordered since the
+  previous full run - zimrnum (its own layer order), zimrlint, robot, mjcf, robot_mjcf, urdf, zimrphysics2d, the
+  demos, geno_dance, humanoid, build.zig, the webtests harnesses and ui.zig. decl-order is now ENFORCED by
+  zimr's build and enabled in the template; every file passes it - in layers, vocabulary first, entry points
+  last - with explained per-site directives on the genuine cycles, and ui.zig alone keeping an explained
+  file-level exemption (feature order; its wrapper <-> impl pairs).
+- **Sep 30 - Stranded banners: audited, and my claim corrected.** A scan found 44 banners with no code under them.
+  Checked each against the pre-reorder backups: almost all - INCLUDING bridge.zig's six (css, ZIMR BOOT, THE ONE
+  GLOBAL, PHASE 3a, WASI shim, CLASSIC INPUT WIRING) - were ALREADY stranded before my reorders, or are deliberate
+  prose sections (spv2wgsl's "Scope and intent", "Architecture", ...); seven more files with stranded banners
+  (entities, runtime, raytracer, ui_full_showcase, ecs_solar_system, cube_demo, lambert_demo) were never in any of
+  my batches. So I was wrong to tell Simon the bridge's banners were my doing - they predate this session (the
+  earlier sweep's tool had the same blind spot). My reorder stranded exactly ONE: renderer_trait.zig's
+  "SECTION 3 - `SwAdapter`" (SwAdapter was hoisted above a user) - put back above SwAdapter's doc comment. And
+  zimrlint's "Walker" banner was DUPLICATED (an old copy-paste) - one copy removed. Both clean (53 rules).
+  Remaining stranded banners: bridge's six fold into the bridge change (each goes above its namespace); the others
+  need a per-file read (prose section, or a home to restore).
+- **Sep 30 - bridge.zig laid out in its layers.** (1) The page state depends on nothing but Value: `EvRec` left
+  ZimrBoot as file-scope `EventRecord` (documented from the code: `code` is the number the app attached with
+  domListen, kept as data-zbcode; a / b the event's offsetX / offsetY; drained by domPollEvent as three
+  little-endian words), and g keeps the default stylesheet's HANDLE (`?Value`; css.defaultSheet rewraps it).
+  (2) Three stranded comments (older than this session) handled: `read_staging`'s description became that
+  field's doc, the numeric fast-path paragraph went to the branch in Value.call that it explains, and the line
+  about a shared >6-argument scratch (gone since call_args went local) was deleted. (3) Layout, measured by the
+  forward references left: kernel -> marshalling -> Value -> the small JS-global helpers -> THE ONE GLOBAL
+  (EventRecord, UserFile, BridgeGlobals, g) -> string building (putc ... fmt, and log / warn / err, which are
+  formatted console output) -> the typed facades (+ document(), fetch, ...) -> the behaviour, each under its OWN
+  banner again (PHASE 3a: ZimrWgpu, WASI shim, CLASSIC INPUT WIRING, ZimrAudio, ZimrJobs, css, WASM hosting,
+  the host-side module runtime) -> ZIMR BOOT: ZimrBoot and start() last. The six banners stranded at the end of
+  the file are back above their namespaces. Forward references 8 -> 6 -> 5: exactly Value's conversions
+  (asElement, asCtx2D, asEvent, asPromise, asResponse) - a facade wraps a Value and a Value offers to view itself
+  as one: a real cycle, explained at each. The old putc directive (its reason no longer true) removed. The tool:
+  already in order. 53 rules: decl-order 0, nothing grown; `zig build cube-demo` 327/327 (compiles and
+  transpiles the bridge).
+- **Sep 30 - raytracer laid out by its own banners; the gl contract surveyed.** raytracer.zig: an earlier sweep had
+  hoisted the per-frame functions above `update` and left their five banners piled at the end. Laid out in
+  layers under them: Init -> Material scatter -> Sky + tonemap -> Trace (hitSphere, hitScene, rayColor) ->
+  Rendering -> Input -> UI panel -> Per-frame update -> Main entry point (deinit, app). Already in order (no
+  extra move); 53 rules clean; `zig build raytracer` 315/315. gl: the 2D code (shapes2d, draw2d, text2d, image;
+  105 parameters) calls 18 methods; draw3d calls only `renderer`, so the old trait's 3D methods (frustum,
+  vertex3f, matrixMode, ...) are rlgl-era leftovers - ONE contract, not two. But no backend has all 18 (WgpuGl
+  lacks getMatrixTransform; raster lacks it and the glyph methods; SwAdapter lacks the matrix stack, scissor and
+  glyphs), only glyphDeviceMapping is probed with @hasDecl, and partial backends work because Zig compiles
+  lazily - what gl must provide depends on the function called: the case the Zig team warns about. Plan (Simon's
+  rule - document what cannot be checked honestly): `requireGl(gl)` in types.zig (the vocabulary every 2D file
+  already imports; renderer_trait would drag raster / SwAdapter into their imports): its doc lists the methods by
+  capability (always: begin end color4ub vertex2f; textures; transforms; clipping; text) and which backend
+  provides which; its body checks only the four every backend has. First line of every public 2D function
+  taking gl; the drifted assertIsGlContext (9 callers) replaced by it.
+- **Sep 30 - The gl backends completed, and a GPU rotation bug found.** Simon: explicit `@compileError` stubs in
+  the backends for unsupported things. Applied with care, the survey changed the picture: (1) SwAdapter lacked
+  pushMatrix / popMatrix / translate / rotate / scissor only because those forwards were never written - raster
+  supports them all - so they are now forwards, not stubs; (2) `getMatrixTransform` (called by shapes2d's
+  drawRectangleLines, itself reached only from dead code) had NO implementation anywhere - now an accessor in
+  WgpuGl (its modelview) and raster (the top of the modelview stack), forwarded by SwAdapter; (3) the glyph
+  methods must NOT get stubs: text2d's `rasterizesGlyphs` probes `@hasDecl(glyphDeviceMapping)` to choose the
+  on-demand atlas (WgpuGl) over the baked-atlas fallback the software backends use - a stub would flip the probe
+  and break software text. They are an optional capability; the contract will say so. (4) A REAL BUG: the 2D code
+  passes TURNS to gl.rotate (text2d, image), raster.rotate takes turns (its doc: "TURNS, TO MATCH WgpuGl.rotate"),
+  but WgpuGl.rotate passed its argument straight to zm.rotationZ, which takes RADIANS - a quarter-turn text
+  rotated ~14 degrees on the GPU. Fixed at the edge (radFromTurns), the doc rewritten (its rlRotatef mention was
+  stale), and a twin of raster's quarter-turn test added to WgpuGl (runs via zimr.zig's test block). `test`
+  431/431. Next: requireGl in types.zig and its call sites; stubs only where a gl type truly cannot do
+  something.
+- **Sep 30 - The gl contracts.** `types.requireGl(gl)`: the 2D drawing surface - 15 required methods, each with
+  its signature in the doc (rotate in TURNS), the backends to copy (WgpuGl; SwAdapter over raster.Context), the
+  rule that a backend that cannot do something still DECLARES it as a @compileError saying why, and the optional
+  glyph capability (glyphEntry / glyphDeviceMapping / bindGlyphPage - probed by text2d to choose the on-demand
+  atlas over the baked fallback, so deliberately never stubbed). In types.zig because renderer_trait would close
+  an import cycle (SwAdapter imports draw2d and text2d). First line of 88 public 2D functions (shapes2d 53,
+  draw2d 21, text2d 8, image 6). `renderer_trait.requireGlScene(gl)`: requireGl plus the scene setup
+  (matrixMode, loadIdentity, multMatrix, frustum, vertex3f, clearColor, clear) - the old assertIsGlContext was a
+  real second contract after all (wgpu_app's camera code, the sidebyside example), not a leftover; renamed,
+  documented, renderer_trait.zig rewritten honestly (its header described the retired GlAdapter), WgpuGl's two
+  duplicate trait tests made one, the curated file description updated. The first compile named the partial gl
+  types: shapes2d's TestGl (the inert smoke-test stub) had `translatef` - the rlgl name - instead of `translate`,
+  so smoke tests of any translating function could never compile (those paths were silently untested); now
+  translate, rotate and an identity getMatrixTransform. draw2d's EmitProbe (records geometry only) declares the
+  rest as explicit @compileErrors with reasons - none fires. A decl-order slip of mine (TestGl using Mat /
+  identity above their aliases) fixed by keeping the aliases together. `test` 431/431; `check` OK.
+- **Sep 30 - The scene contract at its real call site.** The only renderer-polymorphic function that uses scene
+  methods is the sidebyside example's `drawScene(gl: anytype)` (wgpu_app's beginMode2D / endMode2D use a concrete
+  WgpuGl - nothing to describe). zimr.zig now exports `renderer_trait` (documented; no cycle - nothing it imports
+  leads back to the root), and drawScene states its contract first (`requireGlScene(gl)`, bound in the example's
+  header). `zig build sidebyside` 315/315 - drawScene instantiated for both backends, both satisfy it; `check`
+  OK; `test` 431/431.
+- **Sep 30 - Stranded banners returned to their code (older than this session).** Six files read by title:
+  entities (Arches, Chunk, Subcmd - hoisted below the Entity banner long ago - each under its own banner again,
+  and Entity's banner back above Entity), runtime (the inlined effects section), ui_full_showcase (Panels 1-5 above
+  panelWidgets, sortBuilds, panelPlots, pack, panelDragDrop), ecs_solar_system (Systems above advanceOrbit),
+  cube_demo and lambert_demo ("Frame" above update) - 12 banners; examples 357/357. A tree-wide re-scan then read
+  the remaining 18 one by one: deliberate prose stays (zimrphysics' "Parity status vs Jolt", zimrmath's "zimr
+  additions", zimrlint's SHADER-SAFE / Sampler-at-top notes); one I had just made myself (ecs_solar_system's
+  "Per-frame update", which had headed the systems too) went above update; and seven more returned: WgpuGl's
+  Matrix helpers (above identityMatrix - by text, it lies above the file's first banner), runtime's camera
+  section, ui's Dock tree - DockContext (so DockRequest heads DockRequest) and Widget: bullet (above
+  bulletImpl), zimrphysics' Broad phase and The world. gpu.zig: "SECTION 4 - primitive writers" headed the four
+  little-endian byte writers an old reorder had scattered above their users in sections 1-3 - the writers are
+  vocabulary, so their section now comes FIRST, retitled "Primitive writers - the little-endian byte writers
+  every encoder below uses". Every move: lines unchanged but titles, ast-check, already in order, 53 rules clean;
+  `test` 431/431 (2640 tests), `zig build ecs-solar-system` OK. Left for a closer read: spv2wgsl's "Per-id
+  table" and "Public entry point", ui's "Layout - cursor advancement", zimrphysics' convex-hull and warm-start
+  notes, zimrlint's "FFI seam detection".
+- **Sep 30 - The last stranded banners settled; the reorder tool can no longer strand one.** spv2wgsl's "Per-id
+  table" was in place but malformed (a doubled bar split title from prose) - merged; its "Public entry point"
+  went above convertSpirvToWgslEntry (the entry points, last in the file); ui's "Layout - cursor advancement"
+  above advanceLayout; zimrphysics' "Convex hull builder" above buildConvexHull; zimrlint's "FFI seam detection"
+  DELETED - no such code exists (the module-var rule handles C-ABI seams by allow-list and lint:off). The five
+  left are deliberate notes (zimrmath "zimr additions"; zimrphysics' warm-start SKETCH and "Parity status vs
+  Jolt"; zimrlint's two shader-tier notes). THE GUARD: reorderDecls now refuses when a section banner that headed
+  at least one declaration would head none afterwards (bannersWithCode, isBannerBar,
+  isTopLevelDeclarationLine) - "move that section by hand", since moving sections is a judgment call. Fixture:
+  a hoist that would strand "Helpers" is refused, file unchanged; the same hoist inside one section goes ahead.
+  89/89; `check` OK (after the tool itself hoisted the two helpers above bannersWithCode).
+- **Sep 30 - zimrmath: requireFloatLike, and the first thing it caught.** Of zimrmath's 132 public anytype
+  functions, 54 already guard their types with a switch (sinRad, lerp, ...), 31 do plain arithmetic over MIXED
+  shapes (abs / square any number, andInt / xorInt integers only, dot / cross2 float vectors - one check cannot
+  describe them, so none: Simon's rule), and 30 use float-only operations. `requireFloatLike(comptime T)` - a float
+  of any width, a comptime_float, or a vector of floats; integers refused on purpose (convert where it is visible)
+  - is the first line of 28 of those (pointFromArr3 / dirFromArr3 take arrays). It caught, in zimrphysics2d,
+  `length2(.{ p[0] - g[0], p[1] - g[1] })` - an anonymous tuple that compiled only because dot2 coerces one -
+  which is `p - g` written out by hand: now `length2(p - g)`. zn-zimrmath 171/171; `test` 431/431 (2640 tests).
+  Next: every example (all-examples), shaders included.
+- **Sep 30 - all-examples stopped (Simon: too long); back to the RL plan.** Eight attempts compiled ~313 of ~322
+  examples (shaders included) with requireFloatLike in place - no compile errors. The disk could not hold the
+  run: each attempt re-installs everything already compiled into zig-out, so the peak grows; the watchdog was
+  changed to prune zig-out instead of stopping. (A compile-only all-examples step would fix that for good.)
+  N4 VERIFIED on today's tree: LatentPlanScorer and Mppi in place, their eight tests in the full zimrnum suite
+  (passing), the tutorial's 18d.7 and 18d.8 intact after the layer-order regeneration. Next: N5 SequenceReplay -
+  zimrnum already has ReplayBuffer (one flat ring of fixed-width transitions, uniform sampling) and
+  RolloutBuffer; N5 extends what exists rather than adding a second replay.
+- **Sep 30 - N5, first half: `SequenceReplay`.** Design read from R1.5 and the BMPC-jax notes: a ring per
+  environment of whole rows, O(1) windows as (environment, start), allowed across an episode's end, `finished`
+  masks, per-step masked insertion. One definition per idea: the ring is ReplayBuffer's, so ReplayBuffer gained
+  chronological access (`slotOf` - the oldest is `len` slots behind the head, one formula for filling and full;
+  `row`, in place, for the write-back to come; `deinit`, which it never had) and SequenceReplay holds one per
+  environment. Windows come out STEP-MAJOR because LatentRollout reads rows t * batch + b. Known answers: (1) every
+  window is consecutive steps of one environment, the rings deliberately wrapped so a window crossing the physical
+  end (steps 4, 5, 6 in slots 4, 0, 1) is drawn and checked; (2) `finished` against a hand computation for every
+  drawn window. Negative control: the done step itself marked finished fails exactly test (2). Ref notes: three new
+  rows, `push` (it had none) and `sample` / `deinit` widened. Tutorial 18d.9 "Remembering stretches of play", its
+  fold generated (332). zimrnum 282/282.
+- **Sep 30 - N5's first half VERIFIED after a restart** (the turn that built it lost its reply; its files survived,
+  and zimrnum.zig was edited four minutes after the entry above claimed 282/282 - so everything was re-checked on
+  the file as it stands). Code read: ReplayBuffer's slotOf (oldest = len slots behind the head - right for filling
+  and full), row in place, deinit; SequenceReplay's init (errdefer frees exactly the rings made), push (inactive
+  environments write nothing), sample (environment uniform among those with enough steps, start uniform over every
+  valid position, step-major copy, finished 0 through the done step and 1 after). Tests read: the wrap window is
+  REQUIRED to be drawn; finished against a hand computation for every window. Both run DIRECTLY (bypassing the
+  build cache): 2/2. The negative control re-planted (done step marked finished): exactly the finished test fails,
+  "expected 0, found 1". zimrnum suite green (cache hit on these exact contents); 53 rules clean on zimrnum and
+  zimrnum_ref; reference rows present; tutorial 18d.9's prose free of testing talk. Small notes for the second
+  half: ReplayBuffer.deinit has no doc comment, and sample's two-counters-per-window scheme deserves a line.
+- **Sep 30 - SequenceReplay rewritten as a course (Simon: clearer names, more locals, ASCII diagrams - "the code
+  is actually a course").** Same behaviour, same expressions named: `environment_rings`, `row_width`,
+  `step_rows`, `environment_is_active`, `draw_index`, `window_length`, `windows_out`, `finished_out`;
+  `eligible_rank`, `chosen_ring`, `last_valid_start`, `first_value_of_output_row`,
+  `an_earlier_step_ended_the_episode`; the which-environment search pulled out as `eligibleRing` (with a worked
+  example in its doc). ReplayBuffer's new methods take `chronological_index`, and slotOf names its parts
+  (`head_minus_len_kept_nonnegative`, `oldest_slot`). Diagrams in the comments: a ring of 5 after 7 pushes
+  (physical slots vs chronological order, the head marked), the formula for the oldest slot, the flat storage,
+  one ring per environment and how push splits a frame, a window as (environment, start), finished on an example
+  window, and the step-major batch row by row. The draw counters explained (two per window, offset by the draw
+  index). Tutorial: 18d.9 regenerated by `zig build zimrnum-ref` (the fold shows the new code and its diagrams);
+  its hand-written example renamed to the same vocabulary. The two tests: field renamed only, run directly 2/2;
+  zimrnum 282/282; 53 rules clean. (A false alarm on the way: my splice's own check matched `..rings` inside
+  `[0..rings_built]` and refused to write - so the first "2/2" was the OLD code; caught, check narrowed, redone.)
+- **Sep 30 - Highlighting: it was already there.** Both tutorials carry the `<!--docfmt:style-->` marker and are
+  on the published list, so `zig build doc-pages` runs tools/docfmt.zig over them: every `<code class="zig">`
+  block highlighted at BUILD time through std.zig.Tokenizer (`tok-*` spans; the one shared stylesheet injected
+  at the marker) - zero script, one highlighter for the gallery and every doc page. Built: zimrnum-tutorial
+  30,965 spans, robot-mocap-tutorial 12,771. The tutorials looked plain because I was handing Simon the SOURCE
+  html (src/notes/tutorials/), which is never highlighted. From now on: present the BUILT page,
+  zig-out/web/<page>.html, after `zig build doc-pages`. No code changed.
+- **Sep 30 - The two tutorials complement each other on replay.** Both explained "one ring per character"; each
+  explained a different window rule; neither mentioned the other. zimrnum 18d.9 gains "Two ways to treat a break":
+  a shove is a break of another kind (the motion goes on, but jumps unpredictably), so SuperTrack's replay keeps
+  the same ring and only draws windows inside one segment - the price of each rule (masking: windows partly empty;
+  segments: long windows hard to find - ~21-frame segments, 32-frame windows may not exist), linking to
+  robot-mocap #replay. Robot-mocap 11.7 gains a paragraph saying its machinery WORKS THE SAME WAY as zimrnum's
+  SequenceReplay (not that it is it - today it is its own code) and pointing there for the mechanics, keeping only
+  what is particular: the segment rule. Plan, under N6: unify the replays when BMPC comes to TrackEnv (typed
+  columns kept; rings and window sampling from zimrnum; "inside one segment" as a second window rule). Checked:
+  zimrnum-ref and doc-folds regenerate nothing (the prose stands; 196 blocks, 0 errors); doc-pages builds; both
+  links land on existing ids; zimrnum 282/282 (its reference test reads the page).
+- **Sep 30 - N5 COMPLETE: the write-back, empty targets, and the masked insertion's answer.** (Simon, standing:
+  generic ingredients in zimrnum; specialised code may start as an independent fork in the robot files; no
+  frameworks or towers of abstraction - simple functions on arrays. The plan's N6 note rewritten to match:
+  robot_track.Replay stays SuperTrack's own, no second window rule in zimrnum.) `sample` also fills `origins_out`
+  - a `WindowOrigin` per window, its environment and the PHYSICAL slot of its first step (still valid after
+  later pushes, until overwritten); `eligibleRing` became `eligibleEnvironment` (the origin needs the index).
+  `writeBack(origins, first_step, step_count, first_column, values_in)`: step-major values copied into those
+  windows' rows in place - reanalyze passes a prefix of the batch's origins and first_step 1 (BMPC's row t holds
+  the target planned at t - 1). Empty targets: N(0, 1), written by the caller at push - no machinery, the doc
+  states the convention. Known answers: (3) after writing back targets that name their (window, step), both rings
+  equal a hand-applied copy EXACTLY, and every sampled row read N(0, 1) before; (5) a frame environment 1 sits
+  out leaves its ring byte-identical - storage, head, length - and its time order is the frames it stepped (0,
+  1, 4, 5). Negative controls: ignoring first_step fails exactly the write-back test (the first attempt did not
+  even compile - an unused parameter - and printed nothing: re-planted with a discard, then it failed as it
+  should); ignoring the active mask fails exactly the inactive test. Reference: 749 rows (WindowOrigin,
+  writeBack); tutorial 18d.9 "Targets that improve" + the example (origins, writeBack); zimrnum 284/284; 53 rules
+  clean. Next per the plan: the ensemble blocks (item 5).
+- **Sep 30 - Plan item 5 COMPLETE: the ensemble blocks.** Members as arrays needed nothing new: an ensemble is an
+  array of members, and meanAxis / varianceAxis over the member axis already give eq. 3's mean and (/ count) eq.
+  4's variance of the mean - recorded instead of wrapped. The new block, plain arrays in and one value out:
+  `klRobustExpectation(T, values, delta, tilted_weights_out)` beside standardError. The maths gave the algorithm:
+  the KL dual's derivative is KL(tilted weights || uniform) - delta, so beta* is the temperature whose tilt sits
+  exactly delta from uniform, bisected on a log scale (KL falls monotonically in beta), and the value is the tilted
+  average; delta 0 -> mean, delta >= log(N / k) -> exactly the minimum. Its doc draws KL against beta. Known
+  answers: limits exact; the value SANDWICHED with no optimiser - no reweighting within delta (mixtures of
+  uniform with one- and two-value spikes) averages lower, the dual objective from its formula never higher and
+  meeting it at its best beta (1e-6) - the weights delta from uniform (1e-9), ordered inversely to the values;
+  small delta ratio 1 +- 0.005 at 1e-4; central differences = the tilted weights (1e-6). Negative control: the
+  bisection flipped fails exactly tests 2-4 (0.18 from uniform, a ratio of 21.9, the gradient 0.19 off) - test 1
+  passes because the limits never search. Lint caught two one-line signatures of mine (4 and 5 parameters) - one
+  per line now. Reference 750 rows; tutorial 18d.10 "Pessimism with a dial" (333 folds); zimrnum 288/288; 53 rules
+  clean. Next per the plan: item 6, TD4's blocks (T5, T6).
+- **Sep 30 - T5 DONE: the categorical twin critic's pieces.** Most of it existed: Q is `CategoricalScalar.decode`
+  (its `.identity` axis is documented as C51 / TD4 return atoms), the network is N2's layers, the critic loss is
+  categoricalProject then softCrossEntropyRows. New - extending CategoricalScalar, which owns the grid, with plain
+  functions on arrays: `quantileBlend` (one walk up both CDFs; each slice of probability placed at the blended bin
+  INDEX - the bins are evenly spaced on the axis - and landed by the shared addPointMassToGrid, its third user),
+  `twinTarget` / `twinTargetRows` (the lower-mean twin per row, a tie to the first, blended by the weight; weight 1
+  and 0 copy exactly). Known answers, sharper than the plan's: the blend's mean EXACTLY the weighted mean (1e-12);
+  a distribution blended with itself is itself; two point masses blend into ONE point mass between them (at 0.5:
+  bin 20 of 10 and 30; at 0.25: bin 25) - the reason for quantiles over a density mix; weight 1 / 0 = lower /
+  upper exactly in either order; rows chosen row by row; the critic loss on planted logits = the hand computation.
+  Negative controls: the weight on the wrong twin fails exactly the mean and point-mass tests (the symmetric ones
+  pass, as predicted); the higher twin chosen fails exactly the two selection tests. Slips caught: `.{0} ** 41` no
+  longer parses here (@splat); a 121-column reference line; the critic-loss test first placed above
+  softCrossEntropyRows - decl-order flagged it, moved after softCrossEntropyRowsGrad. Reference 753 rows; tutorial
+  18d.3 "Twin critics, kept distributions"; zimrnum 294/294; 53 rules clean. Next: T6, the deterministic actor.
+- **Sep 30 - Review (Simon: "make it perfect and verbose ... look for bugs"), part 1: the replays.** TWO REAL BUGS in
+  SequenceReplay.writeBack: (1) PARTIAL UPDATES - the environment index was checked inside the write loop, so a bad
+  origin late in the list returned an error after earlier windows had been overwritten; (2) WRITES OUTSIDE THE STORED
+  HISTORY - nothing checked the steps exist: past the newest row the write wrapped onto the OLDEST rows (full ring) or
+  onto slots holding nothing yet (filling ring), and a first_slot beyond the capacity was hidden by the modulo. Fixed:
+  every origin checked BEFORE anything is written (a real environment; a slot below the capacity holding a stored
+  row; stored rows for every step after it), the writes going through `row()` like sample's reads. Also: an empty
+  write-back is a no-op (reanalyze may choose no windows); `eligible_ring_count` -> `eligible_environment_count`.
+  ReplayBuffer: `chronologicalIndexOf(slot)`, slotOf's inverse (one `oldestSlot` behind both); slotOf / row keep
+  zimrnum's unchecked fast-path form (`Tensor.offsetOf`'s convention) but now SAY that an index >= len WRAPS rather
+  than panics; sample's locals named and its physical-slot draw explained (kept on purpose: a uniform slot below len
+  IS a uniform stored row - a ring fills from slot 0 - and switching to chronological indices would change which rows
+  every fixed seed draws). Tests: chronologicalIndexOf undoes slotOf (filling and full; unfilled slots at len or
+  beyond); the write-back all or nothing (a bad environment last, steps past the newest, a slot beyond the ring, a
+  slot not filled yet - each an error, the rings byte-identical; empty = no-op). Negative control: today's tests run
+  against the OLD writeBack - exactly the all-or-nothing test fails ("expected error.DomainError"). zimrnum 296/296;
+  reference 754 rows; 53 rules clean. Part 2 next: klRobustExpectation, the twin-critic methods, the tutorial prose.
+- **Sep 30 - Review, part 2: klRobustExpectation, the twin-critic methods, the tutorial prose.** klRobustExpectation:
+  (K1) NON-FINITE VALUES were accepted - @min / @max step over a NaN the sum does not, so at delta 0 (no search) a
+  NaN came straight back as the answer, and at delta infinite the minimum skipped it; now refused. (The old code
+  refused my first NaN test only BY ACCIDENT: the NaN weights summed to a KL of 0 and the bracket gave up after 4096
+  halvings - the negative control exposed it, so the test now covers delta 0, 0.1 and infinity.) (K2) THE MIDPOINT
+  OVERFLOWED: sqrt(a * b) of two temperatures of the values' scale passes f32's 3.4e38 once the scale passes ~1e19
+  and the search silently returned the mean; now sqrt(a) * sqrt(b). (K3) An edge: delta within rounding of log(N/k)
+  could saturate the tilt with KL still <= delta, and halving on would reach beta = 0, weight exp(-0/0) = NaN; the
+  sharpening now stops on saturation and returns the minimum. (K4) Names: fillTiltedWeightsReturningKl, the two
+  bracket counters separate, why the normaliser is never zero. Tests: non-finite refused at three deltas; f32 at
+  scale 1e25 = f64 to 1e-4 and well below the mean; delta just below log N finite and in range. Negative control:
+  the OLD function fails exactly the non-finite and the huge-scale tests. Twin critics: quantileBlend's parameters
+  first / second / first_weight (it blends any two distributions; lower / upper belong to twinTarget), its doc now
+  says what it assumes (distributions; the blend carries the smaller total; a negative entry is empty);
+  twinTargetRows checks ranks before reading shapes. Tutorial: 18d.3 showed the CategoricalScalar fold TWICE (my
+  separate twin example used zn.CategoricalScalar, and the generator folds every zn. name after every example) - now
+  three paragraphs and ONE example, each fold once (333 folds); 18d.9 says the write-back checks every address and
+  writes nothing on a bad one; 18d.10's "log N" is log(N / k) with ties. zimrnum 299/299; 53 rules clean.
+  (Then `doc-pages` refused to start: the disk had filled again, 546 MB free - the build cache back to 8.3 GB.
+  Removed whole, as before; 8.9 GB free; the pages rebuilt cold.)
+- **Sep 30 - T6 DONE: the deterministic actor's blocks.** The actor is the existing layers (its pre-activation is the
+  Dense output before `tanh`); the target actor is `polyakUpdate`. New, simple functions on arrays plus one composed
+  graph method: `Graph.preActivationPenalty` (a row of -1s broadcast by add, two relus, squaredRowNorm, the mean
+  over rows via transpose + reduceRows - existing ops only, no abs on the tape); `linearSchedule` (from the step
+  alone, both ends returned exactly); `policyUpdateDue` (after every delay-th critic update; a delay of 0 refused);
+  `addGaussianActionNoise` - ONE function for TD3's two noises, exploration (no clip) and target smoothing (0.2,
+  clip 0.5) - its counter draw_index * len + i, because a fixed stride would repeat noise once a batch outgrew it
+  (1024 environments x 64 dimensions = 65536 values). Known answers: the penalty by hand (2.125) and checkGradient
+  (< 1e-7), zero value AND gradient inside the band; 33 actor updates in 100 at delay 3; the schedule's exact ends,
+  midpoint, flat tail and refusals; the noise clipped, inside [-1, 1], reproducible, zero std = unchanged, unclipped
+  std measured within 5%. Negative controls, one scratch copy: the penalty's lower side dropped, the delay off by
+  one, the slope over the whole run - each failed exactly its own test, the noise tests passed. A shadowing slip
+  (`gradient` is a zimrnum function) renamed. Reference 758 rows; tutorial 16.12 "A deterministic actor: TD3's and
+  TD4's helpers" (folds once each), and 16.3 now points to 18d.9; zimrnum 304/304; 53 rules clean. Item 6 (TD4's
+  blocks T5, T6) COMPLETE. Next per the plan: item 7, V1's block (a differentiable observation selection) and V2b's
+  (a DAgger buffer).
+- **Sep 30 - Item 7 DONE: V1's observation selection; V2b needs nothing new.** V1: `gatherColumns`, plain (the one
+  the game calls - mirrors gatherRows, every column checked before any write) and `Graph.gatherColumns`, a product
+  with a constant 0/1 selection matrix built from the existing oneHotRows, transposed - no new op, its gradient
+  matmul's own. EXACT, with one honest caveat found while writing the doc: equal as NUMBERS, not bits - a negative
+  zero comes back as zero (-0 + 0 = +0); and the input must be finite (0 * inf = NaN). Known answers: every column in
+  order gives back the input (a -0 included); graph = plain exactly under a reordering with a repeat and a column
+  left out; checkGradient, exactly zero for the unchosen, and a column chosen twice gets exactly twice one output's
+  HAND gradient (my first draft only checked "nonzero" while its name claimed "doubled" - caught on re-reading, now
+  checked against 2 (x - t) / 6). Negative control: the plain gather reading the next column fails exactly the plain
+  and parity tests. V2b: a DAgger buffer is a ReplayBuffer whose rows are student state ++ teacher action - no new
+  zimrnum code (Simon's rule); the teacher and the row test belong to the robot assembly (V2). Reference 760 rows;
+  tutorial 18d.11 "Watching less than the model knows" (with the DAgger recipe); zimrnum 307/307; 53 rules clean.
+  Next per the plan: item 8, the assemblies - BMPC (N6) first.
+- **Sep 30 - Review, part 3: random streams, and the new sections.** A REAL BUG in T6's addGaussianActionNoise: its
+  counter, draw_index * len + i in 32-bit arithmetic, wraps - with 1024 environments x 64 action dimensions, len is
+  2^16, so draw 65536 landed exactly on draw 0's counters and the exploration noise would have REPEATED every 65536
+  steps (its doc claimed the opposite). SequenceReplay.sample's index * 0x9e37 + 2w wrapped more gently (draws
+  millions apart occasionally coming back to nearly the same counters). Both now draw from ONE STREAM PER DRAW,
+  `rng.split(draw_index)` (split derives a seed through bijections, so distinct labels give distinct streams), the
+  element index as the counter. Regression test: 65536 values per draw, draws 0 and 65536 must differ - the old
+  formula, planted back, fails exactly it. ReplayBuffer.sample keeps its form (robot_gym's SAC agent calls it one
+  row at a time with a fresh per-update stream, so it never wraps in practice; SacTrack's fingerprints rest on it)
+  and its doc now says so and how to use it. Mppi checked: already split per iteration and state - correct.
+  Tutorial: 18d.11's example had a `...` placeholder - now the real two loops; its prose said "each output column
+  holds a single 1" - it is each column of the MATRIX; 16.12's "TD3's computes" -> "TD3's actor computes". The
+  rest of T6 / V1 re-read: sound. zimrnum 308/308; 53 rules clean.
+- **Sep 30 - N6 designed, not yet built: the inventory and the breakdown.** Read N6 and R1.1 / R1.1c in full. Most
+  ingredients exist; missing: `finished` masks in WorldModelLoss (its only weight is rho^t, per step - finished is
+  per row), RunningScale, the BMPC policy head's pieces. The agent is an assembly - its own file, proposed
+  `src/robot_bmpc.zig`. Six turns B1-B6, each with known answers, recorded in the plan under N6. No code this turn.
+- **Sep 30 - BMPC-jax and EfficientTDMPC v5 re-read (Simon: "did we forget something").** ONE REAL GAP in our N6
+  design: jax stores each row's NEXT OBSERVATION and samples windows of H rows; we had planned observations only and
+  windows of H + 1 rows - so the step that ENDS an episode would take the next episode's first state (after the
+  reset) as its successor, and the consistency loss would teach the dynamics a jump that never happens. Fixed in the
+  plan (B3's row layout; the target in the same row as its observation, write-back first_step 0; the tutorial's
+  replay example to follow in B3). SequenceReplay itself is generic and needs no change. Also pinned for B1: torch's
+  RunningScale exactly (EMA toward max(1, q95 - q5), the floor per batch before averaging - jax floors after, and
+  stores it) and the masks' normalisation (jax: consistency over unfinished rows; reward / value summed over steps,
+  mean over the whole batch; a continue loss masked, which jax forgets). B4's base stated as torch's (entropy 1e-4,
+  KL averaged over dimensions, rho / H, log std [-3, 1]); jax's differences listed as bench options. v5 agrees with our
+  R1 notes; new: A.4 wall-clock parity, B.4 acting penalty no help, C.1 ensemble cuts planner exploitation; for N7 the
+  multi-horizon objective needs the value heads at every depth. Mppi's defaults already match (512/24/64/6/0.5,
+  spread [0.05, 2]).
+- **Oct 1 - Four more papers weighed (Simon: "something to include?"): plan R4, candidates only.** Newt is the one
+  that maps onto what we have: its demonstration recipe fits BMPC almost for free (a demonstration row's target =
+  the teacher's action -> BMPC's KL distillation IS model-based BC; pretraining = the warm-up burst; 50 / 50 = a
+  second SequenceReplay; constrained planning = an Mppi bias annealed) - a model-based third route for V2's
+  multi-clip student; no task embedding needed (the reference is the instruction); open-loop length as a world-model
+  diagnostic. RAY-TOLD: exact short rollouts + learned value in our scorer-agnostic Mppi, and ray observations as a
+  game-cheap V1 view - after the gate. IQL-TD-MPC (2023 / ICRA 2024, not 2026): offline, hierarchical - later.
+  ViGMO: not found by that name; visual - low priority for state-based agents. Nothing scheduled; B1 is still next.
+- **Oct 1 - B1, first half: RunningScale; R4 pointers placed.** The four papers now also have pointers where they
+  will act (V2: Newt's model-based distillation as a third route to weigh; "After the gate": RAY-TOLD's exact-
+  rollout scorer with ray observations, IQL-TD-MPC's subgoal manager, Newt's open-loop length as a diagnostic).
+  `zimrnum.RunningScale(T)`, after `quantile`: value (starts 1) and tau; update(batch, scratch) copies and sorts the
+  batch (left untouched), takes q5 and q95 by quantileSorted - whose interpolation at q * (n - 1) IS torch's - and
+  moves value += tau * (max(1, q95 - q5) - value): torch's order, the floor per batch before averaging. Known
+  answers: the hand EMA (101 values: spread 90 -> 9.9; then a 0.5 spread floored -> 9.01); torch's order pinned
+  against jax's (from 5, a 0.2 spread -> 4.6, not jax's 4.52); 11 shuffled values -> 9; the batch untouched;
+  empty, mismatched scratch and NaN refused. Negative control: jax's order (average, then floor) fails exactly the
+  two numeric tests, with exactly jax's numbers (8.955, 4.52). Slips: `scale` shadows a zimrnum function (test
+  locals now kl_scale); two doc lines at 121. Reference 762 rows; tutorial 18d.12; zimrnum 311/311; 53 rules
+  clean. Next: B1's second half - the `finished` masks in WorldModelLoss.
+- **Oct 1 - B1 COMPLETE: the finished masks.** Read first: WorldModelLoss's reward and value terms are
+  softCrossEntropy against two-hot constants; consistency is LatentRollout's own. The deciding fact:
+  softCrossEntropyRowsGrad weighs the prediction by the row's TARGET MASS, so an all-zero target row costs exactly
+  nothing, value and gradient - masking reward and value is masking their targets (now pinned by its own unit test;
+  the backward case's comment said "predicted - target" and now gives the real formula). Design: the rollout OWNS
+  the masks - an `unfinished` [batch, 1] column per step and a factor batch / still counting (0 when none) - all 1
+  until `setFinished(finished_out)`, which checks every entry is 0 or 1 before writing any; consistency at t =
+  mseLoss(z * M, y * M) * factor (the mean over the windows still counting); WorldModelLoss multiplies its targets
+  by the same columns (whole-batch mean, finished as 0): one call marks all three terms. New Graph op
+  copyToEveryColumn (copyToEveryRow's twin). Known answers: nothing finished = the old formula BIT FOR BIT, total and
+  every gradient of five networks, against a hand-built second graph in the old node order; a finished window's
+  action, next observation and targets changed -> no bit moves anywhere (and counted again, the losses part); the
+  masked mean by hand; all finished at a step -> 0, not NaN; refusals change nothing. Four negative controls, each
+  failing exactly the predicted tests (no rescale: 9, 10; targets unmasked: 15; consistency target unmasked: 9, 15;
+  gradient assuming mass 1: the zero-row test and 15). Slips: an anchor across a blank line (caught before any
+  write), `gradient` shadowing a zimrnum function. zimrnum 317/317; 53 rules clean; reference 764 rows; tutorial
+  18d.4 paragraph. For B4: check whether jax masks the policy's loss by finished. Next: B2, the policy head.
+- **Oct 1 - B2a: the policy head; one note corrected from torch's own source.** Before designing, re-read BMPC's
+  torch code (still on disk at /tmp/bmpc/bmpc-main) instead of trusting the recorded summary - and it corrected one
+  point that matters: in BMPC mode the policy is NOT a squashed draw. mean = tanh(m), action = clamp(mean + s * eps,
+  -1, 1), no Jacobian - so the policy IS N(tanh m, s^2), the very Gaussian its KL compares, and SAC's
+  squashedReparameterize is TD-MPC2's way, not BMPC's (noted in the plan for B3). Also confirmed from source: log std
+  = low + dif * (tanh + 1) / 2 in [-3, 1] ([-2, 1] for reanalyze's policy trajectories); update_pi on zs.detach();
+  the KL averaged over dims; scale.update(kl[0]) before dividing; scaled_entropy = -size * log N(eps), whose
+  gradient is size per log std and whose mean is size * entropy - so dims * entropy has exactly torch's gradient.
+  Existing pieces reused: Graph.klGaussianDiag (already KL(policy || reference), per-row spreads, the reference as
+  data), Graph.slice on columns, DiagGaussian(T).half_log_tau (the house pattern, not hoisted). New:
+  Graph.tanhIntoRange, Graph.diagGaussianEntropy, TanhMeanGaussian(T). Known answers: exact ends for both ranges,
+  the slope by hand; entropy parity with DiagGaussian.entropy and a gradient of exactly 1; centres, spreads, zero
+  KL against itself, a distillation step under checkGradient. Two controls, each failing exactly its predicted
+  tests. zimrnum 320/320; 53 rules clean; reference 769 rows; tutorial 18d.13. Next: B2b, the per-step policy loss.
+- **Oct 1 - B2b: the policy loss; B2 COMPLETE.** Settled from BMPC-jax's source (/tmp/bmpcjax), not memory: jax DOES
+  mask the policy loss (sum over t of lam * kl / scale where ~finished, then the mean over the whole batch) - torch
+  has no masks only because its windows never cross an episode. So: torch's formula with jax's masks.
+  `PolicyDistillationLoss(T)`: the latents ONE Var [H * batch, latent], step-major, data (a separate graph's constant,
+  or detached rollout rows); the policy in one pass through TanhMeanGaussian; targets zero-filled = N(0, 1); the KL
+  averaged over dims; c * dims * entropy; one weight column rho^t / (H * batch) * unfinished, built in-graph from the
+  rollout's shared columns (one setFinished marks all four terms now); each term one dot product; updateScale reads
+  step 0's rows into the RunningScale and sets 1 / scale. Known answers: the hand computation with the formulas
+  written out (nothing finished; one finished, counting 0 over the whole batch); a finished row's latent and targets
+  changed -> no bit moves (counted again, the totals part); updateScale = a hand RunningScale on step 0's rows only,
+  the scale really moved, and the gradient WITHOUT the second recompute equals the one with it, bit for bit (a
+  shared graph may skip it - now documented as a known answer); checkGradient through the policy network, every
+  parameter connected; refusals. Three controls, each failing exactly its predicted tests. Lint: two 4-parameter
+  signatures put one per line. zimrnum 325/325; 53 rules clean; reference 773 rows; tutorial 18d.14. Next: B3, the
+  agent's skeleton and acting (robot_bmpc.zig) - acting = clamp(tanh(m) + s * eps, -1, 1).
+- **Oct 1 - Lint pause: decl literals across zimrnum.** Simon asked whether `const x: Tensor(T) = try .alloc(...)`
+  is accepted in place of `try Tensor(T).alloc(...)`. Proven first on one line in a scratch copy: it compiles
+  (Tensor(T).alloc returns Error!Self; decl literals work through `try`, as the code's existing `try .build(...)`
+  already showed) and its tests pass; all 53 lint rules accept it (none concerns decl literals). Then a conservative
+  converter (/tmp/declit/declit.py): only `const|var name: X = [try ]X.fn(...)` with the two X texts byte-identical
+  (a regex backreference: same text, same scope, same type - so `.fn` is the same declaration), X a plain or dotted
+  name with at most one non-nested argument list, and the call the WHOLE initializer (its matching paren, found by a
+  scanner that skips strings, chars and comments, followed only by `;`). Dry run: 1160 sites, 0 excluded (718
+  Tensor(f64).alloc, 114 Tensor(T).alloc, the fromSlice family, Rng.init, Series, the RNN cells' init, the typed
+  wrappers' .of). Written back to front; an independent checker confirmed 39913 lines, exactly 1160 changed, each
+  equal to the original with only the receiver removed. zig fmt unchanged; zimrnum 325/325; `zig build check`
+  358/358 steps; 53 rules clean; folds regenerated. Elsewhere: 919 sites in 84 files, left for Simon to decide.
+- **Oct 1-2 - prefer-decl-literal (advisory, --fix) landed in zimrlint; a walker blind spot found; lint plan written.**
+  The rule (LintRule `prefer_decl_literal`, NOT in zimr_lint_rules): fires on `const|var x: X = [try ]X.fn(...)` with
+  the receiver spelled with exactly the annotation's tokens and the call the whole initializer; the fix deletes the
+  receiver. 3 tests, 3 negative controls; zimrlint 92/92. On pre-conversion zimrnum it found only 1057 of 1160: the
+  walker never visits members of a container reached as an expression (`return struct {...}` - every generic type),
+  for EVERY rule. A one-branch fix in a scratch copy makes `--fix` reproduce the verified 1160 byte for byte (+1 split
+  declaration). Not landed: `check` lints from source with the 53 rules and the baseline - newly visible code must be
+  measured and ratcheted first. Simon's policy (Oct 2): constructor-like decl literals only with the type on the same
+  line; other literals free. Last turn's helper sat below its caller (decl-order would have failed `check`): moved;
+  `check` 358/358. The plan, L0-L7: src/notes/lint_opinionated_plan.md, "NEXT".
+- **Oct 2 - Lint plan L1: the coverage oracle (`zimrlint --coverage`).** Simon: the creation vocabulary is a big,
+  opinionated list (creation of memory-owning things must show the type); proceed. Built inside zimrlint.zig (no new
+  files): Ctx.visited marked by walkNode; walkCoverage / unwalkedNodes / runCoverage; a `--coverage` flag. Test: the
+  known hole (a declaration in a struct returned by a function) is found, a walked one is not. zimrlint 93/93;
+  self-lint clean. Slips: an anchor matching Ctx AND Args (nothing written; widened); `@typeInfo(...).@"enum".fields`
+  is `field_names` in this Zig (the unit test never instantiated runCoverage - the exe build caught it). Measured on a
+  COPY of check's 839 files: 125610 tracked nodes never walked, in 717 files; the statement-shaped holes (2321
+  declarations, 973 functions, ~1600 control-flow nodes) are L2's work, field accesses and calls mostly read through
+  their parents. Next: L2 - the container-as-expression branch, re-measure, attribute the rest.
+- **Oct 2 - Lint plan L2, step 1: one branch, then attribution; L2 revised to a complete walk.** In scratch: the
+  container-as-expression branch plus a root-attributing `--coverage` (outermost unwalked nodes by token span,
+  labelled by the token before them or by what opens their block). On the 839-file copy: 125610 -> 112388 unwalked;
+  declarations 2321 -> 224, functions 973 -> 180, most loops and ifs closed. The 76127 remaining roots: type positions
+  (~18000, by design so far), defer/errdefer bodies (6386), if conditions (~9000), for operands (~3250), operator
+  operands, struct-literal values, array elements, array access - all one cause: `childNodes` is a partial switch
+  with `else => no children`. Revised L2: an EXHAUSTIVE `childNodes` (no `else` arm), compiler-enforced. No change to
+  the real tree this turn (scratch only); the plan records the numbers.
+- **Oct 2 - Lint plan L2 done in scratch: a COMPLETE walk, 125610 -> 0 unwalked nodes.** An exhaustive
+  `allChildren` (163 tags, no `else`, compiled first time) iterating fixed children + list slices; walkNode's handlers
+  completed (conditions, continue expressions, for inputs, case values, declaration types and attributes, the fn
+  prototype); `walkContainerChildren` via `fullContainerDecl` for every container tag plus its tag argument (it
+  handled 2 of 12 container tags: tagged and tag-typed containers were never walked); `walkTypeExpr` through
+  `allChildren`. Re-measured on the 839-file copy at each stage: 112388 -> 226 -> 0. Slips: an anchor matching twice
+  (nothing written); a `$'\t'` bash-ism under sh (sampled with Python instead). Saved as
+  src/notes/lint_complete_walk.patch (verified to reproduce the scratch). Next: L3 - the 53 enforced rules over the
+  newly visible code, on the copy: counts above the baseline, autofixable vs manual; and the double type-rule call.
+- **Oct 2 - Lint plan L3: what the complete walk exposes.** Linted the copy with the committed walker and the
+  complete walk, no baseline, then filtered to the 721 files `check` lints (the build also skips the vendored cli,
+  notes/staging, webtests/external_project, tools/c2js_cases - the first comparison over all 839 copied files had
+  mixed those in). Committed walker: 0 there (green; the baseline is empty). Complete walk: 1967 distinct, genuine
+  on sampling; 1618 autofixable (no-qualified-std 1319, no-qualified-zm 285, float-from-int 14), 349 manual. 107
+  duplicates traced to the fn_decl handler's by-hand prototype checks (turn 348's fix for the old blind walk) now that
+  the prototype is walked: ONE WALK in scratch - walkTypeExpr and its three call sites removed; re-linted: 0
+  duplicates, identical distinct set. Slips: a doc-filtered read made an anchor miss (nothing written); a `pkill -f`
+  matched its own shell (then `pkill -x`). Patch regenerated (verified). Next: L4 - land, autofix, ratchet the rest.
+- **Oct 2 - Lint plan L4 in detail: autofix a bit more, burn the rest down by hand with few compiles.** Measured
+  what the cheap checks catch: `zig ast-check` (0.24 s on zimrnum) catches syntax, undeclared identifiers (renames),
+  shadowing (alias collisions), unused locals - not types; fmt 0.04 s; one-file lint 27 s at worst. So three tiers:
+  T0 per edit, T1 per file, T2 (`check` ~4 min + touched module tests) once per batch. lint_autofix.md §6 already
+  rated fn-args-multiline and branch-braces A1 and prefer-std-alias A2: writing those takes the by-hand remainder
+  from 349 to 146 findings in 35 files, half of it in entities.zig, gpu/zn_conformance.zig, utils.zig, zimrnum.zig.
+  int-from-float stays by hand on purpose (the rounding choice is the improvement). Landing (L4b) waits for the
+  next full build, with prefer-decl-literal. Plan: lint_opinionated_plan.md, L4a-L4d.
+- **Oct 2 - L4a, part 1: autofixes for fn-args-multiline and branch-braces.** In the real zimrlint: `closingParen` +
+  one comma before it (fmt does the layout); `emitBranchBraces` -> `{ body; }`, swallowing the statement's `;` but
+  never an `else`. Tests run std's renderAlloc after the fix (parse + rule silent); two negative controls each fail
+  their own test. The linter fixed its own two findings (dogfood); 95/95. On real code, a copy of the 25 files with
+  all 104 findings: fix + fmt -> 0 left, all pass ast-check. Slips: my comments claimed `--fix` formats (it is `zig
+  build fix` = --fix then fmt - corrected); one command ran past 300 s (the fix loop on 25 files, zimrnum last -
+  re-run alone in the background: fixed 19). Patch refreshed on top. Next: prefer-std-alias's fix.
+- **Oct 2 - L4a part 2: prefer-std-alias folded into no-qualified-std; the L4b package's first unit-test run.**
+  Simon asked "Stuck?" - not stuck; the previous step had finished. prefer-std-alias's names have no overlap with
+  no-qualified-std's vocabulary and its findings (98 ArrayList, 1 allocPrint) never share a line - and the vocabulary
+  doc already said "until that rule folds in". Folded (16 names; the rule retired; build.zig's LintRule field and list
+  entry removed; a test). With today's walker the fold adds 132 findings (ArrayList in signatures/fields) - so it rides
+  L4b. The package is one patch now, src/notes/lint_l4b.patch (two files, verified). First unit-test run of the
+  complete walk: 3/96 fail - the coverage test must flip; two no-qualified-zm tests break because `zm.Vec3` in a
+  signature is now seen (Vec3 IS a keyword; the test predates that) - a scope decision for Simon (bodies only, or
+  everywhere). Also: no-qualified-zm's fix cannot insert a missing binding (L3 overstated autofixable).
+- **Oct 2 - zm keywords bare EVERYWHERE (Simon); no-qualified-zm gets a two-pass binding fix.** In the L4b package:
+  the rule's wording, catalog, docs updated; tests 69/70 corrected (70's "Vec3 is not a keyword" predated Vec3
+  becoming one), a test pinning the decision; the coverage test flipped; the long line wrapped - 97/97. Then the fix:
+  missing binding inserted at `bindingInsertOffset` (std's insertion point, generic in its roots - renamed), the
+  next pass drops `zm.`; skipped when the name is declared in the file (`declarationCount`) - a collision no parse
+  check would catch. Tests + a negative control (no guard fails exactly the collision test). 99/99. Patch refreshed
+  (verified). Real tree untouched this turn.
+- **Oct 2 - Every fixable lint finding names the command that fixes it.** `printIssues` appends
+  ` - autofix: <command>` when a finding has a fix and returns the count; the summary prints "K of the findings can
+  be fixed automatically: <command>". `--fix-command` (zimr's build: `zig build fix`; default: rerun with --fix).
+  Apps had no fix step - added to the project helper (lint --fix, then zig fmt over the lint dirs; `LintOptions.fix`
+  / `.fix_command`); verified via the template's `zig build -l`. Ad-hoc "(`--fix` ...)" phrases removed from
+  messages. 96/96, self-lint clean, `check` 358/358; the L4b package rebased cleanly, 100/100.
+- **Oct 2 - The package re-measured: 2009 findings, 1849 autofix, 159 by hand in 37 files.** Fixability read off
+  each finding's new marker. One by-hand finding was codecs.zig's file-level `lint:off prefer-std-alias`, now naming
+  no rule - I had said no such directive existed; my search had been cut at 20 lines. Its deletion joins the package
+  (3 files); without it codecs.zig's 106 findings are all autofixable. runtime.zig's 9 zm findings are the collision
+  guard at work (per-struct bindings). Patch verified.
+- **Oct 2 - The L4b dry run found two real fix bugs.** One --fix over a fresh copy: 1368 edits, nothing visibly
+  refused; fmt; ast-check 719/721 (2 pre-existing notes excerpts); re-lint: 642 still fixable, and a second run applied
+  zero edits to the 21 files holding them - silently, while still printing "can be fixed automatically". (1) Bisected
+  (codecs.zig; a scratch diagnostic: no single culprit, a combination of 81): collectFixes sorted by start only, so
+  two names' identical binding insertions interleaved and slipped past the adjacent-duplicate check - a redeclaration,
+  the guard discarded the whole pass. Fixed in the package (sort by start, end, text), test + negative control,
+  101/101. (2) A drop-`zm.` rewrite above an existing late binding (wgpu_app.zig: binding at 1768, use at 1312) made a
+  decl-order violation - next: rewrite only below the binding, else report. Also next: make rollbacks loud.
+- **Oct 2 - Both fix bugs fixed; the L4b dry run converges in one `zig build fix`.** (2) rewrites only below the
+  binding (fileScopeBinding returns its token; above it, a by-hand "move that binding up"). Robustness: a breaking
+  pass falls back to applyFixesGuarded (one at a time from the last, keep what stays clean, refuse the rest), with an
+  honest report and "refused here - by hand" hints. Tests + 2 negative controls; package 103/103. Dry run again: 2079
+  edits in one run (1368 before), ast-check clean but the 2 pre-existing excerpts, re-lint 160 by hand + 1 refused
+  float-from-int (features_test.zig) - nothing else fixable, no decl-order. Next small thing: float-from-int should
+  only offer a fix that resolves.
+- **Oct 2 - L4b landed; lint then commented out at Simon's request.** Patch applied (103/103); `--fix` exits 0
+  unless an input failed; prefer_decl_literal joined the rules (Simon: "same line" = one logical line, so a split
+  declaration still names its type - L5 retired). `zig build fix`: 3094 edits in 270 files, 1 refused, fmt clean.
+  zimrlint.zig's own 12 new findings fixed (reorder tool for the decl-order; dead isStdRoot removed; 10 locals
+  typed). Baseline 160. The gate failed on lint: the build's paths are `./src/...`, the baseline's `src/...`.
+  Simon: comment out all of zimr_lint_rules for now - done (53 lines; `zig build lint` passes). Open: compile and
+  tests of the fixed tree (never reached), tutorial folds, and the baseline's paths before re-enabling.
+- **Oct 2 - Lint re-enabled; the fixed tree compiles; GATE 406/406.** Rules restored; baseline regenerated via
+  `zig build lint -- --write-baseline` (the build's ./src paths; 163 findings). check: only doc_folds failed (stale
+  excerpts) - regenerated, 358/358. Gate: template's build.zig still enabled prefer_std_alias (missed by a search cut
+  at 20 lines - again) - removed; robots.html quoted 4 rewritten lines - updated; the template's lint then found
+  `zm.Camera3D` in a signature - fixed by its new `zig build fix`. Gate 406/406, all tests passing. Lesson kept: a
+  search I rely on must never be cut short.
+- **Oct 2 - L4c begins; a linter bug first.** entities.zig reported `pub const TagEnum = ...` in a file-scope
+  `union(enum)` as an untyped local: L2's isContainerDeclTag edit had landed in checkAnonReturn (an anchor on a
+  shared switch tail; one match, wrong function), so tagged-union members took the generic descent and were linted
+  as statements. Reverted checkAnonReturn exactly; added the tags to isContainerDeclTag, verified in place; a
+  regression test (104/104); check 358/358; baseline 163 -> 161. Next: entities.zig's 36 by hand.
+- **Oct 2 - L4c batch 1: entities.zig, 36 by hand, one compile.** Types read from each local's source (iterators,
+  slots, handles, comptime `type`s, `@FieldType` for the generic field read); `bytes` no longer the address of a
+  temporary slice; `CompFlag.max` -> `CompFlag.capacity`. ast-check caught an ambiguous `Iterator` (named both
+  ArchChange's and CmdBuf's) -> `ArchChange.Iterator`. check 358/358; baseline 161 -> 125.
+- **Oct 2 - L4c batch 2: gpu/zn_conformance.zig.** 11 useless-error-return were function literals
+  (`struct { fn f ... }.f`) whose `anyerror!void` the table's `cpu` field dictates - fixed in the linter
+  (`isFunctionLiteral`, test + negative control), not by 11 lint:offs. 5 locals named `vec` (zm's word) ->
+  `output_row`. check 358/358; baseline 125 -> 109.
+- **Oct 2 - L4c batch 3: utils.zig, 14 untyped locals, one compile.** The bounded array's locals typed from their
+  sources (`T`, `*T`, `[]const T`, `usize`, `Self` via `.init`, `[]T` from the aligned `slice()`), `newlen` ->
+  `new_length`. check 358/358 first try.
+- **Oct 2 - L4c batch 4: zimrnum.zig.** `sumValid`'s anonymous return named `ValidSum` (+ reference row);
+  attach results typed by their own nested `Attached` (qualified - plain would be the block's); Chain's loop names
+  `Layer` via @FieldType; three int-from-float by intent (`@round` throughout - one was already rounding); the
+  split DataLoader declaration made a decl literal. zn-zimrnum 325/325, check 358/358; baseline 95 -> 84.
+- **Oct 2 - L4c batch 5: runtime.zig.** The merged file's namespaces each re-bound zm names (old files' imports);
+  seven bound once in the header, ten per-namespace copies removed, then the autofix made the 9 uses bare. check
+  358/358. Simon: dedent code shared in chat (it renders with only the first line at the left).
+- **Oct 2 - L4c batch 6: shader_runtime_wgpu.zig, 7 untyped locals, one compile** (check 358/358 first try).
+- **Oct 2 - L4c batch 7: int-from-float, 29 sites.** Colours round (ranges checked), pixel sizes round, sample
+  indices floor - and robot.zig's `steps = 1.0 / dt` rounds, fixing a latent bug: in f32 1/(1/500) = 499.99997, so
+  the integrator test's "one second" was 499 steps. check 358/358; test-fast 622 passed.
+- **Oct 2 - L4c batch 8: the last 14 untyped locals.** `held()`'s anonymous struct named `HeldSteps`; compute_host's
+  `dst` pointers name `field_name` first; jobs' kernel loop gets an explained lint:off (each kernel its own fn type).
+  check 358/358, test-fast 17/17; robot-mocap tutorial 1 fold. Baseline 39 -> 25.
+- **Oct 2 - L4c batch 9: clamp-pattern, 7 sites -> `clamp(v, lo, hi)`** (exact for every number - the nestings differ
+  only on NaN, impossible at these sites); the Julia colours also round (batch 7's convention). check 358/358,
+  test-fast 612.
+- **Oct 2 - L4c batch 10: the robot family, and a cascade.** normalize -> normalizeObservations, round ->
+  simulateAndTrain (tests, examples, tutorial fold key), sin(2 pi t) -> sinTurns(t), an explained lint:off for a test's
+  best-effort cleanup. Two useless `!` dropped; their callers' `!` then went useless - learn, iterate, setParameters
+  followed; 10 test `try`s and two examples' dead error branches gone. check 358/358, test-fast 612, doc-sync 0.
+- **Oct 2 - L4c DONE: the baseline is empty.** The last 12: frame indices named (floor), a count taken from its
+  integer, two split decl literals, assertUnreachable, one file-scope builtin, wgpu_app's Vec2 binding moved up,
+  named f32 locals instead of `@as(f32, @floatFromInt(...))` where zm is absent. Full gate 406/406, 618 tests.
+  172 by-hand findings in ten batches; two linter bugs fixed; one latent test bug fixed.
+- **Oct 2 - L6 investigated: a census of every decl-literal call.** 3577 in 230 files, 95.7% in view (typed
+  declarations, split ones included). The converse rule would flag 143: member assignments 84, literal fields 23,
+  local assignments 19, elements 9, arguments 7, a return. Vocabulary covers 31 of 52 names - every memory-owning
+  constructor. Census kept as src/notes/l6_census.patch. Decisions open: assignments; std value constructors as
+  arguments (.of, .limited, .fromByteUnits); `.empty(...)`; the fix style.
+- **Oct 2 - L6 decided and built: `constructor-in-view` (advisory).** Simon: simple, no dependence on type or variable
+  names, assignments in. A constructor-like decl literal only as a typed declaration's value (branches included);
+  spell the type everywhere else. Tests + negative control, 108/108, check 358/358. Tree: 143 in 34 files, matching
+  the census. Next: fix them in batches, then graduate it into zimr_lint_rules.
+- **Oct 2 - constructor-in-view refined to BARE words.** Simon: `.initBozo(gpa)` is fine anywhere; bare `.init` is the
+  problem. The 15 words now match whole; compounds carry their own words. Tests + negative control, 108/108, check
+  358/358. Tree: 136, all `.init(`.
+- **Oct 2 - constructor-in-view burn-down, batch 1: robot_gym.zig, 28.** Each assignment spells its field's declared
+  type. check 358/358 (3 robot-mocap folds regenerated), test-fast 612. 108 left.
+- **Oct 2 - constructor-in-view batch 2: zimrnum.zig, 13.** Rule refined: elements of the array a typed declaration
+  declares are in view (`var graphs: [2]Graph(f64) = .{ .init(arena), .init(arena) }`) - struct-literal fields stay
+  flagged. Seven lines spell their type. zn-zimrnum 325/325, check 358/358. 95 left in 32 files.
+- **Oct 2 - constructor-in-view batch 3: robot_supertrack, robot_latent, robot_geno - 32.** Simon confirmed the array
+  refinement. Each assignment spells its field's type. check 358/358, test-fast 616, 2 robot-mocap folds. 63 left.
+- **Oct 2 - constructor-in-view batch 4: codecs, robot_sac_track, robot_world - 16.** check 358/358, test-fast passed.
+  47 left.
+- **Oct 2 - constructor-in-view DONE and enforced.** The last 47 in one pass (each type from its declaration, the
+  doubtful ones checked by hand); one more gap fixed in the rule (a field's default value names its type); the rule
+  joined zimr_lint_rules, no longer advisory. Tested once at the end: zimrlint 108/108, tree 0 findings, full gate
+  406/406 with 619 tests. Nothing to fix.
+- **Oct 2 - L4d: the coverage guard.** `--coverage` now fails on any unwalked node (with a summary); a
+  `lint-coverage` build step over exactly lint's files; the gate runs it. Tree fully covered (58 s); a blind linter
+  makes it exit 1 (negative control). The lint arc is closed: complete walk, empty baseline, constructor-in-view
+  enforced, coverage guarded. Next: RL B3.
+- **Oct 3 - Review of the last RL turn (B2b) and the plan; the next three turns made precise.** B2b stands (torch's
+  formula with jax's masks, known answers, controls, 18d.14). Read from BMPC's torch source (still in /tmp/bmpc):
+  the planning scorer (_estimate_value), acting (_plan: 24 policy trajectories fixed in MPPI's first rows, a
+  score-weighted elite draw, target = (elite's first action, std[0]), + std[0] eps, clamp, warm start), the value
+  target (td_horizon policy steps from the TRUE latents through the TARGET heads; NO terminal handling - the gate
+  must use fixed-length episodes), the update's order (WM loss / H, / H, / (H num_q); one clip 20 over all model
+  parameters; encoder lr x 0.3; then the policy on the rolled latents, detached; then the target follow), and the
+  defaults (config.yaml). `Mlp.apply` needs a Graph: acting builds one inference graph per act. Plan: TURN 1 B3a
+  acting (robot_bmpc.zig), TURN 2 the replay row + world-model update, TURN 3 the policy update + update(); then
+  B5 (reanalyze, schedule, cartpole gate) and B6.
+- **Oct 3 - B3, turn 1a: `LatentPolicyPlans` - the policy's own plans for MPPI.** The review's "missing scorer" was
+  wrong: LatentPlanScorer exists and is _estimate_value. What was missing - the policy's plans for Mppi's reserved
+  rows - is built in zimrnum beside it (built once, frozen, the draw between recomputes, only the policy rows
+  written). Bit for bit against a row-by-row reroll; two controls each failing exactly their test. Mistakes the
+  tests caught and I fixed: `try` on `at2` (not an error union), `.init(seed)` arguments (constructor-in-view, on
+  my own new code), the tutorial fold (derived from `zn.` names in examples, not hand-written). zimrnum 329/329,
+  check 358/358, tutorial 18d.15. Next: robot_bmpc.zig - Config, Networks, act.
+- **Oct 3 - B3 turn 1b: robot_bmpc.zig - BMPC's networks and ACTING. Turn 1 complete.** `Bmpc(T)`: Config,
+  Networks (zero-last heads, cloned target heads), Actor (plans + scorer + Mppi, frozen), `act` (plans into the
+  search; Mppi.plan noise-free for the replay target; Mppi.explore - extracted from choose - for the action). Four
+  known answers, two controls each failing exactly its test. Caught on the way: `.init` bare in assignments and a
+  return (constructor-in-view), `std.mem.eql` qualified, four long lines, `zn.scalarClamp` not public (the test now
+  clamps with zm.clamp - an independent clamp), a control whose mutation broke the syntax (redone). zimrnum
+  329/329, test-fast 616 (+4), check 358/358. Next: turn 2 - the replay row and the world-model update.
+- **Oct 3 - The linter dogfooded; the write-first checklist; B3/B4 turn 2a: the replay row.** `-Dautofix` (its
+  comment said default true, its code false) is now on: lint --fix -> zig fmt -> lint (check) -> compile, and lint-check
+  / check see the fixed tree - a planted fixable finding was repaired by plain `zig build check` (file byte for byte
+  restored), a planted untyped local failed it with the finding named. A false lead (findings "missing": my `> f 2>&1`
+  capture let the build runner's summary overwrite them) cost a detour; logs are now captured stream by stream. The 44
+  by-hand rules are a checklist in the plan's standing rules. Then the Row (BMPC's layout, each row its own successor,
+  done = terminated or truncated, the empty target N(0, 1)): 4 known answers, a control failing exactly the two it
+  should; SequenceReplay's doc and 18d.9 follow. Written lint-clean first time. test-fast 620, check 360/360.
+- **Oct 3 - B4, turn 2b1: the value targets.** `zimrnum.LatentValueTargets` - the policy's lookahead from each stored
+  step's true latent, through the model, closed by the TARGET heads' averaged value (BMPC's _td_target_V) - and
+  `TanhMeanGaussian.draw`, the draw's one definition (the plans use it now). Bit for bit against a row-by-row reroll
+  two steps ahead with two heads; zero heads give zero; seeds; refusals; two controls each failing exactly the
+  bit-for-bit test. The autofix fixed one signature itself; one long line by hand. zimrnum 333/333, check 360/360,
+  tutorial 18d.16. Next: the world-model update (turn 2b2).
+- **Oct 3 - Review, and the BMPC chapter made a course.** Review of the last turns' code: one stale comment (robot_bmpc's
+  "what is here so far" predated the Row) and Mppi's header not mentioning `explore` - fixed. Tutorial: the chapter
+  intro now promises the whole agent; 18d.0 the course map (the two loops, every box a section); figures with worked
+  examples in 18d.9 (a window across an episode end), 18d.13 (the draw: clamp, not squash - 0.8 + 0.45 = 1.25 -> 1),
+  18d.15 (one state's 512 candidates, 24 fixed, 6 rounds, the elite drawn), 18d.16 (a value target: 0.5 + 0.9 x 2.5 =
+  2.75); new 18d.17 (one decision assembled: three phases, the warm start [0.2, 0.5, -0.1] -> [0.5, -0.1, 0], the
+  exploration 0.6 -> 1.05 -> 1.0 with (0.6, 0.3) kept; act's real code). Every figure rendered and looked at before it
+  shipped (Playwright) - which caught overflowing text, colliding labels, missing arrowheads (marker-end marks only a
+  path's last segment), a cut-off canvas and one misleading arrow - and checked again on the built page. Code comments
+  gained the same in ASCII: the two loops, the window, the block layout, the 2.75 target, the draw, explore. check
+  360/360.
+- **Oct 3 - B4 turn 2b2: the world-model update. Turn 2 complete.** `WorldModelLearner` in robot_bmpc.zig: windows laid
+  out with each step checked against its own successor, value targets from the target heads, the masked loss, ONE
+  clip over everything, two Adams (encoder at 0.3), the target heads' 1% follow. Three known answers (the layout by
+  hand; the clip exact, Adam's first step at the rate, the follow by hand; same seed same update) passed first
+  compile; two controls each failing exactly the one-update test. Written lint-clean with the dogfooded loop (the
+  autofix split a signature and removed two unused constants; long lines rewritten around a `rowOf` helper).
+  Tutorial 18d.18 with two figures, rendered and checked on the built page. test-fast 623, check 360/360. Next: turn
+  3 - the policy update and `update()`.
+- **Oct 3 - B4 turn 3: the policy update and `update()`. B4 complete - BMPC can act and learn.** PolicyLearner on its
+  own graph (latents copied as numbers from the world model's forward pass, the planner's means and log spreads from
+  the rows, the running KL scale, its own clip and Adam), Learner (pretraining skips the policy), discountFor. Five
+  known answers passed first compile; three controls each failing exactly their own test. Lint findings while
+  writing: one zm core-word shadow (`length` -> `episode_steps`), two long lines. Tutorial 18d.19 with two figures,
+  checked rendered and on the built page. test-fast 628, check 360/360. Next: B5 - reanalyze, the warm-up schedule,
+  and the cartpole gate.
+- **Oct 3 - B5a: reanalyze.** Built as what it is - a decision: an Actor with the policy's plans at the exploration
+  bounds, every state a first step, evaluated; answers written into the replay and the batch, between sampling and
+  learning. The world-model update split into sample + learn without changing a number. A first control went
+  undetected - fresh networks score every candidate alike, so the decision could not see the bounds; the test now
+  compares the candidate block. Another run looked like a pass but was a compile error read without its summary.
+  Both lessons in the plan. Tutorial 18d.20. test-fast 631, check 360/360.
+- **Oct 3 - Review of the policy update and reanalyze.** Re-checked against BMPC's source: the policy trains on
+  zs[:-1] (z_0 .. z_(H-1)), and our row t's own target pairs with z_t as torch's row t + 1 does; no bugs found.
+  Simplified: the policy's targets written by whole rows; reanalyze as two symmetric step x window loops
+  (`state_index`, `batch_row_index`); `Learner.update`'s `reanalyzing`; `discountFor` reads as an effective horizon
+  n = L / 5 (BMPC's (n - 1) / n form kept for exact clamped values); renamed fields (`reanalyzed_windows`,
+  `target_rows`, `discount_horizon_divisor`). Comments, test names, 18d.19, 18d.20 and their figures rewritten in a
+  plain book tone; the file header's stale "lands next" and a plan reference in Config removed. test-fast 631 after
+  the refactor; two controls re-planted on the new loops, each caught (one first failed to compile - read from its
+  summary). check 360/360.
+- **Oct 3 - Investigation: splitting RL out of zimrnum.** Measured with a repeatable script
+  (src/notes/scripts/zimrrl_split_analysis.py): 58 public declarations, 29 private helpers, 94 of 333 tests, about
+  9,470 of 40,907 lines move; nothing that stays uses a moved name once the two PPO losses stay (Graph's PPO
+  operation calls them). The linter's canonical-alias rule already supports a `zrl` module. Callers: 9 source files
+  and the robot-mocap tutorial's quotes. Found two orphaned doc fragments and a stale header claim about the GPU
+  sweep. The staged plan (S0 - S4) is in the plan, ahead of B5b.
+- **Oct 3 - The direction settled; split stage S0 done.** Simon asked what Graph knowing PPO means for RL on the GPU.
+  Findings: `ppo_clip` is Graph's only algorithm-named node kind (30 kinds; the distribution helpers are already
+  compositions) and can be composed from generic nodes with PPO's exact gradient; the GPU side has no autograd -
+  hand-written kompute kernels run by compute_host - and zimrnum's GPU half holds 4 RL kernels. Plan amended: S0b
+  takes PPO out of Graph, S1b gives zrl its own GPU half (`wants_zimrrl`), so generic code never knows an RL algorithm
+  on either side. S0: two detached doc blocks returned to `saveParameters` and `PpoStats`; the header states the
+  sweep's five RL rows; the baseline recorded by name (439 public, 333 tests, 784 rows). zn-zimrnum 333/333, check
+  360/360.
+- **Oct 3 - Safari: "'texture_2d<f32>' cannot be used as the type of a 'let'" (shapes_fs, every 2D page).** Simon tried
+  zimr on an iPad. Cause: spv2wgsl's `emitLoad` bound every load with `let`, including texture and sampler HANDLES;
+  WGSL requires a `let`'s type to be constructible or a pointer. Chrome accepts it, Safari enforces the
+  specification. The translator's own guard `checkNoHandleValues` listed `let` of a handle as legal, and its test
+  expected it. Fix: a handle load binds nothing (the result id names the module-scope variable; uses substitute it);
+  `markHoistedResults` never hoists a handle; `checkNoHandleValues` now refuses a handle `let` (runs on every
+  translation, so the build fails on a regression); its doc and test corrected. Two docs merged above it went back to
+  `checkBarrierUniformity` and `checkNonFiniteConstants`. Verified: `zig build test` 431/431 steps (2028 tests); 125
+  regenerated WGSL files, 0 handle lets; the shapes shader now samples `textureSample(texture0, texture0_sampler,
+  uv)`. Note: build.zig's comment describes a `wgpu-check` step that does not exist. Safari stops at the first error -
+  re-test on the iPad for any further spec difference.
+- **Oct 3 - Split stage S0b: PPO leaves Graph.** `PpoClipLoss(T)` builds PPO's clipped surrogate from generic graph
+  operations; it matched the fused node to 1e-12 in value and gradient in every clip regime before the node was
+  removed. Graph now names no algorithm; with the PPO loss family classified as RL the split analysis reports no
+  blockers. Ported PpoModel, ppoUpdate, robot_gym, the tests, the tutorial passage (rewritten in the plain tone) and
+  robot-mocap's quotes; stale reference notes for the removed API deleted. Docs written for cartpoleOutcome and
+  ppoEpoch. A full disk (98%, 7.7 GB of build cache) first showed as a cache error; cleared. test-fast, check
+  360/360, doc-sync, zn-zimrnum 333/333.
+- **Oct 4 - Split stage S1a: zrl as a facade.** src/zimrrl.zig re-exports the 61 moving names; the zrl module is wired
+  beside every non-kernel zn import; seven source files, the robot-mocap tutorial's quotes and one zn_mlp comment now
+  spell the moved names `zrl.`. Two slips caught by the checks: the build script's pattern first matched the new
+  module's own zn import (an assertion stopped it before writing), and the caller script also rewrote the facade
+  (restored from its backup). test-fast unchanged, check 360/360, doc-sync. Finding for S1b: zn_mlp.zig holds SAC and
+  SuperTrack kernels, so the GPU half needs a full inventory, including a third home - the robot's GPU code.
+- **Oct 4 - S1a verified after a session restart.** The restarted session found S1a's work on disk and recorded in
+  the plan, re-checked it independently (the facade re-exports exactly the analysis's 61 names; only zn_binary and
+  the GPU probe still spell moved names with zn., as planned for S1b; every touched file lint-clean), then ran the
+  pending full gate: 410/410 (GPU modules, the SPIR-V probe, every example). While the gate ran: the S1b inventory -
+  zn_binary's 4 RL kernels, and in zn_mlp 8 PPO / SAC kernels (zrl's half) and 5 SuperTrack kernels (a third home,
+  the robot's GPU code); `wants_zimrrl` must be opt-in per kernel.
+- **Oct 4 - S1b scoped and S1b-1 done.** Reading the dispatch: `compute_host.Compute(M)` serves one kernel module, and
+  a trainer dispatches its generic and RL kernels through one pipe in one submission. So zn_binary's 4 RL kernels
+  (which call zn formulas that become zrl's) move now, through the sweep only; zn_mlp's 13 RL kernels (no import of
+  zrl) wait for a kernel-set design (S4b). S1b-1: the build and the shader pipeline learned `wants_zimrrl`; check
+  360/360. S1b-2's steps are written out in the plan.
+- **Oct 4 - S1b-2: zrl's GPU half.** The four RL kernels moved from zn_binary.zig to src/gpu/zrl_binary.zig (the
+  ABI copied, the kernels calling `zrl.`), attached to the sweep page with `wants_zimrrl`; the page has a fourth
+  pipeline and a compile-time check that the two files' Buffers and Params match field by field; the conformance table
+  has `Kind.rl_binary`; the GPU probe imports zrl. On the way, three generic kernels' docs that had been stranded above
+  cartpole_step's went back to their owners. The gate passed but did not build the sweep page - found by looking for
+  the new WGSL and not finding it; the focused page build exposed a type-info API change in the new check, fixed, and
+  a control showed the check fails on a mismatch. zn_binary no longer depends on any RL name.
+- **Oct 4 - S2: the doc tool handles several libraries.** zimrnum_ref now reads a `Library` table; every page's
+  examples are matched against every library's alias, so a page can fold and arity-check calls into either library.
+  Restructured textually so main's comments moved with its body. Proof of no behaviour change: the tutorial is
+  reproduced byte for byte, three runs. check 360/360. Next: S3, the move itself.
+- **Oct 4 - S3b: the split is applied.** zimrnum.zig 40,907 -> 31,350 lines; zimrrl.zig 9,891 lines with 61 public
+  declarations and 95 tests, a fast test root of its own. The compiler found what the static analysis could not: two
+  private members reached across the new file boundary (DiagGaussian.half_log_tau, PpoClipEval.loss), made pub by
+  rules in the script. All suites green (zrl 95/95, zn 238/238, test-fast, check 360/360), and the script reproduces
+  the tree byte for byte from the backups. The RL chapters' folds wait in zimrnum's tutorial for S3c.
+- **Oct 4 - S3c-1: zimrrl's documentation machinery.** The tutorial check became one shared helper
+  (`zn.expectReferenceTableMatches`) used by both libraries; zimrrl has its own check, ASCII scan and suffix scan; a
+  first zimrrl-tutorial.html with a generated 139-row reference table; the doc tool documents both libraries. A
+  control (one row removed) fails zrl's check by name. Next: S3c-2, moving the RL chapters.
+- **Oct 4 - S3c-2: the tutorial split. The zimrnum / zimrrl split is complete.** The RL chapters moved to
+  zimrrl-tutorial.html (chapters 2-4, reference 5) by a script that finds blocks by id, renumbers references and
+  figure labels, leaves pointers in zimrnum and retargets links across the two pages; its invariants (every id kept,
+  every link resolving, no old numbers, no stale zn. spellings) and both pages' heading numbering held. Folds are
+  conserved (285 + 63 = 348). All suites, doc-sync, the sweep page and the gate (412/412) green. Next: B5b.
+- **Oct 4 - RL tutorial organisation, step 1.** Read the whole tutorial: chapters 2 and 3 were two generations of the
+  same material (terminal/truncated three times, PPO's clip three times, replay and cartpole twice), with development
+  history and testing detail. Reorganised by the library's layers into ten chapters (a first agent, environments,
+  experience, policies, on-policy, off-policy, imitation, world models, reference) by a script that moves sections
+  whole by id; duplicates now sit side by side for the merge step. All checks green. Next: merges, then prose.
+
+- **Oct 4 - RL tutorial organisation, step 2.** The four duplicated topics are one section each: how an episode ends
+  (3.3), rollouts and replay (4.1), GAE with its recurrence (4.2), PPO's clip (6.1); the absorbed sections' ids stay as
+  anchors. ppoClipSample's quoted body matched the source again (it still showed zimrnum's scalarClamp). All checks
+  green. Next: the prose pass.
+- **Oct 4 - RL tutorial: 20% shorter, neutral, three new figures.** Prose 13,797 -> 11,034 words, chapter by chapter:
+  history and test detail out, measured blocks stated as expected values, repeated explanations replaced by links.
+  New figures: the run loop, terminal vs truncated, PPO's clipped objective. Found on the way: a stray fold closing
+  marker inherited from the old zimrnum chapter, and figure colours that vanished without the page stylesheet - both
+  fixed. All checks green.
+- **Oct 4 - znum history removed from source and tutorials.** 371 lines in 14 files at the start. The parity tool
+  (whose purpose was parity with znum) and its build step deleted; every comparison rewritten to explain the design
+  directly rather than deleted; the tensor file magic is now "ZIMR\0\0" (no saved files existed). On the way: the PPO
+  doc chain in zimrrl.zig returned to its owners, a false `exp` doc removed, stale facts fixed (Transition's
+  `seam`, the cartpole angle in turns, the reshape -1 claim), a broken MAD sentence and a broken test table row
+  repaired. The zimrnum tutorial also lost its stale "What exists" chapter (chapters renumbered). All checks green.
+- **Oct 4 - B5b-1: BMPC's schedule.** `Bmpc(T).Schedule`: seeding, the pretraining burst and the steady phase as
+  arithmetic over frames, generalised to E environments by holding the update-to-data ratio fixed; one environment
+  at ratio 1 is torch's schedule. Four known-answer tests; a control (no rounding) fails exactly its test. Next:
+  the loop over a stand-in environment, then the cartpole gate.
+- **Oct 4 - B5b-1 reviewed: a real bug in the schedule.** Dividing the seed steps among the environments meant that
+  with 8 environments and 200-step episodes, seeding ended after 125 frames - before any episode had ended. Seeding
+  now counts frames per environment (five episodes in every one), the burst catches up one update per seeded step,
+  and the ratio of updates to data is u from the burst on. The one-environment test could not see the bug (both
+  readings agree there); the new tests could, and a control proves it. Comments rewritten as a course, with the
+  timeline, the episodes grid and the update-to-data identity drawn in ASCII.
+
+- **Oct 4 - EfficientTDMPC v5 re-read against our code; the plan made sufficient for parity.** Everything in BMPC's
+  column of their Table 2 is in place (widths, rates, per-step insertion, evaluation by a drawn elite). The gaps are
+  theirs: two planners configured apart (acting H 6 with the multi-horizon mean; reanalyze H 3, 64 / 8 / 3, final
+  objective, pessimism), +2 iterations above 20 action dimensions, the value-equivalent dynamics ensemble (training
+  and scoring per Appendix D - every candidate under every head, which our earlier guess had wrong), presets. N7 is
+  now six stages with known answers, ending with their cross-scoring diagnostic; N8 is their protocol on our tasks
+  (DMC-equivalent classics and the early-termination tasks) with explicit success criteria; N8b decides termination
+  for TrackEnv by measurement; N9 is the GPU prerequisite. Fixed on the way: zrl's Mppi doc and the tutorial said
+  evaluation takes the best elite; the code (and torch) draws one.
+- **Oct 4 - B5b-2: the training loop.** `Trainer(Environment)` runs one frame at a time as the schedule says: random
+  actions with empty targets while seeding, the planner after; fixed-length episodes cut by truncation with the true
+  final observation kept; the burst as pretraining; labelled random streams so the same seeds replay the same run.
+  Five tests on a stand-in environment and two controls, each failing exactly its own test. Next: the cartpole gate.
+- **Oct 4 - B5b-3: the cartpole gate is built, and it fails.** `zig build bmpc-cartpole` trains a small BMPC agent on
+  the cartpole (fixed 100-step episodes, reward 1 while the pole is up) and judges it in the simulator against
+  random actions: 0.110 of the steps up trained, 0.153 at random. The leading hypothesis is structural - a 3-step plan
+  with a 0 / 1 reward depends entirely on a value function 350 updates do not teach - but it is a hypothesis, so the
+  next step is diagnosis (losses, the reward head) before any change to the task or the budget.
+- **Oct 4 - B5b-3 reviewed before re-testing.** No wiring bug: the actor reads the learner's tensors live, now
+  guarded by a test with a control. The loop keeps its latest update's report. The gate's task now rewards balance
+  the way the DeepMind Control Suite does (`zrl.tolerance`, `zrl.cartpoleBalanceReward`, both with known answers),
+  since BMPC's three-step plans were tuned for graded rewards; the verdict stays behaviour. The tutorial gained the
+  schedule (with a timeline figure) and the training loop. The gate itself is re-run next.
+- **Oct 4 - the gate, diagnosed.** With DMC's dense reward: 0.200 up trained vs 0.153 random. Instrumented: the model
+  learns (reward and value losses fall; it scores upright 1.79 vs hanging 0.87) but the planner's candidates span only
+  0.011 - three 0.02 s decisions are too short for a push to matter, and the value function after 350 updates cannot
+  make up the rest. Action repeat 5 widened the planner's spread 30x but made the model's job harder (it barely ranked
+  upright above hanging); reverted to DMC's 0.02 s protocol. Conclusion: learning works, the budget is ~100x short,
+  and 0.145 s per update for networks this small says the overhead is ours. Next: profile.
+- **Oct 4 - profiled, and the first fix.** perf (installed from Ubuntu's archive, software-clock sampling) showed the
+  time is arithmetic, not pipeline: matmul 69%. `zn.matmul` gained two fast paths that are bit-identical to the naive
+  loop (now `zn.matmulReference`, the specification): the same Neumaier sum per element in the same order, visited
+  in the order memory and the vector unit prefer. The profile run went from 58 s to 25 s. Next: `add`'s broadcast
+  path, path B's vectorisation, and a decision on the transcendental functions.
+- **Oct 4 - a memory leak in the backward pass, fixed.** Simon: approximate activations are fine, and the endgame is
+  GPU training, so CPU work stays bounded to what the gates need. Reading the backward pass to fuse Mish found seven
+  temporaries taken from the graph's allocator instead of the pass's scratch arena - BMPC hit two of them (softplus,
+  concat) on every update, so memory grew with training. Fixed, with a test that counts the allocator's calls (an
+  arena's capacity hides small leaks) and a control that fails it. Next: Mish as one node with one exponential.
+- **Oct 4 - Mish as one node, with one exponential.** tanh(softplus(x)) = n / (n + 2) with n = e^x (e^x + 2), so mish
+  and its slope need one exponential each instead of an exponential, a logarithm and a hyperbolic tangent - the same
+  function, accurate in both tails, saturating cleanly. Scalar forms in zimrmath (shader-safe), one tape node in
+  zimrnum; checked against the composition, by central differences, and by the graph's own gradient probe.
+- **Oct 4 - the agent's memory is flat, and broadcasting is fast.** Two tests now hold a warm BMPC update (reanalyze
+  included) and a warm decision to zero allocations, with a control that reintroduces the concat leak. `zip` gained
+  a row path for the bias broadcast. The profile run is down to 15 s from 58 s, peak memory from 517 to 352 MB;
+  matmul is again the half that remains.
+- **Oct 4 - `@divCeil`.** No `std.math.divCeil` in zimr's code. `zm.divCeil` now wraps the builtin (fixing its
+  unsigned and minInt cases), and 24 hand-written ceilings in host code and examples use it. The SPIR-V backend does
+  not lower `@divCeil` yet, so the three GPU kernel ceilings stay written out, with the reason at each site.
+- **Oct 4 - the gate at five times the training.** matmul's vectorised path, register-blocked, is now limited by
+  Neumaier's arithmetic itself; the profile run is 12 s, from 58 s. The gate, re-sized to 1650 updates in 3 minutes:
+  0.333 up trained vs 0.153 random - learning, not mastery. The model ranks states correctly; the planner still
+  cannot separate its candidates, because the value function is too flat after so few updates. Mastery needs BMPC's
+  tens of thousands of updates; how to gate it is Simon's call.
+- **Oct 4 - decided: no more CPU learning runs.** The plan continues - B6's review, EfficientTDMPC's additions, the
+  GPU kit - towards an overnight WebGPU training, where the agent must learn to balance (and later to track). The
+  cartpole gate remains as an on-demand check with its diagnosis.
+- **Oct 4 - B6a: the networks and the configuration, reviewed.** Both match BMPC (the initialisation included). One
+  gap was BMPC's own: two more MPPI rounds from 20 action dimensions - `Config.iterationsFor`, counted as the code
+  counts (`>= 20`), which matters for the robot. Next: the world model's learner and the value targets.
+- **Oct 4 - B6b: the world model's update, reviewed - no bug.** It is Appendix D's equations 11 to 15 with one
+  dynamics head, down to which stored observation feeds each value target. The review also fixed where the ensemble
+  enters for N7c: the rollout, the loss and the targets, each once per head.
+- **Oct 4 - B6c: the policy update and reanalyze, reviewed deeply - no functional bug.** Checked against BMPC's code
+  as recorded (the KL's direction and averaging, the scale's order, reanalyze's settings) and, line by line, the
+  layouts where a silent misplacement could hide - writeBack's row order among them. The code gained clearer names,
+  named intermediates and diagrams of its layouts. Next: the tutorial's figures for the policy update, value-
+  equivalent training and reanalyze.
+- **Oct 4 - two figures for the tutorial.** 9.14 shows why the divergence puts the policy first (two disagreeing
+  answers: averaging between them versus committing to one), with the closed form worked through; 9.18 shows
+  value-equivalent training as three rows - targets from the true latents, heads scored on the rolled ones. Next: B6d,
+  the actor.
+- **Oct 4 - B6d: the actor, reviewed deeply - no functional bug.** Every point of BMPC's planner checked, down to
+  the spread's reset at every call and the cleaning of non-finite scores before ranking. The actor's doc is now a
+  course with a diagram of one decision; its fields have clearer names. The review of the assembled agent is
+  complete; next its last tutorial figure, then EfficientTDMPC's two planners (N7a).
+- **Oct 4 - B6 complete; N7a-1: two planners.** The planner's settings are now a `PlannerConfig`, and the agent has
+  two - one to act, one to reanalyze - while `Config.horizon` is only the training window. Today's numbers are the
+  defaults, so every decision is unchanged; a new test shows a six-step acting planner leaving the training window
+  and reanalyze's planner alone. Next: the BMPC and EfficientTDMPC presets.
+- **Oct 4 - N7a complete: two presets.** `Config.bmpc` and `Config.efficientTdmpc` are Table 2's two columns, each
+  checked field by field; the tutorial's 9.23 explains the two planners and the two configurations. Next: the
+  multi-horizon objective.
+- **Oct 4 - N7b: the multi-horizon objective.** Both objectives turn out to be weighted sums of the same rewards and
+  values, so the scorer takes an objective and its weights; BMPC's scores stay bit-identical, and EfficientTDMPC's
+  acting planner scores a plan by the mean of its prefixes - checked against the paper's definition, computed by
+  hand. Next: its tutorial figure, then the dynamics ensemble.
+- **Oct 4 - N7b complete: the objective in the tutorial.** 9.7 explains the whole-plan and every-prefix objectives
+  with a figure of one plan's three prefix scores, the example of two plans they rank oppositely, and the weights.
+  Next: the dynamics ensemble (N7c).
+- **Oct 4 - N7c-1: the networks hold an ensemble of dynamics heads.** Head 0 is exactly the single network BMPC had;
+  the others start from their own random streams. Until the ensemble trains, the learner refuses more than one head
+  rather than leave three untrained. N7c-2's design is settled: zrl's rollout and loss take a list of heads.
+- **Oct 4 - the last two turns reviewed.** No stream collision (Rng.split hashes its label), but two real gaps in
+  N7c-1 fixed - a zero-head configuration, and the ensemble refusal living one level above the component that trains
+  the dynamics - and one wrong worked line in the tutorial (plan A's final objective written with plan B-like terms).
+- **Oct 4 - N7c-2: the world model trains through every dynamics head.** zrl's rollout encodes once and rolls each
+  head from the shared latent; the loss scores every head's latents and averages the heads' terms - summed then
+  scaled once, so agreeing heads give exactly the one-head numbers and BMPC is unchanged to the bit. Two controls
+  confirm the tests see a missing average and a head that never rolls its own network.
+- **Oct 4 - N7c-3a: value targets through every dynamics head.** The heads' lookahead chains are stacked along the
+  rows and share each stored step's noise, so at the first step they all take the one action of eq. 14; the target
+  averages where each head leads. Checked against eq. 14 by hand, exact for agreeing heads, and a control shows the
+  shared noise matters. Next: the robot trains and uses every head.
+- **Oct 4 - deep review of the ensemble code: one real bug, older than the ensemble.** Resampling dropout gave every
+  dropout node the same mask, so BMPC's two value heads - at every step - dropped the same elements instead of
+  independently. Each node now draws from its own split of the generator, with a test and a control; the loss's own
+  dropout streams are unique per dynamics head, step and value head. The rest of the review renamed what had become
+  ambiguous (several `head_count`s counting different heads) and named the intermediates.
+- **Oct 4 - N7c complete: the agent trains an ensemble of dynamics heads.** Every head is bound, rolled, scored and
+  stepped by the optimiser; the value targets average where the heads lead; the policy learns on every head's latents,
+  stacked into its batch. One head stays bit-identical to BMPC; two identical heads report exactly the one-head loss;
+  controls show the tests notice a head left out of the optimiser or of the policy's batch. EfficientTDMPC's preset
+  now has four heads. Planning still reads the first - next, the ensemble's tutorial and its scoring.
+- **Oct 4 - the ensemble in the tutorial.** 9.24 explains the dynamics heads with a figure of one encoded latent
+  fanning out into three rollouts, each compared with the same targets; the value target and the policy through
+  every head; and a stale sentence in 9.23 corrected. Next: scoring plans under every head (N7d).
+- **Oct 4 - N10 added: jumpy dynamics, an experiment after EfficientTDMPC's parity.** Simon's idea, discussed: a
+  4-step dynamics head (with a 4-step reward output) beside the 1-step one, planning on a fixed 1, 1, 4, 4 schedule -
+  ten steps of lookahead in four evaluations. Shared encoder and value heads; a fixed schedule so candidates stay
+  comparable; the 1-step head kept for the policy. To be tested on a linear system first, then measured.
+- **Oct 4 - N7d: plans scored under every dynamics head.** Each candidate is rolled under every head and bootstrapped
+  with every value head; the score is the mean of those estimates, and the variance of that mean is kept for the
+  pessimism to come. One head stays BMPC's to the bit; the variance is checked against a hand computation, and two
+  controls show the tests notice a missing division and an ensemble silently reduced to its first head.
+- **Oct 4 - N7e: pessimistic reanalyze.** The scorer can make a plan pay beta standard deviations of the heads'
+  disagreement; EfficientTDMPC's preset turns it on in reanalyze where episodes can end early, never while acting.
+  The chosen plan flips exactly at the beta worked out by hand, and two controls show the tests notice a variance
+  used in place of its square root and acting reading reanalyze's setting. The build cache was cleared for disk space.
+- **Oct 4 - N7f-1: the planner remembers which plan it chose.** MPPI now records the candidate row behind each
+  state's answer, and the actor can hand out the whole chosen plan - the first piece of the cross-scoring diagnostic,
+  which will compare plans made under one head and under the ensemble against the real environment.
+- **Oct 4 - deep review of the ensemble's scoring, pessimism and the chosen plan.** Every layout and order checked;
+  one deviation from BMPC fixed - an infinite score now ranks like BMPC's nan_to_num(0) ranks it, so a pessimistic
+  score that overflowed downward ranks last instead of being rescued to 0. The scorer, MPPI and the actor gained
+  diagrams of their row layouts, the estimate grid and the chosen plan. Next: the same pictures in the tutorial.
+- **Oct 4 - ensemble scoring and pessimism, drawn.** The tutorial's scoring section shows one candidate's grid of
+  estimates worked through to its spread, the scorer's rows stacked per head, and two plans' pessimistic scores
+  crossing as beta grows - the steadier plan overtaking the higher one. Next: the cross-scoring diagnostic's model
+  side (N7f-2).
+- **Oct 4 - N7f-2: plans scored across models.** The diagnostic plans the same states under one dynamics head and
+  under the ensemble and scores both plans and the policy's under both models. Its controls exposed a blind spot:
+  BMPC starts the reward and value heads at zero, so every plan scored alike and the first tests could not fail. The
+  tests now wake those heads - and the same fix turned a vacuous comparison in the pessimism test into a real one.
+- **Oct 5 - R5: a merge of SuperTrack and BMPC, proposed.** SuperTrack is fast because its policy follows the exact
+  gradient of a known tracking loss through a learned model - and its three limits (a horizon of one window, a local
+  gradient, a gym that resets on falls) are the three goals: robustness to large pushes and get-ups. The proposal
+  keeps SuperTrack's loop for the common case and adds BMPC's tools where gradients fail: a pessimistic value tail
+  on the pathwise loss, a planner run only on hard states as a teacher, a gym that keeps falls, and re-entry by
+  motion matching on the simulated pose. Fifteen options weighed; staged P1-P5 with known answers; runtime stays one
+  policy pass.
+- **Oct 5 - the north star narrowed and unified, after PHC.** The goal is now the whole two-minute dance, precisely,
+  plus realistic recovery back into it - one objective, no switch between tracking and recovering. PHC needed its
+  switch because its exponential rewards vanish far from the reference; a cost whose gradient does not vanish
+  (SuperTrack's L1) stays informative from the floor, and the value function makes returning worth it. Torque limits,
+  mechanical power and a differentiable pose prior over the dance and the get-up capture keep the recovery human.
+  R5.7-R5.9 hold the study, the objective and the new judge; the stages gained the objective and the body's limits.

@@ -26,6 +26,14 @@ pub const Out = shader_externs.Out;
 /// Ambient floor so fully back-lit faces still read as shape.
 const ambient_strength: f32 = 0.18;
 
+/// x^16 as four squarings.
+fn pow16(x: f32) f32 {
+    const x2: f32 = x * x;
+    const x4: f32 = x2 * x2;
+    const x8: f32 = x4 * x4;
+    return x8 * x8;
+}
+
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
@@ -67,14 +75,6 @@ pub fn shaderMain(io_in: Io) Out {
 
     out.final_color = .{ final[0], final[1], final[2], 1.0 };
     return out;
-}
-
-/// x^16 as four squarings.
-fn pow16(x: f32) f32 {
-    const x2: f32 = x * x;
-    const x4: f32 = x2 * x2;
-    const x8: f32 = x4 * x4;
-    return x8 * x8;
 }
 
 comptime {

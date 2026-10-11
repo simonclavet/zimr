@@ -83,7 +83,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     // convenience: WebGPU keeps groups 0 (projection) and 1 (texture) bound across a pipeline
     // swap only when the two pipeline layouts agree on that prefix, and handing it the same
     // handles is the only way to be certain that they do.
-    const filter: z.Shader2D = try z.Shader2D.init(
+    const filter: z.Shader2D = try .init(
         gpa,
         f.gpu.device,
         f.gpu.queue,

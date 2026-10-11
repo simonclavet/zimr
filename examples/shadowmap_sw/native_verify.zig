@@ -17,6 +17,7 @@ const zm = @import("zm");
 const scene = @import("scene.zig");
 const bunny_proxy = @import("bunny_proxy");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const float = zm.float;
 
 const sm_res: usize = 8;
@@ -35,9 +36,9 @@ fn luminance(c0: u8, c1: u8, c2: u8) f32 {
 
 pub fn main() !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     // ---- runtime evaluation of the SAME bake function ----
     const live: scene.CornerBake(sm_res, img_w, img_h) = scene.bakeCorner(sm_res, img_w, img_h);
@@ -100,8 +101,8 @@ pub fn main() !void {
     defer gpa.free(lit_png);
     const sm_png: []u8 = try z.codecs.png.encode(gpa, &baked.shadow_map, sm_res, sm_res);
     defer gpa.free(sm_png);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "corner_lit.png", .data = lit_png });
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "corner_shadowmap.png", .data = sm_png });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "corner_lit.png", .data = lit_png });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "corner_shadowmap.png", .data = sm_png });
     std.debug.print("  wrote corner_lit.png + corner_shadowmap.png\n", .{});
 
     if (sm_diff != 0 or img_diff != 0) {

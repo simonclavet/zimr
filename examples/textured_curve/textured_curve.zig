@@ -147,6 +147,11 @@ fn scale(a: Vec2, s: f32) Vec2 {
     return .{ a[0] * s, a[1] * s };
 }
 
+fn emit(f: *z.Frame, u: f32, v: f32, p: Vec2) void {
+    z.rlTexCoord2f(f.gl, u, v);
+    z.rlVertex2f(f.gl, p[0], p[1]);
+}
+
 /// The hero: sweep the road texture along the cubic Bezier as a UV ribbon.
 fn drawTexturedCurve(f: *z.Frame, s: *State) void {
     const segs: i32 = if (s.segments < 2) 2 else s.segments;
@@ -212,11 +217,6 @@ fn drawTexturedCurve(f: *z.Frame, s: *State) void {
     z.rlSetTexture(f.gl, .{}); // back to the white 1x1 so shapes stay solid
 }
 
-fn emit(f: *z.Frame, u: f32, v: f32, p: Vec2) void {
-    z.rlTexCoord2f(f.gl, u, v);
-    z.rlVertex2f(f.gl, p[0], p[1]);
-}
-
 // A cheap horizontal slider: returns the (possibly updated) value.
 fn slider(
     f: *z.Frame,
@@ -242,6 +242,22 @@ fn slider(
 
 fn hit(m: Vec2, p: Vec2, r: f32) bool {
     return distance(m, p) <= r;
+}
+
+// small local Rectangle helpers (types.Rectangle via z)
+fn z_rect(x: f32, y: f32, w: f32, h: f32) z.Rectangle {
+    return .{ .x = x, .y = y, .width = w, .height = h };
+}
+
+fn pointInRect(m: Vec2, r: z.Rectangle) bool {
+    return m[0] >= r.x and m[0] <= r.x + r.width and m[1] >= r.y and m[1] <= r.y + r.height;
+}
+
+fn drawHandle(f: *z.Frame, m: Vec2, p: Vec2, col: Color) void {
+    if (hit(m, p, 8)) {
+        f.gl.circle(p, 8, .{ .color = yellow_hi, .segments = 16 });
+    }
+    f.gl.circle(p, 5, .{ .color = col, .segments = 16 });
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -361,21 +377,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     common.caption(f.gl, s.font, "textured curve - drag the four points; sliders set width & segments");
     z.endDrawing(f.gl);
-}
-
-fn drawHandle(f: *z.Frame, m: Vec2, p: Vec2, col: Color) void {
-    if (hit(m, p, 8)) {
-        f.gl.circle(p, 8, .{ .color = yellow_hi, .segments = 16 });
-    }
-    f.gl.circle(p, 5, .{ .color = col, .segments = 16 });
-}
-
-// small local Rectangle helpers (types.Rectangle via z)
-fn z_rect(x: f32, y: f32, w: f32, h: f32) z.Rectangle {
-    return .{ .x = x, .y = y, .width = w, .height = h };
-}
-fn pointInRect(m: Vec2, r: z.Rectangle) bool {
-    return m[0] >= r.x and m[0] <= r.x + r.width and m[1] >= r.y and m[1] <= r.y + r.height;
 }
 
 pub const app: z.AppSpec(State) = .{

@@ -39,6 +39,8 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const zeroes = std.mem.zeroes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -82,14 +84,14 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
 
-    lines: [log_cap]LogLine = std.mem.zeroes([log_cap]LogLine),
+    lines: [log_cap]LogLine = zeroes([log_cap]LogLine),
     severities: [log_cap]Severity = @splat(.info),
     line_count: usize = 0,
 
     auto_scroll: bool = true,
     paused: bool = false,
     next_seq: u32 = 0,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
 
     // Scratch buffer for "copy all to clipboard."  Sized for the
     // worst case (every log line joined with newlines); written
@@ -127,7 +129,7 @@ fn appendLine(s: *State) void {
     if (s.line_count == log_cap) {
         return;
     }
-    const r: std.Random = s.rng.random();
+    const r: Random = s.rng.random();
     s.next_seq += 1;
 
     // Three severity buckets, weighted 70/20/10.
@@ -191,7 +193,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .ui_host = z.UiHost.init(gpa, font),
         .font = font,
-        .rng = std.Random.DefaultPrng.init(0xa17a),
+        .rng = Random.DefaultPrng.init(0xa17a),
     };
 
     // Phone readability: load the bundled TTF (Atkinson Hyperlegible Mono),
@@ -239,7 +241,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     // Background log emission - at ~10 lines/sec while not paused.
     if (!s.paused) {
-        const r: std.Random = s.rng.random();
+        const r: Random = s.rng.random();
         if (r.intRangeAtMost(u8, 0, 5) == 0) {
             appendLine(s);
         }

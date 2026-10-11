@@ -263,8 +263,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         iv.* = @intCast(i);
     }
 
-    const sw: z.raster.Context = try z.raster.Context.init(gpa, 220, 136);
-    const sw_fb: z.CpuFramebuffer = z.CpuFramebuffer.init(
+    const sw: z.raster.Context = try .init(gpa, 220, 136);
+    const sw_fb: z.CpuFramebuffer = .init(
         f.gpu.device,
         f.gpu.queue,
         220,
@@ -334,6 +334,57 @@ fn maybePlaceDecal(s: *State, dt: f32) void {
     s.place_index += 1;
 }
 
+fn colorToLinear(c: Color) [4]f32 {
+    const f: [4]f32 = Color.toFloats(c);
+    return .{ f[0], f[1], f[2], f[3] };
+}
+
+/// A trivial flat-colour fragment shader for the base sphere fill, sharing the
+/// decal VS's `Out` (it reads no varyings, just writes a constant). Written in
+/// the same `shaderMain` shape the rasterizer expects, so the base pass goes
+/// through the identical code path as the overlay.
+const FlatFs = struct {
+    pub const Ubo = struct { rgba: [4]f32 };
+    pub const Io = struct {
+        u: FlatFs.Ubo,
+        o_world: Vec3,
+        o_normal: Vec3,
+        /// The rasterizer reads `Io.Ubo` (mirroring the generated IoT); alias
+        /// the outer type so `buildDecalUbo`-style callers and the rasterizer
+        /// agree on one uniform type.
+        pub const Ubo = FlatFs.Ubo;
+    };
+    pub const Out = struct { final_color: Vec };
+    pub fn shaderMain(io_in: Io) Out {
+        return .{ .final_color = io_in.u.rgba };
+    }
+};
+
+/// Flat-fill the receiver triangles into the CPU colour+depth buffer (base
+/// surface), depth-writing with `.less` so the sphere is solid. Uses the shared
+/// rasterizer with a constant-colour path by writing directly - a tiny inline
+/// FS-free fill keeps the base trivially identical to the GPU's flat draw.
+fn fillTrianglesFlat(s: *State, rgba: [4]f32) void {
+    const connect: fn (decal.vs.Out, *FlatFs.Io) void = comptime z.shader.autoConnect(decal.vs.Out, FlatFs.Io);
+    const fs_io: FlatFs.Io = .{ .u = .{ .rgba = rgba }, .o_world = .{ 0, 0, 0 }, .o_normal = .{ 0, 0, 0 } };
+    z.raster_shader.rasterizeTriangles(
+        decal.vs,
+        FlatFs,
+        &s.sw,
+        s.vs_outs,
+        s.indices_u32,
+        fs_io,
+        connect,
+        .{
+            .front_face = .none,
+            .depth_test = true,
+            .depth_compare = .less,
+            .depth_write = true,
+            .blend = false,
+        },
+    );
+}
+
 /// The CPU half: fill the sphere flat, then run decal_vs + decal_fs over the
 /// receiver triangles once per decal, depth-tested `.less_equal` (no write) and
 /// alpha-blended over - the software mirror of the GPU decal overlay.
@@ -386,57 +437,6 @@ fn renderCpu(s: *State, view: Mat, proj: Mat) void {
     }
 }
 
-fn colorToLinear(c: Color) [4]f32 {
-    const f: [4]f32 = Color.toFloats(c);
-    return .{ f[0], f[1], f[2], f[3] };
-}
-
-/// Flat-fill the receiver triangles into the CPU colour+depth buffer (base
-/// surface), depth-writing with `.less` so the sphere is solid. Uses the shared
-/// rasterizer with a constant-colour path by writing directly - a tiny inline
-/// FS-free fill keeps the base trivially identical to the GPU's flat draw.
-fn fillTrianglesFlat(s: *State, rgba: [4]f32) void {
-    const connect: fn (decal.vs.Out, *FlatFs.Io) void = comptime z.shader.autoConnect(decal.vs.Out, FlatFs.Io);
-    const fs_io: FlatFs.Io = .{ .u = .{ .rgba = rgba }, .o_world = .{ 0, 0, 0 }, .o_normal = .{ 0, 0, 0 } };
-    z.raster_shader.rasterizeTriangles(
-        decal.vs,
-        FlatFs,
-        &s.sw,
-        s.vs_outs,
-        s.indices_u32,
-        fs_io,
-        connect,
-        .{
-            .front_face = .none,
-            .depth_test = true,
-            .depth_compare = .less,
-            .depth_write = true,
-            .blend = false,
-        },
-    );
-}
-
-/// A trivial flat-colour fragment shader for the base sphere fill, sharing the
-/// decal VS's `Out` (it reads no varyings, just writes a constant). Written in
-/// the same `shaderMain` shape the rasterizer expects, so the base pass goes
-/// through the identical code path as the overlay.
-const FlatFs = struct {
-    pub const Ubo = struct { rgba: [4]f32 };
-    pub const Io = struct {
-        u: FlatFs.Ubo,
-        o_world: Vec3,
-        o_normal: Vec3,
-        /// The rasterizer reads `Io.Ubo` (mirroring the generated IoT); alias
-        /// the outer type so `buildDecalUbo`-style callers and the rasterizer
-        /// agree on one uniform type.
-        pub const Ubo = FlatFs.Ubo;
-    };
-    pub const Out = struct { final_color: Vec };
-    pub fn shaderMain(io_in: Io) Out {
-        return .{ .final_color = io_in.u.rgba };
-    }
-};
-
 fn clampDist(s: *State) void {
     s.cam_dist = clamp(s.cam_dist, 1.8, 8.0);
 }
@@ -476,6 +476,22 @@ fn handleInput(f: *z.Frame, s: *State) void {
         s.cam_pitch = clamp(s.cam_pitch - ddy * 0.01, -1.4, 1.4);
     }
     s.dragging = down;
+}
+
+/// Keep the CPU raster buffer matched to the live canvas: `cpu_pixel_budget`
+/// pixels shaped to the canvas aspect (constant cost at any orientation). The
+/// GPU half draws straight into the live frame, so it needs no target here.
+fn ensureTargets(f: *z.Frame, s: *State) void {
+    const vw: f32 = @max(f.window.widthf(), 1);
+    const vh: f32 = @max(f.window.heightf(), 1);
+    const aspect: f32 = vw / vh;
+    const want_w: i32 = @trunc(@max(@round(@sqrt(cpu_pixel_budget * aspect)), 16));
+    const want_h: i32 = @trunc(@max(@round(float(want_w) / aspect), 16));
+    const dims: Vec2i = s.sw.colorBufferDims();
+    if (dims[0] != want_w or dims[1] != want_h) {
+        s.sw.resize(s.gpa, want_w, want_h) catch return;
+        s.sw_fb.resize(f.gl, @intCast(want_w), @intCast(want_h), s.sw.colorBufferBytes(), "decal_sw");
+    }
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -550,22 +566,6 @@ fn update(f: *z.Frame, s: *State) void {
         "GPU decal_fs",
         .{ .size = 22, .color = .{ .r = 235, .g = 235, .b = 245, .a = 255 }, .font = &s.font },
     );
-}
-
-/// Keep the CPU raster buffer matched to the live canvas: `cpu_pixel_budget`
-/// pixels shaped to the canvas aspect (constant cost at any orientation). The
-/// GPU half draws straight into the live frame, so it needs no target here.
-fn ensureTargets(f: *z.Frame, s: *State) void {
-    const vw: f32 = @max(f.window.widthf(), 1);
-    const vh: f32 = @max(f.window.heightf(), 1);
-    const aspect: f32 = vw / vh;
-    const want_w: i32 = @trunc(@max(@round(@sqrt(cpu_pixel_budget * aspect)), 16));
-    const want_h: i32 = @trunc(@max(@round(float(want_w) / aspect), 16));
-    const dims: Vec2i = s.sw.colorBufferDims();
-    if (dims[0] != want_w or dims[1] != want_h) {
-        s.sw.resize(s.gpa, want_w, want_h) catch return;
-        s.sw_fb.resize(f.gl, @intCast(want_w), @intCast(want_h), s.sw.colorBufferBytes(), "decal_sw");
-    }
 }
 
 pub const app: z.AppSpec(State) = .{

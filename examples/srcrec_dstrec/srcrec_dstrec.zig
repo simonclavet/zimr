@@ -140,6 +140,23 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
 }
 
+fn drawSheetStrip(f: *z.Frame, s: *State, w: f32) void {
+    const gl = f.gl;
+    const pad: f32 = 10.0;
+    const tw: f32 = @min(w - 2.0 * pad, 360.0);
+    const th: f32 = tw * float(sheet_h) / float(sheet_w);
+    const tx: f32 = (w - tw) * 0.5;
+    const ty: f32 = pad;
+    gl.texture(.{ .x = tx, .y = ty, .width = tw, .height = th }, s.tex, .{ .tint = white });
+    gl.rect(.{ .x = tx, .y = ty, .width = tw, .height = th }, .{ .color = common.palette.ink_dim, .outline = 1.0 });
+    // box the active frame
+    const fw: f32 = tw / float(frames);
+    gl.rect(
+        .{ .x = tx + float(s.selected) * fw, .y = ty, .width = fw, .height = th },
+        .{ .color = common.palette.accent, .outline = 1.0 },
+    );
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const w: f32 = f.window.widthf();
     const h: f32 = f.window.heightf();
@@ -205,23 +222,6 @@ fn update(f: *z.Frame, s: *State) void {
     ) catch "";
     common.caption(gl, s.font, label);
     z.endDrawing(gl);
-}
-
-fn drawSheetStrip(f: *z.Frame, s: *State, w: f32) void {
-    const gl = f.gl;
-    const pad: f32 = 10.0;
-    const tw: f32 = @min(w - 2.0 * pad, 360.0);
-    const th: f32 = tw * float(sheet_h) / float(sheet_w);
-    const tx: f32 = (w - tw) * 0.5;
-    const ty: f32 = pad;
-    gl.texture(.{ .x = tx, .y = ty, .width = tw, .height = th }, s.tex, .{ .tint = white });
-    gl.rect(.{ .x = tx, .y = ty, .width = tw, .height = th }, .{ .color = common.palette.ink_dim, .outline = 1.0 });
-    // box the active frame
-    const fw: f32 = tw / float(frames);
-    gl.rect(
-        .{ .x = tx + float(s.selected) * fw, .y = ty, .width = fw, .height = th },
-        .{ .color = common.palette.accent, .outline = 1.0 },
-    );
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

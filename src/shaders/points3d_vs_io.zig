@@ -12,6 +12,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("cube3d_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex attributes: world-space position + per-point colour.
 /// Locations match the interleaved P3F + C4U8 vertex the example packs
@@ -24,7 +26,7 @@ pub const Attributes = struct {
 /// Single uniform block (group 0, binding 0): the camera
 /// view-projection.
 pub const Ubo = struct {
-    view_projection: [4]@Vector(4, f32),
+    view_projection: [4]Vec,
 };
 
 /// Varying outputs - aliases the cube3d `Interp` (one colour), so

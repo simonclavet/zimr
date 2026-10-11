@@ -56,6 +56,12 @@ const expect = std.testing.expect;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const indexOfScalar = std.mem.indexOfScalar;
+const splitScalar = std.mem.splitScalar;
+const sortSlice = std.mem.sort;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
 const zm = @import("zm");
 const maxInt = zm.maxInt;
 const isInf = zm.isInf;
@@ -66,6 +72,8 @@ const radFromTurns = zm.radFromTurns;
 const turnsFromDeg = zm.turnsFromDeg;
 const float = zm.float;
 const Color = zm.Color;
+const ColorU32 = zm.ColorU32;
+const Mat = zm.Mat;
 const ui = @import("ui.zig");
 /// Shared color + colormap + tick machinery (also used by implot.zig).
 const plot_core = @import("plot_core.zig");
@@ -587,10 +595,10 @@ const Im = struct {
 
     // ---- Color packing -------------------------------------------------
     // zm.Color owns float<->wire; the wire form is zm.ColorU32 (0xAABBGGRR).
-    fn colorToU32(_: Im, c: Color) zm.ColorU32 {
+    fn colorToU32(_: Im, c: Color) ColorU32 {
         return c.toWire();
     }
-    fn colorFromU32(_: Im, c: zm.ColorU32) Color {
+    fn colorFromU32(_: Im, c: ColorU32) Color {
         return Color.fromWire(c);
     }
 
@@ -687,7 +695,7 @@ const Im = struct {
             self: DrawListAdapter,
             a: Vec2,
             b: Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
             thickness: f32,
         ) void {
             self.list.addLine(self.gpa, a, b, col, thickness);
@@ -696,7 +704,7 @@ const Im = struct {
             self: DrawListAdapter,
             min: Vec2,
             max: Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
         ) void {
             self.list.addRectFilled(self.gpa, rectOf(min, max), col);
         }
@@ -704,14 +712,14 @@ const Im = struct {
             self: DrawListAdapter,
             min: Vec2,
             max: Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
         ) void {
             self.list.addRectOutline(self.gpa, rectOf(min, max), col);
         }
         pub fn addText(
             self: DrawListAdapter,
             pos: Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
             s: []const u8,
         ) void {
             const st: *ui.Style = &self.h.ctx.style;
@@ -721,7 +729,7 @@ const Im = struct {
             self: DrawListAdapter,
             center: Vec2,
             radius: f32,
-            col: zm.ColorU32,
+            col: ColorU32,
         ) void {
             self.list.addCircleFilled(self.gpa, center, radius, col, 0);
         }
@@ -729,7 +737,7 @@ const Im = struct {
             self: DrawListAdapter,
             center: Vec2,
             radius: f32,
-            col: zm.ColorU32,
+            col: ColorU32,
             thickness: f32,
         ) void {
             self.list.addCircle(self.gpa, center, radius, col, thickness, 0);
@@ -739,7 +747,7 @@ const Im = struct {
             a: Vec2,
             b: Vec2,
             c: Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
         ) void {
             self.list.addTriangleFilled(self.gpa, a, b, c, col);
         }
@@ -749,14 +757,14 @@ const Im = struct {
             b: Vec2,
             c: Vec2,
             d: Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
         ) void {
             self.list.addQuadFilled(self.gpa, a, b, c, d, col);
         }
         pub fn addPolyline(
             self: DrawListAdapter,
             points: []const Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
             closed: bool,
             thickness: f32,
         ) void {
@@ -765,7 +773,7 @@ const Im = struct {
         pub fn addConvexPolyFilled(
             self: DrawListAdapter,
             points: []const Vec2,
-            col: zm.ColorU32,
+            col: ColorU32,
         ) void {
             self.list.addPolygon(self.gpa, points, col);
         }
@@ -776,7 +784,7 @@ const Im = struct {
             p_max: Vec2,
             uv0: Vec2,
             uv1: Vec2,
-            tint: zm.ColorU32,
+            tint: ColorU32,
         ) void {
             self.list.addTexturedQuad(self.gpa, rectOf(p_min, p_max), tex, uv0, uv1, tint);
         }
@@ -790,7 +798,7 @@ const Im = struct {
             b: Vec2,
             c: Vec2,
             d: Vec2,
-            tint: zm.ColorU32,
+            tint: ColorU32,
         ) void {
             const minx: f32 = @min(@min(a[0], b[0]), @min(c[0], d[0]));
             const miny: f32 = @min(@min(a[1], b[1]), @min(c[1], d[1]));
@@ -1010,7 +1018,7 @@ const Im = struct {
     ) bool {
         var bufs: [32][]const u8 = undefined;
         var n: usize = 0;
-        var it = std.mem.splitScalar(u8, items_packed, 0);
+        var it = splitScalar(u8, items_packed, 0);
         while (it.next()) |seg| {
             if (seg.len == 0) {
                 continue;
@@ -1109,7 +1117,7 @@ const Im = struct {
 
     // ---- Style push/pop (accepted-and-dropped no-ops, like the 2D port) --
     fn pushStyleColor(_: Im, _: anytype, _: Color) void {}
-    fn pushStyleColorU32(_: Im, _: anytype, _: zm.ColorU32) void {}
+    fn pushStyleColorU32(_: Im, _: anytype, _: ColorU32) void {}
     fn popStyleColor(_: Im, _: usize) void {}
     fn pushStyleVarF32(_: Im, _: anytype, _: f32) void {}
     fn pushStyleVarVec2(_: Im, _: anytype, _: Vec2) void {}
@@ -1120,7 +1128,7 @@ pub fn Pool(comptime T: type) type {
     return struct {
         const Self = @This();
         items: ArrayList(*T) = .empty,
-        map: std.AutoHashMapUnmanaged(Im.ID, usize) = .{},
+        map: AutoHashMapUnmanaged(Im.ID, usize) = .{},
         gpa: Allocator,
 
         pub fn init(gpa: Allocator) Self {
@@ -1130,7 +1138,9 @@ pub fn Pool(comptime T: type) type {
         /// backing list/map.
         pub fn deinit(self: *Self) void {
             for (self.items.items) |ptr| {
-                if (@hasDecl(T, "deinit")) ptr.deinit(self.gpa);
+                if (@hasDecl(T, "deinit")) {
+                    ptr.deinit(self.gpa);
+                }
                 self.gpa.destroy(ptr);
             }
             self.items.deinit(self.gpa);
@@ -1143,11 +1153,13 @@ pub fn Pool(comptime T: type) type {
             return self.items.items.len;
         }
         pub fn getByKey(self: *Self, id: Im.ID) ?*T {
-            const idx = self.map.get(id) orelse return null;
+            const idx: usize = self.map.get(id) orelse return null;
             return self.items.items[idx];
         }
         pub fn getOrAddByKey(self: *Self, id: Im.ID) *T {
-            if (self.map.get(id)) |idx| return self.items.items[idx];
+            if (self.map.get(id)) |idx| {
+                return self.items.items[idx];
+            }
             const ptr = self.gpa.create(T) catch @panic("implot3d: OOM");
             ptr.* = if (@hasDecl(T, "init")) T.init(self.gpa) else .{};
             const idx = self.items.items.len;
@@ -1160,7 +1172,9 @@ pub fn Pool(comptime T: type) type {
         }
         pub fn getIndex(self: *const Self, item: *const T) usize {
             for (self.items.items, 0..) |p, i| {
-                if (p == item) return i;
+                if (p == item) {
+                    return i;
+                }
             }
             return maxInt(usize);
         }
@@ -1233,7 +1247,7 @@ pub const Ticker = struct {
     pub fn getText(self: *const Ticker, idx: usize) [:0]const u8 {
         const off: usize = @intCast(self.ticks.items[idx].text_offset);
         const buf: []u8 = self.text_buffer.items[off..];
-        const end = std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
+        const end = indexOfScalar(u8, buf, 0) orelse buf.len;
         return buf[0..end :0];
     }
 };
@@ -1462,7 +1476,7 @@ pub const Axis = struct {
         if (self.label.items.len == 0) {
             return "";
         }
-        const end = std.mem.indexOfScalar(u8, self.label.items, 0) orelse self.label.items.len;
+        const end = indexOfScalar(u8, self.label.items, 0) orelse self.label.items.len;
         return self.label.items[0..end :0];
     }
 
@@ -1577,7 +1591,7 @@ pub const ItemGroup = struct {
     pub fn getLegendLabel(self: *ItemGroup, i: usize) [:0]const u8 {
         const off: usize = @intCast(self.getLegendItem(i).name_offset);
         const buf: []u8 = self.legend.labels.items[off..];
-        const end = std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
+        const end = indexOfScalar(u8, buf, 0) orelse buf.len;
         return buf[0..end :0];
     }
     pub fn reset(self: *ItemGroup) void {
@@ -1592,7 +1606,7 @@ const Tri3D = struct {
     a: Vec2,
     b: Vec2,
     c: Vec2,
-    col: zm.ColorU32,
+    col: ColorU32,
     z: f32, // mean camera-space depth; larger = nearer (drawn later)
 };
 
@@ -1618,7 +1632,7 @@ pub const DrawList3D = struct {
         a: Vec2,
         b: Vec2,
         c: Vec2,
-        col: zm.ColorU32,
+        col: ColorU32,
         z: f32,
     ) void {
         dropFrameOnOom(self.tris.append(self.gpa, .{ .a = a, .b = b, .c = c, .col = col, .z = z }));
@@ -1631,7 +1645,7 @@ pub const DrawList3D = struct {
         b: Vec2,
         c: Vec2,
         d: Vec2,
-        col: zm.ColorU32,
+        col: ColorU32,
         z: f32,
     ) void {
         self.addTriangle(a, b, c, col, z);
@@ -1646,7 +1660,7 @@ pub const DrawList3D = struct {
     /// Sort the accumulated triangles far->near and emit them to the 2D
     /// DrawList, then clear the batch.
     pub fn flush(self: *DrawList3D, dl: Im.DrawList) void {
-        std.mem.sort(Tri3D, self.tris.items, {}, lessThan);
+        sortSlice(Tri3D, self.tris.items, {}, lessThan);
         for (self.tris.items) |t| {
             dl.addTriangleFilled(t.a, t.b, t.c, t.col);
         }
@@ -1746,7 +1760,7 @@ pub const Plot3D = struct {
         if (self.title.items.len == 0) {
             return "";
         }
-        const end = std.mem.indexOfScalar(u8, self.title.items, 0) orelse self.title.items.len;
+        const end = indexOfScalar(u8, self.title.items, 0) orelse self.title.items.len;
         return self.title.items[0..end :0];
     }
     pub fn isRotationLocked(self: *const Plot3D) bool {
@@ -2060,7 +2074,7 @@ pub fn getStyleColor(ctx: *Context, idx: Col) Color {
     return if (ctx.style.colors[@intCast(@backingInt(idx))]) |c| c else getAutoColor(ctx, idx);
 }
 
-pub fn getStyleColorU32(ctx: *Context, idx: Col) zm.ColorU32 {
+pub fn getStyleColorU32(ctx: *Context, idx: Col) ColorU32 {
     const im: Im = ctx.im();
     return im.colorToU32(getStyleColor(ctx, idx));
 }
@@ -2360,7 +2374,7 @@ fn viewProjMatrixCentered(
     target_w: f32,
     target_h: f32,
     center: Vec2,
-) zm.Mat {
+) Mat {
     const ex: Point3 = rotate(plot.rotation, point3(1, 0, 0));
     const ey: Point3 = rotate(plot.rotation, point3(0, 1, 0));
     const ez: Point3 = rotate(plot.rotation, point3(0, 0, 1));
@@ -2408,7 +2422,7 @@ fn viewProjMatrixCentered(
 /// columns are taken straight from `rotate()` on the basis vectors, so the
 /// orientation matches the CPU path by construction. Orthographic (`w == 1`),
 /// WebGPU depth range [0,1].
-pub fn viewProjMatrix(plot: *const Plot3D, target_w: f32, target_h: f32) zm.Mat {
+pub fn viewProjMatrix(plot: *const Plot3D, target_w: f32, target_h: f32) Mat {
     return viewProjMatrixCentered(plot, target_w, target_h, plot.plot_rect.center());
 }
 
@@ -2416,19 +2430,19 @@ pub fn viewProjMatrix(plot: *const Plot3D, target_w: f32, target_h: f32) zm.Mat 
 /// plot rect (the plot pane), for the RTT GPU-fill compositing path. The plot is
 /// centered in the texture (center = size/2), so drawing the texture 1:1 at the
 /// plot rect aligns it with the CPU axes overlay.
-pub fn viewProjMatrixRT(plot: *const Plot3D) zm.Mat {
+pub fn viewProjMatrixRT(plot: *const Plot3D) Mat {
     const rw: f32 = plot.plot_rect.width();
     const rh: f32 = plot.plot_rect.height();
     return viewProjMatrixCentered(plot, rw, rh, .{ rw / 2, rh / 2 });
 }
 
 /// `viewProjMatrix` for the current plot (call between begin/endPlot).
-pub fn getViewProjMatrix(ctx: *Context, target_w: f32, target_h: f32) zm.Mat {
+pub fn getViewProjMatrix(ctx: *Context, target_w: f32, target_h: f32) Mat {
     return viewProjMatrix(ctx.currentPlot(), target_w, target_h);
 }
 
 /// `viewProjMatrixRT` for the current plot (call between begin/endPlot).
-pub fn getViewProjMatrixRT(ctx: *Context) zm.Mat {
+pub fn getViewProjMatrixRT(ctx: *Context) Mat {
     return viewProjMatrixRT(ctx.currentPlot());
 }
 /// Determine which of the three back faces are "active" (drawn) given the
@@ -2492,9 +2506,13 @@ pub fn pixelsToPlotPlane(ctx: *Context, pix: Vec2, plane: Plane3D, mask: bool) P
                     numer = coord - o2[2];
                 },
             }
-            if (@abs(denom) < 1e-12) return point3(math.nan(f32), math.nan(f32), math.nan(f32));
-            const t = numer / denom;
-            if (t < 0) return point3(math.nan(f32), math.nan(f32), math.nan(f32));
+            if (@abs(denom) < 1e-12) {
+                return point3(math.nan(f32), math.nan(f32), math.nan(f32));
+            }
+            const t: f32 = numer / denom;
+            if (t < 0) {
+                return point3(math.nan(f32), math.nan(f32), math.nan(f32));
+            }
             return o2 + d2 * splat(t);
         }
     }.f;
@@ -2915,14 +2933,14 @@ pub fn setupLegend(ctx: *Context, location: Location, flags: LegendFlags) void {
 /// the visible title is the text before the first `##`; everything from `##`
 /// on is ID-only and not drawn. Returns the end index of the visible portion.
 fn labelVisibleEnd(s: []const u8) usize {
-    return std.mem.indexOf(u8, s, "##") orelse s.len;
+    return indexOf(u8, s, "##") orelse s.len;
 }
 /// The substring hashed for the persistent plot ID. With `###`, only the text
 /// after it seeds the ID, so the visible label can change frame-to-frame
 /// without resetting the plot's stored rotation/limits. Otherwise the whole
 /// string seeds the ID (matching plain and `##` labels).
 fn idSeed(s: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, s, "###")) |at| {
+    if (indexOf(u8, s, "###")) |at| {
         return s[at + 3 ..];
     }
     return s;
@@ -3000,7 +3018,7 @@ fn addTextCentered(
     ctx: *Context,
     dl: Im.DrawList,
     center: Vec2,
-    col: zm.ColorU32,
+    col: ColorU32,
     s: []const u8,
 ) void {
     const im: Im = ctx.im();
@@ -3151,8 +3169,8 @@ fn renderTicksAndLabels(
     _ = corners_pix;
     _ = active_faces;
     _ = plane_2d;
-    const tick_col: zm.ColorU32 = getStyleColorU32(ctx, .axis_tick);
-    const text_col: zm.ColorU32 = getStyleColorU32(ctx, .axis_text);
+    const tick_col: ColorU32 = getStyleColorU32(ctx, .axis_tick);
+    const text_col: ColorU32 = getStyleColorU32(ctx, .axis_text);
     const range_min: Point3 = plot.rangeMin();
     const range_max: Point3 = plot.rangeMax();
 
@@ -3238,7 +3256,7 @@ fn renderPlotBackground(
     plane_2d: i32,
 ) void {
     _ = plot;
-    const col: zm.ColorU32 = getStyleColorU32(ctx, .plot_bg);
+    const col: ColorU32 = getStyleColorU32(ctx, .plot_bg);
     var face: usize = 0;
     while (face < 3) : (face += 1) {
         if (plane_2d != -1 and @as(i32, @intCast(face)) != plane_2d) {
@@ -3313,11 +3331,11 @@ fn renderPlotBorder(
     const im: Im = ctx.im();
     _ = active_faces;
     _ = plane_2d;
-    const col: zm.ColorU32 = getStyleColorU32(ctx, .plot_border);
+    const col: ColorU32 = getStyleColorU32(ctx, .plot_border);
     // While hovering, brighten + thicken the 4 edges of the axis nearest the
     // cursor as an interaction affordance (matches ImPlot3D's edge feedback).
     const hi_axis: i32 = if (plot.hovered) hoveredAxis(corners_pix, im.getMousePos(), edge_hover_px) else -1;
-    const hi_col: zm.ColorU32 = plot_core.lerpWire(col, 0xFFFFFFFF, 0.6);
+    const hi_col: ColorU32 = plot_core.lerpWire(col, 0xFFFFFFFF, 0.6);
     for (box_edges, 0..) |e, i| {
         if (hi_axis >= 0 and @as(i32, axis_of_edge[i]) == hi_axis) {
             dl.addLine(corners_pix[e[0]], corners_pix[e[1]], hi_col, 2.0);
@@ -3337,8 +3355,8 @@ fn renderGrid(
 ) void {
     const im: Im = ctx.im();
     const base: Color = getStyleColor(ctx, .axis_grid);
-    const col_minor: zm.ColorU32 = im.colorToU32(base.scaleAlpha(0.3));
-    const col_major: zm.ColorU32 = im.colorToU32(base.scaleAlpha(0.6));
+    const col_minor: ColorU32 = im.colorToU32(base.scaleAlpha(0.3));
+    const col_major: ColorU32 = im.colorToU32(base.scaleAlpha(0.6));
 
     var face: usize = 0;
     while (face < 3) : (face += 1) {
@@ -3374,7 +3392,7 @@ fn renderGrid(
                 const offset_u: Point3 = u_edge * splat(t_u);
                 const line_start: Vec2 = plotToPixelsP(plot, origin + offset_u);
                 const line_end: Vec2 = plotToPixelsP(plot, v_end + offset_u);
-                const color: zm.ColorU32 = if (tick.major) col_major else col_minor;
+                const color: ColorU32 = if (tick.major) col_major else col_minor;
                 dl.addLine(line_start, line_end, color, 1.0);
             }
         }
@@ -3388,7 +3406,7 @@ fn renderGrid(
                 const offset_v: Point3 = v_edge * splat(t_v);
                 const line_start: Vec2 = plotToPixelsP(plot, origin + offset_v);
                 const line_end: Vec2 = plotToPixelsP(plot, u_end + offset_v);
-                const color: zm.ColorU32 = if (tick.major) col_major else col_minor;
+                const color: ColorU32 = if (tick.major) col_major else col_minor;
                 dl.addLine(line_start, line_end, color, 1.0);
             }
         }
@@ -3461,7 +3479,7 @@ fn setupLock(ctx: *Context) void {
 
     // Title
     if (plot.hasTitle()) {
-        const col: zm.ColorU32 = getStyleColorU32(ctx, .title_text);
+        const col: ColorU32 = getStyleColorU32(ctx, .title_text);
         const top_center = Vec2{ plot.frame_rect.center()[0], plot.canvas_rect.min[1] };
         addTextCentered(ctx, dl, top_center, col, plot.getTitle());
         plot.plot_rect.min[1] += im.getTextLineHeight() + ctx.style.label_padding[1];
@@ -3522,7 +3540,7 @@ fn renderLegend(ctx: *Context, dl: Im.DrawList, plot: *Plot3D) void {
     dl.addRectFilled(lr.min, lr.max, getStyleColorU32(ctx, .legend_bg));
     dl.addRect(lr.min, lr.max, getStyleColorU32(ctx, .legend_border));
 
-    const text_col: zm.ColorU32 = getStyleColorU32(ctx, .legend_text);
+    const text_col: ColorU32 = getStyleColorU32(ctx, .legend_text);
     for (0..n) |i| {
         const item: *Item = items.getLegendItem(i);
         const label: [:0]const u8 = items.getLegendLabel(i);
@@ -3870,7 +3888,7 @@ fn renderLineStrip(
     plot: *Plot3D,
     dl: Im.DrawList,
     getter: anytype,
-    col: zm.ColorU32,
+    col: ColorU32,
     weight: f32,
 ) void {
     if (getter.count < 2) {
@@ -3906,7 +3924,7 @@ fn renderLineSegments(
     plot: *Plot3D,
     dl: Im.DrawList,
     getter: anytype,
-    col: zm.ColorU32,
+    col: ColorU32,
     weight: f32,
 ) void {
     const box: Box = cullBox(plot);
@@ -3930,7 +3948,7 @@ fn renderLineSegments(
 }
 
 /// Triangle fills (groups of 3), depth-sorted via DrawList3D.
-fn renderTriangleFill(plot: *Plot3D, getter: anytype, col: zm.ColorU32) void {
+fn renderTriangleFill(plot: *Plot3D, getter: anytype, col: ColorU32) void {
     const box: Box = cullBox(plot);
     var prim: usize = 0;
     while (3 * prim + 2 < getter.count) : (prim += 1) {
@@ -3960,7 +3978,7 @@ fn renderTriangleFill(plot: *Plot3D, getter: anytype, col: zm.ColorU32) void {
 }
 
 /// Quad fills (groups of 4), depth-sorted via DrawList3D.
-fn renderQuadFill(plot: *Plot3D, getter: anytype, col: zm.ColorU32) void {
+fn renderQuadFill(plot: *Plot3D, getter: anytype, col: ColorU32) void {
     const box: Box = cullBox(plot);
     var prim: usize = 0;
     while (4 * prim + 3 < getter.count) : (prim += 1) {
@@ -3992,8 +4010,8 @@ fn triMarker(
     p: Vec2,
     s: f32,
     up: bool,
-    fill: zm.ColorU32,
-    line: zm.ColorU32,
+    fill: ColorU32,
+    line: ColorU32,
     weight: f32,
     render_fill: bool,
     render_line: bool,
@@ -4018,8 +4036,8 @@ fn renderMarker(
     mkr: Marker,
     p: Vec2,
     size: f32,
-    fill: zm.ColorU32,
-    line: zm.ColorU32,
+    fill: ColorU32,
+    line: ColorU32,
     weight: f32,
     render_fill: bool,
     render_line: bool,
@@ -4108,8 +4126,8 @@ fn renderMarkers(
 ) void {
     const im: Im = ctx.im();
     const box: Box = cullBox(plot);
-    const fill: zm.ColorU32 = im.colorToU32(n.spec.marker_fill_color.?);
-    const line: zm.ColorU32 = im.colorToU32(n.spec.marker_line_color.?);
+    const fill: ColorU32 = im.colorToU32(n.spec.marker_fill_color.?);
+    const line: ColorU32 = im.colorToU32(n.spec.marker_line_color.?);
     var i: usize = 0;
     while (i < getter.count) : (i += 1) {
         // A marker is a point, so containment IS the correct cull here - unlike the triangle
@@ -4207,7 +4225,7 @@ fn plotLineImpl(
         const s: *Spec = &n.spec;
         const dl: Im.DrawList = im.getWindowDrawList();
         if (n.render_line) {
-            const col: zm.ColorU32 = im.colorToU32(s.line_color.?);
+            const col: ColorU32 = im.colorToU32(s.line_color.?);
             if (@as(LineFlags, @bitCast(s.flags)).segments) {
                 renderLineSegments(plot, dl, getter, col, s.line_weight);
             } else if (@as(LineFlags, @bitCast(s.flags)).loop) {
@@ -4259,7 +4277,7 @@ fn renderTriangleEdges(
     plot: *Plot3D,
     dl: Im.DrawList,
     getter: anytype,
-    col: zm.ColorU32,
+    col: ColorU32,
     weight: f32,
 ) void {
     var prim: usize = 0;
@@ -4338,7 +4356,7 @@ fn renderQuadEdges(
     plot: *Plot3D,
     dl: Im.DrawList,
     getter: anytype,
-    col: zm.ColorU32,
+    col: ColorU32,
     weight: f32,
 ) void {
     var prim: usize = 0;
@@ -4437,8 +4455,8 @@ pub fn plotSurface(
         const n: *NextItemData = &ctx.next_item_data;
         const s: *Spec = &n.spec;
         const dl: Im.DrawList = im.getWindowDrawList();
-        const fill_col: zm.ColorU32 = im.colorToU32(s.fill_color.?);
-        const line_col: zm.ColorU32 = im.colorToU32(s.line_color.?);
+        const fill_col: ColorU32 = im.colorToU32(s.fill_color.?);
+        const line_col: ColorU32 = im.colorToU32(s.line_color.?);
         var yi: usize = 0;
         while (yi + 1 < y_count) : (yi += 1) {
             var xi: usize = 0;
@@ -4511,8 +4529,8 @@ pub fn plotMesh(
         const n: *NextItemData = &ctx.next_item_data;
         const s: *Spec = &n.spec;
         const dl: Im.DrawList = im.getWindowDrawList();
-        const fill_col: zm.ColorU32 = im.colorToU32(s.fill_color.?);
-        const line_col: zm.ColorU32 = im.colorToU32(s.line_color.?);
+        const fill_col: ColorU32 = im.colorToU32(s.fill_color.?);
+        const line_col: ColorU32 = im.colorToU32(s.line_color.?);
         // `idxs` is a flat list of triplets, so `t` steps by 3 and the guard is `t + 2` - the
         // last complete triangle starts at `idxs.len - 3`. A trailing 1 or 2 stray indices are
         // ignored rather than read past the end.
@@ -4899,7 +4917,7 @@ pub fn showAboutWindow(ctx: *Context, p_open: ?*bool) void {
 //=============================================================================
 
 test "destroyContext frees everything (no leak)" {
-    const alloc: Allocator = std.testing.allocator;
+    const alloc: Allocator = testing_allocator;
     const ctx: *Context = createContext(alloc);
     const plot: *Plot3D = ctx.plots.getOrAddByKey(0);
     plot.setTitle(alloc, "title");
@@ -4914,7 +4932,7 @@ test "destroyContext frees everything (no leak)" {
 }
 
 test "viewProjMatrix (GPU) reproduces ndcToPixels via mulMatVec over the full framebuffer" {
-    const alloc: Allocator = std.testing.allocator;
+    const alloc: Allocator = testing_allocator;
     const ctx: *Context = createContext(alloc);
     defer destroyContext(ctx);
     const plot: *Plot3D = ctx.plots.getOrAddByKey(0);
@@ -4924,7 +4942,7 @@ test "viewProjMatrix (GPU) reproduces ndcToPixels via mulMatVec over the full fr
     // Render target larger than the plot rect (plot is a sub-rect of the window).
     const tw: f32 = 800;
     const th: f32 = 600;
-    const m: zm.Mat = viewProjMatrix(plot, tw, th);
+    const m: Mat = viewProjMatrix(plot, tw, th);
     const samples = [_]Point3{
         .{ 0, 0, 0, 0 },       .{ 0.5, 0, 0, 0 },       .{ 0, 0.5, 0, 0 },
         .{ 0, 0, 0.5, 0 },     .{ 0.3, -0.4, 0.25, 0 }, .{ -0.5, -0.5, -0.5, 0 },
@@ -4945,7 +4963,7 @@ test "viewProjMatrix (GPU) reproduces ndcToPixels via mulMatVec over the full fr
 }
 
 test "viewProjMatrixRT maps NDC to plot-rect-local pixels (RTT compositing)" {
-    const alloc: Allocator = std.testing.allocator;
+    const alloc: Allocator = testing_allocator;
     const ctx: *Context = createContext(alloc);
     defer destroyContext(ctx);
     const plot: *Plot3D = ctx.plots.getOrAddByKey(0);
@@ -4954,7 +4972,7 @@ test "viewProjMatrixRT maps NDC to plot-rect-local pixels (RTT compositing)" {
     plot.rotation = quatFromAxisAngle(normalize3(.{ 0.2, 0.7, 0.4, 0 }), 1.1);
     const rw: f32 = plot.plot_rect.width();
     const rh: f32 = plot.plot_rect.height();
-    const m: zm.Mat = viewProjMatrixRT(plot);
+    const m: Mat = viewProjMatrixRT(plot);
     const samples = [_]Point3{
         .{ 0, 0, 0, 0 },   .{ 0.5, 0, 0, 0 },        .{ 0, 0.5, 0, 0 },
         .{ 0, 0, 0.5, 0 }, .{ -0.4, 0.3, -0.25, 0 }, .{ 0.5, 0.5, 0.5, 0 },

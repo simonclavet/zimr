@@ -16,6 +16,7 @@ const std = @import("std");
 const zm = @import("zm");
 const float64 = zm.float64;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const z = @import("zimr");
 
 /// A clean light theme suitable for print/figures.
@@ -35,12 +36,12 @@ pub fn main() !void {
     // The application picks the I/O implementation in main (like the
     // allocator) and threads it to anything that reads/writes. Currently
     // std.Io.Threaded is the only implementation.
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     // 1. A 900x560 page, supersampled 4x for crisp anti-aliasing.
-    var canvas: z.Canvas = try z.Canvas.init(gpa, 900, 560, .{ .ss = 4 });
+    var canvas: z.Canvas = try .init(gpa, 900, 560, .{ .ss = 4 });
     defer canvas.deinit();
     try canvas.useFont(@embedFile("font.ttf"));
 

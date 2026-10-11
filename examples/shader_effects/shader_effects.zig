@@ -20,6 +20,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -96,6 +97,13 @@ const palettes: [palette_count][8][4]f32 = .{
     },
 };
 
+const Ball = struct {
+    pos: Vec2,
+    vel: Vec2,
+    radius: f32,
+    color: Color,
+};
+
 const State = struct {
     gpa: Allocator,
 
@@ -147,13 +155,6 @@ const State = struct {
     balls: [5]Ball,
 };
 
-const Ball = struct {
-    pos: Vec2,
-    vel: Vec2,
-    radius: f32,
-    color: Color,
-};
-
 fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
     for (s.fx.values) |e| {
@@ -180,7 +181,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // The engine owns the quad, the layouts and the binding contract now; this
     // example only says WHICH fragment shaders it wants.
-    var fx_host: z.effects2d.Host = try z.effects2d.Host.init(gpa, f.gl, shading_vs_wgsl, .{});
+    var fx_host: z.effects2d.Host = try .init(gpa, f.gl, shading_vs_wgsl, .{});
 
     // EnumArray: every Mode must be given an effect, and the compiler checks it.
     // `.source` is the passthrough (no effect runs), so it gets the empty default.
@@ -300,20 +301,20 @@ fn writeEffectUbos(f: *z.Frame, s: *State, t: f32) void {
     const q: z.wgpu.QueueHandle = f.gpu.queue;
 
     var grade: GradeUbo = .{ .params = .{ s.contrast, s.brightness, s.saturation, 0 } };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.grade).ubo, 0, std.mem.asBytes(&grade));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.grade).ubo, 0, asBytes(&grade));
 
     var wave: WaveUbo = .{
         .drive = .{ t, s.wave_freq, s.wave_freq, 0 },
         .motion = .{ s.wave_amp, s.wave_amp, 8, 8 },
         .size = .{ w, h, 0, 0 },
     };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.waves).ubo, 0, std.mem.asBytes(&wave));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.waves).ubo, 0, asBytes(&wave));
 
     var outline: OutlineUbo = .{
         .outline_color = .{ 1.0, 0.42, 0.1, 1 },
         .params = .{ s.outline_px, w, h, 0 },
     };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.outline).ubo, 0, std.mem.asBytes(&outline));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.outline).ubo, 0, asBytes(&outline));
 
     var spot: SpotlightUbo = .{
         .spots = .{
@@ -323,7 +324,7 @@ fn writeEffectUbos(f: *z.Frame, s: *State, t: f32) void {
         },
         .params = .{ s.spot_dark, w, h, 0 },
     };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.spotlight).ubo, 0, std.mem.asBytes(&spot));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.spotlight).ubo, 0, asBytes(&spot));
 
     var pal: PaletteUbo = .{
         .palette = undefined,
@@ -332,13 +333,13 @@ fn writeEffectUbos(f: *z.Frame, s: *State, t: f32) void {
     for (palettes[s.palette_ix], &pal.palette) |src, *dst| {
         dst.* = src;
     }
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.palette).ubo, 0, std.mem.asBytes(&pal));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.palette).ubo, 0, asBytes(&pal));
 
     var tiling: TilingUbo = .{ .tiling = .{ s.tiling_n, s.tiling_n, 0, 0 } };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.tiling).ubo, 0, std.mem.asBytes(&tiling));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.tiling).ubo, 0, asBytes(&tiling));
 
     var sieve: SieveUbo = .{ .params = .{ s.sieve_scale, 0, 0, 0 } };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.sieve).ubo, 0, std.mem.asBytes(&sieve));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.sieve).ubo, 0, asBytes(&sieve));
 
     // The ASCII cell grid is defined in PIXELS, so the shader must be told the
     // live canvas size - derive it from the UV and it would stretch with aspect.
@@ -346,11 +347,11 @@ fn writeEffectUbos(f: *z.Frame, s: *State, t: f32) void {
         .params = .{ s.ascii_cell, s.ascii_mix, 0, 0 },
         .resolution = .{ f.window.widthf(), f.window.heightf(), 0, 0 },
     };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.ascii).ubo, 0, std.mem.asBytes(&ascii));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.ascii).ubo, 0, asBytes(&ascii));
 
     // Purely procedural - it never samples the scene, it just needs the clock.
     var cubes: CubesUbo = .{ .params = .{ t, s.cubes_div, s.cubes_fill, 0 } };
-    z.wgpu.queueWriteBuffer(q, s.fx.get(.cubes).ubo, 0, std.mem.asBytes(&cubes));
+    z.wgpu.queueWriteBuffer(q, s.fx.get(.cubes).ubo, 0, asBytes(&cubes));
 }
 
 fn update(f: *z.Frame, s: *State) void {

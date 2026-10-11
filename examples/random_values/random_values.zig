@@ -20,6 +20,7 @@ const Allocator = std.mem.Allocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const bufPrint = std.fmt.bufPrint;
+const Random = std.Random;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -32,14 +33,14 @@ const regen_frames: usize = 120; // ~2 s at the 60 fps fixed step
 
 const State = struct {
     font: z.Font,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     value: i32 = 0,
     frame_count: usize = 0,
 };
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
-    var rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x5EED_1234);
+    var rng: Random.DefaultPrng = .init(0x5EED_1234);
     const value: i32 = rng.random().intRangeAtMost(i32, -8, 5);
     s.* = .{ .font = font, .rng = rng, .value = value };
 }

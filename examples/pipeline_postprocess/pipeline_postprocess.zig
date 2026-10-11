@@ -21,6 +21,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const common = @import("example_common");
 const zm = @import("zm");
@@ -28,6 +29,8 @@ const zm = @import("zm");
 const mulMat = zm.mulMat;
 const scaling = zm.scaling;
 const rotationZ = zm.rotationZ;
+const Color = zm.Color;
+const Mat = zm.Mat;
 
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
@@ -63,7 +66,7 @@ const vertices = [_]Vertex{
 
 /// transform = scale(sx, sy) * rotateZ(angle), in zm row convention so the
 /// shader's `mulMatPoint` matches WGSL `m * vec4(p, 1)`.
-fn transform2d(angle: f32, sx: f32, sy: f32) zm.Mat {
+fn transform2d(angle: f32, sx: f32, sy: f32) Mat {
     return mulMat(scaling(sx, sy, 1.0), rotationZ(angle));
 }
 
@@ -89,7 +92,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "scene_vbo",
     });
-    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, std.mem.sliceAsBytes(&vertices));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, vbo, 0, sliceAsBytes(&vertices));
 
     const rt: z.RenderTexture = z.loadRenderTexture(f.gl, rt_size, rt_size);
 
@@ -136,7 +139,7 @@ fn update(f: *z.Frame, s: *State) void {
     const sy: f32 = if (aspect < 1.0) aspect else 1.0;
     s.scene.pushUbo(f.gpu.queue, .{ .transform = transform2d(f.time.time * 0.7, sx, sy) });
 
-    const scene_bg_clear: zm.Color = .{ .r = 14, .g = 16, .b = 24, .a = 255 };
+    const scene_bg_clear: Color = .{ .r = 14, .g = 16, .b = 24, .a = 255 };
     z.beginTextureMode(f.gl, s.rt, scene_bg_clear);
     const rps: *z.PassState = f.gl.pass;
     s.scene.bindForDraw(rps);

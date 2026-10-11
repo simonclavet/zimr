@@ -7,6 +7,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -41,8 +42,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn genPositions(pos: *[n_part][2]f32) void {
-    var prng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0x7f1e);
-    const rnd: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0x7f1e);
+    const rnd: Random = prng.random();
     for (0..n_part) |i| {
         pos[i] = .{ rnd.float(f32) * tg.domain, rnd.float(f32) * tg.domain };
     }
@@ -120,7 +121,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const params: tg.Params = .{ .count = n_part, .h = tg.h_radius, .cols = tg.n_cols, .rows = tg.n_rows };
 
     // CPU-backend oracle.
-    var cpu: z.Compute(tg) = z.Compute(tg).initCpu();
+    var cpu: z.Compute(tg) = .initCpu();
     cpu.params = params;
     cpu.upload(.pos, pos[0..]);
     runGather(&cpu);
@@ -132,7 +133,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const cpu_ok: bool = countMiss(co, &truth) == 0;
 
     // GPU round-trip.
-    var pipe: z.Compute(tg) = try z.Compute(tg).initGpu(
+    var pipe: z.Compute(tg) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,

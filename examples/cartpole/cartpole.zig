@@ -29,6 +29,9 @@
 //! is an honest thing for a demo to show.
 
 const std = @import("std");
+const Random = std.Random;
+const copyForwards = std.mem.copyForwards;
+const sortSlice = std.mem.sort;
 const common = @import("example_common");
 
 /// A wasm safety trap is a bare `RuntimeError: unreachable` without this - no message, no line.
@@ -147,7 +150,7 @@ const State = struct {
 
     mean: Policy,
     sigma: Policy,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     generation: u32,
     /// Elite score per generation, for the plot.
     history: [256]f32,
@@ -188,7 +191,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     s.mean = @splat(0);
     s.sigma = @splat(1.0);
-    s.rng = std.Random.DefaultPrng.init(7);
+    s.rng = Random.DefaultPrng.init(7);
     s.generation = 0;
     s.history = @splat(0);
     s.history_len = 0;
@@ -219,8 +222,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 /// Put an environment at a randomised start, inside the fail limit.
 fn beginEpisode(env: *ctl.Env, seed: u64) void {
-    var rng: std.Random.DefaultPrng = .init(seed);
-    const r: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(seed);
+    const r: Random = rng.random();
     _ = env.reset();
     env.data.pos[pole_hinge] = (r.float(f32) - 0.5) * start_tilt;
     env.data.vel[pole_hinge] = (r.float(f32) - 0.5) * start_tilt * 2.0;
@@ -262,7 +265,7 @@ fn score(env: *ctl.Env, policy: Policy, seed: u64) f32 {
 
 /// Draw a fresh population from the current Gaussian, to be scored over the coming frames.
 fn beginGeneration(s: *State) void {
-    const r: std.Random = s.rng.random();
+    const r: Random = s.rng.random();
     for (0..population) |i| {
         for (0..4) |k| {
             s.samples[i][k] = s.mean[k] + s.sigma[k] * r.floatNorm(f32);
@@ -299,7 +302,7 @@ fn finishGeneration(s: *State) void {
             return self.by[a] > self.by[b];
         }
     };
-    std.mem.sort(usize, &order, Ranking{ .by = &s.scores }, Ranking.better);
+    sortSlice(usize, &order, Ranking{ .by = &s.scores }, Ranking.better);
 
     var next: Policy = @splat(0);
     for (order[0..elite]) |i| {
@@ -329,7 +332,7 @@ fn finishGeneration(s: *State) void {
         s.history[s.history_len] = elite_mean;
         s.history_len += 1;
     } else {
-        std.mem.copyForwards(f32, s.history[0 .. s.history.len - 1], s.history[1..]);
+        copyForwards(f32, s.history[0 .. s.history.len - 1], s.history[1..]);
         s.history[s.history.len - 1] = elite_mean;
     }
     s.generation += 1;
@@ -364,73 +367,6 @@ fn trainWithinFrame(s: *State, delta_time: f32) void {
         evaluateOne(s, s.evaluated);
         s.evaluated += 1;
     }
-}
-
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    if (s.training) {
-        trainWithinFrame(s, f.time.delta_time);
-    }
-
-    // The displayed robot runs the current best policy, restarting when it falls.
-    //
-    // * AN ACCUMULATOR, NOT ONE STEP PER FRAME. The simulation runs at 100 Hz and the display
-    // at whatever the device gives - 60, or 30 under load - so stepping once per frame plays
-    // the pole back at 60% speed on a good device and 30% on a struggling one. The physics
-    // would be right and the motion visibly wrong, in a way that reads as the policy being
-    // sluggish rather than the loop being wrong.
-    if (s.show_best) {
-        s.display_accumulator += @min(f.time.delta_time, 0.1);
-        while (s.display_accumulator >= sim_timestep) : (s.display_accumulator -= sim_timestep) {
-            _ = s.display.step(&.{actionFor(&s.display, s.mean)});
-            s.display_steps += 1;
-            if (hasFallen(&s.display) or s.display_steps >= max_steps) {
-                s.display_seed += 1;
-                s.display_steps = 0;
-                beginEpisode(&s.display, s.display_seed);
-            }
-        }
-    }
-
-    z.clearViewport(f, bg);
-    // * PULL BACK ON A TALL, NARROW VIEWPORT. The rail is 4.8 m wide and a portrait phone sees
-    // far less of it horizontally than a desktop does, so a fixed distance frames the scene for
-    // one and crops it for the other.
-    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
-    s.cam.distance = clamp(2.4 / @max(0.35, aspect), 2.2, 6.0);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
-    z.beginMode3D(gl, cam);
-    drawScene(s, gl);
-    z.endMode3D(gl);
-}
-
-fn drawScene(s: *State, gl: *z.WgpuGl) void {
-    const x: f32 = s.display.data.pos[cart_slide];
-    const angle: f32 = s.display.data.pos[pole_hinge];
-
-    // The rail, and the limits the episode ends at.
-    s.transform[0] = mulMat(translation(0, -0.06, 0), scaling(2 * fail_position, 0.01, 0.06));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
-    inline for (.{ -fail_position, fail_position }) |edge| {
-        s.transform[0] = mulMat(translation(edge, 0.0, 0), scaling(0.02, 0.12, 0.08));
-        z.drawMeshInstanced(gl, &s.cube, &s.transform, fail_col);
-    }
-
-    s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
-
-    // * THE POLE IS DRAWN FROM ITS PIVOT, not centred on it - the cylinder mesh spans [0, h]
-    // along Y, measured from the mesh's own bounds rather than assumed from the generator,
-    // which remaps axes as it writes.
-    s.transform[0] = mulMat(
-        mulMat(translation(x, 0, 0), rotationZ(angle)),
-        scaling(0.03, 0.6, 0.03),
-    );
-    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, if (@abs(angle) > fail_angle) fail_col else pole_col);
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -497,12 +433,79 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
             s.generation = 0;
             s.history_len = 0;
             s.best_ever = 0;
-            s.rng = std.Random.DefaultPrng.init(7);
+            s.rng = Random.DefaultPrng.init(7);
             s.evaluated = population; // a fresh population on the next frame
             beginEpisode(&s.display, s.display_seed);
         }
     }
     return captured;
+}
+
+fn drawScene(s: *State, gl: *z.WgpuGl) void {
+    const x: f32 = s.display.data.pos[cart_slide];
+    const angle: f32 = s.display.data.pos[pole_hinge];
+
+    // The rail, and the limits the episode ends at.
+    s.transform[0] = mulMat(translation(0, -0.06, 0), scaling(2 * fail_position, 0.01, 0.06));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, rail_col);
+    inline for (.{ -fail_position, fail_position }) |edge| {
+        s.transform[0] = mulMat(translation(edge, 0.0, 0), scaling(0.02, 0.12, 0.08));
+        z.drawMeshInstanced(gl, &s.cube, &s.transform, fail_col);
+    }
+
+    s.transform[0] = mulMat(translation(x, 0, 0), scaling(0.2, 0.1, 0.1));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, cart_col);
+
+    // * THE POLE IS DRAWN FROM ITS PIVOT, not centred on it - the cylinder mesh spans [0, h]
+    // along Y, measured from the mesh's own bounds rather than assumed from the generator,
+    // which remaps axes as it writes.
+    s.transform[0] = mulMat(
+        mulMat(translation(x, 0, 0), rotationZ(angle)),
+        scaling(0.03, 0.6, 0.03),
+    );
+    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, if (@abs(angle) > fail_angle) fail_col else pole_col);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    if (s.training) {
+        trainWithinFrame(s, f.time.delta_time);
+    }
+
+    // The displayed robot runs the current best policy, restarting when it falls.
+    //
+    // * AN ACCUMULATOR, NOT ONE STEP PER FRAME. The simulation runs at 100 Hz and the display
+    // at whatever the device gives - 60, or 30 under load - so stepping once per frame plays
+    // the pole back at 60% speed on a good device and 30% on a struggling one. The physics
+    // would be right and the motion visibly wrong, in a way that reads as the policy being
+    // sluggish rather than the loop being wrong.
+    if (s.show_best) {
+        s.display_accumulator += @min(f.time.delta_time, 0.1);
+        while (s.display_accumulator >= sim_timestep) : (s.display_accumulator -= sim_timestep) {
+            _ = s.display.step(&.{actionFor(&s.display, s.mean)});
+            s.display_steps += 1;
+            if (hasFallen(&s.display) or s.display_steps >= max_steps) {
+                s.display_seed += 1;
+                s.display_steps = 0;
+                beginEpisode(&s.display, s.display_seed);
+            }
+        }
+    }
+
+    z.clearViewport(f, bg);
+    // * PULL BACK ON A TALL, NARROW VIEWPORT. The rail is 4.8 m wide and a portrait phone sees
+    // far less of it horizontally than a desktop does, so a fixed distance frames the scene for
+    // one and crops it for the other.
+    const aspect: f32 = f.window.widthf() / @max(1.0, f.window.heightf());
+    s.cam.distance = clamp(2.4 / @max(0.35, aspect), 2.2, 6.0);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 8.0 });
+    z.beginMode3D(gl, cam);
+    drawScene(s, gl);
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

@@ -80,6 +80,50 @@ const parts = [_]Part{
     .{ .offset = .{ 0, 1.1, -3.1 }, .size = .{ 0.22, 1.4, 1.0 }, .color = tail_col }, // vertical fin
 };
 
+/// Ease a value toward 0 by `step` (raylib's release behavior).
+fn easeToZero(v: f32, step: f32) f32 {
+    if (v > step) {
+        return v - step;
+    }
+    if (v < -step) {
+        return v + step;
+    }
+    return 0;
+}
+
+/// A pair of held buttons that increment/decrement `v` while pressed. `plus_left`
+/// flips which button adds (yaw's A/S is inverted vs the others in raylib).
+fn heldPair(
+    u: z.ui_real.Ui,
+    neg_label: []const u8,
+    pos_label: []const u8,
+    v: *f32,
+    step: f32,
+    plus_left: bool,
+) void {
+    _ = u.button(neg_label, .{});
+    if (u.isItemActive()) {
+        v.* += if (plus_left) step else -step;
+    }
+    u.sameLine(.{});
+    _ = u.button(pos_label, .{});
+    if (u.isItemActive()) {
+        v.* += if (plus_left) -step else step;
+    }
+}
+
+/// On-screen held buttons: pitch (+/-), yaw (+/-), roll (+/-). Phone-first: 2 rows.
+fn controlPanel(u: z.ui_real.Ui, s: *State, vw: f32, vh: f32) void {
+    u.setNextWindowPos(.{ 8, vh - 108 }, .{});
+    u.setNextWindowSize(.{ @min(340, vw - 16), 100 }, .{});
+    if (u.window("attitude", .{})) |w| {
+        defer w.close();
+        heldPair(u, "nose up", "nose dn", &s.pitch, 0.6, false);
+        heldPair(u, "yaw L", "yaw R", &s.yaw, 1.0, true);
+        heldPair(u, "roll L", "roll R", &s.roll, 1.0, false);
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
@@ -155,50 +199,6 @@ fn update(f: *z.Frame, s: *State) void {
     f.gl.text(.{ 14, 42 }, hud, .{ .size = 18, .color = common.palette.ink_dim, .font = &s.font });
     common.caption(f.gl, s.font, "WebGPU 3D - yaw / pitch / roll (arrows + A/S, or buttons)");
     s.ui_host.render(f);
-}
-
-/// Ease a value toward 0 by `step` (raylib's release behavior).
-fn easeToZero(v: f32, step: f32) f32 {
-    if (v > step) {
-        return v - step;
-    }
-    if (v < -step) {
-        return v + step;
-    }
-    return 0;
-}
-
-/// On-screen held buttons: pitch (+/-), yaw (+/-), roll (+/-). Phone-first: 2 rows.
-fn controlPanel(u: z.ui_real.Ui, s: *State, vw: f32, vh: f32) void {
-    u.setNextWindowPos(.{ 8, vh - 108 }, .{});
-    u.setNextWindowSize(.{ @min(340, vw - 16), 100 }, .{});
-    if (u.window("attitude", .{})) |w| {
-        defer w.close();
-        heldPair(u, "nose up", "nose dn", &s.pitch, 0.6, false);
-        heldPair(u, "yaw L", "yaw R", &s.yaw, 1.0, true);
-        heldPair(u, "roll L", "roll R", &s.roll, 1.0, false);
-    }
-}
-
-/// A pair of held buttons that increment/decrement `v` while pressed. `plus_left`
-/// flips which button adds (yaw's A/S is inverted vs the others in raylib).
-fn heldPair(
-    u: z.ui_real.Ui,
-    neg_label: []const u8,
-    pos_label: []const u8,
-    v: *f32,
-    step: f32,
-    plus_left: bool,
-) void {
-    _ = u.button(neg_label, .{});
-    if (u.isItemActive()) {
-        v.* += if (plus_left) step else -step;
-    }
-    u.sameLine(.{});
-    _ = u.button(pos_label, .{});
-    if (u.isItemActive()) {
-        v.* += if (plus_left) -step else step;
-    }
 }
 
 pub const app: z.AppSpec(State) = .{

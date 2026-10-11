@@ -20,6 +20,7 @@
 //! every `ShaderPipeline.addShader` call.
 
 const std = @import("std");
+const ArrayList = std.ArrayList;
 
 // Local aliases for the std.Build types this file works with so the
 // type annotations at every `const x: T = b.addX(...)` site stay
@@ -62,6 +63,9 @@ const LazyPath = std.Build.LazyPath;
 /// pass around to every `addShader` / `addShaderImport` call.
 pub const ShaderPipeline = struct {
     b: *std.Build,
+    /// Every compute kernel entry built so far, in the order the build wired them: what `kernels-wgsl` installs, and
+    /// what a native build embeds.
+    compute_outputs: ArrayList(ComputeOutput) = .empty,
     tools_dep: ?*std.Build.Step = null,
     /// `spv2wgsl` - pure-Zig SPIR-V -> WGSL translator.  Operates on
     /// the compiler's raw `shader.spv` directly.  No Naga / Tint in
@@ -72,16 +76,6 @@ pub const ShaderPipeline = struct {
     /// Only invoked when `addShaderWgsl` is called (or when
     /// `addShader` is called with `opts.emit_wgsl = true`).
     spv2wgsl_path: []const u8 = "tools/zig-out/bin/spv2wgsl",
-    /// Which CFG walker `spv2wgsl` uses to reconstruct control flow:
-    /// "ir" (the structured-IR path, `ir_build.zig` -> `ir_emit.zig`,
-    /// with per-function fallback to legacy on unsupported shapes) or
-    /// "legacy" (the original recursive walker).  Passed through as the
-    /// CLI's leading `--walker=` flag.  Default "ir" - the IR path is
-    /// proven on the whole corpus + in-browser (cardioid renders) and is
-    /// naga-clean on the typed-harness shaders.  Set from the `-Dwalker=`
-    /// build option; `-Dwalker=legacy` is the escape hatch (F5 deletes
-    /// the legacy walker).
-    wgsl_walker: []const u8 = "ir",
     /// Pure-Zig tool ARTIFACTS, built by the MAIN build (not the
     /// nested `tools/build.zig`).  When set, the pipeline invokes the
     /// tool via `addArtifactArg` instead of the `*_path` string, which
@@ -192,6 +186,9 @@ pub const ShaderPipeline = struct {
     /// typed-shader path; no codegen ran).
     pub const ShaderOutput = struct {
         externs: ?std.Build.LazyPath,
+        /// The compiler's own SPIR-V - what the native (Vulkan) host loads, legalized at load time by
+        /// `spv_vulkan.zig`. The web embeds `wgsl`, translated from this same module.
+        spv: std.Build.LazyPath,
         /// Pre-translated WGSL.  Present when `opts.emit_wgsl == true`,
         /// null otherwise.  Consumers `@embedFile` this to bake the
         /// WGSL into the wasm for the wgpu backend.  See
@@ -505,9 +502,6 @@ pub const ShaderPipeline = struct {
             };
             // spv2wgsl consumes the compiler's raw, unoptimized SPIR-V
             // directly - no spirv-opt, no spirv-val, zero C++ SPIR-V tools.
-            // Leading flag: select the CFG walker (must come before
-            // --strict / the positional input, per the CLI parser).
-            w.addArg(b.fmt("--walker={s}", .{self.wgsl_walker}));
             if (opts.wgsl_strict) {
                 w.addArg("--strict");
             }
@@ -534,6 +528,7 @@ pub const ShaderPipeline = struct {
 
         return .{
             .externs = externs_module,
+            .spv = raw_spv,
             .wgsl = checked_wgsl_path,
         };
     }
@@ -545,14 +540,30 @@ pub const ShaderPipeline = struct {
     /// (the kernel's `config.workgroup`), so no flag is passed. Skips the
     /// sampler-rewrite + externs-gen that the fragment/vertex `addShader` path
     /// needs. Returns the WGSL LazyPath.
+    /// `addComputeOutput`'s WGSL, for callers that embed only the browser's form.
     pub fn addCompute(
+        self: *ShaderPipeline,
+        source: LazyPath,
+        entry: ?[]const u8,
+        wants_zimrnum: bool,
+        wants_zimrrl: bool,
+    ) LazyPath {
+        return self.addComputeOutput(source, entry, wants_zimrnum, wants_zimrrl).wgsl;
+    }
+
+    /// Compile a kernel file to SPIR-V and translate `entry` of it to WGSL, recording both (`compute_outputs`).
+    pub fn addComputeOutput(
         self: *ShaderPipeline,
         source: LazyPath,
         entry: ?[]const u8,
         /// Give the kernel `zn`, so it can call the host function rather than transcribe it.
         /// Opt-in: Zig rejects `--dep` for a module the file does not import.
         wants_zimrnum: bool,
-    ) LazyPath {
+        /// Give the kernel `zrl`, the reinforcement-learning library, for the same reason. zrl
+        /// imports zn, so `zn` is defined whenever this is set, and named in the kernel's own
+        /// dependency list only when `wants_zimrnum` is.
+        wants_zimrrl: bool,
+    ) ComputeOutput {
         const b: *Build = self.b;
         // Stage 1: Zig -> SPIR-V (same flags as the fragment path).
         const compile: *Run = b.addSystemCommand(&.{
@@ -581,13 +592,17 @@ pub const ShaderPipeline = struct {
             compile.addArg("--dep");
             compile.addArg("zn");
         }
+        if (wants_zimrrl) {
+            compile.addArg("--dep");
+            compile.addArg("zrl");
+        }
         compile.addPrefixedFileArg("-Mroot=", source);
         compile.addPrefixedFileArg("-Mzm=", b.path("src/zimrmath.zig"));
         // kompute re-exports zm (as `k.math`), so the kompute module needs zm too.
         compile.addArg("--dep");
         compile.addArg("zm");
         compile.addPrefixedFileArg("-Mkompute=", b.path("src/kompute.zig"));
-        if (wants_zimrnum) {
+        if (wants_zimrnum or wants_zimrrl) {
             // THE KERNEL CALLS THE HOST FUNCTION INSTEAD OF RESTATING IT
             //
             // zimrnum compiles to SPIR-V - checked directly with `build-obj -ofmt=spirv` before
@@ -599,6 +614,14 @@ pub const ShaderPipeline = struct {
             compile.addArg("--dep");
             compile.addArg("kompute");
             compile.addPrefixedFileArg("-Mzn=", b.path("src/zimrnum.zig"));
+        }
+        if (wants_zimrrl) {
+            // zrl's own dependency list: it imports zm and zn.
+            compile.addArg("--dep");
+            compile.addArg("zm");
+            compile.addArg("--dep");
+            compile.addArg("zn");
+            compile.addPrefixedFileArg("-Mzrl=", b.path("src/zimrrl.zig"));
         }
 
         // Stage 2: SPIR-V -> WGSL. @workgroup_size comes from the SPIR-V LocalSize.
@@ -614,41 +637,81 @@ pub const ShaderPipeline = struct {
             r.addFileInput(b.path(self.spv2wgsl_path));
             break :wblk r;
         };
-        w.addArg(b.fmt("--walker={s}", .{self.wgsl_walker}));
         if (entry) |e| {
             w.addArg(b.fmt("--entry={s}", .{e}));
         }
         w.addFileArg(raw_spv);
         const wgsl: LazyPath = w.addOutputFileArg("compute.wgsl");
-        return wgsl;
+        // Canonical, as `LazyPath.path` makes its own (separators, `.`/`..`): one file, one name, however reached.
+        const source_name: []const u8 = std.fs.path.resolveAlloc(b.allocator, &.{source.getDisplayName()}) catch
+            @panic("OOM");
+        const file_name: []const u8 = std.fs.path.stem(source_name);
+        const output: ComputeOutput = .{
+            .name = b.fmt("{s}__{s}", .{ file_name, entry orelse "main" }),
+            .source_name = source_name,
+            .spv = raw_spv,
+            .wgsl = wgsl,
+        };
+        self.compute_outputs.append(b.allocator, output) catch @panic("OOM");
+        return output;
     }
 
-    /// `addCompute` + wire the WGSL into `mod` as `import_name` (@embedFile-able).
+    /// One compute kernel entry as built: the kernel file's SPIR-V (every entry of a file shares it) and the entry's
+    /// WGSL.
+    pub const ComputeOutput = struct {
+        /// `<kernel file>__<entry>`, the same however many apps use the kernel.
+        name: []const u8,
+        /// The kernel file, as the build names it: two different files must not share a `name`.
+        source_name: []const u8,
+        /// The kernel file's SPIR-V, as the compiler writes it: every entry of the file.
+        spv: LazyPath,
+        /// This entry's WGSL, translated from `spv` by spv2wgsl.
+        wgsl: LazyPath,
+
+        /// The form an app embeds: the WGSL the browser runs, or the SPIR-V the native host does.
+        pub fn embedded(output: ComputeOutput, embed: KernelEmbed) LazyPath {
+            return switch (embed) {
+                .wgsl => output.wgsl,
+                .spirv => output.spv,
+            };
+        }
+    };
+
+    /// What an app embeds for each kernel entry, under the entry's import name either way (`<entry>_wgsl`): the WGSL
+    /// for the browser, or - for the native (Vulkan) host - the kernel file's SPIR-V, which holds every entry and
+    /// which the host selects from by name.
+    pub const KernelEmbed = enum { wgsl, spirv };
+
+    /// Build a kernel file with one unnamed entry, and embed it into `mod` as `import_name` (@embedFile-able): its
+    /// WGSL, or for the native host its SPIR-V (`embed`).
     pub fn addComputeImport(
         self: *ShaderPipeline,
         mod: *Module,
         source: LazyPath,
         import_name: []const u8,
+        embed: KernelEmbed,
     ) void {
-        const wgsl_path: LazyPath = self.addCompute(source, null, false);
-        mod.addAnonymousImport(import_name, .{ .root_source_file = wgsl_path });
+        const output: ComputeOutput = self.addComputeOutput(source, null, false, false);
+        mod.addAnonymousImport(import_name, .{ .root_source_file = output.embedded(embed) });
     }
 
-    /// Multi-kernel variant (t1178): translate `source` once per entry name
-    /// (spv2wgsl --entry) and import each standalone WGSL module as
-    /// `<entry>_wgsl`. The host hands the pairs to `Compute.initGpu`.
+    /// Build a kernel file with several entries, and embed each entry into `mod` as `<entry>_wgsl`: its WGSL - spv2wgsl
+    /// translates the file once per entry (`--entry`) - or for the native host the file's SPIR-V (`embed`). The host
+    /// hands the pairs of name and bytes to `Compute.initGpu`.
     pub fn addComputeKernelImports(
         self: *ShaderPipeline,
         mod: *Module,
         source: LazyPath,
         entries: []const []const u8,
         wants_zimrnum: bool,
+        wants_zimrrl: bool,
+        embed: KernelEmbed,
     ) void {
         for (entries) |entry| {
-            const wgsl_path: LazyPath = self.addCompute(source, entry, wants_zimrnum);
+            const output: ComputeOutput = self.addComputeOutput(source, entry, wants_zimrnum, wants_zimrrl);
             mod.addAnonymousImport(
                 self.b.fmt("{s}_wgsl", .{entry}),
-                .{ .root_source_file = wgsl_path },
+                .{ .root_source_file = output.embedded(embed) },
             );
         }
     }

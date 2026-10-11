@@ -140,8 +140,8 @@ pub fn shaderMain(io_in: Io) Out {
     while (bounce < max_bounces) : (bounce += 1) {
         // Find nearest sphere hit.
         var best_t: f32 = 1.0e30;
-        const NO_HIT: u32 = 0xffffffff;
-        var hit_i: u32 = NO_HIT;
+        const no_hit: u32 = 0xffffffff;
+        var hit_i: u32 = no_hit;
         var i: u32 = 0;
         while (i < max_spheres) : (i += 1) {
             if (i >= count) {
@@ -160,7 +160,7 @@ pub fn shaderMain(io_in: Io) Out {
             }
         }
 
-        if (hit_i == NO_HIT) {
+        if (hit_i == no_hit) {
             // Miss -> sky, modulated by attenuation so far.
             color = color + attenuation * skyColor(rd);
             break;

@@ -7,6 +7,7 @@
 //! start the AudioContext suspended, so the first tap also resumes it.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -28,7 +29,7 @@ const pad_colors = [pad_count]Color{
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     audio: z.AudioState = .{},
     snd: [pad_count]z.Sound,
     frame_count: usize = 0,
@@ -82,7 +83,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .audio = audio,
         .snd = snd,
     };

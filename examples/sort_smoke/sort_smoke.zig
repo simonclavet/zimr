@@ -14,9 +14,11 @@
 //!
 //! No other test in the tree can separate those three.
 const std = @import("std");
+const Random = std.Random;
 const z = @import("zimr");
 const sm = @import("sort_min.zig");
 const zm = @import("zm");
+const Color = zm.Color;
 
 const Pipe = z.Compute(sm);
 /// Each kernel's transpiled WGSL, embedded by the build. Mirrors `fluid_sort`.
@@ -39,6 +41,34 @@ const Line = struct {
     text: [96]u8 = @splat(0),
     len: usize = 0,
     ok: bool = true,
+};
+
+fn cellOfHost(p: Vec2) u32 {
+    const max_cx: f32 = float(sm.n_cols - 1);
+    const max_cy: f32 = float(sm.n_rows - 1);
+    const cx: u32 = @trunc(clamp(@floor(p[0] / sm.cell_size), 0.0, max_cx));
+    const cy: u32 = @trunc(clamp(@floor(p[1] / sm.cell_size), 0.0, max_cy));
+    return cx + cy * sm.n_cols;
+}
+
+/// The answer, worked out on the host with no kernels involved.
+const Truth = struct {
+    counts: [sm.n_cells]u32 = @splat(0),
+    starts: [sm.n_cells + 1]u32 = @splat(0),
+
+    fn compute(input: *const [sm.n_particles]Vec2) Truth {
+        var t: Truth = .{};
+        for (input) |p| {
+            t.counts[cellOfHost(p)] += 1;
+        }
+        var acc: u32 = 0;
+        for (0..sm.n_cells) |c| {
+            t.starts[c] = acc;
+            acc += t.counts[c];
+        }
+        t.starts[sm.n_cells] = acc;
+        return t;
+    }
 };
 
 const State = struct {
@@ -78,8 +108,8 @@ fn say(s: *State, ok: bool, comptime fmt: []const u8, args: anytype) void {
 /// get very different populations, and one particle sits outside the domain so the clamp in
 /// `cellOf` is exercised too.
 fn makeInput(out: *[sm.n_particles]Vec2) void {
-    var prng: std.Random.DefaultPrng = .init(0x50127);
-    const rng: std.Random = prng.random();
+    var prng: Random.DefaultPrng = .init(0x50127);
+    const rng: Random = prng.random();
     for (out, 0..) |*p, i| {
         if (i == 0) {
             p.* = .{ -50.0, -50.0 }; // deliberately out of bounds -> must clamp into cell 0
@@ -90,34 +120,6 @@ fn makeInput(out: *[sm.n_particles]Vec2) void {
             rng.float(f32) * 400.0,
         };
     }
-}
-
-/// The answer, worked out on the host with no kernels involved.
-const Truth = struct {
-    counts: [sm.n_cells]u32 = @splat(0),
-    starts: [sm.n_cells + 1]u32 = @splat(0),
-
-    fn compute(input: *const [sm.n_particles]Vec2) Truth {
-        var t: Truth = .{};
-        for (input) |p| {
-            t.counts[cellOfHost(p)] += 1;
-        }
-        var acc: u32 = 0;
-        for (0..sm.n_cells) |c| {
-            t.starts[c] = acc;
-            acc += t.counts[c];
-        }
-        t.starts[sm.n_cells] = acc;
-        return t;
-    }
-};
-
-fn cellOfHost(p: Vec2) u32 {
-    const max_cx: f32 = float(sm.n_cols - 1);
-    const max_cy: f32 = float(sm.n_rows - 1);
-    const cx: u32 = @trunc(clamp(@floor(p[0] / sm.cell_size), 0.0, max_cx));
-    const cy: u32 = @trunc(clamp(@floor(p[1] / sm.cell_size), 0.0, max_cy));
-    return cx + cy * sm.n_cols;
 }
 
 /// Check every stage of an ALREADY-DISPATCHED pipe against ground truth. Returns false if
@@ -398,27 +400,6 @@ fn checkStages(
     return true;
 }
 
-fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
-
-    var input: [sm.n_particles]Vec2 = undefined;
-    makeInput(&input);
-    const truth: Truth = Truth.compute(&input);
-
-    say(s, true, "counting sort: {d} particles, {d}x{d} grid", .{ sm.n_particles, sm.n_cols, sm.n_rows });
-
-    // ---- the SAME kernel source, on the CPU (plain Zig). Synchronous: check immediately.
-    var cpu: Pipe = Pipe.initCpu();
-    dispatch(&cpu, &input);
-    _ = checkStages(s, &cpu, "CPU", &truth);
-
-    // ---- and on the GPU (SPIR-V -> WGSL). Dispatch now; check when the readback lands.
-    s.gpu = try Pipe.initGpu(gpa, f.gpu.device, f.gpu.queue, &kernel_wgsls);
-    s.input = input;
-    s.truth = truth;
-    dispatch(&s.gpu, &input);
-}
-
 /// Upload + run the five kernels once. Separated from the checking so the GPU can be
 /// dispatched in `init` and inspected later, once its async readback completes.
 fn dispatch(pipe: *Pipe, input: *const [sm.n_particles]Vec2) void {
@@ -439,6 +420,27 @@ fn dispatch(pipe: *Pipe, input: *const [sm.n_particles]Vec2) void {
     pipe.run("computeForce", sm.n_particles);
     pipe.run("computeVisc", sm.n_particles);
     pipe.run("applyMini", sm.n_particles);
+}
+
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{ .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24) };
+
+    var input: [sm.n_particles]Vec2 = undefined;
+    makeInput(&input);
+    const truth: Truth = .compute(&input);
+
+    say(s, true, "counting sort: {d} particles, {d}x{d} grid", .{ sm.n_particles, sm.n_cols, sm.n_rows });
+
+    // ---- the SAME kernel source, on the CPU (plain Zig). Synchronous: check immediately.
+    var cpu: Pipe = .initCpu();
+    dispatch(&cpu, &input);
+    _ = checkStages(s, &cpu, "CPU", &truth);
+
+    // ---- and on the GPU (SPIR-V -> WGSL). Dispatch now; check when the readback lands.
+    s.gpu = try Pipe.initGpu(gpa, f.gpu.device, f.gpu.queue, &kernel_wgsls);
+    s.input = input;
+    s.truth = truth;
+    dispatch(&s.gpu, &input);
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -463,7 +465,7 @@ fn update(f: *z.Frame, s: *State) void {
     const fsz: f32 = clamp(f.window.widthf() / 46.0, 10.0, 20.0);
     var y: f32 = fsz;
     for (s.lines[0..s.n_lines]) |l| {
-        const col: zm.Color = if (l.ok) z.colors.green_400 else z.colors.red_400;
+        const col: Color = if (l.ok) z.colors.green_400 else z.colors.red_400;
         f.gl.text(.{ fsz * 0.5, y }, l.text[0..l.len], .{ .size = fsz, .color = col, .font = &s.font });
         y += fsz * 1.6;
     }

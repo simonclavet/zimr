@@ -16,15 +16,50 @@
 //! second thing to keep in sync, and this table is only ever read by this program.
 
 const std = @import("std");
+const cli = @import("cli");
 
 const Allocator = std.mem.Allocator;
 const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const indexOf = std.mem.indexOf;
+const indexOfPos = std.mem.indexOfPos;
+const indexOfScalar = std.mem.indexOfScalar;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const trim = std.mem.trim;
+const parseInt = std.fmt.parseInt;
+const ArrayList = std.ArrayList;
+const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
 
-const source_path: []const u8 = "src/zimrnum.zig";
-const doc_path: []const u8 = "src/notes/tutorials/zimrnum-tutorial.html";
-/// The sweep: every `Case` names a kernel and calls exactly one `zn.` function, which is how a
-/// function's GPU status is derived rather than declared.
-const sweep_path: []const u8 = "examples/zimrnum_field/zimrnum_field.zig";
+/// One library this tool documents.
+const Library = struct {
+    /// The name its callers import it under (`zn` in `zn.matmul(...)`). A page's code blocks are matched on
+    /// `<alias>.`: each such call is checked against this library's declarations and folded from its source.
+    alias: []const u8,
+    /// Its source. Every public declaration and public method becomes a row of its page's reference table.
+    source_path: []const u8,
+    /// The tutorial page that holds its reference table.
+    page_path: []const u8,
+    /// The sweep: every `Case` names a kernel and calls exactly one `<alias>.` function, which is how a function's
+    /// GPU status is derived rather than declared. Null for a library without one.
+    sweep_path: ?[]const u8 = null,
+};
+
+/// The libraries documented, each with its own page. A page's examples may call any of them.
+const libraries = [_]Library{
+    .{
+        .alias = "zn",
+        .source_path = "src/zimrnum.zig",
+        .page_path = "src/notes/tutorials/zimrnum-tutorial.html",
+        .sweep_path = "examples/zimrnum_field/zimrnum_field.zig",
+    },
+    .{
+        .alias = "zrl",
+        .source_path = "src/zimrrl.zig",
+        .page_path = "src/notes/tutorials/zimrrl-tutorial.html",
+    },
+};
 
 /// The row that opens the reference table. Rows are rewritten between this and the next `</table>`.
 const table_header: []const u8 =
@@ -45,7 +80,7 @@ const notes = [_]Note{
     },
     .{
         .name = "requireInt",
-        .text = "Whole numbers only. znum's bitwiseAnd has no guard at all.",
+        .text = "Whole numbers only.",
     },
     .{
         .name = "polyakUpdate",
@@ -53,16 +88,24 @@ const notes = [_]Note{
     },
     .{
         .name = "cartpoleStep",
-        .text = "PURE: state in, next state out. znum mutates and warns you in prose.",
+        .text = "Pure: state in, next state out.",
     },
     .{
         .name = "cartpoleStepBatch",
         .text = "A LOOP over the scalar step - one definition, and the GPU twin is free.",
     },
     .{ .name = "cartpoleReset", .text = "Separate from the step, which removes two flags." },
+    .{ .name = "Falloff", .text = "How tolerance falls off outside its band: gaussian, quadratic or linear." },
+    .{ .name = "Tolerance", .text = "Band, margin, falloff and value at the margin; dm_control's defaults." },
+    .{ .name = "tolerance", .text = "1 inside a band, a falloff outside it: dm_control's rewards.tolerance." },
+    .{ .name = "HeadTerms", .text = "One dynamics head's logits and its reward and value terms, in WorldModelLoss." },
+    .{ .name = "not_a_candidate", .text = "Mppi.chosen_rows' entry for a choice that is no candidate (the mean)." },
+    .{ .name = "PlanObjective", .text = "A plan's score: final (BMPC) or the mean over prefixes (EfficientTDMPC)." },
+    .{ .name = "planObjectiveWeights", .text = "The weights an objective puts on each step's reward and value." },
+    .{ .name = "cartpoleBalanceReward", .text = "DMC's dense cartpole balance reward, on this cartpole's state." },
     .{ .name = "CartpoleState", .text = "Four NAMED fields, not four positions in a tensor." },
     .{ .name = "CartpoleStep", .text = "state, reward, failed - not rd[0] and rd[1]." },
-    .{ .name = "Push", .text = "left or right. znum decodes `action > 0.5`." },
+    .{ .name = "Push", .text = "left or right." },
     .{
         .name = "categorical",
         .text = "One draw per sample. The max is subtracted, so logits of 800 work.",
@@ -71,7 +114,7 @@ const notes = [_]Note{
         .name = "boundedIndex",
         .text = "Uniform without the modulo bias every tutorial ships.",
     },
-    .{ .name = "affine", .text = "a * gain + offset. One function where znum has three." },
+    .{ .name = "affine", .text = "a * gain + offset: every scalar add, subtract, multiply, divide." },
     .{
         .name = "divFloor",
         .text = "-7/2 is -4. `div` stays float-only so integers must choose.",
@@ -89,7 +132,7 @@ const notes = [_]Note{
     },
     .{
         .name = "compareScalar",
-        .text = "One function where znum has six: eq/ne/lt/le/gt/geScalar.",
+        .text = "Every comparison with a scalar, as one function.",
     },
     .{ .name = "Comparison", .text = "Named, so the call site reads as a sentence." },
     .{
@@ -187,7 +230,7 @@ const notes = [_]Note{
         .name = "bitwiseNot",
         .text = "Flips every bit: ~5 is -6. NOT logicalNot, which asks if it was zero.",
     },
-    .{ .name = "logicalNot", .text = "One where the input was zero. znum has only this one." },
+    .{ .name = "logicalNot", .text = "One where the input was zero." },
     .{
         .name = "shiftLeft",
         .text = "An over-shift is a DomainError, not Zig's undefined behaviour.",
@@ -199,7 +242,10 @@ const notes = [_]Note{
     .{ .name = "divisor", .text = "Returns null where the divisor is undefined." },
     .{ .name = "approxEqAbs", .text = "Absolute tolerance. NaN equals nothing." },
     .{ .name = "Rng", .text = "Counter-based. A draw is a pure function of (seed, index)." },
-    .{ .name = "init", .text = "Rng.init(seed) and Ctx.init(gpa, seed)." },
+    .{
+        .name = "init",
+        .text = "Construct: Rng.init(seed), Ctx.init(gpa, seed), and each layer's, network's and planner's init.",
+    },
     .{ .name = "split", .text = "A derived generator from a label." },
     .{ .name = "bits", .text = "Raw 32-bit draw, stream 0." },
     .{ .name = "unitFloat", .text = "[0, 1) with the full mantissa of T." },
@@ -294,9 +340,9 @@ const notes = [_]Note{
     .{ .name = "atanRad", .text = "" },
     .{ .name = "sinh", .text = "By identity, so CPU and GPU compute the same expression." },
     .{ .name = "cosh", .text = "" },
-    .{ .name = "asinh", .text = "No znum counterpart." },
-    .{ .name = "acosh", .text = "NaN below 1. No znum counterpart." },
-    .{ .name = "atanh", .text = "NaN outside (-1,1). No znum counterpart." },
+    .{ .name = "asinh", .text = "Inverse hyperbolic sine." },
+    .{ .name = "acosh", .text = "Inverse hyperbolic cosine; NaN below 1." },
+    .{ .name = "atanh", .text = "Inverse hyperbolic tangent; NaN outside (-1,1)." },
     .{ .name = "rsqrt", .text = "NaN below zero." },
     .{ .name = "pow", .text = "exp(b&middot;log a). NaN for a negative base." },
     .{ .name = "exp2", .text = "2&#8319;. Named by the correspondence gate on its first run." },
@@ -337,6 +383,7 @@ const notes = [_]Note{
     },
     .{ .name = "mish", .text = "x * tanh(softplus(x)) - a composition once softplus is a node." },
     .{ .name = "softplus", .text = "Returns x above 20, on both backends." },
+    .{ .name = "mish", .text = "x tanh(softplus(x)) with one exponential: tanh(softplus(x)) = n / (n + 2)." },
     .{ .name = "silu", .text = "x&middot;sigmoid(x), also called swish." },
     .{ .name = "leakyRelu", .text = "The slope has no default." },
     .{ .name = "elu", .text = "Continuous at zero for any alpha." },
@@ -488,7 +535,7 @@ const notes = [_]Note{
     },
     .{
         .name = "glu",
-        .text = "slice * sigmoid(slice). No backward: znum hand-derives one.",
+        .text = "slice * sigmoid(slice), composed of graph operations.",
     },
     .{ .name = "swiglu", .text = "The same, gated by SiLU. Every recent transformer uses it." },
     .{
@@ -496,17 +543,88 @@ const notes = [_]Note{
         .text = "In a cell, one gate's two matrices and its bias; in a gated unit, " ++
             "which nonlinearity.",
     },
-    .{
-        .name = "ppoClipLoss",
-        .text = "PPO as a LOSS. The clip acts in the backward: a clipped step gets ZERO.",
-    },
-    .{ .name = "constants", .text = "Node data a backward needs that are not Vars." },
     .{ .name = "normalizeAdvantages", .text = "In place. Epsilon, not DomainError, for a constant batch." },
     .{ .name = "ppoClipObjective", .text = "An objective to MAXIMISE. min(ratio·A, clip(ratio)·A)." },
+    .{ .name = "PpoClipLoss", .text = "PPO's clipped surrogate as a graph loss, from generic operations." },
+    .{ .name = "setInputs", .text = "Write the next minibatch's old log-probabilities and advantages." },
     .{ .name = "entropyRows", .text = "A zero probability contributes zero." },
     .{ .name = "ReplayBuffer", .text = "A ring: the oldest transition is overwritten." },
-    .{ .name = "push", .text = "" },
-    .{ .name = "sample", .text = "Uniform with replacement. Addressable by (rng, index)." },
+    .{
+        .name = "push",
+        .text = "ReplayBuffer: one transition, the oldest overwritten. SequenceReplay: one step of every " ++
+            "environment; an inactive one writes nothing.",
+    },
+    .{
+        .name = "sample",
+        .text = "Uniform with replacement, addressable by (rng, index); SequenceReplay.sample draws step-major " ++
+            "windows of one environment with their finished masks and origins; Mppi.sample draws candidate plans.",
+    },
+    .{
+        .name = "slotOf",
+        .text = "The slot of the k-th oldest row (0 the oldest): time order is the ring read from len slots " ++
+            "behind the head.",
+    },
+    .{ .name = "row", .text = "The k-th oldest row, in place - writing through it changes the stored row." },
+    .{
+        .name = "chronologicalIndexOf",
+        .text = "The inverse of slotOf: how many rows after the oldest a slot's row sits; an unfilled slot is at " ++
+            "len or beyond.",
+    },
+    .{ .name = "ValidSum", .text = "Series: what sumValid returns - the present values' total and their count." },
+    .{
+        .name = "RunningScale",
+        .text = "BMPC's loss scale: an EMA of max(1, q95 - q5) of each batch - floored per batch, before averaging.",
+    },
+    .{ .name = "update", .text = "RunningScale: value += tau * (max(1, q95 - q5) - value); the batch is left alone." },
+    .{
+        .name = "quantileBlend",
+        .text = "Two distributions over the bins blended along their quantiles, reprojected: one point mass between " ++
+            "two, never two bumps; the mean exactly the weighted mean.",
+    },
+    .{
+        .name = "twinTarget",
+        .text = "TD4's target: the twin with the lower mean (weight 1), blended with the other along quantiles " ++
+            "below 1.",
+    },
+    .{ .name = "twinTargetRows", .text = "twinTarget for every row - the lower twin chosen row by row." },
+    .{
+        .name = "gatherColumns",
+        .text = "out[r][k] = table[r][columns[k]]; on the graph a product with a 0/1 selection matrix - exact, its " ++
+            "gradient zero for the unchosen.",
+    },
+    .{
+        .name = "linearSchedule",
+        .text = "Start to end in a straight line over the first decay_fraction of the run, then flat; both ends exact.",
+    },
+    .{ .name = "policyUpdateDue", .text = "True after every policy_delay-th critic update (TD3's delay); 0 refused." },
+    .{
+        .name = "addGaussianActionNoise",
+        .text = "Actions plus N(0, std) noise clipped to +-noise_clip, clamped to [-1, 1]: TD3's exploration and " ++
+            "target smoothing in one.",
+    },
+    .{
+        .name = "preActivationPenalty",
+        .text = "Mean over rows of the sum of relu(u - 1)^2 + relu(-u - 1)^2: zero inside [-1, 1], no kink at 0.",
+    },
+    .{
+        .name = "klRobustExpectation",
+        .text = "The lowest average within KL delta of uniform weights: the mean at 0, the minimum from log N; " ++
+            "its tilted weights are the gradient.",
+    },
+    .{
+        .name = "WindowOrigin",
+        .text = "Where a sampled window lives: its environment and the physical slot of its first step.",
+    },
+    .{
+        .name = "writeBack",
+        .text = "Copies step-major values into chosen columns of chosen steps of sampled windows, in place - " ++
+            "reanalyze's fresh targets.",
+    },
+    .{
+        .name = "SequenceReplay",
+        .text = "One ring per environment; windows of consecutive steps drawn as (environment, start), allowed " ++
+            "across an episode's end, with finished masks.",
+    },
     .{ .name = "conv2d", .text = "Cross-correlation with stride and zero padding, per axis. Rank 2." },
     .{ .name = "maxPool2d", .text = "Non-overlapping square windows. Partial trailing window dropped." },
     .{ .name = "avgPool2d", .text = "" },
@@ -612,11 +730,6 @@ const notes = [_]Note{
             "update owns the loop - the same split `Fitting` uses for supervised training.",
     },
     .{
-        .name = "setPpoClipInputs",
-        .text = "Refresh a clip node's old log-probs and advantages. `ppoClipLoss` COPIES them, " ++
-            "so without this a minibatch loop optimises against the first stride forever.",
-    },
-    .{
         .name = "klGaussianDiag",
         .text = "The EXACT KL between two diagonal Gaussians. KL(new||old) - the direction is " ++
             "the point, and swapping it computes something real, different, and silent.",
@@ -628,8 +741,7 @@ const notes = [_]Note{
     },
     .{
         .name = "apply",
-        .text = "Normalise, PURELY. It never touches the statistics, so evaluation cannot drift " ++
-            "into a normalisation the policy never trained with.",
+        .text = "Pure: a normaliser never touches its statistics; an Mlp runs over handles from bind.",
     },
     .{
         .name = "observe",
@@ -810,6 +922,26 @@ const notes = [_]Note{
             "log-probability for the entropy term.",
     },
     .{
+        .name = "diagGaussianEntropy",
+        .text = "Graph: a diagonal Gaussian's entropy per row, DiagGaussian.entropy's twin; gradient 1 per log std.",
+    },
+    .{
+        .name = "tanhIntoRange",
+        .text = "Graph: low + (high - low) * (tanh(x) + 1) / 2 - an output held smoothly inside an interval.",
+    },
+    .{
+        .name = "PolicyDistillationLoss",
+        .text = "BMPC's policy loss: rho^t * (KL to the planner / scale - 1e-4 * dims * entropy); finished rows 0.",
+    },
+    .{
+        .name = "updateScale",
+        .text = "PolicyDistillationLoss: move the RunningScale with step 0's divergences, then set 1 / scale.",
+    },
+    .{
+        .name = "TanhMeanGaussian",
+        .text = "BMPC's policy head: tanh centres, log std held in [low, high]; draws clamped, not squashed.",
+    },
+    .{
         .name = "diagGaussianLogProb",
         .text = "A diagonal Gaussian's log-density ON THE TAPE - the missing link between a " ++
             "network that outputs mean/log_std and a loss that can be descended.",
@@ -864,8 +996,7 @@ const notes = [_]Note{
     },
     .{
         .name = "MinibatchOrder",
-        .text = "The shuffled minibatch walk every on-policy update needs, owned ONCE - znum has " ++
-            "two copies, 61% identical and already diverged.",
+        .text = "The shuffled minibatch walk every on-policy update needs.",
     },
     .{
         .name = "reshuffle",
@@ -983,7 +1114,7 @@ const notes = [_]Note{
     },
     .{
         .name = "bind",
-        .text = "Put the cell's weights on the tape, once, before the sequence loop.",
+        .text = "Put weights on the graph once, before a loop: a recurrent cell's, a Params' or an Mlp's.",
     },
     .{
         .name = "stepBound",
@@ -1028,10 +1159,15 @@ const notes = [_]Note{
     .{ .name = "valueOf", .text = "The tensor behind a Var." },
     .{ .name = "gradOf", .text = "DomainError for a constant." },
     .{ .name = "backward", .text = "Seeds 1 into a single-element value and walks the tape back." },
+    .{
+        .name = "useScratchAllocator",
+        .text = "Takes backward's temporaries from a real allocator - for a graph reused over many passes.",
+    },
+    .{ .name = "deinitScratch", .text = "Frees those temporaries; pairs with useScratchAllocator." },
     .{ .name = "recompute", .text = "Replays the tape forward. Leaves keep whatever was written." },
     .{ .name = "crossEntropy", .text = "Labels are a []usize, not a Var: they have no gradient." },
     .{ .name = "dropout", .text = "Inverted. Mask drawn once and stored; see resampleDropout." },
-    .{ .name = "resampleDropout", .text = "Fresh masks for every dropout node. Once per step." },
+    .{ .name = "resampleDropout", .text = "Fresh masks, each node from its own generator split. Once per step." },
     .{
         .name = "checkGradient",
         .text = "Worst gap against a central finite difference. Restores the model.",
@@ -1072,6 +1208,7 @@ const notes = [_]Note{
     .{ .name = "unique", .text = "Ascending, not first-seen." },
     .{ .name = "argsort", .text = "Rank 1, ascending, stable. Indices into a []usize." },
     .{ .name = "matmul", .text = "Rank 2. Compensated inner sum." },
+    .{ .name = "matmulReference", .text = "The naive triple loop: matmul's specification, matched bit for bit." },
     .{ .name = "softmaxRows", .text = "Rank 2. The row maximum is subtracted." },
     .{
         .name = "logSumExp",
@@ -1155,7 +1292,11 @@ const notes = [_]Note{
         .name = "fromTensorMarkingNaN",
         .text = "NaN in, honest mask out. Allocates only if something IS missing.",
     },
-    .{ .name = "deinit", .text = "Frees the values and the mask, if there is one." },
+    .{
+        .name = "deinit",
+        .text = "Give back what init allocated: a masked array's values and mask, a network's or planner's tensors, " ++
+            "a replay's rings.",
+    },
     .{ .name = "len", .text = "Entries, present or not." },
     .{ .name = "fillMissing", .text = "A constant into every gap. The mask is then freed." },
     .{
@@ -1208,7 +1349,7 @@ const notes = [_]Note{
         .name = "firstRows",
         .text = "pandas' head. Not called `head` - that shadows three locals here.",
     },
-    .{ .name = "JoinHow", .text = "inner, left, right, outer - znum's four with its meanings." },
+    .{ .name = "JoinHow", .text = "inner, left, right or outer." },
     .{
         .name = "RowPair",
         .text = "One joined row. `no_row` beats ?usize: dense array, tight loop.",
@@ -1220,7 +1361,7 @@ const notes = [_]Note{
     },
     .{
         .name = "Summary",
-        .text = "NAMED fields. znum returns [8]f64 and slot 3 being min is not a type.",
+        .text = "Named fields rather than an array of eight.",
     },
     .{
         .name = "describe",
@@ -1230,7 +1371,7 @@ const notes = [_]Note{
         .name = "Aggregate",
         .text = "Seven that fit one pass. No variance or median stub that always errors.",
     },
-    .{ .name = "needsFloat", .text = "Only mean does. znum floats all ten." },
+    .{ .name = "needsFloat", .text = "Only mean does." },
     .{
         .name = "aggregate",
         .text = "The TYPE survives: sum of i32 is i32. A mean of i32 is a COMPILE error.",
@@ -1321,11 +1462,133 @@ const notes = [_]Note{
         .name = "cholesky",
         .text = "Lower-triangular L with L&middot;L&#7488; = a. DomainError when not positive-definite.",
     },
+    // The world-model building blocks (tutorial 18d).
+    .{ .name = "addPointMassToGrid", .text = "Spread a point's mass onto the two grid bins around it." },
+    .{ .name = "half_log_tau", .text = "log(2 pi) / 2, the constant term of a Gaussian's log-density." },
+    .{ .name = "expectReferenceTableMatches", .text = "Tests a tutorial's table against a source's public names." },
+    .{ .name = "loss", .text = "Minus PPO's clipped objective at `t`: what numericalGrad differentiates." },
+    .{
+        .name = "categoricalProject",
+        .text = "C51's projection: atoms moved by reward + discount x atom, shared back onto the grid by closeness.",
+    },
+    .{ .name = "symlog", .text = "sign(x) log(1 + |x|): squashes large magnitudes, the identity near zero." },
+    .{ .name = "symexp", .text = "The inverse of symlog: sign(y) (exp(|y|) - 1)." },
+    .{
+        .name = "CategoricalScalar",
+        .text = "One number predicted as a distribution over bins: two-hot encode, decode by the mean.",
+    },
+    .{ .name = "Axis", .text = "CategoricalScalar's axis: symlog (TD-MPC2, BMPC) or identity (C51 / TD4 atoms)." },
+    .{ .name = "check", .text = "CategoricalScalar: refuse settings that describe no grid." },
+    .{ .name = "toAxis", .text = "A value placed on the bins' axis." },
+    .{ .name = "fromAxis", .text = "A position on the bins' axis taken back to a value." },
+    .{ .name = "binPosition", .text = "Where a bin sits on the axis." },
+    .{ .name = "encode", .text = "The two-hot target: two neighbouring bins, shared by closeness, summing to 1." },
+    .{
+        .name = "decode",
+        .text = "A distribution over the bins read back as a number: the mean of the bins, off the axis.",
+    },
+    .{ .name = "encodeRows", .text = "encode, one row per value." },
+    .{ .name = "decodeRows", .text = "decode, one value per row." },
+    .{ .name = "simNormRows", .text = "SimNorm: every group of features softmaxed into a probability vector." },
+    .{ .name = "simNormRowsGrad", .text = "SimNorm's backward: per group, p (g - the p-weighted mean of g)." },
+    .{
+        .name = "softCrossEntropyRows",
+        .text = "Mean over rows of -sum target log softmax(logits): regression as classification.",
+    },
+    .{ .name = "softCrossEntropyRowsGrad", .text = "Its gradient: (softmax(logits) - target) / rows." },
+    .{ .name = "initNormal", .text = "Normal weights of a chosen deviation (InitScheme.small_normal)." },
+    .{ .name = "small_normal_deviation", .text = "0.02: TD-MPC2's weight deviation." },
+    .{
+        .name = "attachAs",
+        .text = "A layer or network on a graph, its tensors trained (parameters) or frozen (constants, same tensors).",
+    },
+    .{
+        .name = "applyBound",
+        .text = "A layer's arithmetic over handles already bound: bind once, apply at every step.",
+    },
+    .{ .name = "LayerNorm", .text = "Row normalisation with a learned gain and bias, on Dense's template." },
+    .{ .name = "Activation", .text = "What a layer ends in: none, relu, mish, or SimNorm with a group size." },
+    .{ .name = "NormedDense", .text = "BMPC's NormedLinear: Dense, dropout, LayerNorm, an activation." },
+    .{ .name = "tensors", .text = "A normed layer's four tensors, in binding order." },
+    .{ .name = "Mlp", .text = "TD-MPC2's MLP from a Spec: normed hidden layers, a plain or normed last layer." },
+    .{ .name = "Spec", .text = "An Mlp's architecture, as data." },
+    .{ .name = "Last", .text = "An Mlp's last layer: a plain head or a normed layer." },
+    .{ .name = "tensorCount", .text = "How many tensors an Mlp has." },
+    .{ .name = "params", .text = "An Mlp's tensors as a Params over the same storage: clone it for a target." },
+    .{ .name = "withParams", .text = "The same architecture over another Params' tensors: a target network." },
+    .{
+        .name = "LatentRollout",
+        .text = "One-pass encoding, detached targets, the dynamics applied H times, the consistency loss.",
+    },
+    .{
+        .name = "setFinished",
+        .text = "LatentRollout: the replay's finished flags - a finished window counts for nothing, nor its gradient.",
+    },
+    .{
+        .name = "Options",
+        .text = "Settings of LatentRollout, WorldModelLoss, TanhMeanGaussian, PolicyDistillationLoss, " ++
+            "LatentPlanScorer and Mppi.",
+    },
+    .{
+        .name = "build",
+        .text = "Build a rollout, a loss, a policy head or a plan scorer on a graph once; refill and recompute.",
+    },
+    .{
+        .name = "WorldModelLoss",
+        .text = "Reward and value heads on the rolled latents, cross-entropy to two-hots, BMPC's weighted total.",
+    },
+    .{
+        .name = "LatentPlanScorer",
+        .text = "Plans scored by imagination: discounted rewards plus the end value, many states at once.",
+    },
+    .{ .name = "score", .text = "Recompute a LatentPlanScorer and write one score per row." },
+    .{
+        .name = "LatentValueTargets",
+        .text = "The value heads' targets: the policy's lookahead through the model, then the target heads' value.",
+    },
+    .{ .name = "compute", .text = "Recompute a LatentValueTargets and write one target per row." },
+    .{ .name = "draw", .text = "TanhMeanGaussian: clamp(tanh mean + exp(log std) x noise, -1, 1) - BMPC's draw." },
+    .{
+        .name = "explore",
+        .text = "Mppi: the chosen first actions jittered by spread x noise and clamped - BMPC's exploration.",
+    },
+    .{
+        .name = "LatentPolicyPlans",
+        .text = "The policy's own plans for MPPI's first rows: encode, then draw and roll through the dynamics.",
+    },
+    .{
+        .name = "Mppi",
+        .text = "Model predictive path integral search: sample, score, refit to the elites, choose; warm-started.",
+    },
+    .{ .name = "Choice", .text = "How Mppi picks its plan: a drawn elite, the best elite, or the mean." },
+    .{ .name = "begin", .text = "Start an Mppi plan: the mean warm-started, the spread reset wide." },
+    .{ .name = "refit", .text = "Refit Mppi's Gaussian to its elites, weighted exp(temperature (score - best))." },
+    .{ .name = "choose", .text = "Mppi's result per state: a first action and the first step's spread." },
+    .{ .name = "plan", .text = "A whole Mppi plan over a LatentPlanScorer." },
+    .{ .name = "Params", .text = "A network's tensors as one set: bind trained or frozen, clone, follow." },
+    .{
+        .name = "Binding",
+        .text = "How tensors enter a graph: trained (parameters) or frozen (constants over the same tensors).",
+    },
+    .{ .name = "clone", .text = "A deep copy of a Params: a target network's own numbers." },
+    .{ .name = "follow", .text = "Move a Params a fraction of the way toward another (Polyak); exact at 0 and 1." },
+    .{ .name = "detach", .text = "Graph op: the input's value with no gradient through it - a stop-gradient." },
+    .{ .name = "activate", .text = "Graph: a value through an Activation." },
+    .{
+        .name = "copyToEveryRow",
+        .text = "Graph: a [1, d] value copied to every row - exact, its gradient summed back.",
+    },
+    .{
+        .name = "copyToEveryColumn",
+        .text = "Graph: a [rows, 1] column copied to every column - exact, its gradient summed back.",
+    },
+    .{ .name = "softCrossEntropy", .text = "Graph op: mean cross-entropy of logits against soft targets." },
+    .{ .name = "simNorm", .text = "Graph op: SimNorm with a group size." },
 };
 
 fn noteFor(name: []const u8) ?[]const u8 {
     for (notes) |entry| {
-        if (std.mem.eql(u8, entry.name, name)) {
+        if (eql(u8, entry.name, name)) {
             return entry.text;
         }
     }
@@ -1348,13 +1611,13 @@ fn noteFor(name: []const u8) ?[]const u8 {
 /// each entry is a question for a human: is one note true of every owner, or does the text need
 /// to widen?
 fn reportDuplicateNotes(gpa: Allocator) !void {
-    var seen: std.ArrayList([]const u8) = .empty;
+    var seen: ArrayList([]const u8) = .empty;
     defer seen.deinit(gpa);
     var reported: usize = 0;
     for (notes, 0..) |entry, i| {
         var already: bool = false;
         for (notes[0..i]) |earlier| {
-            if (std.mem.eql(u8, earlier.name, entry.name)) {
+            if (eql(u8, earlier.name, entry.name)) {
                 already = true;
                 break;
             }
@@ -1364,7 +1627,7 @@ fn reportDuplicateNotes(gpa: Allocator) !void {
         }
         var listed: bool = false;
         for (seen.items) |s| {
-            if (std.mem.eql(u8, s, entry.name)) {
+            if (eql(u8, s, entry.name)) {
                 listed = true;
                 break;
             }
@@ -1378,7 +1641,7 @@ fn reportDuplicateNotes(gpa: Allocator) !void {
     if (reported == 0) {
         return;
     }
-    var line: std.ArrayList(u8) = .empty;
+    var line: ArrayList(u8) = .empty;
     defer line.deinit(gpa);
     for (seen.items) |s| {
         try line.appendSlice(gpa, s);
@@ -1391,7 +1654,7 @@ fn reportDuplicateNotes(gpa: Allocator) !void {
 }
 
 /// Append `text` with the three characters that would otherwise be markup escaped.
-fn appendEscaped(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) !void {
+fn appendEscaped(gpa: Allocator, out: *ArrayList(u8), text: []const u8) !void {
     for (text) |c| {
         switch (c) {
             '&' => try out.appendSlice(gpa, "&amp;"),
@@ -1411,27 +1674,33 @@ fn appendEscaped(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) !voi
 ///
 /// Returns the kernel names for `name`, comma-separated, or null. Up to four kernels may check
 /// one function (`add` has `add` and `bcast_add`; `matmul` has three).
-fn kernelsFor(gpa: Allocator, sweep: []const u8, name: []const u8) !?[]const u8 {
-    var found: std.ArrayList(u8) = .empty;
+fn kernelsFor(
+    gpa: Allocator,
+    sweep: []const u8,
+    alias: []const u8,
+    name: []const u8,
+) !?[]const u8 {
+    const prefix: []const u8 = try allocPrint(gpa, "{s}.", .{alias});
+    var found: ArrayList(u8) = .empty;
     var scan: usize = 0;
     const entry_tag: []const u8 = ".entry = \"";
-    while (std.mem.indexOfPos(u8, sweep, scan, entry_tag)) |hit| {
+    while (indexOfPos(u8, sweep, scan, entry_tag)) |hit| {
         const start: usize = hit + entry_tag.len;
-        const end: usize = std.mem.indexOfScalarPos(u8, sweep, start, '"') orelse break;
+        const end: usize = indexOfScalarPos(u8, sweep, start, '"') orelse break;
         const kernel: []const u8 = sweep[start..end];
         // The cpu body follows within a few hundred bytes; the first `zn.NAME(` in it is the
         // function this row checks.
         const window_end: usize = @min(sweep.len, end + 900);
         const window: []const u8 = sweep[end..window_end];
-        if (std.mem.indexOf(u8, window, "zn.")) |z| {
-            const fn_start: usize = z + 3;
+        if (indexOf(u8, window, prefix)) |z| {
+            const fn_start: usize = z + prefix.len;
             var fn_end: usize = fn_start;
             while (fn_end < window.len and
                 (std.ascii.isAlphanumeric(window[fn_end]) or window[fn_end] == '_'))
             {
                 fn_end += 1;
             }
-            if (std.mem.eql(u8, window[fn_start..fn_end], name)) {
+            if (eql(u8, window[fn_start..fn_end], name)) {
                 if (found.items.len > 0) {
                     try found.appendSlice(gpa, ", ");
                 }
@@ -1441,6 +1710,78 @@ fn kernelsFor(gpa: Allocator, sweep: []const u8, name: []const u8) !?[]const u8 
         scan = end;
     }
     return if (found.items.len == 0) null else found.items;
+}
+
+/// One declaration's exact source text, as the compiler's own parser sees it.
+const Extract = struct {
+    name: []const u8,
+    source: []const u8,
+    /// How many parameters the declaration takes, or null if it is not a function.
+    ///
+    /// Used to check the tutorial's examples. A fold proves a NAME exists - the generator
+    /// looks it up to attach the source - but says nothing about how it is CALLED. An example
+    /// written `zn.takeRows(gpa, column, rows)` when the signature gained a `comptime T` still
+    /// attaches its fold and still reads plausibly, and a reader who copies it loses an hour.
+    params: ?usize,
+    /// Which parameter positions are `comptime <name>: type`.
+    ///
+    /// Arity alone cannot tell `zn.mean(f64, t)` from `zn.mean(t, f64)` - both are two
+    /// arguments and both attach their fold. A TYPE parameter is the one position where the
+    /// distinction is visible without a type checker: `f64` in a value slot, or a literal in a
+    /// type slot, is wrong no matter what the surrounding types resolve to.
+    type_params: []const bool,
+};
+
+/// A library with its source read and its declarations extracted.
+const Parsed = struct {
+    library: Library,
+    source: []const u8,
+    decls: []const Extract,
+};
+
+/// A function an example names: which library, and its name there.
+const Named = struct {
+    library: usize,
+    name: []const u8,
+};
+
+/// An argument's source text, minus surrounding whitespace and any trailing comment.
+fn trimArg(raw: []const u8) []const u8 {
+    var text: []const u8 = trim(u8, raw, " \t\n\r");
+    if (indexOf(u8, text, "//")) |cut| {
+        text = trim(u8, text[0..cut], " \t\n\r");
+    }
+    return text;
+}
+
+/// True for a literal that CANNOT be a type: a number, an enum literal, a string, a `&`-ref.
+/// Deliberately narrow - an identifier might name a type, so it is not listed.
+fn isClearlyNotAType(text: []const u8) bool {
+    if (text.len == 0) {
+        return false;
+    }
+    return switch (text[0]) {
+        '0'...'9', '.', '"', '\'', '&', '-' => true,
+        else => false,
+    };
+}
+
+/// The scalar type names an argument can be spelled with. A bare one of these in a slot that is
+/// NOT `comptime ...: type` is the mistake this catches; anything else - an identifier, a call,
+/// `Tensor(f64)` - is left alone, because deciding those needs the compiler.
+const scalar_type_names = [_][]const u8{
+    "f16",  "f32",   "f64",   "f80",  "f128",      "i8",  "i16", "i32",
+    "i64",  "i128",  "isize", "u1",   "u8",        "u16", "u32", "u64",
+    "u128", "usize", "bool",  "void", "anyopaque",
+};
+
+fn isScalarTypeName(text: []const u8) bool {
+    for (scalar_type_names) |name| {
+        if (eql(u8, text, name)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Wrap every `<pre><code>` example in the prose with the source of the functions it names.
@@ -1462,17 +1803,17 @@ fn kernelsFor(gpa: Allocator, sweep: []const u8, name: []const u8) !?[]const u8 
 fn insertSourceFolds(
     gpa: Allocator,
     doc: []const u8,
-    decls: []const Extract,
+    parsed: []const Parsed,
     emitted: *usize,
 ) ![]u8 {
     const open_tag: []const u8 = "<div class=\"zn-source\">";
     const close_tag: []const u8 = "</div><!--/zn-source-->";
 
     // Strip what a previous run wrote.
-    var stripped: std.ArrayList(u8) = .empty;
+    var stripped: ArrayList(u8) = .empty;
     var scan: usize = 0;
-    while (std.mem.indexOfPos(u8, doc, scan, open_tag)) |hit| {
-        const end: usize = std.mem.indexOfPos(u8, doc, hit, close_tag) orelse {
+    while (indexOfPos(u8, doc, scan, open_tag)) |hit| {
+        const end: usize = indexOfPos(u8, doc, hit, close_tag) orelse {
             std.process.fatal("zimrnum_ref: a generated source block is not closed", .{});
         };
         // * Back up over the newline emitted before the block, or each run leaves one more
@@ -1490,9 +1831,9 @@ fn insertSourceFolds(
     const clean: []const u8 = stripped.items;
 
     // The reference table is an index, not prose; its examples are the signatures themselves.
-    const prose_end: usize = std.mem.indexOf(u8, clean, "id=\"reference\"") orelse clean.len;
+    const prose_end: usize = indexOf(u8, clean, "id=\"reference\"") orelse clean.len;
 
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     var cursor: usize = 0;
     // -- `<pre><code` WITHOUT THE CLOSING `>` --
     //
@@ -1505,155 +1846,160 @@ fn insertSourceFolds(
     // same reason; the two scanners had the same bug three weeks apart.
     const example_open: []const u8 = "<pre><code";
     const example_close: []const u8 = "</code></pre>";
-    while (std.mem.indexOfPos(u8, clean, cursor, example_open)) |hit| {
+    while (indexOfPos(u8, clean, cursor, example_open)) |hit| {
         if (hit >= prose_end) {
             break;
         }
-        const tag_end: usize = std.mem.indexOfPos(u8, clean, hit, ">") orelse break;
+        const tag_end: usize = indexOfPos(u8, clean, hit, ">") orelse break;
         const body_at: usize = tag_end + 1;
-        const body_end: usize = std.mem.indexOfPos(u8, clean, body_at, example_close) orelse break;
+        const body_end: usize = indexOfPos(u8, clean, body_at, example_close) orelse break;
         const after: usize = body_end + example_close.len;
         try out.appendSlice(gpa, clean[cursor..after]);
         cursor = after;
 
-        // Which zn functions does this example name?
-        var named: std.ArrayList([]const u8) = .empty;
-        var probe: usize = body_at;
-        while (std.mem.indexOfPos(u8, clean[0..body_end], probe, "zn.")) |at| {
-            var stop: usize = at + 3;
-            while (stop < body_end and (std.ascii.isAlphanumeric(clean[stop]) or clean[stop] == '_')) {
-                stop += 1;
-            }
-            probe = stop;
-            const name: []const u8 = clean[at + 3 .. stop];
-            if (name.len == 0) {
-                continue;
-            }
-            // ARITY: THE HALF A FOLD DOES NOT PROVE
-            //
-            // Attaching a fold proves the NAME resolves. It says nothing about how the example
-            // CALLS it - so `zn.takeRows(gpa, column, rows)` still folds after the signature
-            // gained a `comptime T`, still reads plausibly, and costs a reader who copies it an
-            // hour. This counts the arguments and compares.
-            //
-            // Counting is by commas at depth one, with nested calls and `&.{ ... }` literals
-            // skipped over. A `try` prefix or a trailing `catch` does not change the count.
-            if (clean[stop] == '(') {
-                var depth: usize = 0;
-                var given: usize = 0;
-                var arg_start: usize = 0;
-                var arg_text: std.ArrayList([]const u8) = .empty;
-                defer arg_text.deinit(gpa);
-                var in_arg: bool = false;
-                // A COMMA INSIDE A STRING IS NOT AN ARGUMENT SEPARATOR
+        // Which library functions does this example name? Each library is matched on its own alias.
+        var named: ArrayList(Named) = .empty;
+        for (parsed, 0..) |library, library_index| {
+            const alias: []const u8 = library.library.alias;
+            const decls: []const Extract = library.decls;
+            const prefix: []const u8 = try allocPrint(gpa, "{s}.", .{alias});
+            var probe: usize = body_at;
+            while (indexOfPos(u8, clean[0..body_end], probe, prefix)) |at| {
+                var stop: usize = at + prefix.len;
+                while (stop < body_end and (std.ascii.isAlphanumeric(clean[stop]) or clean[stop] == '_')) {
+                    stop += 1;
+                }
+                probe = stop;
+                const name: []const u8 = clean[at + prefix.len .. stop];
+                if (name.len == 0) {
+                    continue;
+                }
+                // ARITY: THE HALF A FOLD DOES NOT PROVE
                 //
-                // `zn.einsum(f64, "ij,jk->ik", out, .{ a, b })` has four arguments and five
-                // commas. A character scanner that does not know about quotes reads it as five,
-                // which is how this check first accused a correct example.
-                var in_string: bool = false;
-                var walk_at: usize = stop;
-                while (walk_at < body_end) : (walk_at += 1) {
-                    if (in_string) {
-                        if (clean[walk_at] == '"' and clean[walk_at - 1] != '\\') {
-                            in_string = false;
-                        }
-                        continue;
-                    }
-                    if (clean[walk_at] == '"') {
-                        in_string = true;
-                        if (depth == 1) {
-                            in_arg = true;
-                        }
-                        continue;
-                    }
-                    // A LINE COMMENT IS NOT AN ARGUMENT
+                // Attaching a fold proves the NAME resolves. It says nothing about how the example
+                // CALLS it - so `zn.takeRows(gpa, column, rows)` still folds after the signature
+                // gained a `comptime T`, still reads plausibly, and costs a reader who copies it an
+                // hour. This counts the arguments and compares.
+                //
+                // Counting is by commas at depth one, with nested calls and `&.{ ... }` literals
+                // skipped over. A `try` prefix or a trailing `catch` does not change the count.
+                if (clean[stop] == '(') {
+                    var depth: usize = 0;
+                    var given: usize = 0;
+                    var arg_start: usize = 0;
+                    var arg_text: ArrayList([]const u8) = .empty;
+                    defer arg_text.deinit(gpa);
+                    var in_arg: bool = false;
+                    // A COMMA INSIDE A STRING IS NOT AN ARGUMENT SEPARATOR
                     //
-                    // `.{},  // PpoConfig defaults` is one argument with a note after it. The
-                    // segment scan counted the note as content, so a five-argument call with a
-                    // trailing comment read as six - and the check accused a correct example,
-                    // which is the same class of false positive the string-literal case was.
-                    if (clean[walk_at] == '/' and walk_at + 1 < body_end and clean[walk_at + 1] == '/') {
-                        while (walk_at < body_end and clean[walk_at] != '\n') {
-                            walk_at += 1;
+                    // `zn.einsum(f64, "ij,jk->ik", out, .{ a, b })` has four arguments and five
+                    // commas. A character scanner that does not know about quotes reads it as five,
+                    // which is how this check first accused a correct example.
+                    var in_string: bool = false;
+                    var walk_at: usize = stop;
+                    while (walk_at < body_end) : (walk_at += 1) {
+                        if (in_string) {
+                            if (clean[walk_at] == '"' and clean[walk_at - 1] != '\\') {
+                                in_string = false;
+                            }
+                            continue;
                         }
-                        continue;
-                    }
-                    switch (clean[walk_at]) {
-                        '(', '{', '[' => depth += 1,
-                        ')', '}', ']' => {
-                            depth -= 1;
-                            if (depth == 0) {
+                        if (clean[walk_at] == '"') {
+                            in_string = true;
+                            if (depth == 1) {
+                                in_arg = true;
+                            }
+                            continue;
+                        }
+                        // A LINE COMMENT IS NOT AN ARGUMENT
+                        //
+                        // `.{},  // PpoConfig defaults` is one argument with a note after it. The
+                        // segment scan counted the note as content, so a five-argument call with a
+                        // trailing comment read as six - and the check accused a correct example,
+                        // which is the same class of false positive the string-literal case was.
+                        if (clean[walk_at] == '/' and walk_at + 1 < body_end and clean[walk_at + 1] == '/') {
+                            while (walk_at < body_end and clean[walk_at] != '\n') {
+                                walk_at += 1;
+                            }
+                            continue;
+                        }
+                        switch (clean[walk_at]) {
+                            '(', '{', '[' => depth += 1,
+                            ')', '}', ']' => {
+                                depth -= 1;
+                                if (depth == 0) {
+                                    if (in_arg) {
+                                        try arg_text.append(gpa, trimArg(clean[arg_start..walk_at]));
+                                        given += 1;
+                                    }
+                                    break;
+                                }
+                            },
+                            ',' => if (depth == 1) {
                                 if (in_arg) {
                                     try arg_text.append(gpa, trimArg(clean[arg_start..walk_at]));
                                     given += 1;
                                 }
-                                break;
-                            }
-                        },
-                        ',' => if (depth == 1) {
-                            if (in_arg) {
-                                try arg_text.append(gpa, trimArg(clean[arg_start..walk_at]));
-                                given += 1;
-                            }
-                            in_arg = false;
-                        },
-                        ' ', '\n' => {},
-                        else => if (depth == 1) {
-                            if (!in_arg) {
-                                arg_start = walk_at;
-                            }
-                            in_arg = true;
-                        },
-                    }
-                }
-                for (decls) |decl| {
-                    if (!std.mem.eql(u8, decl.name, name)) {
-                        continue;
-                    }
-                    if (decl.params) |wants| {
-                        if (given != wants) {
-                            std.process.fatal(
-                                "zimrnum_ref: the tutorial calls zn.{s} with {d} argument(s); " ++
-                                    "it takes {d}. Fix the example or the function.",
-                                .{ name, given, wants },
-                            );
+                                in_arg = false;
+                            },
+                            ' ', '\n' => {},
+                            else => if (depth == 1) {
+                                if (!in_arg) {
+                                    arg_start = walk_at;
+                                }
+                                in_arg = true;
+                            },
                         }
+                    }
+                    for (decls) |decl| {
+                        if (!eql(u8, decl.name, name)) {
+                            continue;
+                        }
+                        if (decl.params) |wants| {
+                            if (given != wants) {
+                                std.process.fatal(
+                                    "zimrnum_ref: the tutorial calls {s}.{s} with {d} argument(s); " ++
+                                        "it takes {d}. Fix the example or the function.",
+                                    .{ alias, name, given, wants },
+                                );
+                            }
 
-                        // -- TYPE SLOTS, now that the arity agrees --
-                        //
-                        // Only the `comptime ...: type` positions are judged. A scalar type name
-                        // in a VALUE slot, or a literal in a TYPE slot, is wrong whatever the
-                        // surrounding types resolve to - no type checker needed. Everything
-                        // else is left alone deliberately: an identifier could name either.
-                        if (arg_text.items.len == decl.type_params.len) {
-                            for (arg_text.items, decl.type_params, 0..) |arg, is_type_slot, idx| {
-                                if (is_type_slot and isClearlyNotAType(arg)) {
-                                    std.process.fatal(
-                                        "zimrnum_ref: the tutorial passes `{s}` as argument {d} " ++
-                                            "of zn.{s}, but that parameter is `comptime …: type`.",
-                                        .{ arg, idx + 1, name },
-                                    );
-                                }
-                                if (!is_type_slot and isScalarTypeName(arg)) {
-                                    std.process.fatal(
-                                        "zimrnum_ref: the tutorial passes the TYPE `{s}` as " ++
-                                            "argument {d} of zn.{s}, which takes a value there.",
-                                        .{ arg, idx + 1, name },
-                                    );
+                            // -- TYPE SLOTS, now that the arity agrees --
+                            //
+                            // Only the `comptime ...: type` positions are judged. A scalar type name
+                            // in a VALUE slot, or a literal in a TYPE slot, is wrong whatever the
+                            // surrounding types resolve to - no type checker needed. Everything
+                            // else is left alone deliberately: an identifier could name either.
+                            if (arg_text.items.len == decl.type_params.len) {
+                                for (arg_text.items, decl.type_params, 0..) |arg, is_type_slot, idx| {
+                                    if (is_type_slot and isClearlyNotAType(arg)) {
+                                        std.process.fatal(
+                                            "zimrnum_ref: the tutorial passes `{s}` as argument {d} " ++
+                                                "of {s}.{s}, but that parameter is `comptime …: type`.",
+                                            .{ arg, idx + 1, alias, name },
+                                        );
+                                    }
+                                    if (!is_type_slot and isScalarTypeName(arg)) {
+                                        std.process.fatal(
+                                            "zimrnum_ref: the tutorial passes the TYPE `{s}` as " ++
+                                                "argument {d} of {s}.{s}, which takes a value there.",
+                                            .{ arg, idx + 1, alias, name },
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            var already: bool = false;
-            for (named.items) |seen| {
-                if (std.mem.eql(u8, seen, name)) {
-                    already = true;
+                var already: bool = false;
+                for (named.items) |seen| {
+                    if (seen.library == library_index and eql(u8, seen.name, name)) {
+                        already = true;
+                    }
                 }
-            }
-            if (!already) {
-                try named.append(gpa, name);
+                if (!already) {
+                    try named.append(gpa, .{ .library = library_index, .name = name });
+                }
             }
         }
         if (named.items.len == 0) {
@@ -1661,10 +2007,11 @@ fn insertSourceFolds(
         }
 
         var wrote_any: bool = false;
-        var body: std.ArrayList(u8) = .empty;
-        for (named.items) |name| {
-            for (decls) |decl| {
-                if (!std.mem.eql(u8, decl.name, name)) {
+        var body: ArrayList(u8) = .empty;
+        for (named.items) |entry| {
+            const name: []const u8 = entry.name;
+            for (parsed[entry.library].decls) |decl| {
+                if (!eql(u8, decl.name, name)) {
                     continue;
                 }
                 try body.appendSlice(gpa, "<details class=\"src-fold\"><summary><code>");
@@ -1689,63 +2036,20 @@ fn insertSourceFolds(
     return out.items;
 }
 
-/// One declaration's exact source text, as the compiler's own parser sees it.
-const Extract = struct {
-    name: []const u8,
-    source: []const u8,
-    /// How many parameters the declaration takes, or null if it is not a function.
-    ///
-    /// Used to check the tutorial's examples. A fold proves a NAME exists - the generator
-    /// looks it up to attach the source - but says nothing about how it is CALLED. An example
-    /// written `zn.takeRows(gpa, column, rows)` when the signature gained a `comptime T` still
-    /// attaches its fold and still reads plausibly, and a reader who copies it loses an hour.
-    params: ?usize,
-    /// Which parameter positions are `comptime <name>: type`.
-    ///
-    /// Arity alone cannot tell `zn.mean(f64, t)` from `zn.mean(t, f64)` - both are two
-    /// arguments and both attach their fold. A TYPE parameter is the one position where the
-    /// distinction is visible without a type checker: `f64` in a value slot, or a literal in a
-    /// type slot, is wrong no matter what the surrounding types resolve to.
-    type_params: []const bool,
-};
-
-/// The scalar type names an argument can be spelled with. A bare one of these in a slot that is
-/// NOT `comptime ...: type` is the mistake this catches; anything else - an identifier, a call,
-/// `Tensor(f64)` - is left alone, because deciding those needs the compiler.
-const scalar_type_names = [_][]const u8{
-    "f16",  "f32",   "f64",   "f80",  "f128",      "i8",  "i16", "i32",
-    "i64",  "i128",  "isize", "u1",   "u8",        "u16", "u32", "u64",
-    "u128", "usize", "bool",  "void", "anyopaque",
-};
-
-/// An argument's source text, minus surrounding whitespace and any trailing comment.
-fn trimArg(raw: []const u8) []const u8 {
-    var text: []const u8 = std.mem.trim(u8, raw, " \t\n\r");
-    if (std.mem.indexOf(u8, text, "//")) |cut| {
-        text = std.mem.trim(u8, text[0..cut], " \t\n\r");
+/// The declared name on a `pub fn` / `pub const` line, or null.
+fn declName(line: []const u8) ?[]const u8 {
+    const trimmed: []const u8 = trim(u8, line, " ");
+    const rest: []const u8 = if (startsWith(u8, trimmed, "pub fn "))
+        trimmed["pub fn ".len..]
+    else if (startsWith(u8, trimmed, "pub const "))
+        trimmed["pub const ".len..]
+    else
+        return null;
+    var end: usize = 0;
+    while (end < rest.len and (std.ascii.isAlphanumeric(rest[end]) or rest[end] == '_')) {
+        end += 1;
     }
-    return text;
-}
-
-fn isScalarTypeName(text: []const u8) bool {
-    for (scalar_type_names) |name| {
-        if (std.mem.eql(u8, text, name)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// True for a literal that CANNOT be a type: a number, an enum literal, a string, a `&`-ref.
-/// Deliberately narrow - an identifier might name a type, so it is not listed.
-fn isClearlyNotAType(text: []const u8) bool {
-    if (text.len == 0) {
-        return false;
-    }
-    return switch (text[0]) {
-        '0'...'9', '.', '"', '\'', '&', '-' => true,
-        else => false,
-    };
+    return if (end == 0) null else rest[0..end];
 }
 
 /// Every top-level declaration in `path`, with its exact span.
@@ -1764,13 +2068,17 @@ fn isClearlyNotAType(text: []const u8) bool {
 ///
 /// * Tests are skipped: only `fn_decl` and the `const` forms are collected, and a `test` block is
 /// neither.
-fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
-    var ast: std.zig.Ast = try std.zig.Ast.parse(gpa, source, .{});
+fn extractDeclarations(
+    gpa: Allocator,
+    source: [:0]const u8,
+    source_path: []const u8,
+) ![]Extract {
+    var ast: std.zig.Ast = try .parse(gpa, source, .{});
     defer ast.deinit(gpa);
     if (ast.errors.len != 0) {
         std.process.fatal("zimrnum_ref: {s} did not parse; {d} errors", .{ source_path, ast.errors.len });
     }
-    var out: std.ArrayList(Extract) = .empty;
+    var out: ArrayList(Extract) = .empty;
     for (ast.rootDecls()) |node| {
         const tag: std.zig.Ast.Node.Tag = ast.nodeTag(node);
         const is_decl: bool = tag == .fn_decl or tag == .simple_var_decl or
@@ -1826,7 +2134,7 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
         // expression is the single token `type`. A token scan would have to re-derive where one
         // parameter ends and the next begins, which is the part the arity counter above already
         // gets subtly wrong on nested parens.
-        var type_flags: std.ArrayList(bool) = .empty;
+        var type_flags: ArrayList(bool) = .empty;
         if (tag == .fn_decl) {
             var proto_buf: [1]std.zig.Ast.Node.Index = undefined;
             if (ast.fullFnProto(&proto_buf, node)) |proto| {
@@ -1840,7 +2148,7 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
                         if (first != last) {
                             break :blk false;
                         }
-                        break :blk std.mem.eql(u8, ast.tokenSlice(first), "type");
+                        break :blk eql(u8, ast.tokenSlice(first), "type");
                     };
                     try type_flags.append(gpa, is_type);
                 }
@@ -1864,7 +2172,7 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
         // * The name comes from the DECLARATION line, not the first line of the span: the span
         // begins at the doc comment, so its first line is prose.
         const decl_line: []const u8 = source[ast.tokenStart(first)..@min(ast.tokenStart(first) + 200, source.len)];
-        const line_end: usize = std.mem.indexOfScalar(u8, decl_line, '\n') orelse decl_line.len;
+        const line_end: usize = indexOfScalar(u8, decl_line, '\n') orelse decl_line.len;
         const name: []const u8 = declName(decl_line[0..line_end]) orelse continue;
         try out.append(gpa, .{
             .name = name,
@@ -1874,22 +2182,6 @@ fn extractDeclarations(gpa: Allocator, source: [:0]const u8) ![]Extract {
         });
     }
     return out.items;
-}
-
-/// The declared name on a `pub fn` / `pub const` line, or null.
-fn declName(line: []const u8) ?[]const u8 {
-    const trimmed: []const u8 = std.mem.trim(u8, line, " ");
-    const rest: []const u8 = if (std.mem.startsWith(u8, trimmed, "pub fn "))
-        trimmed["pub fn ".len..]
-    else if (std.mem.startsWith(u8, trimmed, "pub const "))
-        trimmed["pub const ".len..]
-    else
-        return null;
-    var end: usize = 0;
-    while (end < rest.len and (std.ascii.isAlphanumeric(rest[end]) or rest[end] == '_')) {
-        end += 1;
-    }
-    return if (end == 0) null else rest[0..end];
 }
 
 /// The declaration as it appears, minus the `pub fn ` / `pub const ` prefix and any trailing `{`.
@@ -1911,9 +2203,9 @@ fn declSignature(gpa: Allocator, source: []const u8, line_start: usize) ![]const
         break :blk i;
     };
     const head: []const u8 = source[trimmed_start..];
-    const skip: usize = if (std.mem.startsWith(u8, head, "pub fn "))
+    const skip: usize = if (startsWith(u8, head, "pub fn "))
         "pub fn ".len
-    else if (std.mem.startsWith(u8, head, "pub const "))
+    else if (startsWith(u8, head, "pub const "))
         "pub const ".len
     else
         0;
@@ -1922,7 +2214,7 @@ fn declSignature(gpa: Allocator, source: []const u8, line_start: usize) ![]const
     // declaration's parameter list can contain braces - `&.{ ... }` in a default - so the scan
     // tracks paren depth and stops at a brace only outside them.
     var depth: usize = 0;
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     var last_was_space: bool = false;
     while (at < source.len) : (at += 1) {
         const c: u8 = source[at];
@@ -1953,7 +2245,7 @@ fn declSignature(gpa: Allocator, source: []const u8, line_start: usize) ![]const
     // Collapsing newlines to spaces puts one after the opening `(` and one before the closing
     // one, and `zig fmt`'s trailing comma on a multi-line list becomes `, )`. None of that is
     // wrong, and all of it reads as sloppy in a reference column.
-    var tidy: std.ArrayList(u8) = .empty;
+    var tidy: ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < out.items.len) : (i += 1) {
         const c: u8 = out.items[i];
@@ -1978,15 +2270,31 @@ fn declSignature(gpa: Allocator, source: []const u8, line_start: usize) ![]const
     return std.mem.trimEnd(u8, std.mem.trimEnd(u8, flat, "="), " ");
 }
 
-pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
-    defer arena.deinit();
-    const gpa: Allocator = arena.allocator();
-    const limit: std.Io.Limit = .limited(16 * 1024 * 1024);
+/// The command line (std's cli, `src/command_line.zig`): none - but the parser still gives it `--help` and refuses
+/// an argument it would otherwise ignore.
+const NoArgs = struct {};
 
-    const source: []u8 = try std.Io.Dir.cwd().readFileAlloc(init.io, source_path, gpa, limit);
-    const doc: []u8 = try std.Io.Dir.cwd().readFileAlloc(init.io, doc_path, gpa, limit);
-    const sweep: []u8 = try std.Io.Dir.cwd().readFileAlloc(init.io, sweep_path, gpa, limit);
+const zimrnum_ref_cli: cli.Config(NoArgs) = .{
+    .prog = "zig build zimrnum-ref",
+    .description = "Regenerates each library's reference table and source folds in its tutorial.",
+};
+
+/// Rewrite one library's page: its source folds (for every library its examples call), its reference table, and a
+/// check of its section numbers.
+fn documentLibrary(
+    init: std.process.Init,
+    gpa: Allocator,
+    limit: Io.Limit,
+    entry: Parsed,
+    all: []const Parsed,
+) !void {
+    const library: Library = entry.library;
+    const source: []const u8 = entry.source;
+    const doc: []u8 = try Io.Dir.cwd().readFileAlloc(init.io, library.page_path, gpa, limit);
+    const sweep: []const u8 = if (library.sweep_path) |sweep_path|
+        try Io.Dir.cwd().readFileAlloc(init.io, sweep_path, gpa, limit)
+    else
+        "";
     var with_kernel: usize = 0;
 
     // -- *** THE SOURCE FOLDS, BEFORE THE TABLE --
@@ -1994,20 +2302,17 @@ pub fn main(init: std.process.Init) !void {
     // The table splice searches for its header in `doc`, so the folds have to be in place first
     // or the second transform would be working on a stale string. Both are pure functions of the
     // source, so running them in this order twice gives the same file.
-    const sentinel: [:0]u8 = try gpa.allocSentinel(u8, source.len, 0);
-    @memcpy(sentinel[0..source.len], source);
-    const decls: []Extract = try extractDeclarations(gpa, sentinel);
     var folds: usize = 0;
-    const doc_with_folds: []u8 = try insertSourceFolds(gpa, doc, decls, &folds);
+    const doc_with_folds: []u8 = try insertSourceFolds(gpa, doc, all, &folds);
 
-    var rows: std.ArrayList(u8) = .empty;
+    var rows: ArrayList(u8) = .empty;
     var count: usize = 0;
-    var missing: std.ArrayList(u8) = .empty;
+    var missing: ArrayList(u8) = .empty;
 
     var cursor: usize = 0;
     while (cursor < source.len) {
         const line_start: usize = cursor;
-        const line_stop: usize = std.mem.indexOfScalarPos(u8, source, cursor, '\n') orelse
+        const line_stop: usize = indexOfScalarPos(u8, source, cursor, '\n') orelse
             source.len;
         cursor = line_stop + 1;
         const line: []const u8 = source[line_start..line_stop];
@@ -2028,7 +2333,7 @@ pub fn main(init: std.process.Init) !void {
         const is_method: bool = line.len > 0 and line[0] == ' ';
         if (is_method) {
             try rows.appendSlice(gpa, "<span class=\"host\">method</span>");
-        } else if (try kernelsFor(gpa, sweep, name)) |kernels| {
+        } else if (try kernelsFor(gpa, sweep, library.alias, name)) |kernels| {
             try rows.appendSlice(gpa, "<code>");
             try rows.appendSlice(gpa, kernels);
             try rows.appendSlice(gpa, "</code>");
@@ -2042,24 +2347,23 @@ pub fn main(init: std.process.Init) !void {
         count += 1;
     }
 
-    const header_at: usize = std.mem.indexOf(u8, doc_with_folds, table_header) orelse {
-        std.process.fatal("{s}: reference table header not found", .{doc_path});
+    const header_at: usize = indexOf(u8, doc_with_folds, table_header) orelse {
+        std.process.fatal("{s}: reference table header not found", .{library.page_path});
     };
     const rows_start: usize = header_at + table_header.len;
-    const rows_end: usize = std.mem.indexOfPos(u8, doc_with_folds, rows_start, "</table>") orelse {
-        std.process.fatal("{s}: reference table is not closed", .{doc_path});
+    const rows_end: usize = indexOfPos(u8, doc_with_folds, rows_start, "</table>") orelse {
+        std.process.fatal("{s}: reference table is not closed", .{library.page_path});
     };
 
-    var out: std.ArrayList(u8) = .empty;
+    var out: ArrayList(u8) = .empty;
     try out.appendSlice(gpa, doc_with_folds[0..rows_start]);
     try out.append(gpa, '\n');
     try out.appendSlice(gpa, rows.items);
     try out.appendSlice(gpa, doc_with_folds[rows_end..]);
-    try std.Io.Dir.cwd().writeFile(init.io, .{ .sub_path = doc_path, .data = out.items });
+    try Io.Dir.cwd().writeFile(init.io, .{ .sub_path = library.page_path, .data = out.items });
 
     // A second note under a name already used is dead text, because `noteFor` returns the first.
     // Reported, not fatal - see the note on `reportDuplicateNotes`.
-    try reportDuplicateNotes(gpa);
 
     // A declaration with no note is the one failure this tool can still have, so it names them
     // rather than leaving a silently blank column.
@@ -2081,18 +2385,18 @@ pub fn main(init: std.process.Init) !void {
         var section: usize = 0;
         var subsection: usize = 0;
         var scan: usize = 0;
-        while (std.mem.indexOfPos(u8, doc_with_folds, scan, "<h")) |hit| {
+        while (indexOfPos(u8, doc_with_folds, scan, "<h")) |hit| {
             if (hit + 3 >= doc_with_folds.len or
                 (doc_with_folds[hit + 2] != '2' and doc_with_folds[hit + 2] != '3'))
             {
                 scan = hit + 2;
                 continue;
             }
-            const close: usize = std.mem.indexOfScalarPos(u8, doc_with_folds, hit, '>') orelse break;
+            const close: usize = indexOfScalarPos(u8, doc_with_folds, hit, '>') orelse break;
             const number_end: usize =
                 std.mem.indexOfAnyPos(u8, doc_with_folds, close + 1, " .<") orelse break;
             const number: usize =
-                std.fmt.parseInt(usize, doc_with_folds[close + 1 .. number_end], 10) catch {
+                parseInt(usize, doc_with_folds[close + 1 .. number_end], 10) catch {
                     scan = close;
                     continue;
                 };
@@ -2111,7 +2415,7 @@ pub fn main(init: std.process.Init) !void {
                 const sub_end: usize =
                     std.mem.indexOfAnyPos(u8, doc_with_folds, dot + 1, " <") orelse break;
                 const sub: usize =
-                    std.fmt.parseInt(usize, doc_with_folds[dot + 1 .. sub_end], 10) catch 0;
+                    parseInt(usize, doc_with_folds[dot + 1 .. sub_end], 10) catch 0;
                 if (sub != subsection) {
                     std.process.fatal(
                         "zimrnum_ref: heading {d}.{d} should be {d}.{d}",
@@ -2126,7 +2430,32 @@ pub fn main(init: std.process.Init) !void {
     const msg: []u8 = try allocPrint(
         gpa,
         "zimrnum_ref: {d} rows, {d} with a kernel, {d} source folds -> {s}\n",
-        .{ count, with_kernel, folds, doc_path },
+        .{ count, with_kernel, folds, library.page_path },
     );
-    try std.Io.File.stdout().writeStreamingAll(init.io, msg);
+    try Io.File.stdout().writeStreamingAll(init.io, msg);
+}
+
+pub fn main(init: std.process.Init) !void {
+    _ = cli.args(&init, NoArgs, zimrnum_ref_cli);
+    var arena: ArenaAllocator = .init(init.gpa);
+    defer arena.deinit();
+    const gpa: Allocator = arena.allocator();
+    const limit: Io.Limit = .limited(16 * 1024 * 1024);
+
+    // Every library is read and parsed first: a page's examples may call any of them.
+    var parsed: [libraries.len]Parsed = undefined;
+    for (libraries, &parsed) |library, *entry| {
+        const source: []u8 = try Io.Dir.cwd().readFileAlloc(init.io, library.source_path, gpa, limit);
+        const sentinel: [:0]u8 = try gpa.allocSentinel(u8, source.len, 0);
+        @memcpy(sentinel[0..source.len], source);
+        entry.* = .{
+            .library = library,
+            .source = source,
+            .decls = try extractDeclarations(gpa, sentinel, library.source_path),
+        };
+    }
+    for (parsed) |entry| {
+        try documentLibrary(init, gpa, limit, entry, &parsed);
+    }
+    try reportDuplicateNotes(gpa);
 }

@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -31,7 +32,7 @@ const min_order: i32 = 2;
 const max_order: i32 = 6;
 
 const State = struct {
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     gpa: Allocator,
     ui_host: z.UiHost,
     font: z.Font,
@@ -141,7 +142,7 @@ fn initState(
 ) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
     s.* = .{
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .gpa = gpa,
         .ui_host = z.UiHost.init(gpa, font),
         .font = font,

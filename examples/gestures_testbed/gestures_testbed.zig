@@ -6,6 +6,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -21,7 +22,7 @@ const log_lines: usize = 16;
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     gestures: z.GesturesState = .{},
     frame_count: usize = 0,
     /// Ring of recent state transitions, newest at log[0].
@@ -43,7 +44,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 32),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
     };
 }
 

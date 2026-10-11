@@ -20,6 +20,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -153,10 +155,6 @@ fn nextRand(state: *u32) f32 {
     return float(x & 0xFFFF) / 65535.0;
 }
 
-/// plane + center cube + 30 tumblers.  Lamp cubes are separate (they
-/// track the moving lights, so their placement is computed per frame).
-const scene_placements: [2 + tumbling_cubes]Placement = buildPlacements();
-
 fn buildPlacements() [2 + tumbling_cubes]Placement {
     var out: [2 + tumbling_cubes]Placement = undefined;
     out[0] = .{
@@ -191,6 +189,10 @@ fn buildPlacements() [2 + tumbling_cubes]Placement {
     }
     return out;
 }
+
+/// plane + center cube + 30 tumblers.  Lamp cubes are separate (they
+/// track the moving lights, so their placement is computed per frame).
+const scene_placements: [2 + tumbling_cubes]Placement = buildPlacements();
 
 /// Light homes + colors, straight from raylib's four CreateLight calls
 /// (yellow/red/green/blue at the +/-2 corners) - but ours ORBIT: each
@@ -379,35 +381,35 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const plane_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(plane_verts[0..]),
+        sliceAsBytes(plane_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "dfr_plane_vbo",
     );
     const plane_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(plane_indices[0..]),
+        sliceAsBytes(plane_indices[0..]),
         .{ .index = true, .copy_dst = true },
         "dfr_plane_ibo",
     );
     const cube_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(cube_verts[0..]),
+        sliceAsBytes(cube_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "dfr_cube_vbo",
     );
     const cube_ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(cube_indices[0..]),
+        sliceAsBytes(cube_indices[0..]),
         .{ .index = true, .copy_dst = true },
         "dfr_cube_ibo",
     );
     const fullscreen_vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(fullscreen_verts[0..]),
+        sliceAsBytes(fullscreen_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "dfr_fullscreen_vbo",
     );
@@ -492,7 +494,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const gbuf_fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, gbuffer_fs_wgsl, "gbuffer_fs");
-    const gbuf_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const gbuf_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none, // no blend - G-buffers store data
         .less,
@@ -528,7 +530,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createShaderModuleWgsl(device, shading_vs_wgsl, "deferred_shading_vs");
     const shade_fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, shading_fs_wgsl, "deferred_shading_fs");
-    const shade_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const shade_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less, // quad at z=0 vs cleared depth 1.0 - always passes
@@ -726,10 +728,10 @@ fn writeObjUniforms(f: *z.Frame, s: *State, t: f32, cam_vp: Mat) void {
             .model = model,
             .normal_matrix = normal_mat,
         };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, asBytes(&vs_io.u));
         var fs_io: gbuf_fs.Io = undefined;
         fs_io.u = .{ .albedo_spec = material };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.fs_ubo, 0, asBytes(&fs_io.u));
     }
 }
 
@@ -742,7 +744,7 @@ fn writeLightsUbo(f: *z.Frame, s: *State, t: f32, cam_eye: Vec) void {
         u.light_pos[i] = .{ lp[0], lp[1], lp[2], light_reach };
         u.light_color[i] = .{ c[0], c[1], c[2], if (s.light_on[i]) 1.0 else 0.0 };
     }
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.lights_ubo, 0, std.mem.asBytes(&u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.lights_ubo, 0, asBytes(&u));
 }
 
 fn drawMesh(rps: *z.PassState, obj: *const Obj) void {

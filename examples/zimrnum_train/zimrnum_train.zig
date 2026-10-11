@@ -27,6 +27,7 @@ const zn_train = @import("zn_train");
 
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const zm = @import("zm");
 const Color = zm.Color;
 
@@ -73,7 +74,7 @@ const State = struct {
     /// `initState` takes `s: *State`, so the arena is initialised at its FINAL address and the
     /// `Allocator` interface is minted from there. Nothing moves after the interface exists,
     /// which is the whole hazard a heap-allocated wrapper was guarding against.
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
 
     /// Loss per step, both sides. A GPU entry is filed under the step the kernel wrote beside it,
     /// so the queue may be any number of frames behind.
@@ -88,27 +89,27 @@ const State = struct {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 16);
-    const ctx: zn.Ctx = zn.Ctx.init(gpa, seed);
+    const ctx: zn.Ctx = .init(gpa, seed);
     // The arena goes into its final home before anything is allocated from it, so the
     // interface below points where the arena will still be when this function returns.
-    s.arena = std.heap.ArenaAllocator.init(gpa);
+    s.arena = ArenaAllocator.init(gpa);
     const a: Allocator = s.arena.allocator();
 
     // Weights, once, shared by both sides: the GPU gets a copy uploaded, the CPU keeps these.
-    const w1: zn.Tensor(f32) = try zn.Tensor(f32).alloc(a, &.{ inputs, hidden });
-    const b1: zn.Tensor(f32) = try zn.Tensor(f32).alloc(a, &.{ 1, hidden });
-    const w2: zn.Tensor(f32) = try zn.Tensor(f32).alloc(a, &.{ hidden, outputs });
-    const b2: zn.Tensor(f32) = try zn.Tensor(f32).alloc(a, &.{ 1, outputs });
+    const w1: zn.Tensor(f32) = try .alloc(a, &.{ inputs, hidden });
+    const b1: zn.Tensor(f32) = try .alloc(a, &.{ 1, hidden });
+    const w2: zn.Tensor(f32) = try .alloc(a, &.{ hidden, outputs });
+    const b2: zn.Tensor(f32) = try .alloc(a, &.{ 1, outputs });
     ctx.rng.split(0).fillNormal(f32, w1.data);
     ctx.rng.split(1).fillNormal(f32, w2.data);
     b1.fill(0);
     b2.fill(0);
-    const x: zn.Tensor(f32) = try zn.Tensor(f32).alloc(a, &.{ samples, inputs });
+    const x: zn.Tensor(f32) = try .alloc(a, &.{ samples, inputs });
     @memcpy(x.data, &[_]f32{ 0, 0, 0, 1, 1, 0, 1, 1 });
-    const t: zn.Tensor(f32) = try zn.Tensor(f32).alloc(a, &.{ samples, outputs });
+    const t: zn.Tensor(f32) = try .alloc(a, &.{ samples, outputs });
     @memcpy(t.data, &[_]f32{ 0, 1, 1, 0 });
 
-    var pipe: z.Compute(zn_train) = try z.Compute(zn_train).initGpu(
+    var pipe: z.Compute(zn_train) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
@@ -197,6 +198,21 @@ fn stepBoth(s: *State) void {
     s.dispatched += 1;
 }
 
+fn textRow(
+    f: *z.Frame,
+    s: *State,
+    y: *f32,
+    color: Color,
+    size: f32,
+    comptime fmt: []const u8,
+    args: anytype,
+) void {
+    var buf: [160]u8 = undefined;
+    const text: []const u8 = bufPrint(&buf, fmt, args) catch return;
+    f.gl.text(.{ 12, y.* }, text, .{ .size = size, .color = color, .font = &s.font });
+    y.* += size + 4;
+}
+
 fn update(f: *z.Frame, s: *State) void {
     // File whatever loss has arrived under the step the kernel labelled it with. The queue may
     // be several frames behind, and the same readback may be seen more than once.
@@ -267,21 +283,6 @@ fn update(f: *z.Frame, s: *State) void {
         textRow(f, s, &y, z.colors.slate_400, 12, "    early agreement is the check; final losses are two minima", .{});
     }
     z.endDrawing(f.gl);
-}
-
-fn textRow(
-    f: *z.Frame,
-    s: *State,
-    y: *f32,
-    color: Color,
-    size: f32,
-    comptime fmt: []const u8,
-    args: anytype,
-) void {
-    var buf: [160]u8 = undefined;
-    const text: []const u8 = bufPrint(&buf, fmt, args) catch return;
-    f.gl.text(.{ 12, y.* }, text, .{ .size = size, .color = color, .font = &s.font });
-    y.* += size + 4;
 }
 
 pub const app: z.AppSpec(State) = .{

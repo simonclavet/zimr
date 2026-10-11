@@ -4,6 +4,7 @@
 //! (same real ui.zig table API: beginTable/tableSetupColumn/tableGetSortSpecs/...).
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sortSlice = std.mem.sort;
 const z = @import("zimr");
 const ui = z.ui_real;
 
@@ -97,7 +98,7 @@ fn update(f: *z.Frame, s: *State) void {
             u.tableHeadersRow();
 
             if (u.tableGetSortSpecs()) |specs| {
-                std.mem.sort(Row, &s.rows, specs, sortRows);
+                sortSlice(Row, &s.rows, specs, sortRows);
             }
 
             for (s.rows) |r| {

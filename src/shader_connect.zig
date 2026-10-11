@@ -32,7 +32,9 @@ pub fn autoConnect(comptime VsOut: type, comptime FsIo: type) fn (VsOut, *FsIo) 
     return struct {
         fn connect(vs_out: VsOut, fs_io: *FsIo) void {
             inline for (@typeInfo(VsOut).@"struct".field_names) |vs_field_name| {
-                if (comptime eql(u8, vs_field_name, "position")) continue;
+                if (comptime eql(u8, vs_field_name, "position")) {
+                    continue;
+                }
                 if (comptime @hasField(FsIo, vs_field_name)) {
                     @field(fs_io.*, vs_field_name) = @field(vs_out, vs_field_name);
                 }

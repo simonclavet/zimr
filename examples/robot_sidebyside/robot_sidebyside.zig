@@ -155,7 +155,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
         .model = try Pendulum.build(gpa),
         .data = undefined,
-        .world = try .init(gpa, 16),
+        .world = try zp.World.init(gpa, 16),
         .upper = undefined,
         .lower = undefined,
         .accumulator = 0,

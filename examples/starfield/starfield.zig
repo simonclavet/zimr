@@ -7,6 +7,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -24,7 +25,7 @@ const Star = struct { x: f32, y: f32, z: f32 };
 const State = struct {
     font: z.Font,
     stars: [num_stars]Star = undefined,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     frame_count: usize = 0,
 };
 
@@ -33,7 +34,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn randf(
-    rand: std.Random,
+    rand: Random,
     low: f32,
     high: f32,
 ) f32 {
@@ -42,7 +43,7 @@ fn randf(
 
 fn respawn(
     star: *Star,
-    rand: std.Random,
+    rand: Random,
     hw: f32,
     hh: f32,
 ) void {
@@ -53,8 +54,8 @@ fn respawn(
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
-    s.* = .{ .font = font, .rng = std.Random.DefaultPrng.init(0x57a4f00d) };
-    const rand: std.Random = s.rng.random();
+    s.* = .{ .font = font, .rng = Random.DefaultPrng.init(0x57a4f00d) };
+    const rand: Random = s.rng.random();
     const hw: f32 = @max(1.0, f.window.widthf() * 0.5);
     const hh: f32 = @max(1.0, f.window.heightf() * 0.5);
     for (&s.stars) |*star| {
@@ -70,7 +71,7 @@ fn update(f: *z.Frame, s: *State) void {
     const h: f32 = f.window.heightf();
     const hw: f32 = w * 0.5;
     const hh: f32 = h * 0.5;
-    const rand: std.Random = s.rng.random();
+    const rand: Random = s.rng.random();
 
     z.clearViewport(f, c.init(6, 8, 16, 255));
 

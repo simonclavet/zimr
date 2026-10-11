@@ -18,6 +18,7 @@
 //      modules in `src/`
 
 const std = @import("std");
+const refAllDecls = std.testing.refAllDecls;
 
 comptime {
     // ===== Test files (cross-cutting suites) =====
@@ -71,13 +72,13 @@ comptime {
 
     // ===== spv2wgsl internals (shared SPIR-V->WGSL translator) =====
     // S1: the transpiler is one file; its sections are namespaces.
-    std.testing.refAllDecls(@import("spv2wgsl.zig").types);
-    std.testing.refAllDecls(@import("spv2wgsl.zig").ir);
-    std.testing.refAllDecls(@import("spv2wgsl.zig").block_table);
-    std.testing.refAllDecls(@import("spv2wgsl.zig").ir_build);
-    std.testing.refAllDecls(@import("spv2wgsl.zig").sccp);
-    std.testing.refAllDecls(@import("spv2wgsl.zig").ir_emit);
-    std.testing.refAllDecls(@import("spv2wgsl.zig").wgsl_check);
+    refAllDecls(@import("spv2wgsl.zig").types);
+    refAllDecls(@import("spv2wgsl.zig").ir);
+    refAllDecls(@import("spv2wgsl.zig").block_table);
+    refAllDecls(@import("spv2wgsl.zig").ir_build);
+    refAllDecls(@import("spv2wgsl.zig").sccp);
+    refAllDecls(@import("spv2wgsl.zig").ir_emit);
+    refAllDecls(@import("spv2wgsl.zig").wgsl_check);
 }
 
 /// `zimr.zig`'s re-exports of the robot family - the files `src/robot_tests.zig` compiles and runs.
@@ -109,56 +110,59 @@ const robot_family = struct {
 };
 
 test {
-    std.testing.refAllDecls(@import("BindGroupCache.zig"));
-    std.testing.refAllDecls(@import("codecs.zig"));
-    std.testing.refAllDecls(@import("compute_host.zig"));
-    std.testing.refAllDecls(@import("wgpu.zig").compute_pass);
-    std.testing.refAllDecls(@import("dom_input.zig"));
-    std.testing.refAllDecls(@import("draw3d.zig"));
-    std.testing.refAllDecls(@import("draw3d.zig").draw_points);
-    std.testing.refAllDecls(@import("easings.zig"));
-    std.testing.refAllDecls(@import("entities.zig"));
-    std.testing.refAllDecls(@import("errors.zig"));
-    std.testing.refAllDecls(@import("renderer_trait.zig"));
-    std.testing.refAllDecls(@import("gpu.zig"));
-    std.testing.refAllDecls(@import("gpu_iface.zig"));
-    std.testing.refAllDecls(@import("image.zig"));
-    std.testing.refAllDecls(@import("Canvas.zig"));
-    std.testing.refAllDecls(@import("kompute.zig"));
-    std.testing.refAllDecls(@import("draw3d.zig").pbr3d);
-    std.testing.refAllDecls(@import("zimrphysics.zig"));
-    std.testing.refAllDecls(@import("wgpu.zig").render_pass);
-    std.testing.refAllDecls(@import("renderer_2d.zig"));
-    std.testing.refAllDecls(@import("raster.zig"));
-    std.testing.refAllDecls(@import("SwAdapter.zig"));
-    std.testing.refAllDecls(@import("raster_pixel.zig"));
-    std.testing.refAllDecls(@import("raster_shader.zig"));
-    std.testing.refAllDecls(@import("runtime.zig"));
-    std.testing.refAllDecls(@import("shader_runtime_wgpu.zig").shader_compile);
-    std.testing.refAllDecls(@import("shader_connect.zig"));
+    refAllDecls(@import("BindGroupCache.zig"));
+    refAllDecls(@import("codecs.zig"));
+    refAllDecls(@import("compute_host.zig"));
+    refAllDecls(@import("wgpu.zig").compute_pass);
+    refAllDecls(@import("dom_input.zig"));
+    refAllDecls(@import("net_core.zig"));
+    refAllDecls(@import("native_input.zig"));
+    refAllDecls(@import("draw3d.zig"));
+    refAllDecls(@import("draw3d.zig").draw_points);
+    refAllDecls(@import("easings.zig"));
+    refAllDecls(@import("entities.zig"));
+    refAllDecls(@import("errors.zig"));
+    refAllDecls(@import("renderer_trait.zig"));
+    refAllDecls(@import("gpu.zig"));
+    refAllDecls(@import("gpu_iface.zig"));
+    refAllDecls(@import("image.zig"));
+    refAllDecls(@import("Canvas.zig"));
+    refAllDecls(@import("kompute.zig"));
+    refAllDecls(@import("draw3d.zig").pbr3d);
+    refAllDecls(@import("zimrphysics.zig"));
+    refAllDecls(@import("wgpu.zig").render_pass);
+    refAllDecls(@import("renderer_2d.zig"));
+    refAllDecls(@import("raster.zig"));
+    refAllDecls(@import("SwAdapter.zig"));
+    refAllDecls(@import("raster_pixel.zig"));
+    refAllDecls(@import("raster_shader.zig"));
+    refAllDecls(@import("runtime.zig"));
+    refAllDecls(@import("shader_runtime_wgpu.zig").shader_compile);
+    refAllDecls(@import("shader_connect.zig"));
     // shader_interface + zimrmath are NAMED MODULES on the test target
     // (test_mod wires them) - file-importing them here would double-own
     // their graphs (one-file-one-module).  Reference the modules.
-    std.testing.refAllDecls(@import("shader_interface"));
-    std.testing.refAllDecls(@import("shader_introspect.zig"));
-    std.testing.refAllDecls(@import("shader_runtime_wgpu.zig"));
-    std.testing.refAllDecls(@import("shapes2d.zig"));
-    std.testing.refAllDecls(@import("sound.zig"));
-    std.testing.refAllDecls(@import("spv2wgsl.zig"));
-    std.testing.refAllDecls(@import("wgpu.zig").storage_buffer);
-    std.testing.refAllDecls(@import("sw_runtime.zig"));
-    std.testing.refAllDecls(@import("text2d.zig"));
-    std.testing.refAllDecls(@import("glyph_atlas.zig"));
-    std.testing.refAllDecls(@import("plot.zig"));
-    std.testing.refAllDecls(@import("types.zig"));
-    std.testing.refAllDecls(@import("ui.zig"));
-    std.testing.refAllDecls(@import("utils.zig"));
-    std.testing.refAllDecls(@import("web.zig"));
-    std.testing.refAllDecls(@import("wgpu.zig"));
-    std.testing.refAllDecls(@import("wgpu_app.zig"));
-    std.testing.refAllDecls(@import("WgpuGl.zig"));
-    std.testing.refAllDecls(@import("wgpu_texture.zig"));
-    std.testing.refAllDecls(@import("shader_codegen.zig"));
+    refAllDecls(@import("shader_interface"));
+    refAllDecls(@import("shader_introspect.zig"));
+    refAllDecls(@import("shader_runtime_wgpu.zig"));
+    refAllDecls(@import("shapes2d.zig"));
+    refAllDecls(@import("sound.zig"));
+    refAllDecls(@import("spv2wgsl.zig"));
+    refAllDecls(@import("wgpu.zig").storage_buffer);
+    refAllDecls(@import("sw_runtime.zig"));
+    refAllDecls(@import("text2d.zig"));
+    refAllDecls(@import("glyph_atlas.zig"));
+    refAllDecls(@import("plot.zig"));
+    refAllDecls(@import("types.zig"));
+    refAllDecls(@import("ui.zig"));
+    refAllDecls(@import("utils.zig"));
+    // lint:off browser-call: the test root reaches every module, the browser's own included
+    refAllDecls(@import("web.zig"));
+    refAllDecls(@import("wgpu.zig"));
+    refAllDecls(@import("wgpu_app.zig"));
+    refAllDecls(@import("WgpuGl.zig"));
+    refAllDecls(@import("wgpu_texture.zig"));
+    refAllDecls(@import("shader_codegen.zig"));
     // `refAllDecls(zimr.zig)`, minus the robot family (see `robot_family`).
     const zimr = @import("zimr.zig");
     inline for (comptime std.meta.declarations(zimr)) |decl_name| {
@@ -166,5 +170,5 @@ test {
             _ = &@field(zimr, decl_name);
         }
     }
-    std.testing.refAllDecls(@import("zm"));
+    refAllDecls(@import("zm"));
 }

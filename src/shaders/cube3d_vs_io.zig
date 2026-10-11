@@ -12,6 +12,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("cube3d_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex attributes: world-space position + world-space normal + the
 /// primitive's colour. Locations match the interleaved P3 + N3 + C4 batch
@@ -26,7 +28,7 @@ pub const Attributes = struct {
 /// set once per beginMode3D. mat4 == [4]@Vector(4,f32) (std140 columns). The
 /// host `Resources` schema in `src/draw3d.zig` mirrors this struct.
 pub const Ubo = struct {
-    view_projection: [4]@Vector(4, f32),
+    view_projection: [4]Vec,
 };
 
 /// Varying outputs to the fragment shader - aliases the shared `Interp`.

@@ -12,6 +12,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: audio-amp-envelope",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_amp_envelope/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-amp-envelope"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: audio-basic",
         "type": "chrome",
         "request": "launch",
@@ -23,6 +34,39 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: audio-mixer",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_mixer/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-mixer"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: audio-sound-lab",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_sound_lab/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-sound-lab"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: audio-spectrum-visualizer",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/audio_spectrum_visualizer/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build audio-spectrum-visualizer"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: audio-stream-synth",
         "type": "chrome",
         "request": "launch",
@@ -31,6 +75,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build audio-stream-synth"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: balance-flywheel",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/balance_flywheel/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build balance-flywheel"
     },
     {
         "adapter": "JavaScript",
@@ -78,17 +133,6 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: bouncing-ball",
-        "type": "chrome",
-        "request": "launch",
-        "url": "http://localhost:8080/bouncing_ball/",
-        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
-        "sourceMaps": true,
-        "smartStep": true,
-        "build": "zig: build bouncing-ball"
-    },
-    {
-        "adapter": "JavaScript",
         "label": "Debug: box-collisions",
         "type": "chrome",
         "request": "launch",
@@ -100,25 +144,25 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: bridge-classic-probe",
+        "label": "Debug: bullet-hell",
         "type": "chrome",
         "request": "launch",
-        "url": "http://localhost:8080/bridge_classic_probe/",
+        "url": "http://localhost:8080/bullet_hell/",
         "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
         "sourceMaps": true,
         "smartStep": true,
-        "build": "zig: build bridge-classic-probe"
+        "build": "zig: build bullet-hell"
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: bridge-slice",
+        "label": "Debug: camera-controls",
         "type": "chrome",
         "request": "launch",
-        "url": "http://localhost:8080/bridge_slice/",
+        "url": "http://localhost:8080/camera_controls/",
         "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
         "sourceMaps": true,
         "smartStep": true,
-        "build": "zig: build bridge-slice"
+        "build": "zig: build camera-controls"
     },
     {
         "adapter": "JavaScript",
@@ -130,6 +174,72 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build camera2d"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: cartpole",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/cartpole/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build cartpole"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: cartpole-duel",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/cartpole_duel/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build cartpole-duel"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: catch",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/catch/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build catch"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: cel-shading",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/cel_shading/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build cel-shading"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: cellular-automata",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/cellular_automata/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build cellular-automata"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: chain-ik",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/chain_ik/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build chain-ik"
     },
     {
         "adapter": "JavaScript",
@@ -243,6 +353,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: crane",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/crane/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build crane"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: cube-demo",
         "type": "chrome",
         "request": "launch",
@@ -331,6 +452,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: decals",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/decals/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build decals"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: deferred-render",
         "type": "chrome",
         "request": "launch",
@@ -339,6 +471,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build deferred-render"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: delta-time",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/delta_time/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build delta-time"
     },
     {
         "adapter": "JavaScript",
@@ -386,6 +529,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: directional-billboard",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/directional_billboard/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build directional-billboard"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: double-pendulum",
         "type": "chrome",
         "request": "launch",
@@ -394,6 +548,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build double-pendulum"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: draw2d-demo",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/draw2d_demo/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build draw2d-demo"
     },
     {
         "adapter": "JavaScript",
@@ -496,14 +661,14 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: fluid-gpu",
+        "label": "Debug: first-person-maze",
         "type": "chrome",
         "request": "launch",
-        "url": "http://localhost:8080/fluid_gpu/",
+        "url": "http://localhost:8080/first_person_maze/",
         "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
         "sourceMaps": true,
         "smartStep": true,
-        "build": "zig: build fluid-gpu"
+        "build": "zig: build first-person-maze"
     },
     {
         "adapter": "JavaScript",
@@ -540,14 +705,25 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: forward-kinematics",
+        "label": "Debug: four-ways",
         "type": "chrome",
         "request": "launch",
-        "url": "http://localhost:8080/forward_kinematics/",
+        "url": "http://localhost:8080/four_ways/",
         "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
         "sourceMaps": true,
         "smartStep": true,
-        "build": "zig: build forward-kinematics"
+        "build": "zig: build four-ways"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: fps-playground",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/fps_playground/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build fps-playground"
     },
     {
         "adapter": "JavaScript",
@@ -559,6 +735,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build fractal-tree"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: friction-slope",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/friction_slope/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build friction-slope"
     },
     {
         "adapter": "JavaScript",
@@ -581,6 +768,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build gallery-all"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: geno-dance",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/geno_dance/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build geno-dance"
     },
     {
         "adapter": "JavaScript",
@@ -694,6 +892,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: gripper",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/gripper/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build gripper"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: heightmap",
         "type": "chrome",
         "request": "launch",
@@ -738,6 +947,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: humanoid",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/humanoid/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build humanoid"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: hybrid-render",
         "type": "chrome",
         "request": "launch",
@@ -746,6 +966,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build hybrid-render"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: icosphere-demo",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/icosphere_demo/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build icosphere-demo"
     },
     {
         "adapter": "JavaScript",
@@ -768,6 +999,39 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build imgui-phone-demo"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: input-actions",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/input_actions/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build input-actions"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: input-cursor-shapes",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/input_cursor_shapes/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build input-cursor-shapes"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: input-gamepad",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/input_gamepad/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build input-gamepad"
     },
     {
         "adapter": "JavaScript",
@@ -815,6 +1079,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: input-pointer-lock",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/input_pointer_lock/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build input-pointer-lock"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: input-virtual-controls",
         "type": "chrome",
         "request": "launch",
@@ -859,6 +1134,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: kaleidoscope",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/kaleidoscope/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build kaleidoscope"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: keys",
         "type": "chrome",
         "request": "launch",
@@ -878,6 +1164,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build lambert-demo"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: langton-ant",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/langton_ant/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build langton-ant"
     },
     {
         "adapter": "JavaScript",
@@ -991,6 +1288,39 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: mesh-builder",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/mesh_builder/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build mesh-builder"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: mesh-picking",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/mesh_picking/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build mesh-picking"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: mocap-viewer",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/mocap_viewer/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build mocap-viewer"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: models-animation-blend-custom",
         "type": "chrome",
         "request": "launch",
@@ -999,6 +1329,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build models-animation-blend-custom"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: models-geometric-shapes",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/models_geometric_shapes/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build models-geometric-shapes"
     },
     {
         "adapter": "JavaScript",
@@ -1013,6 +1354,39 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: monitors",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/monitors/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build monitors"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: mpc-cartpole",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/mpc_cartpole/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build mpc-cartpole"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: mpc-quadruped",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/mpc_quadruped/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build mpc-quadruped"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: music-streaming",
         "type": "chrome",
         "request": "launch",
@@ -1021,6 +1395,39 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build music-streaming"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: net-cursors",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/net_cursors/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build net-cursors"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: net-rtc-smoke",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/net_rtc_smoke/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build net-rtc-smoke"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: net-ws-smoke",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/net_ws_smoke/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build net-ws-smoke"
     },
     {
         "adapter": "JavaScript",
@@ -1043,6 +1450,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build obj-simple"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: orthographic-projection",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/orthographic_projection/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build orthographic-projection"
     },
     {
         "adapter": "JavaScript",
@@ -1101,17 +1519,6 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: pipeline-array",
-        "type": "chrome",
-        "request": "launch",
-        "url": "http://localhost:8080/pipeline_array/",
-        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
-        "sourceMaps": true,
-        "smartStep": true,
-        "build": "zig: build pipeline-array"
-    },
-    {
-        "adapter": "JavaScript",
         "label": "Debug: pipeline-basic",
         "type": "chrome",
         "request": "launch",
@@ -1134,17 +1541,6 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: pipeline-constants",
-        "type": "chrome",
-        "request": "launch",
-        "url": "http://localhost:8080/pipeline_constants/",
-        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
-        "sourceMaps": true,
-        "smartStep": true,
-        "build": "zig: build pipeline-constants"
-    },
-    {
-        "adapter": "JavaScript",
         "label": "Debug: pipeline-instancing",
         "type": "chrome",
         "request": "launch",
@@ -1153,17 +1549,6 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build pipeline-instancing"
-    },
-    {
-        "adapter": "JavaScript",
-        "label": "Debug: pipeline-mipmap",
-        "type": "chrome",
-        "request": "launch",
-        "url": "http://localhost:8080/pipeline_mipmap/",
-        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
-        "sourceMaps": true,
-        "smartStep": true,
-        "build": "zig: build pipeline-mipmap"
     },
     {
         "adapter": "JavaScript",
@@ -1222,17 +1607,6 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: pipeline-storage",
-        "type": "chrome",
-        "request": "launch",
-        "url": "http://localhost:8080/pipeline_storage/",
-        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
-        "sourceMaps": true,
-        "smartStep": true,
-        "build": "zig: build pipeline-storage"
-    },
-    {
-        "adapter": "JavaScript",
         "label": "Debug: pipeline-uniforms",
         "type": "chrome",
         "request": "launch",
@@ -1241,6 +1615,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build pipeline-uniforms"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: platonic-solids",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/platonic_solids/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build platonic-solids"
     },
     {
         "adapter": "JavaScript",
@@ -1310,6 +1695,50 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: quadruped",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/quadruped/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build quadruped"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: ragdoll-compare",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/ragdoll_compare/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build ragdoll-compare"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: random-sequence",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/random_sequence/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build random-sequence"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: random-values",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/random_values/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build random-values"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: raytracer",
         "type": "chrome",
         "request": "launch",
@@ -1376,6 +1805,94 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: rl-humanoid",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/rl_humanoid/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build rl-humanoid"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: robot-3d",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robot_3d/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robot-3d"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: robot-contact",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robot_contact/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robot-contact"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: robot-demo",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robot_demo/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robot-demo"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: robot-pendulum",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robot_pendulum/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robot-pendulum"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: robot-sidebyside",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/robot_sidebyside/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build robot-sidebyside"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: rock-demo",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/rock_demo/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build rock-demo"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: rocket",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/rocket/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build rocket"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: rounded-rectangle",
         "type": "chrome",
         "request": "launch",
@@ -1409,14 +1926,91 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: shader-inspection",
+        "label": "Debug: rt-workers",
         "type": "chrome",
         "request": "launch",
-        "url": "http://localhost:8080/shader_inspection/",
+        "url": "http://localhost:8080/rt_workers/",
         "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
         "sourceMaps": true,
         "smartStep": true,
-        "build": "zig: build shader-inspection"
+        "build": "zig: build rt-workers"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: scissor-test",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/scissor_test/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build scissor-test"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shader-effects",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shader_effects/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shader-effects"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shaders-lightmap-rendering",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shaders_lightmap_rendering/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shaders-lightmap-rendering"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shaders-multi-texture",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shaders_multi_texture/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shaders-multi-texture"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shaders-normalmap-rendering",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shaders_normalmap_rendering/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shaders-normalmap-rendering"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shaders-shapes-textures",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shaders_shapes_textures/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shaders-shapes-textures"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shaders-vertex-displacement",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shaders_vertex_displacement/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shaders-vertex-displacement"
     },
     {
         "adapter": "JavaScript",
@@ -1464,6 +2058,28 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: shapes-gallery",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shapes_gallery/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shapes-gallery"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shapes-procedural",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shapes_procedural/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shapes-procedural"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: shapes-showcase",
         "type": "chrome",
         "request": "launch",
@@ -1472,6 +2088,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build shapes-showcase"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: shapes-top-down-lights",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/shapes_top_down_lights/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build shapes-top-down-lights"
     },
     {
         "adapter": "JavaScript",
@@ -1530,6 +2157,39 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: smooth-pixelperfect",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/smooth_pixelperfect/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build smooth-pixelperfect"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: snake",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/snake/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build snake"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: sort-smoke",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/sort_smoke/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build sort-smoke"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: sph-fluid-2d",
         "type": "chrome",
         "request": "launch",
@@ -1563,6 +2223,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: srcrec-dstrec",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/srcrec_dstrec/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build srcrec-dstrec"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: starfield",
         "type": "chrome",
         "request": "launch",
@@ -1585,6 +2256,39 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: state-persistence",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/state_persistence/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build state-persistence"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: tesseract-view",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/tesseract_view/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build tesseract-view"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-codepoints-loading",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_codepoints_loading/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-codepoints-loading"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: text-field",
         "type": "chrome",
         "request": "launch",
@@ -1593,6 +2297,50 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build text-field"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-font-filters",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_font_filters/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-font-filters"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-font-loading",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_font_loading/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-font-loading"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-font-sdf",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_font_sdf/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-font-sdf"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-inline-styling",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_inline_styling/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-inline-styling"
     },
     {
         "adapter": "JavaScript",
@@ -1618,6 +2366,39 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: text-sprite-fonts",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_sprite_fonts/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-sprite-fonts"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-strings-management",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_strings_management/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-strings-management"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: text-unicode-ranges",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/text_unicode_ranges/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build text-unicode-ranges"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: texture-readback",
         "type": "chrome",
         "request": "launch",
@@ -1626,6 +2407,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build texture-readback"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: texture-views",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/texture_views/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build texture-views"
     },
     {
         "adapter": "JavaScript",
@@ -1659,6 +2451,226 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build textures-background-scrolling"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-blend-modes",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_blend_modes/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-blend-modes"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-bunnymark",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_bunnymark/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-bunnymark"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-fog-of-war",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_fog_of_war/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-fog-of-war"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-framebuffer-rendering",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_framebuffer_rendering/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-framebuffer-rendering"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-gif-player",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_gif_player/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-gif-player"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-image-channel",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_image_channel/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-image-channel"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-image-rotate",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_image_rotate/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-image-rotate"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-image-text",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_image_text/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-image-text"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-magnifying-glass",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_magnifying_glass/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-magnifying-glass"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-mouse-painting",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_mouse_painting/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-mouse-painting"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-npatch-drawing",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_npatch_drawing/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-npatch-drawing"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-polygon-drawing",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_polygon_drawing/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-polygon-drawing"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-raw-data",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_raw_data/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-raw-data"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-screen-buffer",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_screen_buffer/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-screen-buffer"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-sprite-animation",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_sprite_animation/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-sprite-animation"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-sprite-button",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_sprite_button/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-sprite-button"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-sprite-explosion",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_sprite_explosion/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-sprite-explosion"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-sprite-stacking",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_sprite_stacking/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-sprite-stacking"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: textures-tiled-drawing",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/textures_tiled_drawing/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build textures-tiled-drawing"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: three-leg",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/three_leg/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build three-leg"
     },
     {
         "adapter": "JavaScript",
@@ -1703,6 +2715,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build track-train"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: tracking",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/tracking/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build tracking"
     },
     {
         "adapter": "JavaScript",
@@ -2245,6 +3268,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: ui-text-editing",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/ui_text_editing/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build ui-text-editing"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: ui-widgets-data-types",
         "type": "chrome",
         "request": "launch",
@@ -2264,6 +3298,17 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build ui-window-menubar"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: undo-redo",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/undo_redo/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build undo-redo"
     },
     {
         "adapter": "JavaScript",
@@ -2289,14 +3334,58 @@
     },
     {
         "adapter": "JavaScript",
-        "label": "Debug: weight-store",
+        "label": "Debug: vertex-texture-test",
         "type": "chrome",
         "request": "launch",
-        "url": "http://localhost:8080/weight_store/",
+        "url": "http://localhost:8080/vertex_texture_test/",
         "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
         "sourceMaps": true,
         "smartStep": true,
-        "build": "zig: build weight-store"
+        "build": "zig: build vertex-texture-test"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: viewport-scaling",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/viewport_scaling/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build viewport-scaling"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: voxel",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/voxel/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build voxel"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: waving-cubes",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/waving_cubes/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build waving-cubes"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: window-requests",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/window_requests/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build window-requests"
     },
     {
         "adapter": "JavaScript",
@@ -2311,6 +3400,17 @@
     },
     {
         "adapter": "JavaScript",
+        "label": "Debug: worker-png",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/worker_png/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build worker-png"
+    },
+    {
+        "adapter": "JavaScript",
         "label": "Debug: writing-anim",
         "type": "chrome",
         "request": "launch",
@@ -2319,6 +3419,39 @@
         "sourceMaps": true,
         "smartStep": true,
         "build": "zig: build writing-anim"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: yaw-pitch-roll",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/yaw_pitch_roll/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build yaw-pitch-roll"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: zimrnum-field",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/zimrnum_field/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build zimrnum-field"
+    },
+    {
+        "adapter": "JavaScript",
+        "label": "Debug: zimrnum-train",
+        "type": "chrome",
+        "request": "launch",
+        "url": "http://localhost:8080/zimrnum_train/",
+        "webRoot": "$ZED_WORKTREE_ROOT/zig-out/web",
+        "sourceMaps": true,
+        "smartStep": true,
+        "build": "zig: build zimrnum-train"
     },
     {
         "adapter": "JavaScript",

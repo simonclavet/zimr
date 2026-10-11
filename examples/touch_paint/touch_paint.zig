@@ -8,6 +8,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -30,7 +31,7 @@ const Trail = struct {
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     frame_count: usize = 0,
     trails: [max_trails]Trail = @splat(.{}),
 };
@@ -42,7 +43,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, @embedFile("atkinson_mono_ttf"), 32);
-    s.* = .{ .font = font, .scratch = std.heap.ArenaAllocator.init(gpa) };
+    s.* = .{ .font = font, .scratch = ArenaAllocator.init(gpa) };
 }
 
 /// Map a touch ID to a stable color from a small palette.  Same

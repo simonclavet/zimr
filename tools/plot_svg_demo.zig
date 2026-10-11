@@ -9,18 +9,19 @@
 //!     -Mbuild_options=<stub:`pub const assert_log=false;`>
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 const plot = @import("plot");
 
 pub fn main() void {
     const gpa: Allocator = std.heap.page_allocator;
     // I/O implementation is chosen here in main and threaded to the write.
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     const svg: []u8 = plot.renderDemoSvg(gpa) catch return;
     defer gpa.free(svg);
 
-    const out: std.Io.File = std.Io.File.stdout();
+    const out: Io.File = .stdout();
     out.writeStreamingAll(io, svg) catch {}; // lint:off catch-suppression: best-effort stdout write
 }

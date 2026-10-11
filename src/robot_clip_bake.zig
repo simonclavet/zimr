@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const zm = @import("zm");
+const vec = zm.vec;
 const rbt = @import("robot.zig");
 const dance = @import("robot_dance.zig");
 const track = @import("robot_track.zig");
@@ -20,6 +21,8 @@ const robot_mjcf = @import("robot_mjcf.zig");
 
 const Allocator = std.mem.Allocator;
 const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const eql = std.mem.eql;
 
 const flex2_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex2.xml");
 
@@ -67,25 +70,44 @@ const jobs = [_]Job{
     },
 };
 
+fn readAll(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const info: Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    errdefer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    return bytes;
+}
+
+/// A line to stdout, through the Io layer like the capture tools - not `std.debug.print`, which
+/// the engine's lint keeps out of `src/` because it bypasses the logging everything else goes
+/// through.
+fn say(gpa: Allocator, io: Io, comptime fmt: []const u8, args: anytype) !void {
+    const text: []u8 = try allocPrint(gpa, fmt, args);
+    defer gpa.free(text);
+    try Io.File.stdout().writeStreamingAll(io, text);
+}
+
 pub fn main() !void {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
     defer _ = debug_allocator.deinit();
     const gpa: Allocator = debug_allocator.allocator();
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     // The robot, exactly as the tracking stack and the pages build it.
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, flex2_xml, null);
     defer doc.deinit();
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
     defer robot.deinit();
-    var options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = zm.vec(0, 0, -9.81), .max_contacts = 256 };
+    var options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
     options.solver.algorithm = .newton;
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, options);
     defer imported.deinit();
     const m: *rbt.Model = &imported.model;
-    var scratch: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch: rbt.Data = try .init(gpa, m);
     defer scratch.deinit();
 
     const rest_bytes: []u8 = try readAll(gpa, io, "assets/lafan1/Geno_stance.bvh");
@@ -111,7 +133,7 @@ pub fn main() !void {
         const bytes: []u8 = try clip.toBytes(gpa);
         defer gpa.free(bytes);
         {
-            const file: std.Io.File = try std.Io.Dir.cwd().createFile(io, job.out, .{});
+            const file: Io.File = try Io.Dir.cwd().createFile(io, job.out, .{});
             defer file.close(io);
             try file.writeStreamingAll(io, bytes);
         }
@@ -119,13 +141,13 @@ pub fn main() !void {
         // Read it back from disk and hold it against the clip it came from, number for number.
         const written: []u8 = try readAll(gpa, io, job.out);
         defer gpa.free(written);
-        var back: dance.Clip = try dance.Clip.fromBytes(gpa, written);
+        var back: dance.Clip = try .fromBytes(gpa, written);
         defer back.deinit();
         const same_shape: bool = back.frame_count == clip.frame_count and back.nq == clip.nq and
             back.frame_time == clip.frame_time;
-        const same_numbers: bool = std.mem.eql(f32, back.targets, clip.targets) and
-            std.mem.eql(f32, back.residual, clip.residual) and
-            std.mem.eql(u32, back.residual_body, clip.residual_body);
+        const same_numbers: bool = eql(f32, back.targets, clip.targets) and
+            eql(f32, back.residual, clip.residual) and
+            eql(u32, back.residual_body, clip.residual_body);
         if (!same_shape or !same_numbers) {
             try say(gpa, io, "clip-bake: {s} did not read back as written\n", .{job.out});
             return error.BakeMismatch;
@@ -140,23 +162,4 @@ pub fn main() !void {
             lift,
         });
     }
-}
-
-/// A line to stdout, through the Io layer like the capture tools - not `std.debug.print`, which
-/// the engine's lint keeps out of `src/` because it bypasses the logging everything else goes
-/// through.
-fn say(gpa: Allocator, io: std.Io, comptime fmt: []const u8, args: anytype) !void {
-    const text: []u8 = try allocPrint(gpa, fmt, args);
-    defer gpa.free(text);
-    try std.Io.File.stdout().writeStreamingAll(io, text);
-}
-
-fn readAll(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
-    const bytes: []u8 = try gpa.alloc(u8, info.size);
-    errdefer gpa.free(bytes);
-    _ = try file.readPositionalAll(io, bytes, 0);
-    return bytes;
 }

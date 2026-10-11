@@ -25,6 +25,7 @@ const zm = @import("zm");
 const Camera3D = zm.Camera3D;
 const tau = zm.tau;
 const pointVec = zm.pointVec;
+const Vec = zm.Vec;
 const TextureRef = z.pbr3d.TextureRef;
 const common = @import("example_common");
 
@@ -75,7 +76,7 @@ fn loadTileTexture(
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const gf: *z.GpuFrame = f.gpu;
-    var renderer: z.pbr3d.Renderer = try z.pbr3d.Renderer.init(.{
+    var renderer: z.pbr3d.Renderer = try .init(.{
         .device = gf.device,
         .queue = gf.queue,
         .gpa = gpa,
@@ -171,7 +172,7 @@ fn update(f: *z.Frame, s: *State) void {
     // Light indicator at the directional light's source (-light_dir), so it
     // orbits with the angle - same idea as raylib's normalmap marker sphere.
     const sun_r: f32 = 5.0;
-    const sun_pos: zm.Vec = pointVec(-light_dir[0] * sun_r, -light_dir[1] * sun_r, -light_dir[2] * sun_r);
+    const sun_pos: Vec = pointVec(-light_dir[0] * sun_r, -light_dir[1] * sun_r, -light_dir[2] * sun_r);
     z.drawSphere(f.gl, sun_pos, .{ .radius = 0.3, .color = .{ .r = 255, .g = 221, .b = 92, .a = 255 } });
     z.endMode3D(f.gl);
 

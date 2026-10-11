@@ -12,6 +12,8 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const sortSlice = std.mem.sort;
 const z = @import("zimr");
 const ui = z.ui_real;
 
@@ -106,8 +108,8 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, @embedFile("atkinson_mono_ttf"), 22);
     s.* = .{ .ui_host = z.UiHost.init(gpa, font), .font = font };
-    var rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xc1c1eaf);
-    const r: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(0xc1c1eaf);
+    const r: Random = rng.random();
     const branch_names: [16][]const u8 = .{
         "main",      "feature/x",    "bugfix/123", "release-1.4",
         "refactor",  "feature/auth", "deps-bump",  "ci-tune",
@@ -228,7 +230,7 @@ fn update(f: *z.Frame, s: *State) void {
 
             u.tableHeadersRow();
             if (u.tableGetSortSpecs()) |specs| {
-                std.mem.sort(Build, &s.builds, specs, sortBuilds);
+                sortSlice(Build, &s.builds, specs, sortBuilds);
             }
 
             for (s.builds) |b| {

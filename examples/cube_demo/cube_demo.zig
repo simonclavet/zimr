@@ -32,6 +32,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec = zm.Vec;
@@ -47,6 +48,7 @@ const si = @import("shader_interface");
 // ============================================================================
 // Cube geometry (reused from examples/cube_split.zig)
 // ============================================================================
+
 //
 // 24 vertices (4 per face) so each face gets clean UVs; 36 indices.
 // Interleaved position(vec3) + tex_coord(vec2) -> ONE vertex buffer,
@@ -104,6 +106,7 @@ const cube_indices = [_]u32{
 // ============================================================================
 // Combined cube schema (Ubo + Samplers -> two bind groups)
 // ============================================================================
+
 //
 // cube_split's VS UBO (mvp) lands at @group(0) and its FS texture0 at
 // @group(1) (the shader was built so the sampler sits in group 1 -
@@ -149,6 +152,7 @@ const State = struct {
 };
 
 const cube_vs_wgsl = @embedFile("cube_split_vs.wgsl");
+
 const cube_fs_wgsl = @embedFile("cube_split_fs.wgsl");
 
 // ============================================================================
@@ -171,7 +175,7 @@ fn initState(
     f.gpu.depth_format = .depth24_plus;
 
     // ---- Checkerboard texture (stand-in for a real albedo map) ----
-    const cube_texture: z.WgpuTexture = try z.WgpuTexture.createCheckerboard(
+    const cube_texture: z.WgpuTexture = try .createCheckerboard(
         device,
         queue,
         gpa,
@@ -187,14 +191,14 @@ fn initState(
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "cube_vbo",
     });
-    z.wgpu.queueWriteBuffer(queue, vertex_buffer, 0, std.mem.sliceAsBytes(&cube_vertices));
+    z.wgpu.queueWriteBuffer(queue, vertex_buffer, 0, sliceAsBytes(&cube_vertices));
 
     const index_buffer: z.wgpu.BufferHandle = z.wgpu.createBuffer(device, .{
         .size = @sizeOf(@TypeOf(cube_indices)),
         .usage = .{ .index = true, .copy_dst = true },
         .label = "cube_ibo",
     });
-    z.wgpu.queueWriteBuffer(queue, index_buffer, 0, std.mem.sliceAsBytes(&cube_indices));
+    z.wgpu.queueWriteBuffer(queue, index_buffer, 0, sliceAsBytes(&cube_indices));
 
     // ---- 3D vertex-buffer layout: ONE interleaved buffer ----
     // slot 0, stride 20: position vec3 @0 (offset 0), tex_coord vec2 @1 (offset 12).
@@ -231,7 +235,7 @@ fn initState(
     const fs_module: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, cube_fs_wgsl, "cube_fs");
 
     // ---- Render pipeline: depth-tested, back-face culled, 3D layout ----
-    const state_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const state_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less, // depth test (LESS)
@@ -267,6 +271,10 @@ fn initState(
         .index_buffer = index_buffer,
     };
 }
+
+// ============================================================================
+// Frame
+// ============================================================================
 
 fn update(f: *z.Frame, s: *State) void {
     const Backend: type = z.WgpuBackend;
@@ -339,7 +347,3 @@ pub fn main() !void {
         .window = .{ .title = "zimr - WebGPU - depth-tested cube", .width = 800, .height = 600 },
     }, State, initState, update);
 }
-
-// ============================================================================
-// Frame
-// ============================================================================

@@ -22,11 +22,18 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
+const float64 = zm.float64;
 const zn = @import("zn");
+const zrl = @import("zrl");
 const gym = @import("robot_gym.zig");
 const compute_host = @import("compute_host.zig");
 
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const swap = std.mem.swap;
 const Var = zn.Var;
 const Graph = zn.Graph(f32);
 const Tensor = zn.Tensor(f32);
@@ -41,7 +48,7 @@ pub const State4 = [4]f32;
 /// columns and the kit's `acc_scale` both multiply it back, so the two stay one model.
 pub const acc_scale: f32 = 10.0;
 
-pub fn fromCartpole(s: zn.CartpoleState(f32)) State4 {
+pub fn fromCartpole(s: zrl.CartpoleState(f32)) State4 {
     return .{ s.cart, s.cart_rate, s.pole_rad, s.pole_rate_rad };
 }
 
@@ -81,16 +88,16 @@ const Net = struct {
 
     fn init(
         arena: Allocator,
-        random: std.Random,
+        random: Random,
         in: usize,
         hidden: usize,
         out: usize,
         last_gain: f32,
     ) !Net {
         return .{ .layers = .{
-            try .init(arena, random, in, hidden, 1.0),
-            try .init(arena, random, hidden, hidden, 1.0),
-            try .init(arena, random, hidden, out, last_gain),
+            try gym.Layer.init(arena, random, in, hidden, 1.0),
+            try gym.Layer.init(arena, random, hidden, hidden, 1.0),
+            try gym.Layer.init(arena, random, hidden, out, last_gain),
         } };
     }
 
@@ -145,7 +152,7 @@ const Record = struct {
 };
 
 pub const SuperTrack = struct {
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: ArenaAllocator,
     gpa: Allocator,
     options: Options,
     policy: Net,
@@ -160,7 +167,7 @@ pub const SuperTrack = struct {
     per_env: usize,
     heads: []usize,
     lens: []usize,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     // -- The world model's graph: a window of real states and forces, rolled out. --
     wm_graph: Graph,
     wm_states: [][4]Var,
@@ -219,19 +226,19 @@ pub const SuperTrack = struct {
             .t1 = undefined,
             .t2 = undefined,
         };
-        st.arena_state = .init(gpa);
+        st.arena_state = ArenaAllocator.init(gpa);
         errdefer st.arena_state.deinit();
         const arena: Allocator = st.arena_state.allocator();
         st.gpa = gpa;
         st.options = options;
         st.out = .{0};
-        st.rng = .init(options.seed);
-        const random: std.Random = st.rng.random();
+        st.rng = Random.DefaultPrng.init(options.seed);
+        const random: Random = st.rng.random();
         const h: usize = options.hidden;
         const b: usize = options.batch;
-        st.policy = try .init(arena, random, 4, h, 1, 0.01);
+        st.policy = try Net.init(arena, random, 4, h, 1, 0.01);
         // In: cart rate, pole angle, pole rate, force / max_force. Out: the two accelerations / 10.
-        st.world = try .init(arena, random, 4, h, 2, 1.0);
+        st.world = try Net.init(arena, random, 4, h, 2, 1.0);
         st.per_env = options.capacity / options.envs;
         st.records = try arena.alloc(Record, st.per_env * options.envs);
         st.heads = try arena.alloc(usize, options.envs);
@@ -247,16 +254,16 @@ pub const SuperTrack = struct {
 
         const ones_t: Tensor = try filled(arena, &.{ b, 1 }, 1.0);
         // One-hot columns that pick an acceleration out of the world model's [rows, 2] output.
-        const pick_cart: Tensor = try Tensor.alloc(arena, &.{ 2, 1 });
+        const pick_cart: Tensor = try .alloc(arena, &.{ 2, 1 });
         pick_cart.data[0] = acc_scale;
         pick_cart.data[1] = 0.0;
-        const pick_pole: Tensor = try Tensor.alloc(arena, &.{ 2, 1 });
+        const pick_pole: Tensor = try .alloc(arena, &.{ 2, 1 });
         pick_pole.data[0] = 0.0;
         pick_pole.data[1] = acc_scale;
         const zero_col: Tensor = try filled(arena, &.{ b, 1 }, 0.0);
 
         // -- The world model's graph. --
-        st.wm_graph = .init(arena);
+        st.wm_graph = Graph.init(arena);
         st.wm_graph.useScratchAllocator(gpa);
         const wg: *Graph = &st.wm_graph;
         st.wm_vars = try st.world.vars(wg);
@@ -281,10 +288,10 @@ pub const SuperTrack = struct {
             loss = if (loss) |l| try wg.add(l, term) else term;
         }
         st.wm_loss = loss.?;
-        st.wm_adam = try .init(arena, &st.world.tensors());
+        st.wm_adam = try gym.AdamSet.init(arena, &st.world.tensors());
 
         // -- The policy's graph: rolled out through the SAME world model weights. --
-        st.pi_graph = .init(arena);
+        st.pi_graph = Graph.init(arena);
         st.pi_graph.useScratchAllocator(gpa);
         const pg: *Graph = &st.pi_graph;
         st.pi_vars = try st.policy.vars(pg);
@@ -312,7 +319,7 @@ pub const SuperTrack = struct {
             pi_loss = if (pi_loss) |l| try pg.add(l, term) else term;
         }
         st.pi_loss = pi_loss.?;
-        st.pi_adam = try .init(arena, &st.policy.tensors());
+        st.pi_adam = try gym.AdamSet.init(arena, &st.policy.tensors());
         return st;
     }
 
@@ -324,7 +331,7 @@ pub const SuperTrack = struct {
     }
 
     fn filled(arena: Allocator, shape: []const usize, value: f32) !Tensor {
-        const t: Tensor = try Tensor.alloc(arena, shape);
+        const t: Tensor = try .alloc(arena, shape);
         @memset(t.data, value);
         return t;
     }
@@ -588,7 +595,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         staging: []f32,
         pol_step: u32 = 0,
         wm_step: u32 = 0,
-        arena_state: std.heap.ArenaAllocator,
+        arena_state: ArenaAllocator,
         // -- The FUSED path (st_ kernels): its own upload region, records, per-row gradients. --
         f_p_start: u32,
         f_p_eps: u32,
@@ -623,9 +630,13 @@ pub fn SuperTrackKitOn(comptime M: type) type {
             return in * out + out;
         }
 
-        pub fn init(gpa: Allocator, pipe: *compute_host.Compute(M), options: Options) !Self {
+        pub fn init(
+            gpa: Allocator,
+            pipe: *compute_host.Compute(M),
+            options: Options,
+        ) !Self {
             var p: Self = undefined;
-            p.arena_state = .init(gpa);
+            p.arena_state = ArenaAllocator.init(gpa);
             errdefer p.arena_state.deinit();
             const arena: Allocator = p.arena_state.allocator();
             p.pipe = pipe;
@@ -714,7 +725,11 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         }
 
         /// A kit holding `st`'s exact weights - for checking one against the other.
-        pub fn initFrom(gpa: Allocator, pipe: *compute_host.Compute(M), st: *const SuperTrack) !Self {
+        pub fn initFrom(
+            gpa: Allocator,
+            pipe: *compute_host.Compute(M),
+            st: *const SuperTrack,
+        ) !Self {
             var p: Self = try .init(gpa, pipe, st.options);
             errdefer p.deinit();
             const arena: Allocator = p.arena_state.allocator();
@@ -927,7 +942,11 @@ pub fn SuperTrackKitOn(comptime M: type) type {
         }
 
         /// `SuperTrack.trainWorldWith`, as kernels.
-        pub fn trainWorldWith(p: *Self, states: []const f32, forces_unit: []const f32) void {
+        pub fn trainWorldWith(
+            p: *Self,
+            states: []const f32,
+            forces_unit: []const f32,
+        ) void {
             const n: usize = p.options.wm_window;
             const r: usize = p.rows;
             for (0..r) |row| {
@@ -952,7 +971,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
                 k -= 1;
                 const last: bool = k == n - 1;
                 p.stepBackward(p.w_state[k + 1], p.w_target[k], cur, nxt, p.w_in[k], p.w_g1[k], p.w_g2[k], last, true);
-                std.mem.swap(u32, &cur, &nxt);
+                swap(u32, &cur, &nxt);
             }
             p.wm_step += 1;
             p.adam(p.wm[0], p.wm_count, p.wm_step, p.options.wm_rate);
@@ -1008,7 +1027,7 @@ pub fn SuperTrackKitOn(comptime M: type) type {
                 add.dx_off = p.d_pin;
                 add.count = p.rows * 4;
                 p.run("add_block", add, p.rows * 4);
-                std.mem.swap(u32, &cur, &nxt);
+                swap(u32, &cur, &nxt);
             }
             p.pol_step += 1;
             p.adam(p.pol[0], p.pol_count, p.pol_step, p.options.policy_rate);
@@ -1017,7 +1036,11 @@ pub fn SuperTrackKitOn(comptime M: type) type {
 
         /// `trainWorldWith`, FUSED: four dispatches (forward, backward, reduce, Adam) instead of
         /// ~150 - one thread per row walks the whole window.
-        pub fn trainWorldFused(p: *Self, states: []const f32, forces_unit: []const f32) void {
+        pub fn trainWorldFused(
+            p: *Self,
+            states: []const f32,
+            forces_unit: []const f32,
+        ) void {
             const n: usize = p.options.wm_window;
             const r: usize = p.rows;
             for (0..r) |row| {
@@ -1114,18 +1137,18 @@ pub const episode_cap: u32 = 500;
 /// Mean episode length of `episodes` REAL cartpole episodes under pushes: the policy without
 /// noise, or no force at all (`policy` null) for the baseline.
 pub fn evaluate(st: ?*SuperTrack, episodes: u32, seed: u64) f32 {
-    var rng: std.Random.DefaultPrng = .init(seed);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(seed);
+    const random: Random = rng.random();
     var total: u32 = 0;
     for (0..episodes) |e| {
-        var state = zn.cartpoleTaskReset(f32, zn.Rng.init(@truncate(seed)), @intCast(e), .hold);
+        var state = zrl.cartpoleTaskReset(f32, zn.Rng.init(@truncate(seed)), @intCast(e), .hold);
         var steps: u32 = 0;
         while (steps < episode_cap) : (steps += 1) {
             if (steps > 0 and steps % push_every == 0) {
                 state.pole_rate_rad += push_size * (2.0 * random.float(f32) - 1.0);
             }
             const force: f32 = if (st) |s| s.act(fromCartpole(state), false) else 0.0;
-            const stepped = zn.cartpoleContinuousStep(f32, state, force);
+            const stepped = zrl.cartpoleContinuousStep(f32, state, force);
             if (stepped.failed) {
                 break;
             }
@@ -1134,6 +1157,84 @@ pub fn evaluate(st: ?*SuperTrack, episodes: u32, seed: u64) f32 {
         total += steps;
     }
     return float(total) / float(episodes);
+}
+
+/// The gym and the training loop over zimrnum's cartpole: `iterations` of (gather 4 ticks of 8
+/// cartpoles, one world-model step, one policy step), the real evaluation every `every`.
+fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
+    const gpa: Allocator = testing_allocator;
+    const st: *SuperTrack = try .init(gpa, options);
+    defer st.deinit();
+    const envs: usize = 8;
+    var states: [8]zrl.CartpoleState(f32) = undefined;
+    var steps: [8]u32 = @splat(0);
+    var segments: [8]u32 = undefined;
+    var next_segment: u32 = 0;
+    var episode: u32 = 0;
+    for (0..envs) |e| {
+        states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+        episode += 1;
+        segments[e] = next_segment;
+        next_segment += 1;
+    }
+    const baseline: f32 = evaluate(null, 10, 99);
+    report.print("\n  SuperTrack alone, real cartpole, a push every {d} steps (cap {d}):\n", .{
+        push_every,
+        episode_cap,
+    });
+    report.print("    zero-force baseline: {d:.1} steps\n", .{baseline});
+    var samples: usize = 0;
+    var wm_loss: f32 = 0;
+    var pi_loss: f32 = 0;
+    var final_eval: f32 = 0;
+    const io: Io = std.testing.io;
+    var train_ns: i96 = 0;
+    for (1..iterations + 1) |iteration| {
+        // Gather: 4 ticks of 8 cartpoles, the current policy plus noise.
+        for (0..4) |_| {
+            for (0..envs) |e| {
+                if (steps[e] > 0 and steps[e] % push_every == 0) {
+                    states[e].pole_rate_rad += push_size * (2.0 * st.rng.random().float(f32) - 1.0);
+                    segments[e] = next_segment;
+                    next_segment += 1;
+                }
+                const force: f32 = st.act(fromCartpole(states[e]), true);
+                st.remember(e, fromCartpole(states[e]), force, segments[e]);
+                const stepped = zrl.cartpoleContinuousStep(f32, states[e], force);
+                steps[e] += 1;
+                samples += 1;
+                if (stepped.failed or steps[e] >= episode_cap) {
+                    states[e] = zrl.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
+                    episode += 1;
+                    steps[e] = 0;
+                    segments[e] = next_segment;
+                    next_segment += 1;
+                } else {
+                    states[e] = stepped.state;
+                }
+            }
+        }
+        const started: Io.Timestamp = Io.Clock.now(.awake, io);
+        if (try st.trainWorld()) |l| {
+            wm_loss = l;
+        }
+        if (try st.trainPolicy()) |l| {
+            pi_loss = l;
+        }
+        train_ns += Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
+        if (iteration % every == 0) {
+            final_eval = evaluate(st, 10, 99);
+            report.print("    iteration {d:>4} ({d:>6} samples): world loss {e:.2}, policy loss {d:.4}, " ++
+                "REAL episodes {d:.1} steps\n", .{ iteration, samples, wm_loss, pi_loss, final_eval });
+        }
+    }
+    report.print("    training: {d:.2} ms an iteration (batch {d}, windows {d}/{d})\n", .{
+        float64(train_ns) / 1.0e6 / float64(iterations),
+        options.batch,
+        options.wm_window,
+        options.policy_window,
+    });
+    return final_eval;
 }
 
 test "supertrack: supervised learning alone holds a real cartpole upright under pushes" {
@@ -1162,82 +1263,4 @@ test "supertrack: the page's small configuration - its cost, and that it still l
     }
     const final_eval: f32 = try runCartpole(.{ .batch = 16, .policy_window = 16 }, 1500, 500);
     try expect(final_eval > evaluate(null, 10, 99) * 4.0);
-}
-
-/// The gym and the training loop over zimrnum's cartpole: `iterations` of (gather 4 ticks of 8
-/// cartpoles, one world-model step, one policy step), the real evaluation every `every`.
-fn runCartpole(options: Options, iterations: usize, every: usize) !f32 {
-    const gpa: Allocator = std.testing.allocator;
-    const st: *SuperTrack = try .init(gpa, options);
-    defer st.deinit();
-    const envs: usize = 8;
-    var states: [8]zn.CartpoleState(f32) = undefined;
-    var steps: [8]u32 = @splat(0);
-    var segments: [8]u32 = undefined;
-    var next_segment: u32 = 0;
-    var episode: u32 = 0;
-    for (0..envs) |e| {
-        states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
-        episode += 1;
-        segments[e] = next_segment;
-        next_segment += 1;
-    }
-    const baseline: f32 = evaluate(null, 10, 99);
-    report.print("\n  SuperTrack alone, real cartpole, a push every {d} steps (cap {d}):\n", .{
-        push_every,
-        episode_cap,
-    });
-    report.print("    zero-force baseline: {d:.1} steps\n", .{baseline});
-    var samples: usize = 0;
-    var wm_loss: f32 = 0;
-    var pi_loss: f32 = 0;
-    var final_eval: f32 = 0;
-    const io: std.Io = std.testing.io;
-    var train_ns: i96 = 0;
-    for (1..iterations + 1) |iteration| {
-        // Gather: 4 ticks of 8 cartpoles, the current policy plus noise.
-        for (0..4) |_| {
-            for (0..envs) |e| {
-                if (steps[e] > 0 and steps[e] % push_every == 0) {
-                    states[e].pole_rate_rad += push_size * (2.0 * st.rng.random().float(f32) - 1.0);
-                    segments[e] = next_segment;
-                    next_segment += 1;
-                }
-                const force: f32 = st.act(fromCartpole(states[e]), true);
-                st.remember(e, fromCartpole(states[e]), force, segments[e]);
-                const stepped = zn.cartpoleContinuousStep(f32, states[e], force);
-                steps[e] += 1;
-                samples += 1;
-                if (stepped.failed or steps[e] >= episode_cap) {
-                    states[e] = zn.cartpoleTaskReset(f32, zn.Rng.init(7), episode, .hold);
-                    episode += 1;
-                    steps[e] = 0;
-                    segments[e] = next_segment;
-                    next_segment += 1;
-                } else {
-                    states[e] = stepped.state;
-                }
-            }
-        }
-        const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
-        if (try st.trainWorld()) |l| {
-            wm_loss = l;
-        }
-        if (try st.trainPolicy()) |l| {
-            pi_loss = l;
-        }
-        train_ns += std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
-        if (iteration % every == 0) {
-            final_eval = evaluate(st, 10, 99);
-            report.print("    iteration {d:>4} ({d:>6} samples): world loss {e:.2}, policy loss {d:.4}, " ++
-                "REAL episodes {d:.1} steps\n", .{ iteration, samples, wm_loss, pi_loss, final_eval });
-        }
-    }
-    report.print("    training: {d:.2} ms an iteration (batch {d}, windows {d}/{d})\n", .{
-        @as(f64, @floatFromInt(train_ns)) / 1.0e6 / @as(f64, @floatFromInt(iterations)),
-        options.batch,
-        options.wm_window,
-        options.policy_window,
-    });
-    return final_eval;
 }

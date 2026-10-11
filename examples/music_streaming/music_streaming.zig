@@ -7,6 +7,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -21,7 +22,7 @@ const sample_ogg = @embedFile("sample_ogg");
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     audio: z.AudioState = .{},
     track: z.Music = .{},
     play_requested: bool = false,
@@ -41,7 +42,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     z.music.setVolume(&audio.music, m, 0.5);
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .audio = audio,
         .track = m,
     };

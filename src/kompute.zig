@@ -28,84 +28,124 @@ const std = @import("std");
 const meta = std.meta;
 const builtin = @import("builtin");
 const gpu = std.spirv;
+const expect = std.testing.expect;
 
 /// True when compiling for SPIR-V (the GPU dispatch). False for the native CPU
 /// loop. Kernel files comptime-branch on it via the generated helpers below.
 pub const is_gpu: bool = builtin.target.cpu.arch.isSpirV();
 
 // ---- Atomics (the parallel-grid primitive) ----
-// Zig's SPIR-V backend (0.17.0-dev.704) does NOT implement `@atomicRmw` /
-// `@atomicLoad` / `@atomicStore` for the spirv target ("TODO (SPIR-V):
-// implement AIR tag atomic_*"), so a kernel cannot use the builtins directly.
-// The route around it: a `noinline` helper
-// with a DUMMY body. On GPU, Zig emits a real `OpFunctionCall` to the helper;
-// `spv2wgsl` then INTERCEPTS that call by name (substring `zatomicAdd` /
-// `zatomicLoad` / `zatomicStore`), emits the WGSL atomic builtin
-// (`atomicAdd(&field[idx], val)` etc.), DELETES the helper, and marks the
-// target binding `array<atomic<u32>>`. The dummy body is never executed on GPU.
-// On CPU the SAME call lowers to the genuine `@atomicRmw`/`@atomicLoad`/
-// `@atomicStore` (the native backend supports them), so the CPU twin is a
-// correct oracle. MIGRATION: when Zig's SPIR-V backend lands atomics, swap
-// these bodies for the real builtins on GPU too and add an OpAtomic* arm to
-// spv2wgsl - the kernel-author API and emitted WGSL are unchanged.
+// An atomic operation lets thousands of threads read and change one word without losing any change: an atomic add
+// returns the value before the add, and no two threads ever see the same one. The CPU build uses Zig's atomic
+// builtins. The GPU build writes the SPIR-V instruction itself, with inline assembly, because Zig's SPIR-V backend does
+// not implement `@atomicRmw` and its siblings: `OpAtomicIAdd`, `OpAtomicLoad` and `OpAtomicStore`, at Device scope
+// with relaxed memory semantics - exactly WebGPU's atomics, which are relaxed and device-wide. spv2wgsl turns each into
+// the WGSL builtin, and marks the buffer it reaches `array<atomic<u32>>`; the Vulkan host runs the instruction as it
+// is. When the backend gains the builtins, the GPU branches become the builtins and nothing else changes.
 //
 // Usage in a kernel (arr is a `g.bind(.field)` storage pointer to `[N]u32`):
-//     const slot = k.atomicAdd(arr, cell, 1);   // returns the value BEFORE add
+//     const slot = k.atomicAdd(arr, cell, 1);   // returns the value before the add
 //     const n    = k.atomicLoad(arr, cell);
 //     k.atomicStore(arr, cell, 0);
 
-noinline fn zatomicAdd(arr: anytype, idx: u32, val: u32) u32 {
-    const prev: u32 = arr[idx];
-    arr[idx] = prev +% val;
-    return prev;
+/// The scope of kompute's atomics: every invocation of the dispatch (SPIR-V's Device scope).
+const atomic_scope: u32 = @backingInt(gpu.Scope.device);
+
+/// The memory semantics of kompute's atomics: relaxed - no ordering beyond the operation itself, as in WGSL.
+const atomic_semantics: u32 = 0;
+
+/// `OpAtomicIAdd` on one storage word: adds `val`, returns the value before.
+inline fn gpuAtomicAdd(ptr: *addrspace(.storage_buffer) u32, val: u32) u32 {
+    return asm volatile (
+        \\%ret = OpAtomicIAdd %u32 %ptr %scope %semantics %val
+        : [ret] "" (-> u32),
+        : [u32] "t" (u32),
+          [ptr] "" (ptr),
+          [scope] "" (atomic_scope),
+          [semantics] "" (atomic_semantics),
+          [val] "" (val),
+    );
 }
 
-/// Atomic read-modify-write add. Returns the value stored BEFORE the add (the
+/// `OpAtomicLoad` of one storage word.
+inline fn gpuAtomicLoad(ptr: *addrspace(.storage_buffer) u32) u32 {
+    return asm volatile (
+        \\%ret = OpAtomicLoad %u32 %ptr %scope %semantics
+        : [ret] "" (-> u32),
+        : [u32] "t" (u32),
+          [ptr] "" (ptr),
+          [scope] "" (atomic_scope),
+          [semantics] "" (atomic_semantics),
+    );
+}
+
+/// `OpAtomicStore` of one storage word.
+inline fn gpuAtomicStore(ptr: *addrspace(.storage_buffer) u32, val: u32) void {
+    asm volatile (
+        \\OpAtomicStore %ptr %scope %semantics %val
+        :
+        : [ptr] "" (ptr),
+          [scope] "" (atomic_scope),
+          [semantics] "" (atomic_semantics),
+          [val] "" (val),
+    );
+}
+
+/// Whether `T` is what the atomics take: a single pointer to an array of `u32` - what `g.bind(.field)` returns for a
+/// `[N]u32` field, in the storage address space on the GPU and a plain pointer on the CPU.
+fn isU32ArrayPointer(comptime T: type) bool {
+    const info: std.lang.Type = @typeInfo(T);
+    if (info != .pointer or info.pointer.size != .one) {
+        return false;
+    }
+    return switch (@typeInfo(info.pointer.child)) {
+        .array => |array| array.child == u32,
+        else => false,
+    };
+}
+
+/// The atomics' argument check: a compile error naming the type when it is not a pointer to an array of `u32`.
+fn requireU32ArrayPointer(comptime T: type) void {
+    if (!isU32ArrayPointer(T)) {
+        @compileError("kompute atomics take a pointer to an array of u32 - a `g.bind(.field)` alias of a [N]u32 " ++
+            "field - not " ++ @typeName(T));
+    }
+}
+
+/// Atomic read-modify-write add. Returns the value stored before the add (the
 /// WGSL `atomicAdd` semantics - the per-particle grid build uses this returned
 /// value as the claimed slot index).
 pub inline fn atomicAdd(arr: anytype, idx: u32, val: u32) u32 {
+    comptime requireU32ArrayPointer(@TypeOf(arr));
     if (is_gpu) {
-        return zatomicAdd(arr, idx, val);
+        return gpuAtomicAdd(&arr[idx], val);
     }
     return @atomicRmw(u32, &arr[idx], .Add, val, .monotonic);
 }
 
-noinline fn zatomicLoad(arr: anytype, idx: u32) u32 {
-    return arr[idx];
-}
-
 /// Atomic load of a single `u32` cell.
 pub inline fn atomicLoad(arr: anytype, idx: u32) u32 {
+    comptime requireU32ArrayPointer(@TypeOf(arr));
     if (is_gpu) {
-        return zatomicLoad(arr, idx);
+        return gpuAtomicLoad(&arr[idx]);
     }
     return @atomicLoad(u32, &arr[idx], .monotonic);
 }
 
-noinline fn zatomicStore(arr: anytype, idx: u32, val: u32) void {
-    arr[idx] = val;
-}
-
 /// Atomic store of a single `u32` cell.
 pub inline fn atomicStore(arr: anytype, idx: u32, val: u32) void {
+    comptime requireU32ArrayPointer(@TypeOf(arr));
     if (is_gpu) {
-        zatomicStore(arr, idx, val);
+        gpuAtomicStore(&arr[idx], val);
         return;
     }
     @atomicStore(u32, &arr[idx], val, .monotonic);
 }
 
-// The GPU-side `noinline` helpers with dummy bodies. MUST be `noinline` so the
-// call survives to spv2wgsl (which rewrites it). The bodies are never executed
-// on GPU - they exist only to give Zig a real OpFunction to call. Named with
-// the `zatomic*` stems spv2wgsl matches on (it sees `<module>_zatomicAdd__anon_N`).
-
 // ---- Workgroup shared memory + barriers (the tiling primitive) ----
-// Same situation as atomics: Zig's SPIR-V backend (0.17.0-dev.704) has no
-// `workgroupBarrier` intrinsic, so a `noinline` helper with an EMPTY body is
-// routed through spv2wgsl, which emits the WGSL `workgroupBarrier()` builtin
-// and DELETES the helper. The empty body survives to SPIR-V because `noinline`
-// blocks elision (verified: the OpFunctionCall is present in the .spv).
+// A workgroup barrier waits until every invocation of the workgroup has reached it, and makes their writes to
+// workgroup memory visible to one another. The GPU build writes `OpControlBarrier` at workgroup scope, acquire-release
+// on workgroup memory (`gpuWorkgroupBarrier`), which spv2wgsl writes as WGSL's `workgroupBarrier()`.
 //
 // Shared memory is a GPU-ONLY OPTIMISATION. A workgroup-address-space variable
 // has no CPU equivalent and the CPU runs kernels as a plain sequential loop
@@ -162,8 +202,6 @@ pub inline fn shared(
     return &Holder.buf;
 }
 
-noinline fn zworkgroupBarrier() void {}
-
 /// Per-kernel-file configuration. `workgroup` is the threads-per-workgroup the
 /// dispatch uses (v1 is 1D scalar; 2D/3D arrays come with the dimensional Ctx).
 pub const Config = struct {
@@ -179,6 +217,22 @@ pub fn Ctx(comptime Module: type) type {
         id: u32,
         params: Module.Params,
     };
+}
+
+/// `OpControlBarrier` with `std.spirv.workgroupBarrier`'s operands - workgroup execution and memory scopes,
+/// acquire-release on workgroup memory - written here, inline, because the standard library's is an ordinary function:
+/// called, it leaves the barrier in a function of its own, where spv2wgsl's check that no lane returns before a barrier
+/// (`checkBarrierUniformity`, within one function) cannot see it.
+inline fn gpuWorkgroupBarrier() void {
+    const workgroup_scope: u32 = @backingInt(gpu.Scope.workgroup);
+    const semantics: gpu.MemorySemantics = .{ .acquire_release = true, .workgroup_memory = true };
+    asm volatile (
+        \\OpControlBarrier %execution %memory %semantics
+        :
+        : [execution] "" (workgroup_scope),
+          [memory] "" (workgroup_scope),
+          [semantics] "" (@as(u32, @bitCast(semantics))),
+    );
 }
 
 /// Workgroup barrier: every thread in the group waits here, so shared-memory
@@ -198,16 +252,13 @@ pub fn Ctx(comptime Module: type) type {
 ///     if (in_range) { tile[lid] = ...; }
 ///     k.workgroupBarrier();        // <- top-level, every lane reaches it
 ///     if (in_range) { out[gid] = tile[...]; }
-/// (The `naga` WGSL validator - see `zig build wgsl-validate` - flags this as a
-/// uniformity error, catching it without a device round-trip.)
+/// (spv2wgsl rejects it at build time, `checkBarrierUniformity`: the WGSL
+/// validators, naga among them, do not flag it.)
 pub inline fn workgroupBarrier() void {
     if (is_gpu) {
-        zworkgroupBarrier();
+        gpuWorkgroupBarrier();
     }
 }
-// Empty noinline helper: the body is never executed - it exists only to make
-// Zig emit an `OpFunctionCall` that spv2wgsl rewrites into `workgroupBarrier()`
-// and then deletes. Named with the `zworkgroupBarrier` stem spv2wgsl matches.
 
 /// The element view a kernel sees for a `Buffers` field. Zig 1245 bans
 /// `@Vector` fields inside `extern struct`s on CPU targets, so vector buffers
@@ -237,25 +288,60 @@ fn isVecBuffer(comptime FieldT: type) bool {
     return BoundView(FieldT) != FieldT;
 }
 
-/// The module-level globals namespace. On GPU the buffers are an `extern` storage
-/// binding and the params an `extern` uniform; on CPU both are plain `var`s the
+/// The type `g.uniform()` returns: a pointer to the kernel's `Params`.
+///   - GPU build: a pointer into the `uniform` address space - the shader's
+///     `@group(0) @binding(0) var<uniform> P`. Reads become uniform loads.
+///   - CPU build: a plain pointer into the module's `Globals.P`, which the host fills before
+///     running the kernel loop. Reads become normal field reads.
+/// One declaration, both backends - the essence of kompute's one-source model.
+pub fn Uniform(comptime Module: type) type {
+    return if (is_gpu)
+        *addrspace(.uniform) Module.Params
+    else
+        *Module.Params;
+}
+
+/// The binding of a kernel's `Params` uniform, in descriptor set 0.
+pub const params_binding: u32 = 0;
+
+/// The binding of a `Buffers` field's storage buffer, in descriptor set 0: one past the `Params` uniform, then the
+/// fields in declaration order.
+pub fn bufferBinding(comptime Buffers: type, comptime field: meta.FieldEnum(Buffers)) u32 {
+    return params_binding + 1 + @backingInt(field);
+}
+
+/// The module-level globals namespace. On GPU the buffers are `extern` storage
+/// bindings and the params an `extern` uniform; on CPU both are plain `var`s the
 /// host points at heap storage. A kernel file does
 /// `pub const g = k.Globals(@This()); const b = &g.B;`.
+///
+/// On GPU every binding carries its number, declared here (`params_binding`, `bufferBinding`): the `Params` uniform
+/// at 0, then each `Buffers` field. spv2wgsl copies the numbers into the WGSL the web host reads; the native host
+/// reads them from the SPIR-V itself.
 pub fn Globals(comptime Module: type) type {
     return if (is_gpu) struct {
-        pub extern const P: Module.Params addrspace(.uniform);
+        /// The kernel's `Params`, in the uniform address space. A pointer, declared through `@extern` so it can carry
+        /// its binding; `g.P.count` reads a field through it exactly as through a value.
+        pub const P: *addrspace(.uniform) Module.Params = @extern(*addrspace(.uniform) Module.Params, .{
+            .name = "P",
+            .decoration = .{ .descriptor = .{ .set = 0, .binding = params_binding } },
+        });
 
-        /// One storage BINDING PER BUFFERS FIELD (t1178): the single
-        /// megastruct binding (`extern var B: Buffers`) corrupted on Adreno
-        /// above ~1000 invocations - large constant field offsets in one
-        /// binding mis-addressed cross-field. Separate runtime-sized
-        /// bindings (the shape every hand-written WebGPU demo uses) are
-        /// stable on the same device. A kernel file aliases once per field:
+        /// The binding of the `Params` uniform (`params_binding`): what a host lays its bind groups out by.
+        pub const uniform_binding: u32 = params_binding;
+
+        /// The binding of a `Buffers` field's storage buffer (`bufferBinding`).
+        pub fn bindingOf(comptime field: meta.FieldEnum(Module.Buffers)) u32 {
+            return bufferBinding(Module.Buffers, field);
+        }
+
+        /// A `Buffers` field, as a storage buffer of its own. Each field has its own binding: the whole struct in one
+        /// binding was read at wrong offsets on Adreno GPUs above about a thousand invocations - large constant
+        /// offsets inside one binding were mis-addressed - while separate bindings, the arrangement hand-written
+        /// WebGPU programs use, read correctly on the same devices. A kernel file aliases each field once:
         ///     const pos = g.bind(.pos);
-        ///     ... pos[i] = ...;            // ptr-to-array indexes directly
-        /// Binding NUMBERS are read back from the generated WGSL by the
-        /// host (initGpu parses the headers), so no ordering contract is
-        /// needed between this code and the SPIR-V backend.
+        ///     ... pos[i] = ...;            // a pointer to the array, indexed directly
+        /// The binding's number is `bufferBinding(field)`.
         pub fn bind(
             comptime field: meta.FieldEnum(Module.Buffers),
         ) *addrspace(.storage_buffer) BoundView(@FieldType(Module.Buffers, @tagName(field))) {
@@ -272,14 +358,14 @@ pub fn Globals(comptime Module: type) type {
             // hand back a pointer to that field: same symbol, same bytes, and a
             // kernel still writes `pos[i]` with no `.items` in sight.
             const Block = extern struct { items: BoundView(FieldT) };
-            const block: *addrspace(.storage_buffer) Block = @extern(
-                *addrspace(.storage_buffer) Block,
-                .{ .name = "kbuf_" ++ @tagName(field) },
-            );
+            const block: *addrspace(.storage_buffer) Block = @extern(*addrspace(.storage_buffer) Block, .{
+                .name = "kbuf_" ++ @tagName(field),
+                .decoration = .{ .descriptor = .{ .set = 0, .binding = bufferBinding(Module.Buffers, field) } },
+            });
             return &block.items;
         }
 
-        // ===== ZNUM-UPSTREAM(lean-path): read the Params uniform via a module alias =====
+        // Read the Params uniform through a module alias.
         // The mirror of `bind`, but for the single `Params` uniform instead of a storage buffer.
         // A lean kernel file aliases it once at module scope:
         //     const P = g.uniform();
@@ -288,12 +374,20 @@ pub fn Globals(comptime Module: type) type {
         // `installKernel` does) is what lets `installKernelLean` emit half-size, dead-branch-free
         // WGSL. Same symbol `P` the stock path uses.
         pub fn uniform() Uniform(Module) {
-            return @extern(*addrspace(.uniform) Module.Params, .{ .name = "P" });
+            return P;
         }
-        // ===== END ZNUM-UPSTREAM(lean-path) =====
     } else struct {
         pub var B: Module.Buffers = undefined;
         pub var P: Module.Params = undefined;
+
+        /// The binding of the `Params` uniform (`params_binding`): what a host lays its bind groups out by - the host
+        /// runs with this form of `Globals`, since its copy of a kernel module is compiled for the CPU.
+        pub const uniform_binding: u32 = params_binding;
+
+        /// The binding of a `Buffers` field's storage buffer (`bufferBinding`).
+        pub fn bindingOf(comptime field: meta.FieldEnum(Module.Buffers)) u32 {
+            return bufferBinding(Module.Buffers, field);
+        }
 
         /// CPU twin of the per-field binding: a pointer into the module's
         /// plain `B` storage, so `pos[i]` indexes identically on both sides.
@@ -310,21 +404,17 @@ pub fn Globals(comptime Module: type) type {
             return ptr;
         }
 
-        // ===== ZNUM-UPSTREAM(lean-path): CPU twin of uniform() =====
+        // The CPU twin of uniform().
         // On the CPU build there is no uniform address space; the host fills the module's plain
         // `P` before running the kernel loop, and the kernel reads it through this pointer. One
         // source, both backends - the same trick `bind` plays for the buffers.
         pub fn uniform() Uniform(Module) {
             return &P;
         }
-        // ===== END ZNUM-UPSTREAM(lean-path) =====
     };
 }
 
-// ===== ZNUM-UPSTREAM(lean-path): the "lean" kernel form =====
-// Merged from znum's delta ledger (`shaders/vendor/zimr/PROVENANCE.md`, recorded `offered`).
-// Kept under its original markers so a re-sync can grep for it.
-//
+// ===== The "lean" kernel form =====
 // WHY THIS EXISTS. The stock `installKernel` below builds a `Ctx` and copies `Params`
 // field-by-field out of the uniform on every dispatch. That copy is CORRECT - see the long note
 // in `installKernel` for the `OpCopyLogical` bug it avoids - but Zig's SPIR-V backend wraps it in
@@ -337,19 +427,6 @@ pub fn Globals(comptime Module: type) type {
 //
 // PURELY ADDITIVE: `installKernel` and `Ctx` are untouched, so every existing zimr kernel is
 // unaffected and can migrate one at a time.
-
-/// The type `g.uniform()` returns: a pointer to the kernel's `Params`.
-///   - GPU build: a pointer into the `uniform` address space - the shader's
-///     `@group(0) @binding(0) var<uniform> P`. Reads become uniform loads.
-///   - CPU build: a plain pointer into the module's `Globals.P`, which the host fills before
-///     running the kernel loop. Reads become normal field reads.
-/// One declaration, both backends - the essence of kompute's one-source model.
-pub fn Uniform(comptime Module: type) type {
-    return if (is_gpu)
-        *addrspace(.uniform) Module.Params
-    else
-        *Module.Params;
-}
 
 /// The lean twin of `installKernel`: generate the SPIR-V compute entry for kernel `name`, but
 /// invoke it as `Module.<name>(id)` with the raw thread index instead of constructing and passing
@@ -388,7 +465,6 @@ pub fn installKernelLean(comptime Module: type, comptime name: []const u8) void 
     // `createComputePipeline(module, name)` and spv2wgsl picks it via `--entry=<name>`.
     @export(&Entry.run, .{ .name = name });
 }
-// ===== END ZNUM-UPSTREAM(lean-path) =====
 
 /// Generate the SPIR-V compute entry point for kernel `name` in `Module`. Reads
 /// `global_invocation_id`, builds a `Ctx` (params by value from the uniform), and
@@ -465,4 +541,11 @@ pub fn installKernels(comptime Module: type) void {
     inline for (Module.kernels) |name| {
         installKernel(Module, name);
     }
+}
+
+test "kompute: the atomics take a pointer to an array of u32, and nothing else" {
+    try expect(isU32ArrayPointer(*[8]u32));
+    try expect(!isU32ArrayPointer(*[8]f32));
+    try expect(!isU32ArrayPointer([]u32));
+    try expect(!isU32ArrayPointer(*u32));
 }

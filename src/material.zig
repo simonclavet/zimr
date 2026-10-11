@@ -109,7 +109,7 @@ pub const Pipeline = struct {
         const pl: wgpu.PipelineLayoutHandle =
             wgpu.createPipelineLayout(device, opts.bind_group_layouts, opts.label);
 
-        const state: gpu.StateCombo = gpu.StateCombo.fromParts(
+        const state: gpu.StateCombo = .fromParts(
             opts.topology,
             opts.blend,
             opts.depth,
@@ -344,71 +344,6 @@ pub const StorageFill = struct {
     label: []const u8 = "storage_fill",
 };
 
-/// One-shot compute fill of a storage-texture `view`: build a compute pipeline
-/// from `opts.wgsl` with a single write-only storage-texture binding at
-/// `@group(0) @binding(0)` bound to `view`, dispatch `opts.groups`, then release
-/// EVERYTHING it created (pipeline, bind group, layout). Self-contained: no
-/// handle escapes this call, so there is nothing for the caller to track or free
-/// afterwards - only the texture behind `view` persists, and the caller already
-/// owns that. This is the leak-safe way to paint a storage texture (or one mip
-/// level, or an array layer set) exactly once.
-pub fn fillStorageView(
-    gpa: Allocator,
-    f: anytype,
-    view: wgpu.TextureViewHandle,
-    opts: StorageFill,
-) !void {
-    const bgl: wgpu.BindGroupLayoutHandle = try bindGroupLayout(gpa, f, &.{
-        .{
-            .binding = 0,
-            .visibility = .{ .compute = true },
-            .resource = .{ .storage_texture = .{
-                .access = .write_only,
-                .format = opts.format,
-                .view_dimension = opts.view_dimension,
-            } },
-        },
-    }, opts.label);
-    const bg: wgpu.BindGroupHandle = try bindGroup(gpa, f, bgl, &.{
-        .{ .binding = 0, .resource = .{ .texture_view = view } },
-    }, opts.label);
-    var pipe: ComputePipeline = ComputePipeline.init(gpa, f, .{
-        .wgsl = opts.wgsl,
-        .bind_group_layouts = &.{bgl},
-        .label = opts.label,
-    });
-    pipe.dispatch(f, bg, opts.groups);
-    // The fill is submitted; the pipeline + bind group / layout were all only
-    // needed to build and dispatch it. Release them - nothing escapes.
-    pipe.deinit();
-    wgpu.destroyBindGroup(bg);
-    wgpu.destroyBindGroupLayout(bgl);
-}
-
-/// Create a 2D `StorageTexture` and paint it once via `wgsl`, dispatched over an
-/// 8x8 workgroup grid covering `width`x`height`. Returns the OWNED texture -
-/// free it with `.deinit()`. The compute scaffolding used to fill it is created
-/// and released internally (see `fillStorageView`), so this returns the single
-/// thing the caller must track.
-pub fn storageTextureFilled(
-    gpa: Allocator,
-    f: anytype,
-    width: u32,
-    height: u32,
-    wgsl: []const u8,
-    label: []const u8,
-) !StorageTexture {
-    const st: StorageTexture = storageTexture(f, width, height, label);
-    const gx: u32 = (width + 7) / 8;
-    const gy: u32 = (height + 7) / 8;
-    try fillStorageView(gpa, f, st.view, .{
-        .wgsl = wgsl,
-        .groups = .{ .x = gx, .y = gy },
-        .label = label,
-    });
-    return st;
-}
-
 /// A compute pipeline - the compute-side companion to `Pipeline`. One WGSL
 /// module with a `@compute` entry, plus the bind group layouts it samples /
 /// writes. `dispatch` runs it ONCE on its own command encoder, which is the
@@ -474,3 +409,68 @@ pub const ComputePipeline = struct {
         wgpu.queueSubmit(f.gpu.queue, cmd);
     }
 };
+
+/// One-shot compute fill of a storage-texture `view`: build a compute pipeline
+/// from `opts.wgsl` with a single write-only storage-texture binding at
+/// `@group(0) @binding(0)` bound to `view`, dispatch `opts.groups`, then release
+/// EVERYTHING it created (pipeline, bind group, layout). Self-contained: no
+/// handle escapes this call, so there is nothing for the caller to track or free
+/// afterwards - only the texture behind `view` persists, and the caller already
+/// owns that. This is the leak-safe way to paint a storage texture (or one mip
+/// level, or an array layer set) exactly once.
+pub fn fillStorageView(
+    gpa: Allocator,
+    f: anytype,
+    view: wgpu.TextureViewHandle,
+    opts: StorageFill,
+) !void {
+    const bgl: wgpu.BindGroupLayoutHandle = try bindGroupLayout(gpa, f, &.{
+        .{
+            .binding = 0,
+            .visibility = .{ .compute = true },
+            .resource = .{ .storage_texture = .{
+                .access = .write_only,
+                .format = opts.format,
+                .view_dimension = opts.view_dimension,
+            } },
+        },
+    }, opts.label);
+    const bg: wgpu.BindGroupHandle = try bindGroup(gpa, f, bgl, &.{
+        .{ .binding = 0, .resource = .{ .texture_view = view } },
+    }, opts.label);
+    var pipe: ComputePipeline = .init(gpa, f, .{
+        .wgsl = opts.wgsl,
+        .bind_group_layouts = &.{bgl},
+        .label = opts.label,
+    });
+    pipe.dispatch(f, bg, opts.groups);
+    // The fill is submitted; the pipeline + bind group / layout were all only
+    // needed to build and dispatch it. Release them - nothing escapes.
+    pipe.deinit();
+    wgpu.destroyBindGroup(bg);
+    wgpu.destroyBindGroupLayout(bgl);
+}
+
+/// Create a 2D `StorageTexture` and paint it once via `wgsl`, dispatched over an
+/// 8x8 workgroup grid covering `width`x`height`. Returns the OWNED texture -
+/// free it with `.deinit()`. The compute scaffolding used to fill it is created
+/// and released internally (see `fillStorageView`), so this returns the single
+/// thing the caller must track.
+pub fn storageTextureFilled(
+    gpa: Allocator,
+    f: anytype,
+    width: u32,
+    height: u32,
+    wgsl: []const u8,
+    label: []const u8,
+) !StorageTexture {
+    const st: StorageTexture = storageTexture(f, width, height, label);
+    const gx: u32 = @divCeil(width, 8);
+    const gy: u32 = @divCeil(height, 8);
+    try fillStorageView(gpa, f, st.view, .{
+        .wgsl = wgsl,
+        .groups = .{ .x = gx, .y = gy },
+        .label = label,
+    });
+    return st;
+}

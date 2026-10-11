@@ -31,6 +31,13 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const trim = std.mem.trim;
+const parseFloat = std.fmt.parseFloat;
+const eql = std.mem.eql;
 
 const zm = @import("zm");
 const float = zm.float;
@@ -153,6 +160,183 @@ pub const Shape = union(enum) {
     hull: []const Vec,
 };
 
+pub const Geom = struct {
+    shape: Shape,
+    pos: Vec,
+    rot: Quat,
+};
+
+pub const Body = struct {
+    name: []const u8,
+    /// Index into `Robot.bodies`, always LESS than this body's own index. Null for the root.
+    parent: ?u32,
+    /// Pose relative to the parent's frame - which is exactly URDF's joint `<origin>`,
+    /// because URDF puts the parent->child transform on the joint and zimr puts it on the
+    /// body. The two conventions line up with no algebra.
+    pos: Vec,
+    rot: Quat,
+    /// The joint connecting this body to its parent. Null for the root and for `fixed`
+    /// joints, both of which contribute no degrees of freedom.
+    joint: ?Joint,
+    inertial: ?Inertial,
+    geoms: []Geom,
+};
+
+pub const Robot = struct {
+    arena: *ArenaAllocator,
+    name: []const u8,
+    /// Topologically ordered: a body's parent always precedes it. Guaranteed by
+    /// construction, so a consumer can build the tree in one forward pass.
+    bodies: []Body,
+
+    pub fn deinit(self: *Robot) void {
+        const gpa: Allocator = self.arena.child_allocator;
+        self.arena.deinit();
+        gpa.destroy(self.arena);
+        self.* = undefined;
+    }
+};
+
+fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
+    if (haystack.len < suffix.len) {
+        return false;
+    }
+    const tail: []const u8 = haystack[haystack.len - suffix.len ..];
+    for (tail, suffix) |a, b| {
+        if (std.ascii.toLower(a) != std.ascii.toLower(b)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Vertices from whichever mesh format the filename names.
+fn meshVertices(gpa: Allocator, filename: []const u8, bytes: []const u8) Error![]f32 {
+    if (endsWithIgnoreCase(filename, ".stl")) {
+        const mesh: codecs.stl.Mesh = codecs.stl.parse(gpa, bytes) catch return Error.Unsupported;
+        defer mesh.deinit(gpa);
+        return gpa.dupe(f32, mesh.positions) catch Error.OutOfMemory;
+    }
+    if (endsWithIgnoreCase(filename, ".obj")) {
+        const parsed: codecs.obj.Data = codecs.obj.parse(gpa, bytes) catch return Error.Unsupported;
+        defer parsed.deinit(gpa);
+        return gpa.dupe(f32, parsed.positions) catch Error.OutOfMemory;
+    }
+    // COLLADA (.dae) is the remaining common one. Refused rather than guessed at: it is a
+    // large XML format, and a robot silently missing its collision geometry is worse than
+    // one that says which file it could not read.
+    return Error.Unsupported;
+}
+
+/// The `i`-th of `n` roughly-equal-area directions on the unit sphere.
+///
+/// Latitude/longitude sampling clusters at the poles; this does not. The golden-angle
+/// spiral places each point at a fixed height increment with the azimuth advanced by an
+/// irrational fraction of a turn, so no two ever line up.
+fn fibonacciDirection(i: u32, n: u32) Vec {
+    const golden_angle: f32 = pi * (3.0 - @sqrt(5.0));
+    const fi: f32 = @floatFromInt(i);
+    const fn_: f32 = @floatFromInt(n);
+    const y: f32 = 1.0 - 2.0 * (fi + 0.5) / fn_;
+    const radius: f32 = @sqrt(@max(0.0, 1.0 - y * y));
+    const theta: f32 = golden_angle * fi;
+    return vec(radius * @cos(theta), y, radius * @sin(theta));
+}
+
+/// Reduce a mesh's vertices to a small set that spans the same convex hull.
+///
+/// -- * WHY THIS EXISTS: 2.7 MB OF GENERATED SOURCE --
+///
+/// A KUKA link's collision mesh is 3038 triangles - 9114 vertices, since STL repeats every
+/// shared corner. Emitted verbatim that is 347 KB of Zig per link and 2.7 MB for the arm,
+/// to describe a shape whose convex hull has perhaps eighty corners. The compiler would
+/// chew through it and the file would be unreadable.
+///
+/// -- THE IDEA --
+///
+/// Every vertex of a convex hull is the FARTHEST point of the cloud in some direction. So
+/// sampling many directions and keeping the extreme point in each recovers the hull's
+/// corners and discards everything interior - which is most of a mesh. What comes back is a
+/// subset of the original points, so it can only under-approximate: no direction produces a
+/// point the cloud does not contain, and the hull of the subset is contained in the hull of
+/// the whole.
+///
+/// Directions come from a Fibonacci sphere, which spreads points on a sphere far more evenly
+/// than latitude/longitude bands - those cluster at the poles and would resolve the top of a
+/// shape finely while missing detail around its equator.
+///
+/// -- WHY A SINGLE HULL AT ALL --
+///
+/// A concave link becomes its convex hull, which is an over-approximation of the solid.
+/// That is not a shortcut relative to MuJoCo: **MuJoCo's collision system is convex-only and
+/// treats a `<mesh>` geom as its hull too.** `obj2mjcf` offers CoACD decomposition into
+/// several hulls, and offers it OPT-IN with a single hull as the default. Matching that
+/// default is parity, and decomposition can follow if a model needs it.
+pub fn hullPoints(
+    gpa: Allocator,
+    vertices: []const f32,
+    direction_count: u32,
+) Error![]Vec {
+    if (vertices.len < 9) {
+        return Error.BadNumber;
+    }
+    const point_count: usize = vertices.len / 3;
+
+    var kept: ArrayListUnmanaged(Vec) = .empty;
+    errdefer kept.deinit(gpa);
+
+    // * THE SIX AXES FIRST, then the spread. A Fibonacci spiral distributes directions
+    // evenly but hits no axis exactly, so the extreme point along +/-X, +/-Y, +/-Z could be
+    // missed by a fraction of a millimetre. That matters more than it sounds: the kept
+    // points' bounding box becomes the geom's `bounds_half_extent`, which is what the
+    // inertia is computed from. Seeding the axes makes the AABB EXACT rather than nearly
+    // right, for six extra iterations.
+    const axes = [_]Vec{
+        vec(1, 0, 0), vec(-1, 0, 0),
+        vec(0, 1, 0), vec(0, -1, 0),
+        vec(0, 0, 1), vec(0, 0, -1),
+    };
+    const axis_count: u32 = axes.len;
+    var d: u32 = 0;
+    while (d < direction_count + axis_count) : (d += 1) {
+        const direction: Vec = if (d < axis_count)
+            axes[d]
+        else
+            fibonacciDirection(d - axis_count, direction_count);
+        var best: usize = 0;
+        var best_dot: f32 = -1.0e30;
+        for (0..point_count) |i| {
+            const v: Vec = vec(vertices[i * 3], vertices[i * 3 + 1], vertices[i * 3 + 2]);
+            // Support function: the vertex furthest along `direction`. Named `projection` rather
+            // than `dot` because the bare name shadows zimrmath's, and because what it measures is
+            // how far this vertex projects onto the search direction.
+            const projection: f32 = dot3(direction, v);
+            if (projection > best_dot) {
+                best_dot = projection;
+                best = i;
+            }
+        }
+        const winner: Vec = vec(
+            vertices[best * 3],
+            vertices[best * 3 + 1],
+            vertices[best * 3 + 2],
+        );
+        // Neighbouring directions usually pick the SAME corner, so most iterations add
+        // nothing - which is the mechanism working, not a waste.
+        var already: bool = false;
+        for (kept.items) |existing| {
+            if (length3(existing - winner) < 1.0e-6) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) {
+            try kept.append(gpa, winner);
+        }
+    }
+    return kept.toOwnedSlice(gpa);
+}
+
 /// Load every `.mesh` shape and replace it with the `.hull` its vertices span.
 ///
 /// * THE FILE I/O IS THE CALLER'S. `urdf.zig` parses bytes and knows nothing about paths,
@@ -199,111 +383,65 @@ pub fn resolveMeshes(
     return resolved;
 }
 
-/// Vertices from whichever mesh format the filename names.
-fn meshVertices(gpa: Allocator, filename: []const u8, bytes: []const u8) Error![]f32 {
-    if (endsWithIgnoreCase(filename, ".stl")) {
-        const mesh: codecs.stl.Mesh = codecs.stl.parse(gpa, bytes) catch return Error.Unsupported;
-        defer mesh.deinit(gpa);
-        return gpa.dupe(f32, mesh.positions) catch Error.OutOfMemory;
-    }
-    if (endsWithIgnoreCase(filename, ".obj")) {
-        const parsed: codecs.obj.Data = codecs.obj.parse(gpa, bytes) catch return Error.Unsupported;
-        defer parsed.deinit(gpa);
-        return gpa.dupe(f32, parsed.positions) catch Error.OutOfMemory;
-    }
-    // COLLADA (.dae) is the remaining common one. Refused rather than guessed at: it is a
-    // large XML format, and a robot silently missing its collision geometry is worse than
-    // one that says which file it could not read.
-    return Error.Unsupported;
+fn applyTensor(t: [6]f32, v: Vec) Vec {
+    return vec(
+        t[0] * v[0] + t[3] * v[1] + t[4] * v[2],
+        t[3] * v[0] + t[1] * v[1] + t[5] * v[2],
+        t[4] * v[0] + t[5] * v[1] + t[2] * v[2],
+    );
 }
 
-fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
-    if (haystack.len < suffix.len) {
-        return false;
-    }
-    const tail: []const u8 = haystack[haystack.len - suffix.len ..];
-    for (tail, suffix) |a, b| {
-        if (std.ascii.toLower(a) != std.ascii.toLower(b)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-pub const Geom = struct {
-    shape: Shape,
-    pos: Vec,
-    rot: Quat,
-};
-
-pub const Body = struct {
-    name: []const u8,
-    /// Index into `Robot.bodies`, always LESS than this body's own index. Null for the root.
-    parent: ?u32,
-    /// Pose relative to the parent's frame - which is exactly URDF's joint `<origin>`,
-    /// because URDF puts the parent->child transform on the joint and zimr puts it on the
-    /// body. The two conventions line up with no algebra.
-    pos: Vec,
-    rot: Quat,
-    /// The joint connecting this body to its parent. Null for the root and for `fixed`
-    /// joints, both of which contribute no degrees of freedom.
-    joint: ?Joint,
-    inertial: ?Inertial,
-    geoms: []Geom,
-};
-
-pub const Robot = struct {
-    arena: *std.heap.ArenaAllocator,
-    name: []const u8,
-    /// Topologically ordered: a body's parent always precedes it. Guaranteed by
-    /// construction, so a consumer can build the tree in one forward pass.
-    bodies: []Body,
-
-    pub fn deinit(self: *Robot) void {
-        const gpa: Allocator = self.arena.child_allocator;
-        self.arena.deinit();
-        gpa.destroy(self.arena);
-        self.* = undefined;
-    }
-};
-
-/// Read a URDF from bytes.
-pub fn parse(
-    gpa: Allocator,
-    source: []const u8,
-    diagnostic: ?*Diagnostic,
-) Error!Robot {
-    var xml_diagnostic: codecs.xml.Diagnostic = .{};
-    var doc: codecs.xml.Document = codecs.xml.parse(gpa, source, &xml_diagnostic) catch {
-        if (diagnostic) |d| {
-            d.* = .{ .detail = "the file is not well-formed XML", .line = xml_diagnostic.line };
-        }
-        return Error.Unsupported;
+/// `I' = R*I*R^T` on the packed six-component form.
+///
+/// The same operation `robot.Inertia.rotated` performs, repeated here so this file does not
+/// depend on the engine. It is six dot products; sharing it would cost a dependency worth
+/// more than the duplication.
+fn rotateInertia(packed_tensor: [6]f32, rot: Quat) [6]f32 {
+    const columns = [3]Vec{
+        zm.rotate(rot, vec(1, 0, 0)),
+        zm.rotate(rot, vec(0, 1, 0)),
+        zm.rotate(rot, vec(0, 0, 1)),
     };
-    defer doc.deinit();
-    return fromDocument(gpa, &doc, diagnostic);
-}
-
-/// Read a URDF from an already-parsed document. Separate so a caller who has the tree for
-/// another reason does not parse twice.
-pub fn fromDocument(
-    gpa: Allocator,
-    doc: *const codecs.xml.Document,
-    diagnostic: ?*Diagnostic,
-) Error!Robot {
-    var arena: *std.heap.ArenaAllocator = try gpa.create(std.heap.ArenaAllocator);
-    errdefer gpa.destroy(arena);
-    arena.* = .init(gpa);
-    errdefer arena.deinit();
-
-    var reader: Reader = .{ .doc = doc, .arena = arena.allocator(), .diagnostic = diagnostic };
-    const bodies: []Body = try reader.run();
-
+    // Rows of R are columns of R^T; `I'[a][b] = row^a * (I * row^b)`.
+    const rows = [3]Vec{
+        vec(columns[0][0], columns[1][0], columns[2][0]),
+        vec(columns[0][1], columns[1][1], columns[2][1]),
+        vec(columns[0][2], columns[1][2], columns[2][2]),
+    };
+    const applied = [3]Vec{
+        applyTensor(packed_tensor, rows[0]),
+        applyTensor(packed_tensor, rows[1]),
+        applyTensor(packed_tensor, rows[2]),
+    };
     return .{
-        .arena = arena,
-        .name = doc.attribute(doc.rootElement(), "name") orelse "robot",
-        .bodies = bodies,
+        dot3(rows[0], applied[0]),
+        dot3(rows[1], applied[1]),
+        dot3(rows[2], applied[2]),
+        dot3(rows[0], applied[1]),
+        dot3(rows[0], applied[2]),
+        dot3(rows[1], applied[2]),
     };
+}
+
+/// * URDF's roll-pitch-yaw, as a quaternion.
+///
+/// THE most dangerous conversion in this file: get the composition order wrong and every
+/// link is subtly rotated, which produces a robot of the right shape in the wrong pose -
+/// the failure that is hardest to see and easiest to ship.
+///
+/// The order is FIXED-AXIS: roll about world X, then pitch about world Y, then yaw about
+/// world Z, which composes right to left as
+///
+///     R = Rz(yaw) * Ry(pitch) * Rx(roll)
+///
+/// Confirmed against two independent implementations rather than derived from the spec's
+/// prose: `URDFLoader.js` builds a three.js Euler with order `'ZYX'`, and `tinyurdfparser`
+/// calls `KDL::Rotation::RPY(r, p, y)`. Both are the same composition.
+pub fn quatFromRpy(rpy: Vec) Quat {
+    const roll: Quat = quatFromNormAxisAngle(vec(1, 0, 0), rpy[0]);
+    const pitch: Quat = quatFromNormAxisAngle(vec(0, 1, 0), rpy[1]);
+    const yaw: Quat = quatFromNormAxisAngle(vec(0, 0, 1), rpy[2]);
+    return qmul(yaw, qmul(pitch, roll));
 }
 
 const Reader = struct {
@@ -345,17 +483,17 @@ const Reader = struct {
 
     fn run(self: *Reader) Error![]Body {
         const root: *const Element = self.doc.rootElement();
-        if (!std.mem.eql(u8, root.name, "robot")) {
+        if (!eql(u8, root.name, "robot")) {
             return self.fail(Error.NotARobot, "root element is not <robot>", root.line);
         }
 
-        var links: std.ArrayListUnmanaged(RawLink) = .empty;
-        var joints: std.ArrayListUnmanaged(RawJoint) = .empty;
+        var links: ArrayListUnmanaged(RawLink) = .empty;
+        var joints: ArrayListUnmanaged(RawJoint) = .empty;
 
         for (self.doc.childrenOf(root)) |*element| {
-            if (std.mem.eql(u8, element.name, "link")) {
+            if (eql(u8, element.name, "link")) {
                 try links.append(self.arena, try self.readLink(element));
-            } else if (std.mem.eql(u8, element.name, "joint")) {
+            } else if (eql(u8, element.name, "joint")) {
                 try joints.append(self.arena, try self.readJoint(element));
             }
             // Anything else at the top level - <material>, <transmission>, <gazebo> - is
@@ -391,14 +529,14 @@ const Reader = struct {
         // failure this whole file is arranged to prevent, and one urdfdom checks for too.
         for (links, 0..) |link, i| {
             for (links[i + 1 ..]) |other| {
-                if (std.mem.eql(u8, link.name, other.name)) {
+                if (eql(u8, link.name, other.name)) {
                     return self.fail(Error.BadName, link.name, root_line);
                 }
             }
         }
         for (joints, 0..) |joint, i| {
             for (joints[i + 1 ..]) |other| {
-                if (std.mem.eql(u8, joint.joint.name, other.joint.name)) {
+                if (eql(u8, joint.joint.name, other.joint.name)) {
                     return self.fail(Error.BadName, joint.joint.name, joint.line);
                 }
             }
@@ -439,7 +577,7 @@ const Reader = struct {
 
         // Breadth-first from the root gives parent-before-child ordering for free, and
         // visiting each link exactly once detects a cycle hanging off the tree.
-        var order: std.ArrayListUnmanaged(u32) = .empty;
+        var order: ArrayListUnmanaged(u32) = .empty;
         var new_index: []u32 = try self.arena.alloc(u32, links.len);
         @memset(new_index, maxInt(u32));
         try order.append(self.arena, root);
@@ -505,7 +643,7 @@ const Reader = struct {
         line: u32,
     ) Error!u32 {
         for (links, 0..) |link, i| {
-            if (std.mem.eql(u8, link.name, name)) {
+            if (eql(u8, link.name, name)) {
                 return @intCast(i);
             }
         }
@@ -518,12 +656,12 @@ const Reader = struct {
         const name: []const u8 = self.doc.attribute(element, "name") orelse
             return self.fail(Error.BadName, "a <link> has no name", element.line);
 
-        var geoms: std.ArrayListUnmanaged(Geom) = .empty;
+        var geoms: ArrayListUnmanaged(Geom) = .empty;
         for (self.doc.childrenOf(element)) |*child| {
             // Only <collision> becomes a geom. <visual> describes appearance and would
             // double the contact geometry if imported - real models give them different
             // shapes on purpose, a detailed mesh to look at and a crude hull to collide.
-            if (!std.mem.eql(u8, child.name, "collision")) {
+            if (!eql(u8, child.name, "collision")) {
                 continue;
             }
             if (try self.readGeom(child)) |geom| {
@@ -587,21 +725,21 @@ const Reader = struct {
 
         for (self.doc.childrenOf(geometry)) |*shape_element| {
             const shape: Shape = blk: {
-                if (std.mem.eql(u8, shape_element.name, "box")) {
+                if (eql(u8, shape_element.name, "box")) {
                     const size: Vec = try self.tuple3(shape_element, "size", shape_element.line);
                     // URDF gives full extents; zimr's box is a half-extent.
                     break :blk .{ .box = size * splat(0.5) };
                 }
-                if (std.mem.eql(u8, shape_element.name, "cylinder")) {
+                if (eql(u8, shape_element.name, "cylinder")) {
                     break :blk .{ .cylinder = .{
                         .half_height = try self.number(shape_element, "length", shape_element.line) * 0.5,
                         .radius = try self.number(shape_element, "radius", shape_element.line),
                     } };
                 }
-                if (std.mem.eql(u8, shape_element.name, "sphere")) {
+                if (eql(u8, shape_element.name, "sphere")) {
                     break :blk .{ .sphere = try self.number(shape_element, "radius", shape_element.line) };
                 }
-                if (std.mem.eql(u8, shape_element.name, "mesh")) {
+                if (eql(u8, shape_element.name, "mesh")) {
                     const filename: []const u8 = self.doc.attribute(shape_element, "filename") orelse
                         return self.fail(Error.MissingField, "<mesh> without filename", shape_element.line);
                     const scale: Vec = if (self.doc.attribute(shape_element, "scale") != null)
@@ -623,15 +761,15 @@ const Reader = struct {
         const type_text: []const u8 = self.doc.attribute(element, "type") orelse
             return self.fail(Error.MissingField, name, element.line);
 
-        const kind: JointKind = if (std.mem.eql(u8, type_text, "revolute"))
+        const kind: JointKind = if (eql(u8, type_text, "revolute"))
             .hinge
-        else if (std.mem.eql(u8, type_text, "continuous"))
+        else if (eql(u8, type_text, "continuous"))
             .continuous
-        else if (std.mem.eql(u8, type_text, "prismatic"))
+        else if (eql(u8, type_text, "prismatic"))
             .slide
-        else if (std.mem.eql(u8, type_text, "fixed"))
+        else if (eql(u8, type_text, "fixed"))
             .fixed
-        else if (std.mem.eql(u8, type_text, "floating"))
+        else if (eql(u8, type_text, "floating"))
             .free
         else
             // `planar` is the remaining URDF type. It is two translations and a rotation,
@@ -730,7 +868,7 @@ const Reader = struct {
     ) Error!f32 {
         const text: []const u8 = self.doc.attribute(element, name) orelse
             return self.fail(Error.MissingField, name, line);
-        return std.fmt.parseFloat(f32, std.mem.trim(u8, text, " \t\r\n")) catch
+        return parseFloat(f32, trim(u8, text, " \t\r\n")) catch
             return self.fail(Error.BadNumber, text, line);
     }
 
@@ -763,7 +901,7 @@ const Reader = struct {
             if (count == 3) {
                 return self.fail(Error.BadNumber, text, line);
             }
-            values[count] = std.fmt.parseFloat(f32, token) catch
+            values[count] = parseFloat(f32, token) catch
                 return self.fail(Error.BadNumber, token, line);
             count += 1;
         }
@@ -774,174 +912,43 @@ const Reader = struct {
     }
 };
 
-/// Reduce a mesh's vertices to a small set that spans the same convex hull.
-///
-/// -- * WHY THIS EXISTS: 2.7 MB OF GENERATED SOURCE --
-///
-/// A KUKA link's collision mesh is 3038 triangles - 9114 vertices, since STL repeats every
-/// shared corner. Emitted verbatim that is 347 KB of Zig per link and 2.7 MB for the arm,
-/// to describe a shape whose convex hull has perhaps eighty corners. The compiler would
-/// chew through it and the file would be unreadable.
-///
-/// -- THE IDEA --
-///
-/// Every vertex of a convex hull is the FARTHEST point of the cloud in some direction. So
-/// sampling many directions and keeping the extreme point in each recovers the hull's
-/// corners and discards everything interior - which is most of a mesh. What comes back is a
-/// subset of the original points, so it can only under-approximate: no direction produces a
-/// point the cloud does not contain, and the hull of the subset is contained in the hull of
-/// the whole.
-///
-/// Directions come from a Fibonacci sphere, which spreads points on a sphere far more evenly
-/// than latitude/longitude bands - those cluster at the poles and would resolve the top of a
-/// shape finely while missing detail around its equator.
-///
-/// -- WHY A SINGLE HULL AT ALL --
-///
-/// A concave link becomes its convex hull, which is an over-approximation of the solid.
-/// That is not a shortcut relative to MuJoCo: **MuJoCo's collision system is convex-only and
-/// treats a `<mesh>` geom as its hull too.** `obj2mjcf` offers CoACD decomposition into
-/// several hulls, and offers it OPT-IN with a single hull as the default. Matching that
-/// default is parity, and decomposition can follow if a model needs it.
-pub fn hullPoints(
+/// Read a URDF from an already-parsed document. Separate so a caller who has the tree for
+/// another reason does not parse twice.
+pub fn fromDocument(
     gpa: Allocator,
-    vertices: []const f32,
-    direction_count: u32,
-) Error![]Vec {
-    if (vertices.len < 9) {
-        return Error.BadNumber;
-    }
-    const point_count: usize = vertices.len / 3;
+    doc: *const codecs.xml.Document,
+    diagnostic: ?*Diagnostic,
+) Error!Robot {
+    var arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = ArenaAllocator.init(gpa);
+    errdefer arena.deinit();
 
-    var kept: std.ArrayListUnmanaged(Vec) = .empty;
-    errdefer kept.deinit(gpa);
+    var reader: Reader = .{ .doc = doc, .arena = arena.allocator(), .diagnostic = diagnostic };
+    const bodies: []Body = try reader.run();
 
-    // * THE SIX AXES FIRST, then the spread. A Fibonacci spiral distributes directions
-    // evenly but hits no axis exactly, so the extreme point along +/-X, +/-Y, +/-Z could be
-    // missed by a fraction of a millimetre. That matters more than it sounds: the kept
-    // points' bounding box becomes the geom's `bounds_half_extent`, which is what the
-    // inertia is computed from. Seeding the axes makes the AABB EXACT rather than nearly
-    // right, for six extra iterations.
-    const axes = [_]Vec{
-        vec(1, 0, 0), vec(-1, 0, 0),
-        vec(0, 1, 0), vec(0, -1, 0),
-        vec(0, 0, 1), vec(0, 0, -1),
-    };
-    const axis_count: u32 = axes.len;
-    var d: u32 = 0;
-    while (d < direction_count + axis_count) : (d += 1) {
-        const direction: Vec = if (d < axis_count)
-            axes[d]
-        else
-            fibonacciDirection(d - axis_count, direction_count);
-        var best: usize = 0;
-        var best_dot: f32 = -1.0e30;
-        for (0..point_count) |i| {
-            const v: Vec = vec(vertices[i * 3], vertices[i * 3 + 1], vertices[i * 3 + 2]);
-            // Support function: the vertex furthest along `direction`. Named `projection` rather
-            // than `dot` because the bare name shadows zimrmath's, and because what it measures is
-            // how far this vertex projects onto the search direction.
-            const projection: f32 = dot3(direction, v);
-            if (projection > best_dot) {
-                best_dot = projection;
-                best = i;
-            }
-        }
-        const winner: Vec = vec(
-            vertices[best * 3],
-            vertices[best * 3 + 1],
-            vertices[best * 3 + 2],
-        );
-        // Neighbouring directions usually pick the SAME corner, so most iterations add
-        // nothing - which is the mechanism working, not a waste.
-        var already: bool = false;
-        for (kept.items) |existing| {
-            if (length3(existing - winner) < 1.0e-6) {
-                already = true;
-                break;
-            }
-        }
-        if (!already) {
-            try kept.append(gpa, winner);
-        }
-    }
-    return kept.toOwnedSlice(gpa);
-}
-
-/// The `i`-th of `n` roughly-equal-area directions on the unit sphere.
-///
-/// Latitude/longitude sampling clusters at the poles; this does not. The golden-angle
-/// spiral places each point at a fixed height increment with the azimuth advanced by an
-/// irrational fraction of a turn, so no two ever line up.
-fn fibonacciDirection(i: u32, n: u32) Vec {
-    const golden_angle: f32 = pi * (3.0 - @sqrt(5.0));
-    const fi: f32 = @floatFromInt(i);
-    const fn_: f32 = @floatFromInt(n);
-    const y: f32 = 1.0 - 2.0 * (fi + 0.5) / fn_;
-    const radius: f32 = @sqrt(@max(0.0, 1.0 - y * y));
-    const theta: f32 = golden_angle * fi;
-    return vec(radius * @cos(theta), y, radius * @sin(theta));
-}
-
-/// * URDF's roll-pitch-yaw, as a quaternion.
-///
-/// THE most dangerous conversion in this file: get the composition order wrong and every
-/// link is subtly rotated, which produces a robot of the right shape in the wrong pose -
-/// the failure that is hardest to see and easiest to ship.
-///
-/// The order is FIXED-AXIS: roll about world X, then pitch about world Y, then yaw about
-/// world Z, which composes right to left as
-///
-///     R = Rz(yaw) * Ry(pitch) * Rx(roll)
-///
-/// Confirmed against two independent implementations rather than derived from the spec's
-/// prose: `URDFLoader.js` builds a three.js Euler with order `'ZYX'`, and `tinyurdfparser`
-/// calls `KDL::Rotation::RPY(r, p, y)`. Both are the same composition.
-pub fn quatFromRpy(rpy: Vec) Quat {
-    const roll: Quat = quatFromNormAxisAngle(vec(1, 0, 0), rpy[0]);
-    const pitch: Quat = quatFromNormAxisAngle(vec(0, 1, 0), rpy[1]);
-    const yaw: Quat = quatFromNormAxisAngle(vec(0, 0, 1), rpy[2]);
-    return qmul(yaw, qmul(pitch, roll));
-}
-
-/// `I' = R*I*R^T` on the packed six-component form.
-///
-/// The same operation `robot.Inertia.rotated` performs, repeated here so this file does not
-/// depend on the engine. It is six dot products; sharing it would cost a dependency worth
-/// more than the duplication.
-fn rotateInertia(packed_tensor: [6]f32, rot: Quat) [6]f32 {
-    const columns = [3]Vec{
-        zm.rotate(rot, vec(1, 0, 0)),
-        zm.rotate(rot, vec(0, 1, 0)),
-        zm.rotate(rot, vec(0, 0, 1)),
-    };
-    // Rows of R are columns of R^T; `I'[a][b] = row^a * (I * row^b)`.
-    const rows = [3]Vec{
-        vec(columns[0][0], columns[1][0], columns[2][0]),
-        vec(columns[0][1], columns[1][1], columns[2][1]),
-        vec(columns[0][2], columns[1][2], columns[2][2]),
-    };
-    const applied = [3]Vec{
-        applyTensor(packed_tensor, rows[0]),
-        applyTensor(packed_tensor, rows[1]),
-        applyTensor(packed_tensor, rows[2]),
-    };
     return .{
-        dot3(rows[0], applied[0]),
-        dot3(rows[1], applied[1]),
-        dot3(rows[2], applied[2]),
-        dot3(rows[0], applied[1]),
-        dot3(rows[0], applied[2]),
-        dot3(rows[1], applied[2]),
+        .arena = arena,
+        .name = doc.attribute(doc.rootElement(), "name") orelse "robot",
+        .bodies = bodies,
     };
 }
 
-fn applyTensor(t: [6]f32, v: Vec) Vec {
-    return vec(
-        t[0] * v[0] + t[3] * v[1] + t[4] * v[2],
-        t[3] * v[0] + t[1] * v[1] + t[5] * v[2],
-        t[4] * v[0] + t[5] * v[1] + t[2] * v[2],
-    );
+/// Read a URDF from bytes.
+pub fn parse(
+    gpa: Allocator,
+    source: []const u8,
+    diagnostic: ?*Diagnostic,
+) Error!Robot {
+    var xml_diagnostic: codecs.xml.Diagnostic = .{};
+    var doc: codecs.xml.Document = codecs.xml.parse(gpa, source, &xml_diagnostic) catch {
+        if (diagnostic) |d| {
+            d.* = .{ .detail = "the file is not well-formed XML", .line = xml_diagnostic.line };
+        }
+        return Error.Unsupported;
+    };
+    defer doc.deinit();
+    return fromDocument(gpa, &doc, diagnostic);
 }
 
 // =============================================================================
@@ -1013,7 +1020,7 @@ test "urdf: a two-link arm imports with the tree, poses and axes intact" {
         \\  </joint>
         \\</robot>
     ;
-    var robot: Robot = try parse(std.testing.allocator, source, null);
+    var robot: Robot = try parse(testing_allocator, source, null);
     defer robot.deinit();
 
     try expectEqualStrings("toy", robot.name);
@@ -1059,7 +1066,7 @@ test "urdf: a fixed joint becomes a body with no joint, not a special case" {
         \\  </joint>
         \\</robot>
     ;
-    var robot: Robot = try parse(std.testing.allocator, source, null);
+    var robot: Robot = try parse(testing_allocator, source, null);
     defer robot.deinit();
     const b: Body = robot.bodies[1];
     // Attached, positioned, and carrying no degrees of freedom - which is what a weld IS in
@@ -1084,7 +1091,7 @@ test "urdf: a mimic joint is recorded, because it is a tendon" {
         \\  </joint>
         \\</robot>
     ;
-    var robot: Robot = try parse(std.testing.allocator, source, null);
+    var robot: Robot = try parse(testing_allocator, source, null);
     defer robot.deinit();
     var found: bool = false;
     for (robot.bodies) |body| {
@@ -1115,7 +1122,7 @@ test "urdf: a rotated inertial origin rotates the tensor into the body frame" {
         \\  </link>
         \\</robot>
     ;
-    var robot: Robot = try parse(std.testing.allocator, source, null);
+    var robot: Robot = try parse(testing_allocator, source, null);
     defer robot.deinit();
     const i: [6]f32 = robot.bodies[0].inertial.?.full_inertia;
     try expectApproxEqAbs(@as(f32, 1), i[0], 1.0e-4); // xx untouched by a roll
@@ -1233,7 +1240,7 @@ test "urdf: malformed topology is refused rather than half-imported" {
     };
     for (cases) |case| {
         var diagnostic: Diagnostic = .{};
-        try expectError(case.err, parse(std.testing.allocator, case.source, &diagnostic));
+        try expectError(case.err, parse(testing_allocator, case.source, &diagnostic));
         // Every refusal must say something, or the error is useless in practice.
         try expect(diagnostic.detail.len > 0);
     }
@@ -1244,8 +1251,8 @@ test "hullPoints: a cube reduces to its eight corners, whatever the cloud" {
     // a corner, so a cube must come back as EXACTLY eight points however many interior or
     // face-centre vertices the mesh carried. Anything more means the deduplication is
     // broken; anything less means the sampling missed a corner.
-    const gpa: Allocator = std.testing.allocator;
-    var vertices: std.ArrayListUnmanaged(f32) = .empty;
+    const gpa: Allocator = testing_allocator;
+    var vertices: ArrayListUnmanaged(f32) = .empty;
     defer vertices.deinit(gpa);
 
     // Eight corners...
@@ -1277,7 +1284,7 @@ test "hullPoints: a real KUKA collision mesh reduces by two orders of magnitude"
     // * THE MEASUREMENT THAT JUSTIFIES THE WHOLE FUNCTION. 9114 vertices emitted verbatim
     // would be 347 KB of generated Zig per link - 2.7 MB for the arm - to describe a shape
     // with well under a hundred corners.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bytes: []const u8 = @embedFile("tests/fixtures/robot/meshes/link_0.stl");
     const mesh: codecs.stl.Mesh = try codecs.stl.parse(gpa, bytes);
     defer mesh.deinit(gpa);
@@ -1320,7 +1327,7 @@ test "urdf: the real KUKA iiwa imports as a seven-DOF chain" {
     // describing a robot that exists.
     const source: []const u8 = @embedFile("tests/fixtures/robot/kuka_iiwa.urdf");
     var diagnostic: Diagnostic = .{};
-    var robot: Robot = parse(std.testing.allocator, source, &diagnostic) catch |err| {
+    var robot: Robot = parse(testing_allocator, source, &diagnostic) catch |err| {
         // The diagnostic is the whole point of a strict parser: a failure here should say
         // WHERE and WHY, not just that the import did not work.
         std.log.err("KUKA import failed: {t} — {s} (line {d})", .{
@@ -1391,7 +1398,77 @@ pub const EmitError = error{
     /// naming the offender, than to emit a file that fails mysteriously.
     NameNotAnIdentifier,
     OutOfMemory,
-} || std.Io.Writer.Error;
+} || Io.Writer.Error;
+
+/// Names become enum fields in `Spec()`, so they must be valid Zig identifiers.
+fn requireIdentifier(name: []const u8) EmitError!void {
+    if (name.len == 0) {
+        return EmitError.NameNotAnIdentifier;
+    }
+    if (std.ascii.isDigit(name[0])) {
+        return EmitError.NameNotAnIdentifier;
+    }
+    for (name) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_') {
+            return EmitError.NameNotAnIdentifier;
+        }
+    }
+}
+
+/// One float, as Zig source.
+///
+/// * NEGATIVE ZERO IS THE TRAP. A rotation of exactly -90 deg produces components of `-0.0`,
+/// and `{d}` prints that as `-0` - which Zig rejects outright as an ambiguous integer
+/// literal, so the generated file does not compile at all. Loud, at least, but it fails at
+/// the far end of the pipeline from the cause.
+///
+/// Normalising negative zero to zero is correct as well as convenient: the two are equal in
+/// every arithmetic sense that matters here, and the sign carries no information about a
+/// robot's geometry.
+///
+/// The `.0` suffix on whole numbers is the other half - `1` is an integer literal and `1.0`
+/// a float one, and the difference matters when the value lands in a `@Vector(4, f32)`.
+fn emitFloat(writer: *Io.Writer, value: f32) EmitError!void {
+    const cleaned: f32 = if (value == 0.0) 0.0 else value;
+    if (cleaned == @trunc(cleaned) and @abs(cleaned) < 1.0e9) {
+        try writer.print("{d}.0", .{cleaned});
+        return;
+    }
+    try writer.print("{d}", .{cleaned});
+}
+
+fn emitVec(writer: *Io.Writer, v: Vec) EmitError!void {
+    try writer.print("vec(", .{});
+    inline for (0..3) |k| {
+        try writer.print("{s}", .{if (k == 0) "" else ", "});
+        try emitFloat(writer, v[k]);
+    }
+    try writer.print(")", .{});
+}
+
+fn emitQuat(writer: *Io.Writer, q: Quat) EmitError!void {
+    try writer.print(".{{ ", .{});
+    inline for (0..4) |k| {
+        try writer.print("{s}", .{if (k == 0) "" else ", "});
+        try emitFloat(writer, q[k]);
+    }
+    try writer.print(" }}", .{});
+}
+
+/// A small fraction of a typical link inertia. See the note at the emission site.
+const default_armature: f32 = 0.01;
+
+/// Half the extent of a point cloud's axis-aligned bounding box - the hull's stand-in for
+/// its true volume when computing mass properties. See `robot.GeomShape.hull`.
+fn boundsHalfExtent(points: []const Vec) Vec {
+    var lo: Vec = points[0];
+    var hi: Vec = points[0];
+    for (points) |p| {
+        lo = @min(lo, p);
+        hi = @max(hi, p);
+    }
+    return (hi - lo) * splat(0.5);
+}
 
 /// Write `robot` as a Zig source file defining `pub const spec` and `pub const Model`.
 ///
@@ -1401,7 +1478,7 @@ pub const EmitError = error{
 /// reaches it through the module as `@import("zimr").robot`. Passing the whole expression
 /// keeps the emitter from having to know which world it is writing for.
 pub fn emitZig(
-    writer: *std.Io.Writer,
+    writer: *Io.Writer,
     robot: *const Robot,
     source_name: []const u8,
     import_path: []const u8,
@@ -1605,18 +1682,6 @@ pub fn emitZig(
     , .{});
 }
 
-/// Half the extent of a point cloud's axis-aligned bounding box - the hull's stand-in for
-/// its true volume when computing mass properties. See `robot.GeomShape.hull`.
-fn boundsHalfExtent(points: []const Vec) Vec {
-    var lo: Vec = points[0];
-    var hi: Vec = points[0];
-    for (points) |p| {
-        lo = @min(lo, p);
-        hi = @max(hi, p);
-    }
-    return (hi - lo) * splat(0.5);
-}
-
 /// How many mesh geoms were skipped. Reported by the tool so a silent omission becomes a
 /// visible one - section 4i's rule is that an importer must never quietly drop something.
 pub fn meshCount(robot: *const Robot) u32 {
@@ -1629,62 +1694,4 @@ pub fn meshCount(robot: *const Robot) u32 {
         }
     }
     return count;
-}
-
-/// A small fraction of a typical link inertia. See the note at the emission site.
-const default_armature: f32 = 0.01;
-
-fn emitVec(writer: *std.Io.Writer, v: Vec) EmitError!void {
-    try writer.print("vec(", .{});
-    inline for (0..3) |k| {
-        try writer.print("{s}", .{if (k == 0) "" else ", "});
-        try emitFloat(writer, v[k]);
-    }
-    try writer.print(")", .{});
-}
-
-fn emitQuat(writer: *std.Io.Writer, q: Quat) EmitError!void {
-    try writer.print(".{{ ", .{});
-    inline for (0..4) |k| {
-        try writer.print("{s}", .{if (k == 0) "" else ", "});
-        try emitFloat(writer, q[k]);
-    }
-    try writer.print(" }}", .{});
-}
-
-/// One float, as Zig source.
-///
-/// * NEGATIVE ZERO IS THE TRAP. A rotation of exactly -90 deg produces components of `-0.0`,
-/// and `{d}` prints that as `-0` - which Zig rejects outright as an ambiguous integer
-/// literal, so the generated file does not compile at all. Loud, at least, but it fails at
-/// the far end of the pipeline from the cause.
-///
-/// Normalising negative zero to zero is correct as well as convenient: the two are equal in
-/// every arithmetic sense that matters here, and the sign carries no information about a
-/// robot's geometry.
-///
-/// The `.0` suffix on whole numbers is the other half - `1` is an integer literal and `1.0`
-/// a float one, and the difference matters when the value lands in a `@Vector(4, f32)`.
-fn emitFloat(writer: *std.Io.Writer, value: f32) EmitError!void {
-    const cleaned: f32 = if (value == 0.0) 0.0 else value;
-    if (cleaned == @trunc(cleaned) and @abs(cleaned) < 1.0e9) {
-        try writer.print("{d}.0", .{cleaned});
-        return;
-    }
-    try writer.print("{d}", .{cleaned});
-}
-
-/// Names become enum fields in `Spec()`, so they must be valid Zig identifiers.
-fn requireIdentifier(name: []const u8) EmitError!void {
-    if (name.len == 0) {
-        return EmitError.NameNotAnIdentifier;
-    }
-    if (std.ascii.isDigit(name[0])) {
-        return EmitError.NameNotAnIdentifier;
-    }
-    for (name) |c| {
-        if (!std.ascii.isAlphanumeric(c) and c != '_') {
-            return EmitError.NameNotAnIdentifier;
-        }
-    }
 }

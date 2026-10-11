@@ -56,12 +56,13 @@ fn colorFor(style: Style, body: *const phys.Body) Color {
     return style.palette[body.material % style.palette.len];
 }
 
+// Each channel rounds to the nearest step - truncating would bias every shade darker.
 fn darkenColor(c: Color, factor: f32) Color {
     const f: f32 = if (factor < 0.0) 0.0 else if (factor > 1.0) 1.0 else factor;
     return .{
-        .r = @intFromFloat(float(c.r) * f),
-        .g = @intFromFloat(float(c.g) * f),
-        .b = @intFromFloat(float(c.b) * f),
+        .r = @round(float(c.r) * f),
+        .g = @round(float(c.g) * f),
+        .b = @round(float(c.b) * f),
         .a = c.a,
     };
 }

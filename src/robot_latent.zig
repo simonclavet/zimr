@@ -17,6 +17,7 @@
 const std = @import("std");
 const report = @import("test_report.zig");
 const zm = @import("zm");
+const vec = zm.vec;
 const zn = @import("zn");
 const rbt = @import("robot.zig");
 const track = @import("robot_track.zig");
@@ -24,10 +25,16 @@ const dance = @import("robot_dance.zig");
 const gym = @import("robot_gym.zig");
 
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
 const Var = zn.Var;
 const Graph = zn.Graph(f32);
 const Tensor = zn.Tensor(f32);
 const float = zm.float;
+const nan = zm.nan;
 const assertf = zm.assertf;
 
 pub const WorldOptions = struct {
@@ -63,8 +70,173 @@ pub const Normalizer = struct {
     }
 };
 
+/// Running first and second moments of the feature vectors, and the Normalizer they give - ONE definition of the
+/// statistics (and of the spread's floor) for every way a normaliser is measured.
+const Moments = struct {
+    sum: []f64,
+    squares: []f64,
+    count: usize = 0,
+
+    fn init(gpa: Allocator, features: usize) !Moments {
+        const sum: []f64 = try gpa.alloc(f64, features);
+        errdefer gpa.free(sum);
+        const squares: []f64 = try gpa.alloc(f64, features);
+        @memset(sum, 0.0);
+        @memset(squares, 0.0);
+        return .{ .sum = sum, .squares = squares };
+    }
+
+    fn deinit(self: *Moments, gpa: Allocator) void {
+        gpa.free(self.squares);
+        gpa.free(self.sum);
+    }
+
+    fn add(self: *Moments, raw: []const f32) void {
+        for (raw, self.sum, self.squares) |x, *s, *q| {
+            s.* += x;
+            q.* += @as(f64, x) * x;
+        }
+        self.count += 1;
+    }
+
+    /// Mean and spread, spreads floored so a feature that never moves does not divide by nothing. The two slices
+    /// are `owned`'s.
+    fn normalizer(self: Moments, owned: Allocator) !Normalizer {
+        if (self.count == 0) {
+            return error.NoData;
+        }
+        const f: usize = self.sum.len;
+        const mean: []f32 = try owned.alloc(f32, f);
+        errdefer owned.free(mean);
+        const spread: []f32 = try owned.alloc(f32, f);
+        const n: f64 = @floatFromInt(self.count);
+        for (mean, spread, self.sum, self.squares) |*mu, *sigma, s, q| {
+            const average: f64 = s / n;
+            mu.* = @floatCast(average);
+            sigma.* = @floatCast(@max(@sqrt(@max(q / n - average * average, 0.0)), 1.0e-3));
+        }
+        return .{ .mean = mean, .spread = spread };
+    }
+};
+
+/// The normaliser the PAPER uses (plan F4): measured from the REFERENCE - every frame of every clip, posed exactly
+/// as the fleet poses a reference (`robot_track.resetToFrame`: the pose, and the velocity by backward difference),
+/// in the same local features. The motion the character is meant to be in, so a normalised feature says "how far
+/// from typical dancing", not "from typical falling" - and it is fixed before the first step, whatever a warm-up
+/// happened to do. The caller owns the two slices.
+pub fn measureClipNormalizer(
+    owned: Allocator,
+    m: *rbt.Model,
+    clips: []const *const dance.Clip,
+) !Normalizer {
+    var data: rbt.Data = try .init(owned, m);
+    defer data.deinit();
+    var state: track.State = try .init(owned, m.nbody);
+    defer state.deinit(owned);
+    const f: usize = track.localSize(m.nbody);
+    const raw: []f32 = try owned.alloc(f32, f);
+    defer owned.free(raw);
+    var moments: Moments = try .init(owned, f);
+    defer moments.deinit(owned);
+    const root: usize = track.rootBody(m);
+    for (clips) |clip| {
+        // Frame 0 has no frame before it to difference against; `resetToFrame` starts at 1 for the same reason.
+        for (1..clip.frame_count) |frame| {
+            track.resetToFrame(m, &data, clip, frame);
+            track.stateOf(m, &data, &state);
+            track.local(state, root, raw);
+            moments.add(raw);
+        }
+    }
+    return moments.normalizer(owned);
+}
+
+/// Mean and spread of every feature over everything the replay holds, spreads floored so a feature
+/// that never moves does not divide by nothing. The caller owns the two slices it comes back with.
+///
+/// Public because the GPU learner needs the same statistics without building a CPU world model to get
+/// them. The paper measures them from the reference clips instead: `measureClipNormalizer`.
+pub fn measureNormalizer(owned: Allocator, fleet: *track.Fleet) !Normalizer {
+    var data: rbt.Data = try .init(owned, fleet.m);
+    defer data.deinit();
+    var state: track.State = try .init(owned, fleet.m.nbody);
+    defer state.deinit(owned);
+    const f: usize = track.localSize(fleet.m.nbody);
+    const raw: []f32 = try owned.alloc(f32, f);
+    defer owned.free(raw);
+    var moments: Moments = try .init(owned, f);
+    defer moments.deinit(owned);
+    for (0..fleet.options.envs) |env| {
+        const written: u64 = fleet.replay.written[env];
+        const oldest: u64 = written -| @as(u64, @intCast(fleet.replay.capacity));
+        var index: u64 = oldest;
+        while (index < written) : (index += 1) {
+            fleet.stateAt(env, index, &data, &state);
+            track.local(state, fleet.root, raw);
+            moments.add(raw);
+        }
+    }
+    return moments.normalizer(owned);
+}
+
+fn filled(
+    owned: Allocator,
+    shape: []const usize,
+    value: f32,
+) !Tensor {
+    const t: Tensor = try .alloc(owned, shape);
+    @memset(t.data, value);
+    return t;
+}
+
+/// One step of the model on one row, from its parameters alone: `z` becomes z + Net(z, ref, act),
+/// in place. The body of `LatentWorld.stepRow`, free-standing so a GPU version can be checked
+/// against the very code the CPU model trains with - not against a copy of it in a test. The sums
+/// run bias first, then the features, the reference and the action in order: the same order the
+/// kit's dense layer adds a stacked first layer's inputs, which is what makes the two comparable
+/// to the last bit or nearly.
+pub fn stepWith(
+    params: [8]Tensor,
+    hidden1: []f32,
+    hidden2: []f32,
+    z: []f32,
+    ref: []const f32,
+    act: []const f32,
+) void {
+    const h: usize = hidden1.len;
+    const features: usize = z.len;
+    const p = params;
+    for (0..h) |j| {
+        var sum: f32 = p[3].data[j];
+        for (z, 0..) |x, i| {
+            sum += x * p[0].data[i * h + j];
+        }
+        for (ref, 0..) |x, i| {
+            sum += x * p[1].data[i * h + j];
+        }
+        for (act, 0..) |x, i| {
+            sum += x * p[2].data[i * h + j];
+        }
+        hidden1[j] = zm.tanh(sum);
+    }
+    for (0..h) |j| {
+        var sum: f32 = p[5].data[j];
+        for (hidden1, 0..) |x, i| {
+            sum += x * p[4].data[i * h + j];
+        }
+        hidden2[j] = zm.tanh(sum);
+    }
+    for (z, 0..) |*out, j| {
+        var sum: f32 = p[7].data[j];
+        for (hidden2, 0..) |x, i| {
+            sum += x * p[6].data[i * features + j];
+        }
+        out.* += sum;
+    }
+}
+
 pub const LatentWorld = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     m: *rbt.Model,
     options: WorldOptions,
     features: usize,
@@ -83,7 +255,7 @@ pub const LatentWorld = struct {
     targets: []Var,
     loss: Var,
     adam: gym.AdamSet,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     /// The windows of the current training step.
     windows: []track.Replay.Window,
     /// Scratch for building examples and running rows outside the graph.
@@ -130,7 +302,7 @@ pub const LatentWorld = struct {
             .hidden1 = undefined,
             .hidden2 = undefined,
         };
-        self.arena = .init(gpa);
+        self.arena = ArenaAllocator.init(gpa);
         errdefer self.arena.deinit();
         const owned: Allocator = self.arena.allocator();
         const m: *rbt.Model = fleet.m;
@@ -143,7 +315,7 @@ pub const LatentWorld = struct {
         self.features = f;
         self.references = r;
         self.actions = a;
-        self.rng = .init(options.seed);
+        self.rng = Random.DefaultPrng.init(options.seed);
         self.state = try track.State.init(owned, m.nbody);
         self.data = try rbt.Data.init(owned, m);
         self.raw = try owned.alloc(f32, f);
@@ -158,7 +330,7 @@ pub const LatentWorld = struct {
 
         // Parameters: Xavier for the tanh layers, and a near-zero output layer so the untrained
         // model is "nothing changes" - a residual model should start as the identity.
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         const shapes = [8][2]usize{
             .{ f, h }, .{ r, h }, .{ a, h }, .{ 1, h }, // first layer: features, reference, action, bias
             .{ h, h }, .{ 1, h }, // second layer
@@ -180,7 +352,7 @@ pub const LatentWorld = struct {
         // The training graph, built once: a window of `steps` steps, rolled out on the model's own
         // predictions from the real first state.
         const b: usize = options.batch;
-        self.graph = .init(owned);
+        self.graph = Graph.init(owned);
         const g: *Graph = &self.graph;
         for (&self.vars, self.params) |*v, p| {
             v.* = try g.parameter(p);
@@ -201,7 +373,7 @@ pub const LatentWorld = struct {
             total = if (total) |t| try g.add(t, term) else term;
         }
         self.loss = try g.scale(total.?, 1.0 / float(options.steps));
-        self.adam = try .init(owned, &self.params);
+        self.adam = try gym.AdamSet.init(owned, &self.params);
         return self;
     }
 
@@ -237,7 +409,7 @@ pub const LatentWorld = struct {
         // All the windows are drawn BEFORE any is filled in. Filling draws no random numbers, so the
         // sequence of draws is exactly what it was when drawing and filling were interleaved - every
         // test measured before the split (D15, T8d) still sees the same windows.
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         for (self.windows) |*window| {
             window.* = fleet.replay.sampleWindow(random, self.options.steps) orelse return null;
         }
@@ -326,52 +498,6 @@ pub const LatentWorld = struct {
     }
 };
 
-/// One step of the model on one row, from its parameters alone: `z` becomes z + Net(z, ref, act),
-/// in place. The body of `LatentWorld.stepRow`, free-standing so a GPU version can be checked
-/// against the very code the CPU model trains with - not against a copy of it in a test. The sums
-/// run bias first, then the features, the reference and the action in order: the same order the
-/// kit's dense layer adds a stacked first layer's inputs, which is what makes the two comparable
-/// to the last bit or nearly.
-pub fn stepWith(
-    params: [8]Tensor,
-    hidden1: []f32,
-    hidden2: []f32,
-    z: []f32,
-    ref: []const f32,
-    act: []const f32,
-) void {
-    const h: usize = hidden1.len;
-    const features: usize = z.len;
-    const p = params;
-    for (0..h) |j| {
-        var sum: f32 = p[3].data[j];
-        for (z, 0..) |x, i| {
-            sum += x * p[0].data[i * h + j];
-        }
-        for (ref, 0..) |x, i| {
-            sum += x * p[1].data[i * h + j];
-        }
-        for (act, 0..) |x, i| {
-            sum += x * p[2].data[i * h + j];
-        }
-        hidden1[j] = zm.tanh(sum);
-    }
-    for (0..h) |j| {
-        var sum: f32 = p[5].data[j];
-        for (hidden1, 0..) |x, i| {
-            sum += x * p[4].data[i * h + j];
-        }
-        hidden2[j] = zm.tanh(sum);
-    }
-    for (z, 0..) |*out, j| {
-        var sum: f32 = p[7].data[j];
-        for (hidden2, 0..) |x, i| {
-            sum += x * p[6].data[i * features + j];
-        }
-        out.* += sum;
-    }
-}
-
 /// How a rollout's pose drifts: the mean distance of every body from where the simulator had it,
 /// in the ROOT's frame, after each step - the same quantity as `TrackingError.pose_position`, read
 /// straight off the feature vector (its first entries are the bodies' positions in that frame).
@@ -389,13 +515,25 @@ pub const PoseDrift = struct {
     }
 };
 
+/// Mean over bodies of the distance between two feature vectors' body positions (raw units).
+fn poseError(a: []const f32, b: []const f32, bodies: usize) f32 {
+    var total: f32 = 0.0;
+    for (0..bodies) |body| {
+        const dx: f32 = a[body * 3] - b[body * 3];
+        const dy: f32 = a[body * 3 + 1] - b[body * 3 + 1];
+        const dz: f32 = a[body * 3 + 2] - b[body * 3 + 2];
+        total += @sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return total / float(bodies);
+}
+
 pub fn measurePoseDrift(
     gpa: Allocator,
     model: *LatentWorld,
     fleet: *track.Fleet,
     draws: usize,
     steps: usize,
-    random: std.Random,
+    random: Random,
 ) !PoseDrift {
     const f: usize = model.features;
     const bodies: usize = model.m.nbody - 1;
@@ -456,138 +594,9 @@ pub fn measurePoseDrift(
     return drift;
 }
 
-/// Mean over bodies of the distance between two feature vectors' body positions (raw units).
-fn poseError(a: []const f32, b: []const f32, bodies: usize) f32 {
-    var total: f32 = 0.0;
-    for (0..bodies) |body| {
-        const dx: f32 = a[body * 3] - b[body * 3];
-        const dy: f32 = a[body * 3 + 1] - b[body * 3 + 1];
-        const dz: f32 = a[body * 3 + 2] - b[body * 3 + 2];
-        total += @sqrt(dx * dx + dy * dy + dz * dz);
-    }
-    return total / float(bodies);
-}
-
-/// Running first and second moments of the feature vectors, and the Normalizer they give - ONE definition of the
-/// statistics (and of the spread's floor) for every way a normaliser is measured.
-const Moments = struct {
-    sum: []f64,
-    squares: []f64,
-    count: usize = 0,
-
-    fn init(gpa: Allocator, features: usize) !Moments {
-        const sum: []f64 = try gpa.alloc(f64, features);
-        errdefer gpa.free(sum);
-        const squares: []f64 = try gpa.alloc(f64, features);
-        @memset(sum, 0.0);
-        @memset(squares, 0.0);
-        return .{ .sum = sum, .squares = squares };
-    }
-
-    fn deinit(self: *Moments, gpa: Allocator) void {
-        gpa.free(self.squares);
-        gpa.free(self.sum);
-    }
-
-    fn add(self: *Moments, raw: []const f32) void {
-        for (raw, self.sum, self.squares) |x, *s, *q| {
-            s.* += x;
-            q.* += @as(f64, x) * x;
-        }
-        self.count += 1;
-    }
-
-    /// Mean and spread, spreads floored so a feature that never moves does not divide by nothing. The two slices
-    /// are `owned`'s.
-    fn normalizer(self: Moments, owned: Allocator) !Normalizer {
-        if (self.count == 0) {
-            return error.NoData;
-        }
-        const f: usize = self.sum.len;
-        const mean: []f32 = try owned.alloc(f32, f);
-        errdefer owned.free(mean);
-        const spread: []f32 = try owned.alloc(f32, f);
-        const n: f64 = @floatFromInt(self.count);
-        for (mean, spread, self.sum, self.squares) |*mu, *sigma, s, q| {
-            const average: f64 = s / n;
-            mu.* = @floatCast(average);
-            sigma.* = @floatCast(@max(@sqrt(@max(q / n - average * average, 0.0)), 1.0e-3));
-        }
-        return .{ .mean = mean, .spread = spread };
-    }
-};
-
-/// Mean and spread of every feature over everything the replay holds, spreads floored so a feature
-/// that never moves does not divide by nothing. The caller owns the two slices it comes back with.
-///
-/// Public because the GPU learner needs the same statistics without building a CPU world model to get
-/// them. The paper measures them from the reference clips instead: `measureClipNormalizer`.
-pub fn measureNormalizer(owned: Allocator, fleet: *track.Fleet) !Normalizer {
-    var data: rbt.Data = try rbt.Data.init(owned, fleet.m);
-    defer data.deinit();
-    var state: track.State = try track.State.init(owned, fleet.m.nbody);
-    defer state.deinit(owned);
-    const f: usize = track.localSize(fleet.m.nbody);
-    const raw: []f32 = try owned.alloc(f32, f);
-    defer owned.free(raw);
-    var moments: Moments = try .init(owned, f);
-    defer moments.deinit(owned);
-    for (0..fleet.options.envs) |env| {
-        const written: u64 = fleet.replay.written[env];
-        const oldest: u64 = written -| @as(u64, @intCast(fleet.replay.capacity));
-        var index: u64 = oldest;
-        while (index < written) : (index += 1) {
-            fleet.stateAt(env, index, &data, &state);
-            track.local(state, fleet.root, raw);
-            moments.add(raw);
-        }
-    }
-    return moments.normalizer(owned);
-}
-
-/// The normaliser the PAPER uses (plan F4): measured from the REFERENCE - every frame of every clip, posed exactly
-/// as the fleet poses a reference (`robot_track.resetToFrame`: the pose, and the velocity by backward difference),
-/// in the same local features. The motion the character is meant to be in, so a normalised feature says "how far
-/// from typical dancing", not "from typical falling" - and it is fixed before the first step, whatever a warm-up
-/// happened to do. The caller owns the two slices.
-pub fn measureClipNormalizer(
-    owned: Allocator,
-    m: *rbt.Model,
-    clips: []const *const dance.Clip,
-) !Normalizer {
-    var data: rbt.Data = try rbt.Data.init(owned, m);
-    defer data.deinit();
-    var state: track.State = try track.State.init(owned, m.nbody);
-    defer state.deinit(owned);
-    const f: usize = track.localSize(m.nbody);
-    const raw: []f32 = try owned.alloc(f32, f);
-    defer owned.free(raw);
-    var moments: Moments = try .init(owned, f);
-    defer moments.deinit(owned);
-    const root: usize = track.rootBody(m);
-    for (clips) |clip| {
-        // Frame 0 has no frame before it to difference against; `resetToFrame` starts at 1 for the same reason.
-        for (1..clip.frame_count) |frame| {
-            track.resetToFrame(m, &data, clip, frame);
-            track.stateOf(m, &data, &state);
-            track.local(state, root, raw);
-            moments.add(raw);
-        }
-    }
-    return moments.normalizer(owned);
-}
-
-fn filled(
-    owned: Allocator,
-    shape: []const usize,
-    value: f32,
-) !Tensor {
-    const t: Tensor = try Tensor.alloc(owned, shape);
-    @memset(t.data, value);
-    return t;
-}
-
 const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
 
 pub const LearnerOptions = struct {
     hidden: usize = 256,
@@ -618,17 +627,70 @@ pub const LearnerOptions = struct {
     /// action the servo received, which is what the replay records. From rest at an episode's first step.
     /// 1: no filter (as before; the graph then has no filter ops at all).
     filter: f32 = 1.0,
+    /// THE POLICY SEES WHAT IT IS APPLYING (plan A1). With the filter on, the same ask means different things from
+    /// different places: asking for 1.0 while 0.9 is applied is a nudge, the same 1.0 from rest is a shove - so what
+    /// to ask depends on what is already being applied, and a policy that cannot see it is blind to half of its own
+    /// control state (DReCon's observation carries it). On: the action being applied BEFORE a decision - the
+    /// filter's state, what `decideInto`'s slot holds, rest when an episode opens - is a third input to the first
+    /// layer, read by a block of its own (`applied_block`, actions x hidden) that starts at ZERO, so the policy starts
+    /// out exactly as the one that cannot see it and learns to read the input as the gradient arrives. In raw action
+    /// units, like the policy's output - no normaliser. Off: the seven tensors of before, which the GPU kit mirrors.
+    sees_applied: bool = false,
     /// TEMPORAL SMOOTHNESS (CAPS: Mysore et al., 2021): the penalty on how far the policy's action moves from one
     /// step of a window to the next, `w_smooth * |a_k - a_(k-1)|^2`. A policy trained through a world model can
     /// learn outputs that swing wildly with small changes of state - on a character, every freedom lurching each
     /// frame, a body that looks like it is exploding. Zero (off) by default.
     w_smooth: f32 = 0.0,
+    /// TWO WORLD MODELS (plan I1b - Simon's idea). A second model is trained on the same replay from a different
+    /// initialisation (and, through its own random stream, on different batches), and the policy's rollouts step
+    /// through the AVERAGE of the two. Where the data pins them down the two agree; where the policy wanders off
+    /// the data nothing pins them, so they drift apart - which makes their disagreement a map of exactly where the
+    /// model cannot be trusted, and that is where a policy exploits it (B1's exploitation ~100). Off: one model,
+    /// the learner exactly as before.
+    twin_world: bool = false,
+    /// The price on the twins' disagreement at every step of a rollout, `w_disagree * |z1 - z2|^2` (per feature,
+    /// like the tracking term): a policy pays for steering where the two models part ways, so the gradient pulls it
+    /// back toward states they agree on, and it knocks nothing the models know well - where they agree it costs
+    /// nothing at all. Needs `twin_world`.
+    w_disagree: f32 = 0.0,
+    /// The twin's seed. Null: the first model's plus one. The first model's own seed makes an exact copy - two
+    /// identical models, which agree to the bit: a test's known answer.
+    twin_seed: ?u64 = null,
     seed: u64 = 1,
     /// Where the noise inside the training rollouts comes from: the learner's own random stream by
     /// default; given a function, `noise(update, step, row, action)`. That is how a GPU version, drawing
     /// its noise from a hash (the kit's `latNoise`), is compared with this one step for step.
     noise: ?*const fn (update: u32, step: u32, row: u32, action: u32) f32 = null,
     world: WorldOptions = .{},
+
+    /// What is wrong with these options, or null when nothing is: ONE definition of a learner's valid settings.
+    /// `Learner.init` asserts it, and a tool that takes settings from outside (the bench) refuses with it, in words,
+    /// before building anything - because a stripped assert that only logs lets a bad setting RUN: a filter of 0
+    /// freezes every action at rest, and the run then reads exactly like the servo alone, as if the change did
+    /// nothing. Written as `!(x > lo)` so a NaN fails too.
+    pub fn problem(self: LearnerOptions) ?[]const u8 {
+        if (!(self.filter > 0.0 and self.filter <= 1.0)) {
+            return "the filter is not in (0, 1]";
+        }
+        if (self.decide_every < 1) {
+            return "decide_every is under 1";
+        }
+        if (!(self.sigma >= 0.0)) {
+            return "sigma is negative";
+        }
+        if (!(self.w_disagree >= 0.0)) {
+            return "w_disagree is negative";
+        }
+        if (self.w_disagree > 0.0 and !self.twin_world) {
+            return "w_disagree prices a disagreement, and without twin_world there is only one model";
+        }
+        const sized: bool = self.hidden > 0 and self.window > 0 and self.batch > 0;
+        const world_sized: bool = self.world.hidden > 0 and self.world.steps > 0 and self.world.batch > 0;
+        if (!sized or !world_sized) {
+            return "a width, window or batch is zero";
+        }
+        return null;
+    }
 };
 
 /// Plan F2's numbers (`Learner.diagnose`), all mean squared distances per feature, in normalised units, averaged
@@ -681,8 +743,71 @@ pub const InModel = struct {
     action: f32,
 };
 
+/// What the policy is applying, for one character (A1): the first layer's block for it (actions x hidden) and the
+/// action itself. One value, so the row form cannot be handed one without the other either.
+pub const AppliedRow = struct {
+    weights: Tensor,
+    action: []const f32,
+};
+
+/// The policy's raw action for one character, from its parameters alone - the body of
+/// `Learner.policyRow`, free-standing so the GPU's version is checked against the very code the CPU
+/// learner acts with. The first layer sums the state and goal terms INTERLEAVED, one input index at a
+/// time; the kit's stacked layer sums the goal block and then the state block, so the two agree to
+/// rounding, not to the bit. `applied` (A1): the action being applied, through its own block - summed
+/// after the state and goal, so without it this is exactly the same sum, stopped one loop earlier.
+pub fn policyWith(
+    params: [7]Tensor,
+    hidden1: []f32,
+    hidden2: []f32,
+    z: []const f32,
+    goal: []const f32,
+    applied: ?AppliedRow,
+    out: []f32,
+) void {
+    const h: usize = hidden1.len;
+    const actions: usize = out.len;
+    const p = params;
+    if (applied) |seen| {
+        const one_per_action: bool = seen.action.len == actions;
+        const block_fits: bool = seen.weights.data.len == actions * h;
+        assertf(one_per_action and block_fits, @src(), "applied block of {d} for {d} numbers; want {d} x {d}", .{
+            seen.weights.data.len,
+            seen.action.len,
+            actions,
+            h,
+        });
+    }
+    for (0..h) |j| {
+        var sum: f32 = p[2].data[j];
+        for (z, goal, 0..) |x, y, i| {
+            sum += x * p[0].data[i * h + j] + y * p[1].data[i * h + j];
+        }
+        if (applied) |seen| {
+            for (seen.action, 0..) |x, i| {
+                sum += x * seen.weights.data[i * h + j];
+            }
+        }
+        hidden1[j] = zm.tanh(sum);
+    }
+    for (0..h) |j| {
+        var sum: f32 = p[4].data[j];
+        for (hidden1, 0..) |x, i| {
+            sum += x * p[3].data[i * h + j];
+        }
+        hidden2[j] = zm.tanh(sum);
+    }
+    for (out, 0..) |*o, j| {
+        var sum: f32 = p[6].data[j];
+        for (hidden2, 0..) |x, i| {
+            sum += x * p[5].data[i * actions + j];
+        }
+        o.* = sum;
+    }
+}
+
 pub const Learner = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     gpa: Allocator,
     options: LearnerOptions,
     fleet: *track.Fleet,
@@ -691,11 +816,22 @@ pub const Learner = struct {
     references: usize,
     actions: usize,
     /// The policy: [features of the character, features of the reference] -> hidden -> hidden ->
-    /// raw action. The first layer split in two (the concat-free trick again).
+    /// raw action. The first layer split in two (the concat-free trick again). With `sees_applied`,
+    /// the first layer reads a third input through `applied_block`; these seven stay exactly the
+    /// layout the GPU kit mirrors either way.
     params: [7]Tensor,
+    /// Plan A1: the first layer's block for the action being applied, with everything that trains it
+    /// - or null, when the policy does not see that action (`LearnerOptions.sees_applied`).
+    applied_block: ?AppliedBlock,
     graph: Graph,
     vars: [7]Var,
     world_vars: [8]Var,
+    /// The second world model (plan I1b), or null. Trained beside the first (`trainWorld`), stepped beside it in
+    /// every rollout - on the graph through `twin_vars`, row by row through `modelStepRow` - the two averaged.
+    twin: ?*LatentWorld,
+    twin_vars: [8]Var,
+    /// Scratch for stepping the twin row by row (empty without one).
+    z_twin: []f32,
     start: Var,
     goals: []Var,
     refs: []Var,
@@ -706,7 +842,7 @@ pub const Learner = struct {
     applied_start: Var,
     loss: Var,
     adam: gym.AdamSet,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     /// Policy updates so far - which update's noise to draw, when `options.noise` is given.
     updates: u32,
     // Scratch for acting and for building windows.
@@ -728,11 +864,15 @@ pub const Learner = struct {
     /// Build the learner on a fleet whose replay already holds some data (the world model's
     /// normaliser is measured from it).
     pub fn init(gpa: Allocator, fleet: *track.Fleet, options: LearnerOptions) !*Learner {
-        // The action path's settings, refused when they are nonsense rather than quietly bent: a filter of 0 would
-        // freeze every action at rest - the policy could never move the character, and nothing would say so.
-        const filter: f32 = options.filter;
-        assertf(filter > 0.0 and filter <= 1.0, @src(), "filter {d} is not in (0, 1]", .{filter});
-        assertf(options.decide_every >= 1, @src(), "decide_every must be at least 1", .{});
+        // Settings refused when they are nonsense rather than quietly bent (`LearnerOptions.problem`, the one
+        // definition): a filter of 0 would freeze every action at rest - the policy could never move the character,
+        // and nothing would say so.
+        const why: []const u8 = options.problem() orelse "";
+        assertf(why.len == 0, @src(), "learner options refused: {s} (filter {d}, decide_every {d})", .{
+            why,
+            options.filter,
+            options.decide_every,
+        });
         const self: *Learner = try gpa.create(Learner);
         errdefer gpa.destroy(self);
         // whole-init-first: the whole struct first - defaults applied, every field named.
@@ -746,9 +886,13 @@ pub const Learner = struct {
             .references = undefined,
             .actions = undefined,
             .params = undefined,
+            .applied_block = undefined,
             .graph = undefined,
             .vars = undefined,
             .world_vars = undefined,
+            .twin = undefined,
+            .twin_vars = undefined,
+            .z_twin = undefined,
             .start = undefined,
             .goals = undefined,
             .refs = undefined,
@@ -770,7 +914,7 @@ pub const Learner = struct {
             .hidden2 = undefined,
             .fleet_actions = undefined,
         };
-        self.arena = .init(gpa);
+        self.arena = ArenaAllocator.init(gpa);
         errdefer self.arena.deinit();
         const owned: Allocator = self.arena.allocator();
         const m: *rbt.Model = fleet.m;
@@ -779,6 +923,15 @@ pub const Learner = struct {
         self.fleet = fleet;
         self.world = try LatentWorld.init(gpa, fleet, options.world);
         errdefer self.world.deinit(gpa);
+        // The twin (I1b): the same options but its seed. Its normaliser is measured from the same replay, so the two
+        // speak the same normalised units - which is what makes their average and their distance mean anything.
+        self.twin = null;
+        if (options.twin_world) {
+            var twin_options: WorldOptions = options.world;
+            twin_options.seed = options.twin_seed orelse options.world.seed +% 1;
+            self.twin = try LatentWorld.init(gpa, fleet, twin_options);
+        }
+        errdefer if (self.twin) |twin| twin.deinit(gpa);
         const f: usize = self.world.features;
         const r: usize = self.world.references;
         const a: usize = self.world.actions;
@@ -786,7 +939,7 @@ pub const Learner = struct {
         self.features = f;
         self.references = r;
         self.actions = a;
-        self.rng = .init(options.seed);
+        self.rng = Random.DefaultPrng.init(options.seed);
         // Set here, not by a field default: the learner is made by `gpa.create`, whose memory is
         // uninitialised - a default on the field would never be applied.
         self.updates = 0;
@@ -796,14 +949,30 @@ pub const Learner = struct {
         self.raw = try owned.alloc(f32, f);
         self.z_sim = try owned.alloc(f32, f);
         self.z_ref = try owned.alloc(f32, f);
+        self.z_twin = try owned.alloc(f32, if (self.twin != null) f else 0);
         self.out = try owned.alloc(f32, a);
         self.hidden1 = try owned.alloc(f32, h);
         self.hidden2 = try owned.alloc(f32, h);
         self.fleet_actions = try owned.alloc(f32, fleet.options.envs * a);
+        // Each character's slot starts as what it was LAST APPLYING - its replay's newest record, when it is mid-
+        // episode (a warm-up drove it before this learner existed) - and at rest otherwise, as every episode opens.
+        // Never left undefined: before this learner writes a slot once, it is held on a clock's odd steps, blended
+        // into by the filter, and read by a policy that sees what it applies. From the replay, too, so a window's
+        // starting state (`appliedBefore`) and what collection really applied agree at the hand-over.
+        for (0..fleet.options.envs) |env| {
+            const slot: []f32 = self.fleet_actions[env * a ..][0..a];
+            const written: u64 = fleet.replay.written[env];
+            const mid_episode: bool = fleet.steps[env] > 0 and written > 0;
+            if (mid_episode) {
+                @memcpy(slot, fleet.replay.actionAt(env, written - 1));
+            } else {
+                @memset(slot, 0.0);
+            }
+        }
 
         // The policy's parameters: Xavier for the tanh layers, and a near-zero output layer, so an
         // untrained policy is the servo alone - the same starting point PPO's residual policy has.
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         const shapes = [7][2]usize{
             .{ f, h }, .{ f, h }, .{ 1, h }, // first layer: the character, the reference, bias
             .{ h, h }, .{ 1, h }, // second layer
@@ -826,7 +995,7 @@ pub const Learner = struct {
         // model predicting the consequences - through the world model's OWN tensors.
         const b: usize = options.batch;
         const steps: usize = options.window;
-        self.graph = .init(owned);
+        self.graph = Graph.init(owned);
         self.graph.useScratchAllocator(gpa);
         const g: *Graph = &self.graph;
         for (&self.vars, self.params) |*v, p| {
@@ -835,8 +1004,28 @@ pub const Learner = struct {
         for (&self.world_vars, self.world.params) |*v, p| {
             v.* = try g.parameter(p);
         }
+        if (self.twin) |twin| {
+            for (&self.twin_vars, twin.params) |*v, p| {
+                v.* = try g.parameter(p);
+            }
+        }
+        // A1's block, when the policy sees what it applies: ZERO, so the policy starts exactly as the one that
+        // cannot see it - and made after the seven, from no random numbers at all, so the seven (and the random
+        // stream behind them) come out bit for bit as a learner without the option makes them.
+        self.applied_block = null;
+        if (options.sees_applied) {
+            const weights: Tensor = try filled(owned, &.{ a, h }, 0.0);
+            self.applied_block = .{
+                .weights = weights,
+                .on_graph = try g.parameter(weights),
+                .adam = try gym.AdamSet.init(owned, &.{weights}),
+            };
+        }
         const ones: Var = try g.constant(try filled(owned, &.{ b, 1 }, 1.0));
         const no_action: Var = try g.constant(try filled(owned, &.{ b, a }, 0.0));
+        // The twins' gap is priced against zero - made only when it is priced, so no other graph changes by a node.
+        const pricing_gap: bool = self.twin != null and options.w_disagree > 0.0;
+        const no_gap: ?Var = if (pricing_gap) try g.constant(try filled(owned, &.{ b, f }, 0.0)) else null;
         self.start = try g.constant(try filled(owned, &.{ b, f }, 0.0));
         self.goals = try owned.alloc(Var, steps + 1);
         self.refs = try owned.alloc(Var, steps);
@@ -859,8 +1048,15 @@ pub const Learner = struct {
             // A DECISION: the policy sees where the reference is going - the goal this step is scored against
             // (SuperTrack's Local(K_{i+1})), not where it was. Between decisions the same noisy action is applied
             // again (the clock, F4e) - the same Var, so its gradient collects every step it acted on.
+            // A1: when it sees what it is applying, that is `applied` as it stands BEFORE this decision - the
+            // filter's state the decision is about to be blended into. A Var like any other, so the gradient also
+            // runs back through it to the earlier decisions that made it.
+            const seen: ?AppliedInput = if (self.applied_block) |block|
+                .{ .weights = block.on_graph, .action = applied }
+            else
+                null;
             const raw: Var = if (deciding)
-                try policyOnGraph(g, self.vars, z, self.goals[k + 1], ones)
+                try policyOnGraph(g, self.vars, z, self.goals[k + 1], seen, ones)
             else
                 previous.?;
             // What the fleet records, and so what the world model learned from: the action APPLIED - the raw action
@@ -875,8 +1071,27 @@ pub const Learner = struct {
                     try g.add(try g.scale(noisy, options.filter), try g.scale(applied, 1.0 - options.filter));
             }
             self.step_actions[k] = applied;
-            z = try LatentWorld.step(g, self.world_vars, z, self.refs[k], applied, ones);
+            const predicted: Var = try LatentWorld.step(g, self.world_vars, z, self.refs[k], applied, ones);
+            // With a twin (I1b): both models step from the SAME state and the rollout continues from their average;
+            // their gap is priced when `w_disagree` is on. The gap is written `p + (-o)` so its gradient reaches BOTH
+            // predictions - `mseLoss` gives none to its target, so `mseLoss(p, o)` would only ever pull one of them.
+            var disagreement: ?Var = null;
+            if (self.twin != null) {
+                const other: Var = try LatentWorld.step(g, self.twin_vars, z, self.refs[k], applied, ones);
+                z = try g.scale(try g.add(predicted, other), 0.5);
+                if (no_gap) |zero| {
+                    const gap: Var = try g.add(predicted, try g.scale(other, -1.0));
+                    disagreement = try g.scale(try g.mseLoss(gap, zero), options.w_disagree);
+                }
+            } else {
+                z = predicted;
+            }
             var term: Var = try g.mseLoss(z, self.goals[k + 1]);
+            // The twins' disagreement is priced on EVERY step, held or not: it is about where the state has gone,
+            // and a held action steers it as much as a fresh one.
+            if (disagreement) |price| {
+                term = try g.add(term, price);
+            }
             // The penalties are on DECISIONS: a held step is not a second choice to price.
             if (!deciding) {
                 total = if (total) |t| try g.add(t, term) else term;
@@ -896,7 +1111,7 @@ pub const Learner = struct {
             total = if (total) |t| try g.add(t, term) else term;
         }
         self.loss = try g.scale(total.?, 1.0 / float(steps));
-        self.adam = try .init(owned, &self.params);
+        self.adam = try gym.AdamSet.init(owned, &self.params);
         return self;
     }
 
@@ -908,13 +1123,86 @@ pub const Learner = struct {
         self.graph.deinitScratch();
         self.ref_data.deinit();
         self.world.deinit(gpa);
+        if (self.twin) |twin| {
+            twin.deinit(gpa);
+        }
         self.arena.deinit();
         gpa.destroy(self);
+    }
+
+    /// One step of the model the policy trains through, row by row: the world model's - or, with a twin (I1b), the
+    /// AVERAGE of the two, stepped from the same state (`(p + o) * 0.5`, the graph's order to the bit). Every
+    /// row-by-row rollout goes through here - `modelLoss`, `diagnose` - so the yardsticks measure the model the
+    /// policy is actually trained against.
+    pub fn modelStepRow(
+        self: *Learner,
+        z: []f32,
+        ref: []const f32,
+        action: []const f32,
+    ) void {
+        if (self.twin) |twin| {
+            @memcpy(self.z_twin, z);
+            twin.stepRow(self.z_twin, ref, action);
+            self.world.stepRow(z, ref, action);
+            for (z, self.z_twin) |*x, y| {
+                x.* = (x.* + y) * 0.5;
+            }
+            return;
+        }
+        self.world.stepRow(z, ref, action);
+    }
+
+    /// One training step of every world model - the first, and the twin when there is one (each on its own
+    /// batches, from its own stream). The loss is the first model's, or the pair's mean. Null until the replay can
+    /// supply windows.
+    pub fn trainWorld(self: *Learner, fleet: *track.Fleet) !?f32 {
+        const first: f32 = (try self.world.trainStep(fleet)) orelse return null;
+        const twin: *LatentWorld = self.twin orelse return first;
+        const second: f32 = (try twin.trainStep(fleet)) orelse return first;
+        return (first + second) * 0.5;
+    }
+
+    /// Plan A1: the first layer's block for the action being applied (actions x hidden), its Var on the training
+    /// graph, and its own Adam moments. One optional value, so the block never exists without what trains it - and
+    /// the seven tensors' Adam, which the GPU kit mirrors, stays exactly what it was.
+    const AppliedBlock = struct {
+        weights: Tensor,
+        on_graph: Var,
+        adam: gym.AdamSet,
+    };
+
+    /// What the policy is applying, on a graph (A1): the first layer's block for it, and the action itself. One
+    /// value, so a graph cannot be handed the input without the weights that read it, or the other way round.
+    pub const AppliedInput = struct {
+        weights: Var,
+        action: Var,
+    };
+
+    /// ONE Adam step on everything the policy trains, from the gradients on `g`: the seven layers, then A1's block
+    /// when there is one. `layers` and `block_on_graph` are those tensors' Vars on `g` - the training graph's or the
+    /// cloning graph's. Every policy update comes through here, so the block cannot be left out of one, and its
+    /// Adam counts steps in lockstep with the seven's (the two sets are then one Adam, split by tensor).
+    fn stepAdam(
+        self: *Learner,
+        g: *Graph,
+        layers: [7]Var,
+        block_on_graph: ?Var,
+    ) !void {
+        try self.adam.apply(g, &self.params, &layers, self.options.rate);
+        if (self.applied_block) |*block| {
+            assertf(block_on_graph != null, @src(), "the policy sees what it applies, but this graph has no Var " ++
+                "for the block that reads it", .{});
+            try block.adam.apply(g, &.{block.weights}, &.{block_on_graph.?}, self.options.rate);
+        }
+        self.updates += 1;
     }
 
     const Clone = struct {
         graph: Graph,
         vars: [7]Var,
+        /// A1: the block's Var on this graph and, per row, the action applied before the recorded step - when the
+        /// policy sees it, so a cloned policy is the same function the learner acts with.
+        applied: ?AppliedInput,
         z: Var,
         goal: Var,
         target: Var,
@@ -934,6 +1222,23 @@ pub const Learner = struct {
         if (steps.len != self.options.batch) {
             return error.WrongBatch;
         }
+        // Cloning regresses the policy's RAW output on the RECORDED action. That is the same quantity only when
+        // every recorded step is a decision (no clock) and nothing blends a decision into what was already applied
+        // (no filter). With either, a record holds a held or a blended action, and the policy would learn to ask
+        // for what the filter delivers - asked again, it would deliver something else.
+        const records_are_raw: bool = self.options.filter == 1.0 and self.options.decide_every == 1;
+        if (!records_are_raw) {
+            return error.CloningNeedsRawActions;
+        }
+        // A policy that sees what it applies is told, for each step, what was applied before it: refuse a step
+        // for which the replay cannot say - checked before anything is written into the graph.
+        if (self.applied_block != null) {
+            for (steps) |step| {
+                if (!appliedKnown(self.fleet, step.env, step.index)) {
+                    return error.UnknownAppliedAction;
+                }
+            }
+        }
         if (self.clone == null) {
             try self.buildClone();
         }
@@ -950,11 +1255,20 @@ pub const Learner = struct {
                 self.goalAt(step.env, step.index + 1, goal);
             }
             @memcpy(g.valueOf(c.target).data[row * a ..][0..a], self.fleet.replay.actionAt(step.env, step.index));
+            // A1: what was being applied when the step was recorded - the replay's action before it, or rest on an
+            // episode's first step - exactly what the policy would have been told there (known: checked above).
+            if (c.applied) |seen| {
+                const applied_row: []f32 = g.valueOf(seen.action).data[row * a ..][0..a];
+                const known: bool = appliedBefore(self.fleet, step.env, step.index, applied_row);
+                assertf(known, @src(), "cloning step {d} of env {d}: applied action unknown", .{
+                    step.index,
+                    step.env,
+                });
+            }
         }
         try g.recompute();
         try g.backward(c.loss);
-        try self.adam.apply(g, &self.params, &c.vars, self.options.rate);
-        self.updates += 1;
+        try self.stepAdam(g, c.vars, if (c.applied) |seen| seen.weights else null);
         return g.valueOf(c.loss).data[0];
     }
 
@@ -964,8 +1278,9 @@ pub const Learner = struct {
         const f: usize = self.features;
         const a: usize = self.actions;
         var c: Clone = .{
-            .graph = .init(owned),
+            .graph = Graph.init(owned),
             .vars = undefined,
+            .applied = null,
             .z = undefined,
             .goal = undefined,
             .target = undefined,
@@ -980,32 +1295,56 @@ pub const Learner = struct {
         c.z = try g.constant(try filled(owned, &.{ b, f }, 0.0));
         c.goal = try g.constant(try filled(owned, &.{ b, f }, 0.0));
         c.target = try g.constant(try filled(owned, &.{ b, a }, 0.0));
-        const raw: Var = try policyOnGraph(g, c.vars, c.z, c.goal, ones);
+        // A1: the block's weights on this graph too (the same tensor - the one Adam steps), and the input it reads.
+        if (self.applied_block) |block| {
+            c.applied = .{
+                .weights = try g.parameter(block.weights),
+                .action = try g.constant(try filled(owned, &.{ b, a }, 0.0)),
+            };
+        }
+        const raw: Var = try policyOnGraph(g, c.vars, c.z, c.goal, c.applied, ones);
         c.loss = try g.mseLoss(raw, c.target);
         self.clone = c;
     }
 
-    /// The policy on a graph: [state, goal] -> raw action. Public so the GPU version's gradients can be
-    /// checked against a graph built from this very function.
+    /// The policy on a graph: [state, goal] -> raw action - and, when `applied` is given (A1), the action being
+    /// applied as a third input, through its own block of the first layer. Public so the GPU version's gradients
+    /// can be checked against a graph built from this very function.
     pub fn policyOnGraph(
         g: *Graph,
         v: [7]Var,
         z: Var,
         goal: Var,
+        applied: ?AppliedInput,
         ones: Var,
     ) !Var {
-        const into: Var = try g.add(
+        var into: Var = try g.add(
             try g.add(try g.matmul(z, v[0]), try g.matmul(goal, v[1])),
             try g.matmul(ones, v[2]),
         );
+        if (applied) |seen| {
+            into = try g.add(into, try g.matmul(seen.action, seen.weights));
+        }
         const h1: Var = try g.tanh(into);
         const h2: Var = try g.tanh(try g.add(try g.matmul(h1, v[3]), try g.matmul(ones, v[4])));
         return g.add(try g.matmul(h2, v[5]), try g.matmul(ones, v[6]));
     }
 
-    /// The policy's raw output for one character, outside the graph.
-    fn policyRow(self: *Learner, z: []const f32, goal: []const f32, out: []f32) void {
-        policyWith(self.params, self.hidden1, self.hidden2, z, goal, out);
+    /// The policy's raw output for one character, outside the graph. `applied` is what the character is applying
+    /// before this decision; the policy reads it only when it sees it (A1) - callers always pass it, so none of them
+    /// has to know which policy this is.
+    fn policyRow(
+        self: *Learner,
+        z: []const f32,
+        goal: []const f32,
+        applied: []const f32,
+        out: []f32,
+    ) void {
+        const seen: ?AppliedRow = if (self.applied_block) |block|
+            .{ .weights = block.weights, .action = applied }
+        else
+            null;
+        policyWith(self.params, self.hidden1, self.hidden2, z, goal, seen, out);
     }
 
     /// A character's live features and its reference's, both normalised.
@@ -1044,8 +1383,9 @@ pub const Learner = struct {
 
     /// ONE DECISION for `env` of `fleet` (the clock, F4e, says when): the policy's action for its live state, plus
     /// `noise_scale * sigma` exploration, blended by Simon's filter (F6) into `slot` - the action this environment
-    /// has been applying, and will apply until the next decision; from REST at an episode's first step. Collecting,
-    /// the judge and `diagnose` all decide through here, so they cannot disagree about what a decision is.
+    /// has been applying, and will apply until the next decision; from REST at an episode's first step. When the
+    /// policy sees what it applies (A1), `slot` as it stands is also its third input. Collecting, the judge and
+    /// `diagnose` all decide through here, so they cannot disagree about what a decision is.
     fn decideInto(
         self: *Learner,
         fleet: *track.Fleet,
@@ -1053,12 +1393,17 @@ pub const Learner = struct {
         noise_scale: f32,
         slot: []f32,
     ) void {
+        // An episode opens from rest - reset BEFORE the policy reads the slot, so it is told it is applying nothing
+        // rather than whatever the last episode left there.
+        if (fleet.steps[env] == 0) {
+            @memset(slot, 0.0);
+        }
         self.liveFeaturesOf(fleet, env);
-        self.policyRow(self.z_sim, self.z_ref, self.out);
+        self.policyRow(self.z_sim, self.z_ref, slot, self.out);
         // No draw at all when there is no noise: judging must not consume the training's random stream, or a judged
         // run would train differently afterwards.
         if (noise_scale != 0.0) {
-            const random: std.Random = self.rng.random();
+            const random: Random = self.rng.random();
             const spread: f32 = noise_scale * self.options.sigma;
             for (self.out) |*o| {
                 o.* += spread * random.floatNorm(f32);
@@ -1070,24 +1415,88 @@ pub const Learner = struct {
                 o.* = 0.0;
             }
         }
-        if (fleet.steps[env] == 0) {
-            @memset(slot, 0.0);
-        }
         track.filterAction(self.options.filter, self.out, slot);
     }
 
-    /// The action APPLIED on the step before `first` in `env`'s replay - the filter's state a training window starts
-    /// from (F6) - or REST when that step is in another segment (a reset begins one; so does a shove, where DReCon's
-    /// filter would not reset - the first night has none) or has already left the ring.
-    fn appliedBefore(fleet: *const track.Fleet, env: usize, first: u64, out: []f32) void {
+    /// Whether the replay can say what was being APPLIED just before record `first` of `env` (`appliedBefore`):
+    /// always on an episode's first step (rest), otherwise only while the step before it is still in the ring. Never
+    /// for a record that is not a step of a rollout (`Replay.append`).
+    fn appliedKnown(fleet: *const track.Fleet, env: usize, first: u64) bool {
         const replay: track.Replay = fleet.replay;
+        const episode_step: u32 = replay.episodeStepAt(env, first) orelse return false;
+        if (episode_step == 0) {
+            return true;
+        }
         const oldest: u64 = replay.written[env] -| @as(u64, @intCast(replay.capacity));
-        const before_in_ring: bool = first > 0 and first - 1 >= oldest;
-        if (!before_in_ring or replay.segmentAt(env, first - 1) != replay.segmentAt(env, first)) {
+        return first > 0 and first - 1 >= oldest;
+    }
+
+    /// What was being APPLIED just before record `first` of `env` - the filter's state a training window or a cloned
+    /// step starts from (F6), and what a policy that sees it is told (A1) - into `out`; false when it is unknown:
+    ///   * REST on an episode's first step: every episode opens from rest (`decideInto` resets the slot);
+    ///   * otherwise the action recorded ONE STEP EARLIER - across a shove too, which ends a segment but not an
+    ///     episode, so the controller's filter carries straight through it;
+    ///   * UNKNOWN when that step has left the ring (a window starting at the oldest record of a full ring), or the
+    ///     record is not a step of a rollout at all. The state was real and is gone: rest would be a guess that
+    ///     looks like an answer, so `out` gets NaN - loud if anything reads it - and the caller draws another
+    ///     window (`drawWindow`) or refuses.
+    fn appliedBefore(fleet: *const track.Fleet, env: usize, first: u64, out: []f32) bool {
+        if (!appliedKnown(fleet, env, first)) {
+            @memset(out, nan(f32));
+            return false;
+        }
+        const replay: track.Replay = fleet.replay;
+        if (replay.episodeStepAt(env, first).? == 0) {
             @memset(out, 0.0);
+        } else {
+            @memcpy(out, replay.actionAt(env, first - 1));
+        }
+        return true;
+    }
+
+    /// Whether a window's starting filter state changes anything: a filter blends the first decision into it, and a
+    /// policy that sees what it applies reads it. With neither, the first decision replaces it whole (a window
+    /// always opens on a decision), so an unknown start costs nothing.
+    fn startStateMatters(self: *const Learner) bool {
+        return self.options.filter < 1.0 or self.applied_block != null;
+    }
+
+    /// A window for the policy: `Replay.sampleWindow`'s, drawn again while its starting filter state is unknown and
+    /// matters (`appliedKnown`, `startStateMatters`) - a window starting at the oldest record of a full ring, about
+    /// one draw in `capacity`. Null when nothing long enough is recorded yet, as `sampleWindow`. With no filter and a
+    /// blind policy it IS `sampleWindow`, draw for draw.
+    pub fn drawWindow(
+        self: *Learner,
+        random: Random,
+        steps: usize,
+    ) ?track.Replay.Window {
+        const fleet: *track.Fleet = self.fleet;
+        for (0..64) |_| {
+            const window: track.Replay.Window = fleet.replay.sampleWindow(random, steps) orelse return null;
+            const usable: bool = !self.startStateMatters() or appliedKnown(fleet, window.env, window.first);
+            if (usable) {
+                return window;
+            }
+        }
+        return null;
+    }
+
+    /// A window's starting filter state into `out`: `appliedBefore`, and where that is unknown - allowed only where
+    /// it cannot matter (asserted) - rest, a value that then changes nothing.
+    fn startStateInto(
+        self: *const Learner,
+        window: track.Replay.Window,
+        out: []f32,
+    ) void {
+        if (appliedBefore(self.fleet, window.env, window.first, out)) {
             return;
         }
-        @memcpy(out, replay.actionAt(env, first - 1));
+        assertf(!self.startStateMatters(), @src(), "the window at record {d} of env {d} starts from an applied " ++
+            "action that is unknown, and this learner reads it - draw windows with `drawWindow`", .{
+            window.first,
+            window.env,
+        });
+        @memset(out, 0.0);
     }
 
     /// The reference's normalised features at a recorded step's frame.
@@ -1120,13 +1529,12 @@ pub const Learner = struct {
     /// One policy update on `batch` windows of the replay: start on the real recorded state,
     /// then roll the policy through the model. Null until the replay can supply the windows.
     pub fn trainPolicy(self: *Learner) !?f32 {
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         // Sample and fill row by row, in that order: filling draws the rollout's noise from the same
         // random stream, so drawing every window first would reorder the draws - and silently change
         // every result measured with this learner.
         for (0..self.options.batch) |row| {
-            const window: track.Replay.Window =
-                self.fleet.replay.sampleWindow(random, self.options.window) orelse return null;
+            const window: track.Replay.Window = self.drawWindow(random, self.options.window) orelse return null;
             self.fillRow(row, window, random);
         }
         return try self.update();
@@ -1139,7 +1547,14 @@ pub const Learner = struct {
         if (windows.len != self.options.batch) {
             return error.WrongBatch;
         }
-        const random: std.Random = self.rng.random();
+        // Every window checked BEFORE any is filled: a refusal must not leave half a batch in the graph.
+        for (windows) |window| {
+            const usable: bool = !self.startStateMatters() or appliedKnown(self.fleet, window.env, window.first);
+            if (!usable) {
+                return error.UnknownAppliedAction;
+            }
+        }
+        const random: Random = self.rng.random();
         for (windows, 0..) |window, row| {
             self.fillRow(row, window, random);
         }
@@ -1152,7 +1567,7 @@ pub const Learner = struct {
         self: *Learner,
         row: usize,
         window: track.Replay.Window,
-        random: std.Random,
+        random: Random,
     ) void {
         const g: *Graph = &self.graph;
         const f: usize = self.features;
@@ -1160,7 +1575,7 @@ pub const Learner = struct {
         const a: usize = self.actions;
         const fleet: *track.Fleet = self.fleet;
         self.world.featuresAt(fleet, window.env, window.first, g.valueOf(self.start).data[row * f ..][0..f]);
-        appliedBefore(fleet, window.env, window.first, g.valueOf(self.applied_start).data[row * a ..][0..a]);
+        self.startStateInto(window, g.valueOf(self.applied_start).data[row * a ..][0..a]);
         for (0..self.options.window + 1) |k| {
             const index: u64 = window.first + k;
             self.goalAt(window.env, index, g.valueOf(self.goals[k]).data[row * f ..][0..f]);
@@ -1181,8 +1596,7 @@ pub const Learner = struct {
         const g: *Graph = &self.graph;
         try g.recompute();
         try g.backward(self.loss);
-        try self.adam.apply(g, &self.params, &self.vars, self.options.rate);
-        self.updates += 1;
+        try self.stepAdam(g, self.vars, if (self.applied_block) |block| block.on_graph else null);
         return g.valueOf(self.loss).data[0];
     }
 
@@ -1200,8 +1614,8 @@ pub const Learner = struct {
         use_policy: bool,
         horizon: usize,
     ) InModel {
-        var rng: std.Random.DefaultPrng = .init(seed);
-        const random: std.Random = rng.random();
+        var rng: Random.DefaultPrng = .init(seed);
+        const random: Random = rng.random();
         const f: usize = self.features;
         const fleet: *track.Fleet = self.fleet;
         const buffers: []f32 = self.gpa.alloc(f32, 2 * f + self.references + 2 * self.actions) catch
@@ -1217,9 +1631,9 @@ pub const Learner = struct {
         var magnitude: f32 = 0.0;
         var counted: usize = 0;
         for (0..windows) |_| {
-            const window: track.Replay.Window = fleet.replay.sampleWindow(random, horizon) orelse continue;
+            const window: track.Replay.Window = self.drawWindow(random, horizon) orelse continue;
             self.world.featuresAt(fleet, window.env, window.first, z);
-            appliedBefore(fleet, window.env, window.first, applied);
+            self.startStateInto(window, applied);
             for (0..horizon) |k| {
                 const index: u64 = window.first + k;
                 // The next goal: what the policy aims at, and what this step is scored against.
@@ -1228,7 +1642,7 @@ pub const Learner = struct {
                     // The clock (F4e): a decision every `decide_every` steps of the window, held in between -
                     // blended into what was applied by the filter (F6).
                     if (k % @max(self.options.decide_every, 1) == 0) {
-                        self.policyRow(z, goal, action);
+                        self.policyRow(z, goal, applied, action);
                         track.filterAction(self.options.filter, action, applied);
                     }
                     // Reported in radians: the fleet's scale is what turns an action into an offset.
@@ -1239,7 +1653,7 @@ pub const Learner = struct {
                     @memset(applied, 0.0);
                 }
                 self.world.referenceAt(fleet, window.env, index, ref);
-                self.world.stepRow(z, ref, applied);
+                self.modelStepRow(z, ref, applied);
                 var squared: f32 = 0.0;
                 for (z, goal) |x, y| {
                     squared += (x - y) * (x - y);
@@ -1386,15 +1800,15 @@ pub const Learner = struct {
                 const frame: u32 = @intCast(start + k);
                 self.goalOf(zero.fleet, 0, frame + 1, goal);
                 self.world.targetsOf(clip, frame, ref);
-                self.world.stepRow(z_c, ref, no_action);
-                self.world.stepRow(z_d, ref, actions_b[(s * horizon + k) * a ..][0..a]);
+                self.modelStepRow(z_c, ref, no_action);
+                self.modelStepRow(z_d, ref, actions_b[(s * horizon + k) * a ..][0..a]);
                 // The model's own closed loop keeps the clock too: a decision every `decide_every` steps from the
                 // start (the judge's fleet starts every episode at step 0), held in between.
                 if (k % @max(self.options.decide_every, 1) == 0) {
-                    self.policyRow(z_e, goal, action);
+                    self.policyRow(z_e, goal, applied_e, action);
                     track.filterAction(self.options.filter, action, applied_e);
                 }
-                self.world.stepRow(z_e, ref, applied_e);
+                self.modelStepRow(z_e, ref, applied_e);
                 const real_a: []const f32 = states_a[(s * horizon + k) * f ..][0..f];
                 const real_b: []const f32 = states_b[(s * horizon + k) * f ..][0..f];
                 out.real_zero += meanSquare(real_a, goal);
@@ -1442,45 +1856,6 @@ pub const Learner = struct {
     }
 };
 
-/// The policy's raw action for one character, from its parameters alone - the body of
-/// `Learner.policyRow`, free-standing so the GPU's version is checked against the very code the CPU
-/// learner acts with. The first layer sums the state and goal terms INTERLEAVED, one input index at a
-/// time; the kit's stacked layer sums the goal block and then the state block, so the two agree to
-/// rounding, not to the bit.
-pub fn policyWith(
-    params: [7]Tensor,
-    hidden1: []f32,
-    hidden2: []f32,
-    z: []const f32,
-    goal: []const f32,
-    out: []f32,
-) void {
-    const h: usize = hidden1.len;
-    const actions: usize = out.len;
-    const p = params;
-    for (0..h) |j| {
-        var sum: f32 = p[2].data[j];
-        for (z, goal, 0..) |x, y, i| {
-            sum += x * p[0].data[i * h + j] + y * p[1].data[i * h + j];
-        }
-        hidden1[j] = zm.tanh(sum);
-    }
-    for (0..h) |j| {
-        var sum: f32 = p[4].data[j];
-        for (hidden1, 0..) |x, i| {
-            sum += x * p[3].data[i * h + j];
-        }
-        hidden2[j] = zm.tanh(sum);
-    }
-    for (out, 0..) |*o, j| {
-        var sum: f32 = p[6].data[j];
-        for (hidden2, 0..) |x, i| {
-            sum += x * p[5].data[i * actions + j];
-        }
-        o.* = sum;
-    }
-}
-
 // -------- Tests: the learner --------
 
 const codecs = @import("codecs.zig");
@@ -1494,6 +1869,81 @@ const flex2_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex2.xm
 // honestly show - the mechanism works and its gain carries - not how far training can go; the GPU
 // version, with a real budget, answers that.
 
+fn readFile(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    const info: Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    errdefer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    return bytes;
+}
+
+/// The walk the SuperTrack tests train on, a fleet on it, and a first helping of data. The clip is
+/// loaded BAKED (`zig build clip-bake`: retargeted, filtered and lifted exactly as these tests once did
+/// at startup, so the same clip number for number) - a test spends its time learning, not on half a
+/// minute of inverse kinematics.
+const WalkSetup = struct {
+    gpa: Allocator,
+    doc: codecs.xml.Document,
+    robot: mjcf.Robot,
+    imported: robot_mjcf.Imported,
+    walk: dance.Clip,
+    fleet: *track.Fleet,
+
+    fn init(self: *WalkSetup, gpa: Allocator, io: Io, envs: usize) !void {
+        // whole-init-first: the whole struct first - defaults applied, every field named.
+        self.* = .{
+            .gpa = undefined,
+            .doc = undefined,
+            .robot = undefined,
+            .imported = undefined,
+            .walk = undefined,
+            .fleet = undefined,
+        };
+        self.gpa = gpa;
+        self.doc = try codecs.xml.parse(gpa, flex2_xml, null);
+        errdefer self.doc.deinit();
+        self.robot = try mjcf.readRobot(gpa, &self.doc);
+        errdefer self.robot.deinit();
+        var options: rbt.Options = .{
+            .timestep = 1.0 / 60.0,
+            .gravity = vec(0, 0, -9.81),
+            .max_contacts = 256,
+        };
+        options.solver.algorithm = .newton;
+        self.imported = try robot_mjcf.build(gpa, &self.robot, options);
+        errdefer self.imported.deinit();
+        const baked: []u8 = readFile(gpa, io, "assets/lafan1/walk1_subject2.zclip") catch return error.SkipZigTest;
+        defer gpa.free(baked);
+        self.walk = try dance.Clip.fromBytes(gpa, baked);
+        errdefer self.walk.deinit();
+        // The policy's authority: 0.3 rad of pose offset per unit of its output.
+        const fleet_options: track.Fleet.Options = .{ .envs = envs, .capacity = 256, .action_scale = 0.3 };
+        self.fleet = try track.Fleet.init(gpa, &self.imported.model, &.{&self.walk}, fleet_options);
+        errdefer self.fleet.deinit();
+        // A first helping of data - wide enough (0.1 of the authority) that the world model sees what an
+        // action DOES - for its normaliser and first steps.
+        const noise: []f32 = try gpa.alloc(f32, envs * track.actionSize(&self.imported.model));
+        defer gpa.free(noise);
+        var rng: Random.DefaultPrng = .init(5);
+        for (0..150) |_| {
+            for (noise) |*a| {
+                a.* = 0.1 * rng.random().floatNorm(f32);
+            }
+            _ = self.fleet.step(noise);
+        }
+    }
+
+    fn deinit(self: *WalkSetup) void {
+        self.fleet.deinit();
+        self.walk.deinit();
+        self.imported.deinit();
+        self.robot.deinit();
+        self.doc.deinit();
+    }
+};
+
 test "robot_track_st: past the window - the policy's gain carries beyond what it trained on" {
     // Trained through 8-step windows, judged over 24 - three windows long - inside the model and
     // against doing nothing, with the world model trained first and then left alone, so only the
@@ -1504,8 +1954,8 @@ test "robot_track_st: past the window - the policy's gain carries beyond what it
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: WalkSetup = undefined;
     try setup.init(gpa, threaded.io(), 8);
@@ -1555,8 +2005,8 @@ test "robot_track_st: the policy learns through the model, and is judged in the 
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: WalkSetup = undefined;
     try setup.init(gpa, threaded.io(), 8);
@@ -1610,89 +2060,14 @@ test "robot_track_st: the policy learns through the model, and is judged in the 
     try expect(in_model_policy.loss < in_model_zero.loss);
 }
 
-/// The walk the SuperTrack tests train on, a fleet on it, and a first helping of data. The clip is
-/// loaded BAKED (`zig build clip-bake`: retargeted, filtered and lifted exactly as these tests once did
-/// at startup, so the same clip number for number) - a test spends its time learning, not on half a
-/// minute of inverse kinematics.
-const WalkSetup = struct {
-    gpa: Allocator,
-    doc: codecs.xml.Document,
-    robot: mjcf.Robot,
-    imported: robot_mjcf.Imported,
-    walk: dance.Clip,
-    fleet: *track.Fleet,
-
-    fn init(self: *WalkSetup, gpa: Allocator, io: std.Io, envs: usize) !void {
-        // whole-init-first: the whole struct first - defaults applied, every field named.
-        self.* = .{
-            .gpa = undefined,
-            .doc = undefined,
-            .robot = undefined,
-            .imported = undefined,
-            .walk = undefined,
-            .fleet = undefined,
-        };
-        self.gpa = gpa;
-        self.doc = try codecs.xml.parse(gpa, flex2_xml, null);
-        errdefer self.doc.deinit();
-        self.robot = try mjcf.readRobot(gpa, &self.doc);
-        errdefer self.robot.deinit();
-        var options: rbt.Options = .{
-            .timestep = 1.0 / 60.0,
-            .gravity = zm.vec(0, 0, -9.81),
-            .max_contacts = 256,
-        };
-        options.solver.algorithm = .newton;
-        self.imported = try robot_mjcf.build(gpa, &self.robot, options);
-        errdefer self.imported.deinit();
-        const baked: []u8 = readFile(gpa, io, "assets/lafan1/walk1_subject2.zclip") catch return error.SkipZigTest;
-        defer gpa.free(baked);
-        self.walk = try dance.Clip.fromBytes(gpa, baked);
-        errdefer self.walk.deinit();
-        // The policy's authority: 0.3 rad of pose offset per unit of its output.
-        const fleet_options: track.Fleet.Options = .{ .envs = envs, .capacity = 256, .action_scale = 0.3 };
-        self.fleet = try .init(gpa, &self.imported.model, &.{&self.walk}, fleet_options);
-        errdefer self.fleet.deinit();
-        // A first helping of data - wide enough (0.1 of the authority) that the world model sees what an
-        // action DOES - for its normaliser and first steps.
-        const noise: []f32 = try gpa.alloc(f32, envs * track.actionSize(&self.imported.model));
-        defer gpa.free(noise);
-        var rng: std.Random.DefaultPrng = .init(5);
-        for (0..150) |_| {
-            for (noise) |*a| {
-                a.* = 0.1 * rng.random().floatNorm(f32);
-            }
-            _ = self.fleet.step(noise);
-        }
-    }
-
-    fn deinit(self: *WalkSetup) void {
-        self.fleet.deinit();
-        self.walk.deinit();
-        self.imported.deinit();
-        self.robot.deinit();
-        self.doc.deinit();
-    }
-};
-
-fn readFile(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
-    defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
-    const bytes: []u8 = try gpa.alloc(u8, info.size);
-    errdefer gpa.free(bytes);
-    _ = try file.readPositionalAll(io, bytes, 0);
-    return bytes;
-}
-
 test "robot_latent: diagnose - a silent policy exploits nothing, the numbers repeat, training untouched" {
     // Plan F2's known answers. With every policy weight zero the policy's action is exactly zero, so the real
     // rollouts with and without it are the same trajectory, and so are the model's: the model promises nothing,
     // the simulator delivers nothing - exploitation EXACTLY 0, and following the policy's actions is following
     // zero. Two diagnoses are identical; a live policy's real rollout differs from the servo's; and diagnosing
     // borrows only scratch - the learner's own fleet is where it was.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: WalkSetup = undefined;
     setup.init(gpa, threaded.io(), 4) catch return error.SkipZigTest;
@@ -1717,7 +2092,7 @@ test "robot_latent: diagnose - a silent policy exploits nothing, the numbers rep
     try expect(std.meta.eql(live, again));
     try expect(live.compared_steps > 0);
     try expect(live.real_policy != live.real_zero); // a live policy acts
-    try expect(std.mem.eql(u32, fleet.frame, frames_before));
+    try expect(eql(u32, fleet.frame, frames_before));
     try expect(std.meta.eql(fleet.rng, fleet_rng_before));
 
     for (learner.params) |tensor| {
@@ -1734,8 +2109,8 @@ test "robot_latent: the clip's own normaliser makes its frames mean 0, spread 1"
     // Plan F4's known answer, exact by definition: a normaliser measured from a clip's frames, applied to those same
     // frames, gives every feature mean 0 and variance 1 - except features that never move, whose spread is floored
     // (they come out exactly 0). Measured twice, it is identical: nothing in it depends on a fleet's history.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: WalkSetup = undefined;
     setup.init(gpa, threaded.io(), 2) catch return error.SkipZigTest;
@@ -1748,12 +2123,12 @@ test "robot_latent: the clip's own normaliser makes its frames mean 0, spread 1"
     const again: Normalizer = try measureClipNormalizer(gpa, m, fleet.clips);
     defer gpa.free(again.mean);
     defer gpa.free(again.spread);
-    try expect(std.mem.eql(f32, norm.mean, again.mean) and std.mem.eql(f32, norm.spread, again.spread));
+    try expect(eql(f32, norm.mean, again.mean) and eql(f32, norm.spread, again.spread));
 
     const f: usize = track.localSize(m.nbody);
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
-    var state: track.State = try track.State.init(gpa, m.nbody);
+    var state: track.State = try .init(gpa, m.nbody);
     defer state.deinit(gpa);
     const raw: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(raw);
@@ -1789,8 +2164,8 @@ test "robot_latent: the policy's clock - decide on even steps, hold on odd ones,
     // training rollout: a held step applies the very same graph node as its decision (its gradient collects both
     // steps), and the next even step is a new one. The judge: asked on an odd step, the actor leaves the buffer as
     // it was - which is how the judge holds.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: WalkSetup = undefined;
     setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
@@ -1821,9 +2196,9 @@ test "robot_latent: the policy's clock - decide on even steps, hold on odd ones,
             const now: []const f32 = learner.fleet_actions[env * a ..][0..a];
             const then: []const f32 = before[env * a ..][0..a];
             if (steps_before[env] % 2 == 1) {
-                try expect(std.mem.eql(f32, now, then));
+                try expect(eql(f32, now, then));
                 held_checked += 1;
-            } else if (!std.mem.eql(f32, now, then)) {
+            } else if (!eql(f32, now, then)) {
                 decided_changed += 1;
             }
         }
@@ -1852,14 +2227,36 @@ test "robot_latent: the policy's clock - decide on even steps, hold on odd ones,
     }
 }
 
-test "robot_latent: the filter in the training graph equals the same rollout done row by row" {
-    // Plan F6's known answer. With noise off, the policy's training loss - built with tensors, the filter written as
-    // `filter * asked + (1 - filter) * applied` inside the graph - equals the same rollout done row by row outside
-    // it: `policyRow` at each decision, `track.filterAction`, the world model's `stepRow`, from the replay's action
-    // before the window (`appliedBefore`). Held steps (decide_every 2), the starting state, and every term of the
-    // loss - the state error each step, the action's price each decision - are in it.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+/// What the parity test varies: A1's input, and the twin world model with its price.
+const Variation = struct {
+    sees_applied: bool = false,
+    twin: bool = false,
+    w_disagree: f32 = 0.0,
+};
+
+/// Fills a weight tensor with values large enough that its input visibly moves the policy's output - A1's block
+/// (the learner starts it at zero) or the output layer (0.01 of Xavier at the start). A test's plant.
+fn plantBlock(weights: Tensor, seed: u64) void {
+    var rng: Random.DefaultPrng = .init(seed);
+    for (weights.data) |*w| {
+        w.* = 0.5 * rng.random().floatNorm(f32);
+    }
+}
+
+/// Plan F6's known answer, and A1's second. With noise off, the policy's training loss - built with tensors, the
+/// filter written as `filter * asked + (1 - filter) * applied` inside the graph - equals the same rollout done row by
+/// row outside it: `policyRow` at each decision, `track.filterAction`, the world model's `stepRow`, from the replay's
+/// action before the window (`appliedBefore`). Held steps (decide_every 2), the starting state, and every term of the
+/// loss - the state error each step, the action's price each decision - are in it, and so is the action APPLIED at
+/// every step, compared directly: through the loss alone, a wrong action barely registers. The output layer is
+/// planted for the same reason - at its starting 0.01 scale every action is tiny, and so is any mistake in one. With
+/// `sees_applied` the rows hand each decision the applied action as it stands before it, and the block is planted
+/// too: at its starting zero the equality would hold for a graph that never fed the input at all. With `twin` the
+/// rows step both world models from the same state, go on from their average, and add the squared gap `w_disagree`
+/// prices - where the graph does all three.
+fn expectGraphEqualsRows(variation: Variation) !void {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     var setup: WalkSetup = undefined;
     setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
@@ -1874,16 +2271,24 @@ test "robot_latent: the filter in the training graph equals the same rollout don
         .sigma = 0.0,
         .decide_every = 2,
         .filter = 0.2,
+        .sees_applied = variation.sees_applied,
+        .twin_world = variation.twin,
+        .w_disagree = variation.w_disagree,
         .world = .{ .hidden = 16, .steps = steps, .batch = batch },
     });
     defer learner.deinit();
     // Filtered, noisy actions into the replay - so windows start from a filter that is not at rest.
     learner.act(80, 1.0);
+    // Then weights under which every input moves the action (see above).
+    plantBlock(learner.params[5], 2);
+    if (learner.applied_block) |block| {
+        plantBlock(block.weights, 3);
+    }
 
-    var prng: std.Random.DefaultPrng = .init(99);
+    var prng: Random.DefaultPrng = .init(99);
     var windows: [batch]track.Replay.Window = undefined;
     for (&windows) |*window| {
-        window.* = fleet.replay.sampleWindow(prng.random(), steps) orelse return error.SkipZigTest;
+        window.* = learner.drawWindow(prng.random(), steps) orelse return error.SkipZigTest;
     }
     const f: usize = learner.features;
     const a: usize = learner.actions;
@@ -1892,45 +2297,81 @@ test "robot_latent: the filter in the training graph equals the same rollout don
     defer gpa.free(z);
     const applied: []f32 = try gpa.alloc(f32, batch * a);
     defer gpa.free(applied);
+    // The rows' applied action after each step, to hold against the graph's `step_actions`.
+    const applied_at: []f32 = try gpa.alloc(f32, steps * batch * a);
+    defer gpa.free(applied_at);
     const asked: []f32 = try gpa.alloc(f32, a);
     defer gpa.free(asked);
     const goal: []f32 = try gpa.alloc(f32, f);
     defer gpa.free(goal);
     const ref: []f32 = try gpa.alloc(f32, r);
     defer gpa.free(ref);
+    // The twin's prediction, row by row (I1b).
+    const z_other: []f32 = try gpa.alloc(f32, f);
+    defer gpa.free(z_other);
     var any_filter_state: bool = false;
     for (windows, 0..) |window, row| {
         learner.world.featuresAt(fleet, window.env, window.first, z[row * f ..][0..f]);
-        Learner.appliedBefore(fleet, window.env, window.first, applied[row * a ..][0..a]);
+        try expect(Learner.appliedBefore(fleet, window.env, window.first, applied[row * a ..][0..a]));
         for (applied[row * a ..][0..a]) |value| {
             any_filter_state = any_filter_state or value != 0.0;
         }
     }
     try expect(any_filter_state);
+    if (variation.sees_applied) {
+        // The knob reaches: told rest instead of what it applies, the first decision is a different one. Not bit for
+        // bit the same is the whole test - the function is deterministic and only that input differs (and the
+        // untrained output layer is small, so the difference is too).
+        const told_rest: []f32 = try gpa.alloc(f32, a);
+        defer gpa.free(told_rest);
+        const no_action: []f32 = try gpa.alloc(f32, a);
+        defer gpa.free(no_action);
+        @memset(no_action, 0.0);
+        learner.goalAt(windows[0].env, windows[0].first + 1, goal);
+        learner.policyRow(z[0..f], goal, applied[0..a], asked);
+        learner.policyRow(z[0..f], goal, no_action, told_rest);
+        try expect(!eql(f32, asked, told_rest));
+    }
     // Row by row, BEFORE the graph's update touches the weights.
     var expected: f64 = 0.0;
     for (0..steps) |k| {
         const deciding: bool = k % 2 == 0;
         var state_error: f64 = 0.0;
         var action_size: f64 = 0.0;
+        var gap_squared: f64 = 0.0;
         for (windows, 0..) |window, row| {
             const z_row: []f32 = z[row * f ..][0..f];
             const applied_row: []f32 = applied[row * a ..][0..a];
             learner.goalAt(window.env, window.first + k + 1, goal);
             if (deciding) {
-                learner.policyRow(z_row, goal, asked);
+                // The applied action as it stands before the decision: what A1's policy is told.
+                learner.policyRow(z_row, goal, applied_row, asked);
                 track.filterAction(0.2, asked, applied_row);
                 for (asked) |x| {
                     action_size += @as(f64, x) * x;
                 }
             }
+            @memcpy(applied_at[(k * batch + row) * a ..][0..a], applied_row);
             learner.world.referenceAt(fleet, window.env, window.first + k, ref);
-            learner.world.stepRow(z_row, ref, applied_row);
+            if (variation.twin) {
+                // Both models from the same state; the rollout goes on from their average, `(p + o) * 0.5` - the
+                // graph's order - and the squared gap is what `w_disagree` prices.
+                @memcpy(z_other, z_row);
+                learner.twin.?.stepRow(z_other, ref, applied_row);
+                learner.world.stepRow(z_row, ref, applied_row);
+                for (z_row, z_other) |*x, y| {
+                    gap_squared += (@as(f64, x.*) - y) * (@as(f64, x.*) - y);
+                    x.* = (x.* + y) * 0.5;
+                }
+            } else {
+                learner.world.stepRow(z_row, ref, applied_row);
+            }
             for (z_row, goal) |x, y| {
                 state_error += (@as(f64, x) - y) * (@as(f64, x) - y);
             }
         }
         expected += state_error / float(batch * f);
+        expected += variation.w_disagree * gap_squared / float(batch * f);
         if (deciding) {
             expected += learner.options.w_action * action_size / float(batch * a);
         }
@@ -1938,4 +2379,406 @@ test "robot_latent: the filter in the training graph equals the same rollout don
     expected /= float(steps);
     const graphs: f32 = try learner.trainPolicyOn(&windows);
     try expect(@abs(graphs - expected) <= 1.0e-5 * @max(1.0, @abs(expected)));
+    // The forward pass's values are still on the graph (the update wrote only the weights). The two sum a layer in
+    // different orders, so to rounding, not to the bit.
+    for (learner.step_actions, 0..) |on_graph, k| {
+        const graph_rows: []const f32 = learner.graph.valueOf(on_graph).data;
+        for (graph_rows, applied_at[k * batch * a ..][0 .. batch * a]) |x, y| {
+            try expect(@abs(x - y) <= 1.0e-5 * @max(1.0, @abs(y)));
+        }
+    }
+}
+
+test "robot_latent: the filter in the training graph equals the same rollout done row by row" {
+    try expectGraphEqualsRows(.{});
+}
+
+test "robot_latent: A1 - seeing what it applies, the training graph still equals the rows" {
+    try expectGraphEqualsRows(.{ .sees_applied = true });
+}
+
+test "robot_latent: twin world models - the graph equals the rows, their average and the price on their gap" {
+    try expectGraphEqualsRows(.{ .twin = true, .w_disagree = 0.7 });
+    // With A1's input too: the ingredients compose, step for step.
+    try expectGraphEqualsRows(.{ .twin = true, .w_disagree = 0.7, .sees_applied = true });
+}
+
+test "robot_latent: a twin from the SAME seed changes nothing, to the bit" {
+    // Two identical models average to themselves and disagree by exactly zero, so a learner with such a twin -
+    // and a price on the gap - must give the loss a learner without one gives, bit for bit. What the known answer
+    // catches: a twin wired to the wrong weights, an average that is not an average, a price on something that
+    // is not the gap.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: WalkSetup = undefined;
+    setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    const steps: usize = 6;
+    const batch: usize = 3;
+    const base: LearnerOptions = .{
+        .hidden = 16,
+        .window = steps,
+        .batch = batch,
+        .sigma = 0.0,
+        .world = .{ .hidden = 16, .steps = steps, .batch = batch },
+    };
+    var twinned: LearnerOptions = base;
+    twinned.twin_world = true;
+    twinned.twin_seed = base.world.seed;
+    twinned.w_disagree = 1.0;
+    // Both built before either acts, so both measure the same replay for their normalisers.
+    const alone: *Learner = try .init(gpa, fleet, base);
+    defer alone.deinit();
+    const paired: *Learner = try .init(gpa, fleet, twinned);
+    defer paired.deinit();
+    plantBlock(alone.params[5], 2);
+    plantBlock(paired.params[5], 2);
+    var prng: Random.DefaultPrng = .init(7);
+    var windows: [batch]track.Replay.Window = undefined;
+    for (&windows) |*window| {
+        window.* = alone.drawWindow(prng.random(), steps) orelse return error.SkipZigTest;
+    }
+    const lone_loss: f32 = try alone.trainPolicyOn(&windows);
+    const pair_loss: f32 = try paired.trainPolicyOn(&windows);
+    try expectEqual(lone_loss, pair_loss);
+    // And the one definition of valid settings refuses a price with nothing to compare.
+    var unpaired: LearnerOptions = base;
+    unpaired.w_disagree = 1.0;
+    try expect(unpaired.problem() != null);
+}
+
+test "robot_latent: A1 - at its starting zero the block is invisible: the same actions, the same first update" {
+    // Plan A1's first known answer. The block starts at ZERO and is made from no random numbers, so a learner with
+    // `sees_applied` starts as the learner without it: the same seven tensors, the same raw action whatever it is
+    // told it applies, and the same first update - its loss, and all seven tensors after it, exactly (at zero the
+    // block adds exact zeros forward, and sends exact zeros back to the decisions that made the applied action).
+    // Only the block moves: windows start from an applied action that is not rest, so it gets a gradient.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: WalkSetup = undefined;
+    setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    const options: LearnerOptions = .{
+        .hidden = 16,
+        .window = 4,
+        .batch = 3,
+        .decide_every = 2,
+        .filter = 0.2,
+        .world = .{ .hidden = 16, .steps = 4, .batch = 3 },
+    };
+    const blind: *Learner = try .init(gpa, fleet, options);
+    defer blind.deinit();
+    var seeing_options: LearnerOptions = options;
+    seeing_options.sees_applied = true;
+    const seeing: *Learner = try .init(gpa, fleet, seeing_options);
+    defer seeing.deinit();
+    try expect(blind.applied_block == null and seeing.applied_block != null);
+    for (blind.params, seeing.params) |x, y| {
+        try expect(eql(f32, x.data, y.data));
+    }
+
+    // The same raw action, told something far from rest.
+    const f: usize = blind.features;
+    const a: usize = blind.actions;
+    const z: []f32 = try gpa.alloc(f32, 2 * f + 3 * a);
+    defer gpa.free(z);
+    const goal: []f32 = z[f..][0..f];
+    const applied: []f32 = z[2 * f ..][0..a];
+    const out_blind: []f32 = z[2 * f + a ..][0..a];
+    const out_seeing: []f32 = z[2 * f + 2 * a ..][0..a];
+    blind.world.featuresAt(fleet, 0, 40, z[0..f]);
+    blind.goalAt(0, 41, goal);
+    for (applied, 0..) |*x, i| {
+        x.* = 0.8 * (float(i % 7) / 3.0 - 1.0);
+    }
+    blind.policyRow(z[0..f], goal, applied, out_blind);
+    seeing.policyRow(z[0..f], goal, applied, out_seeing);
+    try expect(eql(f32, out_blind, out_seeing));
+
+    // The same first update, on the same windows (neither learner has drawn from its random stream since `init`,
+    // so the rollouts' noise is the same too).
+    var prng: Random.DefaultPrng = .init(17);
+    var windows: [3]track.Replay.Window = undefined;
+    for (&windows) |*window| {
+        window.* = blind.drawWindow(prng.random(), 4) orelse return error.SkipZigTest;
+    }
+    const loss_blind: f32 = try blind.trainPolicyOn(&windows);
+    const loss_seeing: f32 = try seeing.trainPolicyOn(&windows);
+    try expect(loss_blind == loss_seeing);
+    for (blind.params, seeing.params) |x, y| {
+        try expect(eql(f32, x.data, y.data));
+    }
+    var block_moved: bool = false;
+    for (seeing.applied_block.?.weights.data) |w| {
+        block_moved = block_moved or w != 0.0;
+    }
+    try expect(block_moved);
+}
+
+test "robot_latent: A1 - a decision reads the action its slot is applying, and rest when an episode opens" {
+    // Plan A1's third known answer, through the judge's actor: `decideInto` - the one definition of a decision,
+    // shared by collecting, the judge and `diagnose` - hands the policy the slot's value. Planted on a step past the
+    // episode's first, the decision is exactly the policy's answer for the PLANTED value, blended into it - and NOT
+    // what a decision that ignored the slot (told rest) would have blended, so the equality is not vacuous. On an
+    // episode's FIRST step the slot is reset before the policy reads it: whatever was planted, it is told rest.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: WalkSetup = undefined;
+    setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    const learner: *Learner = try .init(gpa, fleet, .{
+        .hidden = 16,
+        .window = 4,
+        .batch = 2,
+        .filter = 0.2,
+        .sees_applied = true,
+        .world = .{ .hidden = 16, .steps = 4, .batch = 2 },
+    });
+    defer learner.deinit();
+    plantBlock(learner.applied_block.?.weights, 5);
+    const a: usize = learner.actions;
+    const clip: *const dance.Clip = fleet.clips[0];
+    const starts = [_]usize{ 10, 90 };
+    const actor: track.Actor = learner.judgeActor();
+    const plants: []f32 = try gpa.alloc(f32, 3 * starts.len * a);
+    defer gpa.free(plants);
+    const plant: []f32 = plants[0 .. starts.len * a];
+    const expected: []f32 = plants[starts.len * a ..][0 .. starts.len * a];
+    const decided: []f32 = plants[2 * starts.len * a ..][0 .. starts.len * a];
+    for (plant, 0..) |*p, i| {
+        p.* = 0.7 * (float(i % 5) / 2.0 - 1.0);
+    }
+    const scratch: []f32 = try gpa.alloc(f32, 3 * a + starts.len * a);
+    defer gpa.free(scratch);
+    const asked: []f32 = scratch[0..a];
+    const asked_from_rest: []f32 = scratch[a..][0..a];
+    const no_action: []f32 = scratch[2 * a ..][0..a];
+    const ignoring: []f32 = scratch[3 * a ..][0 .. starts.len * a];
+    @memset(no_action, 0.0);
+
+    // Past the first step: the policy's answer for the planted value, blended into it.
+    var judging: track.Judging = try .init(gpa, fleet.m, clip, fleet.options, &starts);
+    defer judging.deinit();
+    _ = judging.advance(actor, 1);
+    try expect(judging.fleet.steps[0] == 1 and judging.fleet.steps[1] == 1);
+    for (0..starts.len) |s| {
+        learner.liveFeaturesOf(judging.fleet, s);
+        learner.policyRow(learner.z_sim, learner.z_ref, plant[s * a ..][0..a], asked);
+        learner.policyRow(learner.z_sim, learner.z_ref, no_action, asked_from_rest);
+        @memcpy(expected[s * a ..][0..a], plant[s * a ..][0..a]);
+        track.filterAction(0.2, asked, expected[s * a ..][0..a]);
+        @memcpy(ignoring[s * a ..][0..a], plant[s * a ..][0..a]);
+        track.filterAction(0.2, asked_from_rest, ignoring[s * a ..][0..a]);
+    }
+    @memcpy(decided, plant);
+    actor.act(actor.context, judging.fleet, decided);
+    try expect(eql(f32, decided, expected));
+    try expect(!eql(f32, decided, ignoring));
+
+    // An episode's first step: planted garbage, and the policy is told rest.
+    var opening: track.Judging = try .init(gpa, fleet.m, clip, fleet.options, &starts);
+    defer opening.deinit();
+    try expect(opening.fleet.steps[0] == 0 and opening.fleet.steps[1] == 0);
+    for (0..starts.len) |s| {
+        learner.liveFeaturesOf(opening.fleet, s);
+        learner.policyRow(learner.z_sim, learner.z_ref, no_action, asked);
+        @memset(expected[s * a ..][0..a], 0.0);
+        track.filterAction(0.2, asked, expected[s * a ..][0..a]);
+    }
+    @memcpy(decided, plant);
+    actor.act(actor.context, opening.fleet, decided);
+    try expect(eql(f32, decided, expected));
+}
+
+test "robot_latent: A1 - cloning hands the policy the applied action too" {
+    // `cloneStep` trains THE policy on recorded states, so it must be the function the learner acts with: with
+    // `sees_applied`, each recorded step's input includes the action applied before it (`appliedBefore` - rest on an
+    // episode's first step). Known answer, the block planted so the input matters: the cloning loss equals the same
+    // mean squared error computed row by row with `policyRow`. No filter and no clock: cloning refuses both (its
+    // records must be raw decisions - see the test after this one).
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: WalkSetup = undefined;
+    setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    const batch: usize = 3;
+    const learner: *Learner = try .init(gpa, fleet, .{
+        .hidden = 16,
+        .window = 4,
+        .batch = batch,
+        .sees_applied = true,
+        .world = .{ .hidden = 16, .steps = 4, .batch = batch },
+    });
+    defer learner.deinit();
+    plantBlock(learner.applied_block.?.weights, 7);
+    const steps = [batch]Learner.Step{
+        .{ .env = 0, .index = 20 },
+        .{ .env = 1, .index = 57 },
+        .{ .env = 2, .index = 101 },
+    };
+    const f: usize = learner.features;
+    const a: usize = learner.actions;
+    const buffers: []f32 = try gpa.alloc(f32, 2 * f + 2 * a);
+    defer gpa.free(buffers);
+    const z: []f32 = buffers[0..f];
+    const goal: []f32 = buffers[f..][0..f];
+    const applied: []f32 = buffers[2 * f ..][0..a];
+    const asked: []f32 = buffers[2 * f + a ..][0..a];
+    var expected: f64 = 0.0;
+    var any_applied: bool = false;
+    for (steps) |step| {
+        learner.world.featuresAt(fleet, step.env, step.index, z);
+        learner.goalAt(step.env, step.index + 1, goal);
+        try expect(Learner.appliedBefore(fleet, step.env, step.index, applied));
+        for (applied) |x| {
+            any_applied = any_applied or x != 0.0;
+        }
+        learner.policyRow(z, goal, applied, asked);
+        for (asked, fleet.replay.actionAt(step.env, step.index)) |x, target| {
+            expected += (@as(f64, x) - target) * (@as(f64, x) - target);
+        }
+    }
+    try expect(any_applied);
+    expected /= float(batch * a);
+    const cloned: f32 = try learner.cloneStep(&steps);
+    try expect(@abs(cloned - expected) <= 1.0e-5 * @max(1.0, @abs(expected)));
+}
+
+test "robot_latent: what the replay says was applied before a record is what collection applied - shoves, the ring" {
+    // The filter's starting state for every training window and cloned step comes from the replay
+    // (`appliedBefore`). The known answer is COLLECTION ITSELF: before each step, the slot every character is about
+    // to decide from - rest on an episode's first step, where `decideInto` resets it. Recorded with SHOVES (a shove
+    // ends a segment but not an episode, and the controller's filter carries straight through it - the old segment
+    // rule said rest there), with short episodes so restarts happen, and long enough to wrap the ring. Every record
+    // still in the ring must agree - except the oldest one of a wrapped ring, whose predecessor is gone: that one must
+    // be reported UNKNOWN, never guessed, and training must refuse a window that starts there. And the HAND-OVER: a
+    // learner taking over a fleet mid-episode starts its slots from what the fleet was applying, so the first record
+    // agrees too. The run must contain shoves, restarts and an unknown, or it proves nothing about them.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: WalkSetup = undefined;
+    setup.init(gpa, threaded.io(), 3) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const fleet: *track.Fleet = setup.fleet;
+    fleet.options.shove_every = 7;
+    fleet.options.max_steps = 50;
+    const learner: *Learner = try .init(gpa, fleet, .{
+        .hidden = 16,
+        .window = 4,
+        .batch = 2,
+        .decide_every = 2,
+        .filter = 0.2,
+        .sees_applied = true,
+        .world = .{ .hidden = 16, .steps = 4, .batch = 2 },
+    });
+    defer learner.deinit();
+    const envs: usize = fleet.options.envs;
+    const a: usize = learner.actions;
+    const capacity: usize = fleet.replay.capacity;
+    // What collection was about to decide from, per ring slot - indexed like the replay, so a later record
+    // overwrites an earlier one exactly where the replay's own ring does.
+    const expected: []f32 = try gpa.alloc(f32, envs * capacity * a + a);
+    defer gpa.free(expected);
+    const told: []f32 = expected[envs * capacity * a ..][0..a];
+    for (0..capacity + 23) |iteration| {
+        for (0..envs) |env| {
+            const index: u64 = fleet.replay.written[env];
+            const ring_slot: usize = env * capacity + @as(usize, @intCast(index % capacity));
+            const into: []f32 = expected[ring_slot * a ..][0..a];
+            if (fleet.steps[env] == 0) {
+                @memset(into, 0.0);
+            } else {
+                @memcpy(into, learner.fleet_actions[env * a ..][0..a]);
+            }
+        }
+        learner.act(1, 1.0);
+        // The HAND-OVER: the fleet was mid-episode, driven by WalkSetup's warm-up before this learner existed, so its
+        // first record must say the learner's slot started from what the warm-up was applying. Checked now, before
+        // the ring overwrites it.
+        if (iteration == 0) {
+            for (0..envs) |env| {
+                const index: u64 = fleet.replay.written[env] - 1;
+                const ring_slot: usize = env * capacity + @as(usize, @intCast(index % capacity));
+                try expect(Learner.appliedBefore(fleet, env, index, told));
+                try expect(eql(f32, told, expected[ring_slot * a ..][0..a]));
+            }
+        }
+    }
+
+    var shoves: usize = 0;
+    var restarts: usize = 0;
+    var unknown: usize = 0;
+    var unknown_env: usize = 0;
+    for (0..envs) |env| {
+        const written: u64 = fleet.replay.written[env];
+        const oldest: u64 = written -| @as(u64, @intCast(capacity));
+        var index: u64 = oldest;
+        while (index < written) : (index += 1) {
+            if (!Learner.appliedBefore(fleet, env, index, told)) {
+                // Only ever the oldest record, and only when it is not an episode's first step.
+                try expect(index == oldest and oldest > 0);
+                unknown += 1;
+                unknown_env = env;
+                continue;
+            }
+            const ring_slot: usize = env * capacity + @as(usize, @intCast(index % capacity));
+            try expect(eql(f32, told, expected[ring_slot * a ..][0..a]));
+            const opens_episode: bool = fleet.replay.episodeStepAt(env, index).? == 0;
+            restarts += @intFromBool(opens_episode);
+            const new_segment: bool = index > oldest and
+                fleet.replay.segmentAt(env, index) != fleet.replay.segmentAt(env, index - 1);
+            shoves += @intFromBool(new_segment and !opens_episode);
+        }
+    }
+    try expect(shoves > 0 and restarts > 0 and unknown > 0);
+
+    // Training refuses a window starting where the replay cannot say - before it writes anything.
+    const unknown_start: u64 = fleet.replay.written[unknown_env] - capacity;
+    var prng: Random.DefaultPrng = .init(3);
+    const fine: track.Replay.Window = learner.drawWindow(prng.random(), 4) orelse return error.SkipZigTest;
+    const windows = [2]track.Replay.Window{ fine, .{ .env = unknown_env, .first = unknown_start, .steps = 4 } };
+    try expectError(error.UnknownAppliedAction, learner.trainPolicyOn(&windows));
+    // And the learner's own draws never start there: a thousand of them, every start known.
+    for (0..1000) |_| {
+        const drawn: track.Replay.Window = learner.drawWindow(prng.random(), 4) orelse return error.SkipZigTest;
+        try expect(Learner.appliedKnown(fleet, drawn.env, drawn.first));
+    }
+}
+
+test "robot_latent: cloning refuses records that are not raw decisions - a filter or a clock" {
+    // `cloneStep` regresses the policy's raw output on the RECORDED action. Behind a filter a record is a blend, and
+    // under a clock half the records are held steps - neither is what the policy asked for, so a learner with
+    // either refuses to clone rather than teach the policy to ask for what the filter delivers.
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    var setup: WalkSetup = undefined;
+    setup.init(gpa, threaded.io(), 2) catch return error.SkipZigTest;
+    defer setup.deinit();
+    const steps = [2]Learner.Step{ .{ .env = 0, .index = 20 }, .{ .env = 1, .index = 30 } };
+    const settings = [2]struct { filter: f32, decide_every: u32 }{
+        .{ .filter = 0.2, .decide_every = 1 },
+        .{ .filter = 1.0, .decide_every = 2 },
+    };
+    for (settings) |setting| {
+        const learner: *Learner = try .init(gpa, setup.fleet, .{
+            .hidden = 16,
+            .window = 4,
+            .batch = 2,
+            .filter = setting.filter,
+            .decide_every = setting.decide_every,
+            .world = .{ .hidden = 16, .steps = 4, .batch = 2 },
+        });
+        defer learner.deinit();
+        try expectError(error.CloningNeedsRawActions, learner.cloneStep(&steps));
+    }
 }

@@ -29,6 +29,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -77,8 +78,11 @@ const ShipTarget = struct { planet: ecs.Entity };
 // ============================================================================
 
 const StarKind = struct {};
+
 const PlanetKind = struct {};
+
 const MoonKind = struct {};
+
 const ShipKind = struct {};
 
 // ============================================================================
@@ -91,7 +95,7 @@ const State = struct {
     es: ecs.Registry,
     tree: ecs.Node.Tree,
     cb: ecs.CmdBuf,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     spawn_timer: f32 = 0.0,
 };
 
@@ -120,7 +124,7 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
 
     // The sun: root of the tree.  No Orbit; its Position is just
     // the center of the canvas.
-    const sun: ecs.Entity = try ecs.Entity.reserveImmediateOrErr(&es);
+    const sun: ecs.Entity = try .reserveImmediateOrErr(&es);
     _ = try sun.changeArchImmediateOrErr(&es, gpa, struct {
         pos: Pos,
         vis: Visual,
@@ -130,7 +134,7 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
         .add = .{
             .pos = .{ 400, 300 },
             .vis = .{ .color = z.colors.amber_400, .radius = 28 },
-            .tag = .init(StarKind),
+            .tag = ecs.Tag.init(StarKind),
             .node = .{},
         },
     });
@@ -153,7 +157,7 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
         .{ .r = 250, .omega = 0.32, .color = z.colors.pink_500, .radius = 11 },
     };
     for (planets, 0..) |p, i| {
-        const planet: ecs.Entity = try ecs.Entity.reserveImmediateOrErr(&es);
+        const planet: ecs.Entity = try .reserveImmediateOrErr(&es);
         const theta: f32 = float(i) * pi * 0.5;
         _ = try planet.changeArchImmediateOrErr(&es, gpa, struct {
             pos: Pos,
@@ -166,7 +170,7 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
                 .pos = .{ 0, 0 }, // overwritten on first frame
                 .orbit = .{ .radius = p.r, .omega = p.omega, .theta = theta },
                 .vis = .{ .color = p.color, .radius = p.radius },
-                .tag = .init(PlanetKind),
+                .tag = ecs.Tag.init(PlanetKind),
                 .node = .{},
             },
         });
@@ -178,7 +182,7 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
 
         // Every other planet gets a moon.
         if (i % 2 == 0) {
-            const moon: ecs.Entity = try ecs.Entity.reserveImmediateOrErr(&es);
+            const moon: ecs.Entity = try .reserveImmediateOrErr(&es);
             _ = try moon.changeArchImmediateOrErr(&es, gpa, struct {
                 pos: Pos,
                 orbit: Orbit,
@@ -190,7 +194,7 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
                     .pos = .{ 0, 0 },
                     .orbit = .{ .radius = p.radius * 2.5 + 4, .omega = 4.5, .theta = 0 },
                     .vis = .{ .color = z.colors.slate_300, .radius = 2.5 },
-                    .tag = .init(MoonKind),
+                    .tag = ecs.Tag.init(MoonKind),
                     .node = .{},
                 },
             });
@@ -215,12 +219,12 @@ fn initState(gpa: Allocator, _: *z.Frame, s: *State) !void {
         .es = es,
         .tree = tree,
         .cb = cb,
-        .rng = .init(0xC0FFEE),
+        .rng = Random.DefaultPrng.init(0xC0FFEE),
     };
 }
 
 // ============================================================================
-// Per-frame update
+// Systems
 // ============================================================================
 
 /// Advance Orbit angles by `dt`.  Visits every entity with an
@@ -271,7 +275,7 @@ fn integrateShip(
 fn spawnShipsTick(
     es: *ecs.Registry,
     cb: *ecs.CmdBuf,
-    rng: *std.Random.DefaultPrng,
+    rng: *Random.DefaultPrng,
     dt: f32,
     timer: *f32,
 ) void {
@@ -342,7 +346,7 @@ fn spawnShipsTick(
     // queue the component-add commands.  Six adds for one entity
     // - the encoder coalesces them into a single batch keyed off
     // the bound entity.
-    const ship: ecs.Entity = ecs.Entity.reserve(cb);
+    const ship: ecs.Entity = .reserve(cb);
     _ = ship.add(cb, Pos, .{ sp[0], sp[1] });
     _ = ship.add(cb, Velocity, .{ vx, vy });
     _ = ship.add(cb, Visual, .{ .color = z.colors.amber_200, .radius = 1.5 });
@@ -374,6 +378,10 @@ fn renderEntity(
 ) void {
     ctx.gl.circle(p.*, v.radius, .{ .color = v.color, .segments = 16 });
 }
+
+// ============================================================================
+// Per-frame update
+// ============================================================================
 
 fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, z.colors.slate_950);
@@ -419,10 +427,6 @@ fn update(f: *z.Frame, s: *State) void {
     // 7. Render every Visual-carrying entity in chunk order.
     s.es.forEach(renderEntity, .{ .gl = f.gl });
 }
-
-// ============================================================================
-// Systems
-// ============================================================================
 
 // ============================================================================
 // Ship spawning

@@ -96,10 +96,10 @@ fn drawCard(
 // Individual primitive demos.  Each draws one thing inside
 // `area` with a known expected shape.
 
-const accent: Color = Color.fromWire(0xFF70C870); // green
-const accent2: Color = Color.fromWire(0xFFFFB060); // amber
-const accent3: Color = Color.fromWire(0xFFE07070); // red
-const white: Color = Color.fromWire(0xFFFFFFFF);
+const accent: Color = .fromWire(0xFF70C870); // green
+const accent2: Color = .fromWire(0xFFFFB060); // amber
+const accent3: Color = .fromWire(0xFFE07070); // red
+const white: Color = .fromWire(0xFFFFFFFF);
 
 fn drawRectFilledCard(
     dl: ui.DrawListHandle,
@@ -423,9 +423,9 @@ fn drawTransparencyCard(
     // EXPECT: three overlapping translucent discs.  Where they
     // overlap, the alpha should accumulate visibly.
     const cy: f32 = area.y + area.height * 0.5;
-    const half_green: Color = Color.fromWire(0x8070C870);
-    const half_amber: Color = Color.fromWire(0x80FFB060);
-    const half_red: Color = Color.fromWire(0x80E07070);
+    const half_green: Color = .fromWire(0x8070C870);
+    const half_amber: Color = .fromWire(0x80FFB060);
+    const half_red: Color = .fromWire(0x80E07070);
     dl.addCircleFilled(.{ area.x + 130, cy }, 50, half_green);
     dl.addCircleFilled(.{ area.x + 180, cy }, 50, half_amber);
     dl.addCircleFilled(.{ area.x + 230, cy }, 50, half_red);

@@ -10,7 +10,7 @@
 //!   2. Hosted anywhere else: type your server's "wss://..." URL into the field
 //!      first, then tap Connect.
 //!
-//! This drives `z.web.ws` end to end: originUrl -> open -> state -> send -> poll
+//! This drives `z.ws` end to end: originUrl -> open -> state -> send -> poll
 //! -> close, all as a per-frame polling loop (wasm can't block on the network).
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -18,6 +18,8 @@ const z = @import("zimr");
 const ui = z.ui_real;
 
 const bufPrint = std.fmt.bufPrint;
+const indexOfScalar = std.mem.indexOfScalar;
+const startsWith = std.mem.startsWith;
 
 const default_room = "zimr-demo";
 const max_log = 12; // how many recent messages to keep on screen
@@ -33,7 +35,7 @@ const State = struct {
     room_buf: [64]u8,
     room_len: usize,
 
-    sock: z.web.ws.Handle, // 0 = not connected
+    sock: z.ws.Handle, // 0 = not connected
     joined: bool, // have we sent our JOIN on this connection yet?
     my_id: [16]u8, // our peer id, parsed out of WELCOME
     my_id_len: usize,
@@ -75,7 +77,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     };
     // Pre-fill the URL with this page's own origin (so a page served by the
     // signaling server just works), and the room with a shared default.
-    const origin: []const u8 = z.web.ws.originUrl(&s.url_buf);
+    const origin: []const u8 = z.ws.originUrl(&s.url_buf);
     s.url_len = origin.len;
     @memcpy(s.room_buf[0..default_room.len], default_room);
     s.room_len = default_room.len;
@@ -83,7 +85,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
 fn deinit(gpa: Allocator, s: *State) void {
     if (s.sock != 0) {
-        z.web.ws.close(s.sock);
+        z.ws.close(s.sock);
     }
     z.unloadFont(gpa, s.font);
     s.ui_host.deinit();
@@ -92,21 +94,21 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn update(f: *z.Frame, s: *State) void {
     // If we have a socket, drive it: join once open, then drain inbound.
     if (s.sock != 0) {
-        const st: z.web.ws.State = z.web.ws.state(s.sock);
+        const st: z.ws.State = z.ws.state(s.sock);
         if (st == .open and !s.joined) {
             var join_buf: [96]u8 = undefined;
             const room: []const u8 = s.room_buf[0..s.room_len];
             const jmsg: []const u8 = bufPrint(&join_buf, "JOIN {s}", .{room}) catch "JOIN zimr-demo";
-            z.web.ws.send(s.sock, jmsg);
+            z.ws.send(s.sock, jmsg);
             s.joined = true;
             pushLog(s, jmsg);
         }
         if (st == .open) {
-            while (z.web.ws.poll(s.sock, &s.recv_buf)) |msg| {
+            while (z.ws.poll(s.sock, &s.recv_buf)) |msg| {
                 pushLog(s, msg);
-                if (std.mem.startsWith(u8, msg, "WELCOME ")) {
+                if (startsWith(u8, msg, "WELCOME ")) {
                     const rest: []const u8 = msg[8..];
-                    const end: usize = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+                    const end: usize = indexOfScalar(u8, rest, ' ') orelse rest.len;
                     const id: []const u8 = rest[0..end];
                     const n: usize = @min(id.len, s.my_id.len);
                     @memcpy(s.my_id[0..n], id[0..n]);
@@ -133,7 +135,7 @@ fn update(f: *z.Frame, s: *State) void {
             _ = u.inputTextWithHint("Room", "room name", &s.room_buf, &s.room_len, .{});
             if (u.button("Connect", .{})) {
                 if (s.url_len > 0) {
-                    s.sock = z.web.ws.open(s.url_buf[0..s.url_len]);
+                    s.sock = z.ws.open(s.url_buf[0..s.url_len]);
                     s.joined = false;
                     s.my_id_len = 0;
                     pushLog(s, "-> connecting...");
@@ -141,7 +143,7 @@ fn update(f: *z.Frame, s: *State) void {
             }
         } else {
             // Connected: show status + controls.
-            const st: z.web.ws.State = z.web.ws.state(s.sock);
+            const st: z.ws.State = z.ws.state(s.sock);
             const state_text: []const u8 = switch (st) {
                 .connecting => "connecting...",
                 .open => "open",
@@ -155,13 +157,13 @@ fn update(f: *z.Frame, s: *State) void {
             u.text("Room:   {s}", .{s.room_buf[0..s.room_len]});
 
             if (u.button("Disconnect", .{})) {
-                z.web.ws.close(s.sock);
+                z.ws.close(s.sock);
                 s.sock = 0;
                 s.joined = false;
             }
             if (st == .open) {
                 if (u.button("Send SIGNAL to peer 1", .{})) {
-                    z.web.ws.send(s.sock, "SIGNAL 1 hello-from-a-tab");
+                    z.ws.send(s.sock, "SIGNAL 1 hello-from-a-tab");
                     pushLog(s, "-> SIGNAL 1 hello-from-a-tab");
                 }
             }

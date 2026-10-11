@@ -37,6 +37,7 @@ const d3 = z.draw3d;
 const fitted = z.robot_geno_shapes;
 
 const Allocator = std.mem.Allocator;
+const eql = std.mem.eql;
 const Color = zm.Color;
 const Camera3D = zm.Camera3D;
 const Vec = zm.Vec;
@@ -152,7 +153,7 @@ const State = struct {
 
 fn boneIndex(clip: d3.BvhSkeletalClip, name: []const u8) ?usize {
     for (0..clip.boneCount()) |i| {
-        if (std.mem.eql(u8, clip.boneName(i), name)) {
+        if (eql(u8, clip.boneName(i), name)) {
             return i;
         }
     }
@@ -264,7 +265,7 @@ fn loadCapture(gpa: Allocator, bytes: []const u8) !Capture {
     for (fitted.geoms, 0..) |geom, g| {
         bone_of[g] = -1;
         for (0..count) |i| {
-            if (std.mem.eql(u8, clip.boneName(i), geom.bone)) {
+            if (eql(u8, clip.boneName(i), geom.bone)) {
                 bone_of[g] = @intCast(i);
                 break;
             }
@@ -283,55 +284,6 @@ fn unloadCapture(gpa: Allocator, capture: Capture) void {
 
 fn toVec(v: [3]f32) Vec {
     return vec(v[0], v[1], v[2]);
-}
-
-fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{
-        .gpa = gpa,
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 16),
-        .ui_host = undefined,
-        .cam = z.OrbitCamera.init(vec(0.0, 0.9, 0), 3.2),
-        .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
-        .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
-        .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
-        .transform = .{zm.identity()},
-        .placed = undefined,
-        .captures = undefined,
-        .geno = undefined,
-        .carrier = undefined,
-        .unbind = undefined,
-        .skin = &.{},
-        .rest = &.{},
-        .rest_normals = &.{},
-        .posed = &.{},
-        .posed_normals = &.{},
-    };
-    s.ui_host = z.UiHost.init(gpa, s.font);
-
-    // The bind pose through the same kinematics the captures will go through: each shape's bone frame
-    // there is what the shape is attached in.
-    const bind: Capture = try loadCapture(gpa, bind_bvh);
-    defer unloadCapture(gpa, bind);
-    d3.bvhForwardKinematics(bind.clip, 0, bind.positions, bind.rotations);
-    for (fitted.geoms, 0..) |geom, g| {
-        const bone: i32 = bind.bone_of[g];
-        const at: Vec = if (bone >= 0) bind.positions[@intCast(bone)] * splat(cm) else vec(0, 0, 0);
-        const turn: Quat = if (bone >= 0) bind.rotations[@intCast(bone)] else zm.qidentity();
-        const undo: Quat = conjugate(turn);
-        s.placed[g] = .{
-            .shape = geom.shape,
-            .a = rotate(undo, toVec(geom.a) - at),
-            .b = rotate(undo, toVec(geom.b) - at),
-            .radius = geom.radius,
-            .rotation = qmul(undo, .{ geom.rotation[0], geom.rotation[1], geom.rotation[2], geom.rotation[3] }),
-            .half = toVec(geom.half),
-        };
-    }
-    s.captures[0] = try loadCapture(gpa, getup_bvh);
-    s.captures[1] = try loadCapture(gpa, dance_bvh);
-    try planLift(gpa, s, &s.captures[0]);
-    try planLift(gpa, s, &s.captures[1]);
-    try loadMesh(gpa, f, s, &bind);
 }
 
 /// The lowest point any shape reaches, with the capture posed at its current frame.
@@ -413,6 +365,55 @@ fn planLift(gpa: Allocator, s: *const State, capture: *Capture) !void {
     }
 }
 
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{
+        .gpa = gpa,
+        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 16),
+        .ui_host = undefined,
+        .cam = z.OrbitCamera.init(vec(0.0, 0.9, 0), 3.2),
+        .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
+        .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
+        .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
+        .transform = .{zm.identity()},
+        .placed = undefined,
+        .captures = undefined,
+        .geno = undefined,
+        .carrier = undefined,
+        .unbind = undefined,
+        .skin = &.{},
+        .rest = &.{},
+        .rest_normals = &.{},
+        .posed = &.{},
+        .posed_normals = &.{},
+    };
+    s.ui_host = z.UiHost.init(gpa, s.font);
+
+    // The bind pose through the same kinematics the captures will go through: each shape's bone frame
+    // there is what the shape is attached in.
+    const bind: Capture = try loadCapture(gpa, bind_bvh);
+    defer unloadCapture(gpa, bind);
+    d3.bvhForwardKinematics(bind.clip, 0, bind.positions, bind.rotations);
+    for (fitted.geoms, 0..) |geom, g| {
+        const bone: i32 = bind.bone_of[g];
+        const at: Vec = if (bone >= 0) bind.positions[@intCast(bone)] * splat(cm) else vec(0, 0, 0);
+        const turn: Quat = if (bone >= 0) bind.rotations[@intCast(bone)] else zm.qidentity();
+        const undo: Quat = conjugate(turn);
+        s.placed[g] = .{
+            .shape = geom.shape,
+            .a = rotate(undo, toVec(geom.a) - at),
+            .b = rotate(undo, toVec(geom.b) - at),
+            .radius = geom.radius,
+            .rotation = qmul(undo, .{ geom.rotation[0], geom.rotation[1], geom.rotation[2], geom.rotation[3] }),
+            .half = toVec(geom.half),
+        };
+    }
+    s.captures[0] = try loadCapture(gpa, getup_bvh);
+    s.captures[1] = try loadCapture(gpa, dance_bvh);
+    try planLift(gpa, s, &s.captures[0]);
+    try planLift(gpa, s, &s.captures[1]);
+    try loadMesh(gpa, f, s, &bind);
+}
+
 fn deinit(gpa: Allocator, s: *State) void {
     unloadMesh(gpa, s);
     unloadCapture(gpa, s.captures[1]);
@@ -424,46 +425,40 @@ fn deinit(gpa: Allocator, s: *State) void {
     z.unloadFont(gpa, s.font);
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const capture: *Capture = &s.captures[s.which];
-    const frames: f32 = float(capture.frames());
-    if (s.playing) {
-        // The captures run at 60 frames a second, which is also what the page aims for.
-        const dt: f32 = if (f.time.delta_time > 0 and f.time.delta_time < 0.2) f.time.delta_time else 0.0;
-        s.frame += dt * 60.0;
-        if (s.frame >= frames) {
+fn drawPanel(s: *State, f: *z.Frame) bool {
+    const u: ui.Ui = s.ui_host.begin(f);
+    const captured: bool = u.wantCaptureMouse();
+    const placement: ui.WindowOpts = .{ .initial_pos = .{ 4, 4 }, .initial_size = .{ 330, 220 } };
+    if (u.window("Geno's body, on the captures", placement)) |window| {
+        defer window.close();
+        const capture: *const Capture = &s.captures[s.which];
+        const frames: f32 = float(capture.frames());
+        if (u.button(if (s.which == 0) "get-up (tap for the dance)" else "dance (tap for the get-up)", .{})) {
+            s.which = 1 - s.which;
             s.frame = 0;
         }
+        u.text("frame {d} of {d}", .{ int(usize, s.frame), capture.frames() });
+        _ = u.slider("frame", &s.frame, .{ .min = 0.0, .max = frames - 1.0, .fmt = "{d:.0}" });
+        _ = u.checkbox("play", &s.playing);
+        u.sameLine(.{});
+        _ = u.checkbox("shapes", &s.show_shapes);
+        u.sameLine(.{});
+        _ = u.checkbox("bones", &s.show_bones);
+        if (u.button("<", .{})) {
+            s.frame = @max(0.0, s.frame - 1.0);
+            s.playing = false;
+        }
+        u.sameLine(.{});
+        if (u.button(">", .{})) {
+            s.frame = @min(frames - 1.0, s.frame + 1.0);
+            s.playing = false;
+        }
+        u.sameLine(.{});
+        _ = u.checkbox("mesh", &s.show_mesh);
+        u.text("{d} shapes: blue capsules, green boxes", .{fitted.geoms.len});
+        u.text("with the shapes on, the mesh is see-through", .{});
     }
-    const shown: usize = @trunc(clamp(s.frame, 0.0, frames - 1.0));
-    d3.bvhForwardKinematics(capture.clip, shown, capture.positions, capture.rotations);
-    // Raise the whole character by this frame's planned lift: positions are in the capture's
-    // centimetres, so the lift goes in as centimetres too.
-    const raise: f32 = capture.lift[shown] / cm;
-    for (capture.positions) |*p| {
-        p.*[1] += raise;
-    }
-
-    z.clearViewport(f, bg);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(s, f);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 10.0 });
-    const gl = f.gl;
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 20, 0.25);
-    s.transform[0] = mulMat(translation(0, -0.1, 0), scaling(16, 0.2, 16));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
-    if (s.show_shapes) {
-        drawShapes(s, gl, capture);
-    }
-    if (s.show_bones) {
-        drawBones(gl, capture);
-    }
-    // Last, so that when it is see-through everything else is already there to be seen through it.
-    if (s.show_mesh) {
-        drawMesh(s, gl, capture);
-    }
-    z.endMode3D(gl);
+    return captured;
 }
 
 /// Every fitted shape, carried by its bone: the bone's place and turn this frame, applied to where the
@@ -527,40 +522,46 @@ fn drawBones(gl: *z.WgpuGl, capture: *const Capture) void {
     }
 }
 
-fn drawPanel(s: *State, f: *z.Frame) bool {
-    const u: ui.Ui = s.ui_host.begin(f);
-    const captured: bool = u.wantCaptureMouse();
-    const placement: ui.WindowOpts = .{ .initial_pos = .{ 4, 4 }, .initial_size = .{ 330, 220 } };
-    if (u.window("Geno's body, on the captures", placement)) |window| {
-        defer window.close();
-        const capture: *const Capture = &s.captures[s.which];
-        const frames: f32 = float(capture.frames());
-        if (u.button(if (s.which == 0) "get-up (tap for the dance)" else "dance (tap for the get-up)", .{})) {
-            s.which = 1 - s.which;
+fn update(f: *z.Frame, s: *State) void {
+    const capture: *Capture = &s.captures[s.which];
+    const frames: f32 = float(capture.frames());
+    if (s.playing) {
+        // The captures run at 60 frames a second, which is also what the page aims for.
+        const dt: f32 = if (f.time.delta_time > 0 and f.time.delta_time < 0.2) f.time.delta_time else 0.0;
+        s.frame += dt * 60.0;
+        if (s.frame >= frames) {
             s.frame = 0;
         }
-        u.text("frame {d} of {d}", .{ int(usize, s.frame), capture.frames() });
-        _ = u.slider("frame", &s.frame, .{ .min = 0.0, .max = frames - 1.0, .fmt = "{d:.0}" });
-        _ = u.checkbox("play", &s.playing);
-        u.sameLine(.{});
-        _ = u.checkbox("shapes", &s.show_shapes);
-        u.sameLine(.{});
-        _ = u.checkbox("bones", &s.show_bones);
-        if (u.button("<", .{})) {
-            s.frame = @max(0.0, s.frame - 1.0);
-            s.playing = false;
-        }
-        u.sameLine(.{});
-        if (u.button(">", .{})) {
-            s.frame = @min(frames - 1.0, s.frame + 1.0);
-            s.playing = false;
-        }
-        u.sameLine(.{});
-        _ = u.checkbox("mesh", &s.show_mesh);
-        u.text("{d} shapes: blue capsules, green boxes", .{fitted.geoms.len});
-        u.text("with the shapes on, the mesh is see-through", .{});
     }
-    return captured;
+    const shown: usize = @trunc(clamp(s.frame, 0.0, frames - 1.0));
+    d3.bvhForwardKinematics(capture.clip, shown, capture.positions, capture.rotations);
+    // Raise the whole character by this frame's planned lift: positions are in the capture's
+    // centimetres, so the lift goes in as centimetres too.
+    const raise: f32 = capture.lift[shown] / cm;
+    for (capture.positions) |*p| {
+        p.*[1] += raise;
+    }
+
+    z.clearViewport(f, bg);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(s, f);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 10.0 });
+    const gl = f.gl;
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 20, 0.25);
+    s.transform[0] = mulMat(translation(0, -0.1, 0), scaling(16, 0.2, 16));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
+    if (s.show_shapes) {
+        drawShapes(s, gl, capture);
+    }
+    if (s.show_bones) {
+        drawBones(gl, capture);
+    }
+    // Last, so that when it is see-through everything else is already there to be seen through it.
+    if (s.show_mesh) {
+        drawMesh(s, gl, capture);
+    }
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

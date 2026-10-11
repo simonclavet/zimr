@@ -44,7 +44,19 @@ const std = @import("std");
 const gpu = @import("gpu.zig");
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
+const Random = std.Random;
+const refAllDecls = std.testing.refAllDecls;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const readInt = std.mem.readInt;
+const zeroes = std.mem.zeroes;
+const Io = std.Io;
+const host = @import("host.zig");
+const native_loop = @import("native_loop.zig");
+const platform = @import("platform.zig");
+const console = @import("platform/console.zig");
+const contract = platform.contract;
+const dom_input = @import("dom_input.zig");
+const native_log = std.log.scoped(.native);
 const zm = @import("zm");
 const Color = zm.Color;
 const Camera2D = zm.Camera2D;
@@ -66,12 +78,14 @@ const normalize = zm.normalize;
 const cross = zm.cross;
 const vec4 = zm.vec4;
 const assert = zm.assert;
+const Vec2 = zm.Vec2;
 
 const wgpu = @import("wgpu.zig");
 const Shader2D = @import("shader2d.zig").Shader2D;
 const profiler = @import("profiler.zig");
 const memwatch = @import("memwatch.zig");
 const leakwatch = @import("leakwatch.zig");
+const sound = @import("sound.zig");
 const gpu_iface = @import("gpu_iface.zig");
 const BindGroupCache = @import("BindGroupCache.zig");
 const assertf = zm.assertf;
@@ -79,8 +93,8 @@ const assertUnreachable = zm.assertUnreachable;
 const renderer_2d = @import("renderer_2d.zig");
 const draw3d = @import("draw3d.zig");
 
-// S4: these were byte-identical reimplementations of draw3d's - now
-// re-exports (a re-export is not a redefinition under the dup-pub-fn rule).
+// The mesh helpers are draw3d's, re-exported so `App` code reaches them here
+// too (a re-export is not a redefinition under the dup-pub-fn rule).
 pub const genMeshCube = draw3d.genMeshCube;
 pub const genMeshTangents = draw3d.genMeshTangents;
 pub const updateMeshBuffer = draw3d.updateMeshBuffer;
@@ -97,6 +111,7 @@ pub const colorFromHSV = types.colorFromHSV;
 // logic - runtime.zig's dom externs are all at fn scope, so importing this
 // namespace pulls no GL/WebGL surface into the wasm.
 const input = @import("runtime.zig").input;
+const FrameTimeFilter = @import("runtime.zig").core.FrameTimeFilter;
 
 const GpuFrame = gpu.GpuFrame;
 const Backend = gpu_iface.WgpuBackend;
@@ -164,6 +179,9 @@ pub const Config = struct {
 /// such as the smoke). Kept fixed so those runs are reproducible.
 const rng_fallback_seed: u64 = 0x853c_49e6_748f_ea9b;
 
+// lint:off browser-call: the browser's random source seeds the RNG; native runs use a fixed seed, so they repeat
+const web = @import("web.zig");
+
 /// Resolve the seed for the run's PRNG. An explicit `Config.rng_seed` always
 /// wins. Otherwise, on wasm we ask the host's `crypto.getRandomValues` for real
 /// per-launch entropy; the buffer is PRE-FILLED with `rng_fallback_seed` so a
@@ -173,10 +191,10 @@ fn resolveRngSeed(explicit: ?u64) u64 {
     if (explicit) |s| {
         return s;
     }
-    if (comptime builtin.target.cpu.arch.isWasm()) {
+    if (comptime host.is_browser) {
         var b: [8]u8 = @bitCast(rng_fallback_seed);
         web.dom.crypto_random_fill(&b, b.len);
-        return std.mem.readInt(u64, &b, .little);
+        return readInt(u64, &b, .little);
     }
     return rng_fallback_seed;
 }
@@ -188,8 +206,12 @@ fn resolveRngSeed(explicit: ?u64) u64 {
 /// Read-only wall-clock + delta for the current frame. Mirrors the GL
 /// `TimeState` shape (delta_time + time) so example logic ports unchanged.
 pub const TimeState = struct {
-    /// Seconds since the previous frame.
+    /// Seconds since the previous frame, as animation should advance by them: the measured duration filtered
+    /// (`runtime.core.FrameTimeFilter`) so jitter does not show as stutter, a spike held to a tenth of a second; 0 on
+    /// the first frame.
     delta_time: f32 = 0,
+    /// Seconds since the previous frame as measured, unfiltered: for timing and profiling. 0 on the first frame.
+    raw_delta_time: f32 = 0,
     /// Seconds since the app started.
     time: f32 = 0,
     /// Frames rendered so far (0 on the first update).
@@ -205,6 +227,12 @@ pub const TimeState = struct {
 pub const WindowState = struct {
     screen_width: u32 = 0,
     screen_height: u32 = 0,
+    /// Whether the app has the keyboard's focus - false once the user switches to another window or tab, until they
+    /// come back. An app may pause, or mute, while it is false; held keys were released when it became false.
+    focused: bool = true,
+    /// Whether the window is fullscreen, as the platform last reported (`requestFullscreen`'s outcome, or the user
+    /// leaving fullscreen).
+    fullscreen: bool = false,
 
     /// Convenience: surface aspect ratio (width / height), 1.0 if unknown.
     pub fn aspect(self: WindowState) f32 {
@@ -252,7 +280,9 @@ pub const Frame = struct {
     /// Audio device for the frame. Call `z.audio_device.init(f.audio_device)`
     /// once before using `z.sounds`/`z.waves`/`z.composer`. Backend-agnostic
     /// (Web Audio); shared with the GL path.
-    audio_device: *@import("sound.zig").audio_device.AudioDeviceState,
+    audio_device: *sound.audio_device.AudioDeviceState,
+    /// The engine's one mixer (`sound.mixer`): an app starts it (`mixer.start`), then plays voices on it.
+    mixer: *sound.mixer.Mixer,
     time: TimeState,
     window: WindowState,
     /// The run's PRNG, seeded once at startup (see `Config.rng_seed`). It's the
@@ -260,7 +290,7 @@ pub const Frame = struct {
     /// `f.random.intRangeLessThan(u32, 0, n)`, `f.random.boolean()`, etc. The
     /// generator persists across frames (its state advances); it is NOT reseeded
     /// per tick, so sequences stay coherent frame to frame.
-    random: std.Random,
+    random: Random,
 };
 
 // ============================================================================
@@ -270,6 +300,10 @@ pub const Frame = struct {
 /// Type-erased per-frame dispatch thunk (built by `run`, called by the
 /// `update` export). Mirrors `AppBridge.update_fn`.
 const UpdateThunk = *const fn (frame: *Frame, state: ?*anyopaque) void;
+
+/// See `AppSpec.memory` for the full policy. In short: examples use `.managed`
+/// (free everything, leak-checked); `.arena` is the opt-out for external apps.
+pub const MemoryMode = enum(u8) { arena, managed };
 
 /// A complete example/app as DATA - no globals, no `main`: its config plus the
 /// three lifecycle fns over its `State`. A standalone build runs ONE of these
@@ -325,10 +359,6 @@ pub fn AppSpec(comptime StateT: type) type {
         memory: MemoryMode = .managed,
     };
 }
-
-/// See `AppSpec.memory` for the full policy. In short: examples use `.managed`
-/// (free everything, leak-checked); `.arena` is the opt-out for external apps.
-pub const MemoryMode = enum(u8) { arena, managed };
 
 /// Type-erased form of an `AppSpec(State)` - what a heterogeneous launcher list
 /// holds. `init` constructs the State into a caller-provided slot of
@@ -434,6 +464,12 @@ fn fitOrtho(dw: f32, dh: f32, cw: f32, ch: f32) [16]f32 {
     };
 }
 
+/// Clock adapter handed to the profiler at startup (`*const fn () f64`).
+/// performance.now() in milliseconds; the dedicated fast import lands later.
+fn profilerClock() f64 {
+    return wgpu.nowMs();
+}
+
 pub const App = struct {
     gpu_frame: GpuFrame = .{},
     pipeline_cache: gpu.PipelineCache = undefined,
@@ -495,22 +531,39 @@ pub const App = struct {
     // Input state, advanced once per frame (current->previous) after the user's
     // update. The JS bridge pushes events into it via the input_push_* exports.
     input_state: input.InputState = .{},
+    /// Whether the app has the keyboard's focus, as the platform last reported (`receiveEvent`); each frame's
+    /// `WindowState.focused` copies it.
+    window_focused: bool = true,
+    /// The cursor the platform shows now (`showWantedCursor`); platforms start with the default arrow.
+    shown_cursor: contract.Cursor = .default,
+    /// The text input last given to the platform (`applyTextInputWish`): on with these options and area, or off.
+    shown_text_input: ?input.TextInputWish = null,
+    /// Whether the window is fullscreen, as the platform last reported; each frame's `WindowState.fullscreen`
+    /// copies it.
+    is_fullscreen: bool = false,
 
     // Audio device, handed to the user as `f.audio_device`. Left UNINITIALIZED
     // (ctx_id=0, not ready); a non-audio app never touches the Web Audio JS
     // bridge. An audio app calls `z.audio_device.init(f.audio_device)` (which is
     // what actually reaches the `extern "audio"` js_audio_* imports), then uses
     // z.sounds / z.waves / z.composer.
-    audio_device: @import("sound.zig").audio_device.AudioDeviceState = .{},
+    audio_device: sound.audio_device.AudioDeviceState = .{},
+    // The engine's one mixer (`sound.mixer`): idle until something starts it; then topped up once a frame, after the
+    // app's update (`update`).
+    mixer: sound.mixer.Mixer = .{},
 
     state: ?*anyopaque = null,
     update_fn: ?UpdateThunk = null,
-    started_at_ms: f64 = 0,
+    /// The first frame's time, on the frame driver's clock (`update`): elapsed time counts from it.
+    first_frame_ms: ?f64 = null,
+    /// How a script's run went (`native_loop.script`), once it has - headless, or in a window; `finishNative` reads
+    /// its failed lines.
+    script_outcome: ?native_loop.script.Outcome = null,
     /// The run's PRNG, seeded once in `run()` from `config.rng_seed`. Persistent
     /// (not per-frame) so random sequences don't reset every tick. Surfaced to
     /// examples as `Frame.random`. Defaults to the fixed fallback seed so any
     /// path that builds a frame before `run()` still gets a valid generator.
-    rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(rng_fallback_seed),
+    rng: Random.DefaultPrng = Random.DefaultPrng.init(rng_fallback_seed),
     frame_count: u64 = 0,
     /// Per-frame wasm-memory growth watchdog (compiled out in ship).
     mem_watch: memwatch.MemWatch = .{},
@@ -547,6 +600,38 @@ pub const App = struct {
     /// the explicit `gpa` (WebGPU examples use the wasm allocator, matching the
     /// other wgpu demos). After this returns, the JS RAF loop's `update` calls
     /// drive `update_fn` via the `update` export below.
+    /// A native program's frames: `update` - the SAME function the browser calls once per frame - driven by the
+    /// window's messages until the window is closed (`native_loop.run`).
+    pub fn runNative(self: *App) void {
+        switch (comptime host.kind) {
+            // lint:off decl-order: `update` and `receiveEvent` sit with the browser's exports, after App
+            .native => self.script_outcome = native_loop.run(&update, &receiveEvent, &saveFrame),
+            // lint:off decl-order: (as above)
+            .headless => self.script_outcome = native_loop.headless.run(&update, &receiveEvent, &saveFrame),
+            .web, .none => {},
+        }
+    }
+
+    /// After the app's teardown (the runner's `runnerShutdown`, which leaves the handle census at zero): the Vulkan
+    /// host's shutdown, with what its validation layer saw - anything still alive included - and the window closed.
+    /// Returns whether the run was clean: nothing from the validation layer, no error logged - a leak among them -
+    /// and every line of its script run, when it ran one.
+    pub fn finishNative(self: *App) bool {
+        const counts: native_loop.Counts = switch (comptime host.kind) {
+            .native => native_loop.finish(),
+            .headless => native_loop.headless.finish(),
+            .web, .none => return true,
+        };
+        native_log.info("validation: {d} errors, {d} warnings", .{ counts.errors, counts.warnings });
+        const is_validation_clean: bool = counts.errors == 0 and counts.warnings == 0;
+        const failed_line_count: u32 = if (self.script_outcome) |outcome| outcome.failed_line_count else 0;
+        const error_line_count: u32 = console.errorLineCount();
+        if (error_line_count > 0) {
+            native_log.info("{d} errors logged", .{error_line_count});
+        }
+        return is_validation_clean and failed_line_count == 0 and error_line_count == 0;
+    }
+
     pub fn run(
         self: *App,
         cfg: Config,
@@ -554,22 +639,34 @@ pub const App = struct {
         comptime init_fn: fn (Allocator, *Frame, *State) anyerror!void,
         comptime update_fn: fn (*Frame, *State) void,
     ) !void {
-        // Host gate: the WebGPU runtime depends on browser services that don't
-        // exist natively. Returning an error here lets host test/lint builds
-        // link (Zig DCE strips the wasm-only call chain).
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return error.WgpuRequiresWasm;
+        // Without a GPU host (host tests, tools) there is nothing to run: returning an error lets those builds
+        // link, and lazy analysis strips the whole GPU call chain from them.
+        if (comptime !host.has_gpu) {
+            return error.NoGpuHost;
         }
 
-        self.counting = .{ .backing = std.heap.wasm_allocator, .label = "example" };
+        self.counting = .{ .backing = host.heap, .label = "example" };
         const gpa: Allocator = self.counting.allocator();
-        self.engine_counting = .{ .backing = std.heap.wasm_allocator, .label = "engine" };
+        self.engine_counting = .{ .backing = host.heap, .label = "engine" };
         const engine_gpa: Allocator = self.engine_counting.allocator();
         self.config = cfg;
         self.gpa = gpa;
         self.engine_gpa = engine_gpa;
-        self.rng = std.Random.DefaultPrng.init(resolveRngSeed(cfg.rng_seed));
+        self.rng = Random.DefaultPrng.init(resolveRngSeed(cfg.rng_seed));
 
+        // A native program opens its window before the first GPU call: the Vulkan host creates its surface from it,
+        // and choosing a GPU depends on presenting to it.
+        if (comptime host.kind == .native) {
+            try native_loop.openWindow(.{
+                .title = cfg.window.title,
+                .logical_width = cfg.window.width,
+                .logical_height = cfg.window.height,
+            });
+        }
+        // A headless run starts its host with a screen of the window's size instead.
+        if (comptime host.kind == .headless) {
+            try native_loop.headless.start(cfg.window.width, cfg.window.height);
+        }
         const device: wgpu.DeviceHandle = wgpu.initDevice();
         const queue: wgpu.QueueHandle = wgpu.getQueue(device);
         const surface: wgpu.SurfaceHandle = wgpu.getSurface();
@@ -597,7 +694,7 @@ pub const App = struct {
         // The GPU device is live via the first Frame, so GPU handles get real
         // values too. (Legacy return-by-value inits reach here already wrapped in
         // an in-place adapter - see `initInto`.)
-        var init_frame: Frame = self.makeFrame();
+        var init_frame: Frame = self.makeFrame(null);
         const state_ptr: *State = try gpa.create(State);
         errdefer gpa.destroy(state_ptr);
         try init_fn(gpa, &init_frame, state_ptr);
@@ -612,7 +709,6 @@ pub const App = struct {
         };
         self.state = state_ptr;
         self.update_fn = Thunk.dispatch;
-        self.started_at_ms = wgpu.nowMs();
 
         // active_app is the module singleton, typed ?*App, so it must be
         // declared after the App struct - yet App.run (here) assigns it.
@@ -628,8 +724,11 @@ pub const App = struct {
     }
 
     /// Build a fresh Frame for the current tick: refresh the live window dims
-    /// and stamp the time state. The GpuFrame handle is stable across frames.
-    pub fn makeFrame(self: *App) Frame {
+    /// and stamp the time state - from `frame_ms`, the frame's time on the frame
+    /// driver's clock (`update`), or null for the frame an app initializes with,
+    /// which no driver ticked: its time is 0, and it starts no count. The
+    /// GpuFrame handle is stable across frames.
+    pub fn makeFrame(self: *App, frame_ms: ?f64) Frame {
         // Logical size: in .responsive this is the live CSS size; in .fit it's
         // the fixed design size (so layout/HUD code uses design coords).
         const css: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(self.gpu_frame.surface);
@@ -637,19 +736,32 @@ pub const App = struct {
             .responsive => css,
             .fit => .{ .width = self.config.window.width, .height = self.config.window.height },
         };
-        const t_ms: f64 = wgpu.nowMs();
-        const elapsed_s: f32 = @floatCast((t_ms - self.started_at_ms) / 1000.0);
+        const elapsed_s: f32 = if (frame_ms) |time_ms| elapsed: {
+            const first_frame_ms: f64 = self.first_frame_ms orelse time_ms;
+            self.first_frame_ms = first_frame_ms;
+            break :elapsed @floatCast((time_ms - first_frame_ms) / 1000.0);
+        } else 0;
+        // The audio device starts and stops the engine's mixer (`audio_device.init`), its blocks from the engine's
+        // allocator.
+        self.audio_device.engine_mixer = &self.mixer;
+        self.audio_device.mixer_allocator = self.engine_counting.allocator();
         return .{
             .gpu = &self.gpu_frame,
             .gl = &self.gl,
             .input = &self.input_state,
             .audio_device = &self.audio_device,
+            .mixer = &self.mixer,
             .time = .{
                 .delta_time = 0, // filled by the update export (needs prev ts)
                 .time = elapsed_s,
                 .frame_count = self.frame_count,
             },
-            .window = .{ .screen_width = size.width, .screen_height = size.height },
+            .window = .{
+                .screen_width = size.width,
+                .screen_height = size.height,
+                .focused = self.window_focused,
+                .fullscreen = self.is_fullscreen,
+            },
             .random = self.rng.random(),
         };
     }
@@ -700,9 +812,9 @@ pub const App = struct {
         }
         // The tracer's own tables go straight to the wasm allocator, not through a counter,
         // so they never show up in the thing they are measuring.
-        const bookkeeping: Allocator = std.heap.wasm_allocator;
+        const bookkeeping: Allocator = host.heap;
         const watch: *leakwatch.LeakWatch = bookkeeping.create(leakwatch.LeakWatch) catch return;
-        watch.* = .init(std.heap.wasm_allocator, bookkeeping);
+        watch.* = leakwatch.LeakWatch.init(host.heap, bookkeeping);
         self.counting.backing = watch.allocator();
         self.counting.watch = watch;
         self.engine_counting.backing = watch.allocator();
@@ -916,12 +1028,6 @@ pub const App = struct {
 // lint:off module-var: the single live-app bridge pointer (analogue of zimr_app); set once by App.run
 var active_app: ?*App = null;
 
-/// Clock adapter handed to the profiler at startup (`*const fn () f64`).
-/// performance.now() in milliseconds; the dedicated fast import lands later.
-fn profilerClock() f64 {
-    return wgpu.nowMs();
-}
-
 // ============================================================================
 // .fit scale-mode helpers - map a fixed design-size coordinate space into the
 // canvas with uniform scale + centering (letterbox/pillarbox), baked into the
@@ -957,6 +1063,26 @@ fn cssToLogical(
         @floatFromInt(@max(css.height, 1)),
     );
     return .{ (x - f.off_x) / f.scale, (y - f.off_y) / f.scale };
+}
+
+/// A motion in CSS pixels as a motion in logical ones: scaled as `cssToLogical` scales a position, without its
+/// offset, which a difference of two positions cancels.
+fn cssMovementToLogical(
+    app: *App,
+    dx: f32,
+    dy: f32,
+) [2]f32 {
+    if (app.config.window.scale_mode != .fit) {
+        return .{ dx, dy };
+    }
+    const css: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(app.gpu_frame.surface);
+    const f: FitXform = fitScaleOffset(
+        @floatFromInt(app.config.window.width),
+        @floatFromInt(app.config.window.height),
+        @floatFromInt(@max(css.width, 1)),
+        @floatFromInt(@max(css.height, 1)),
+    );
+    return .{ dx / f.scale, dy / f.scale };
 }
 
 /// The app's logical space -> CSS px. Use for ALL outgoing geometry that must
@@ -1045,6 +1171,8 @@ pub fn endDrawing(gl: *WgpuGl) void {
 }
 
 // ---- immediate-mode primitives (thin wrappers over the gl_iface trait) ----
+
+const raster = @import("raster.zig");
 
 pub fn rlBegin(gl: *WgpuGl, mode: raster.DrawMode) void {
     gl.begin(mode);
@@ -1300,7 +1428,7 @@ pub const CylinderDesc = struct {
 
 /// Options for `drawPlane` (XZ plane, normal +Y). `size` is X/Z extent.
 pub const PlaneDesc = struct {
-    size: zm.Vec2 = .{ 1, 1 },
+    size: Vec2 = .{ 1, 1 },
     color: Color = white3d,
 };
 
@@ -1757,7 +1885,265 @@ pub fn getMouseWheelMove(in: *const input.InputState) f32 {
     return input.getMouseWheelMove(in);
 }
 
-const Vec2 = zm.Vec2;
+/// Hides the cursor and asks the platform to lock the pointer to the window, for first-person controls: the pointer
+/// held still, its motion still reported by `getMouseDelta`. The lock is the platform's to grant - a browser grants it
+/// after a click - and `isPointerLocked` says when it holds.
+pub fn disableCursor(in: *input.InputState) void {
+    input.disableCursor(in);
+    platform.current.requestPointerLock();
+}
+
+/// Releases the pointer lock and shows the cursor again.
+pub fn enableCursor(in: *input.InputState) void {
+    input.enableCursor(in);
+    platform.current.releasePointerLock();
+}
+
+/// Asks for fullscreen (`on`) or for the window back. The platform answers in its time - a browser grants fullscreen
+/// only after a click or a key - and each frame's `WindowState.fullscreen` says what holds.
+pub fn requestFullscreen(on: bool) void {
+    platform.current.requestFullscreen(on);
+}
+
+/// A monitor, as the platform reports it (`contract.Monitor`).
+pub const Monitor = contract.Monitor;
+
+/// How many monitors there are: a window's desktop's, or one for a page - its screen.
+pub fn monitorCount() u32 {
+    return platform.current.monitorCount();
+}
+
+/// A monitor's position and size in its own logical pixels, scale, refresh rate and name; null past the count.
+pub fn monitor(index: u32) ?Monitor {
+    return platform.current.monitor(index);
+}
+
+/// The monitor holding the window (for a page, its screen).
+pub fn currentMonitor() u32 {
+    return platform.current.currentMonitor();
+}
+
+/// How a window is shown, and its drawing area's size limits (`contract`).
+pub const WindowShow = contract.WindowShow;
+pub const SizeLimits = contract.SizeLimits;
+
+/// Minimizes, maximizes or restores the window. A page cannot: this does not compile for the web.
+pub fn showWindow(show: WindowShow) void {
+    platform.current.showWindow(show);
+}
+
+/// Asks to bring the window to the front. A page cannot: this does not compile for the web.
+pub fn focusWindow() void {
+    platform.current.focusWindow();
+}
+
+/// Places the window's top-left corner on a monitor, (`x`, `y`) logical pixels from that monitor's top-left corner.
+/// A page cannot: this does not compile for the web.
+pub fn setWindowPosition(monitor_index: u32, x: f32, y: f32) void {
+    platform.current.setWindowPosition(monitor_index, x, y);
+}
+
+/// A key's label in the person's current keyboard layout - the key at the US W is "Z" on a French keyboard - as UTF-8
+/// written into `buffer`; null for no key, or a label longer than `buffer`. Keys are named by their position
+/// (`KeyboardKey`); this is what to show a person, as in "press Z to move up".
+pub fn keyName(key: contract.KeyboardKey, buffer: []u8) ?[]const u8 {
+    return platform.current.keyName(key, buffer);
+}
+
+/// Limits the sizes a person may give the window's drawing area, in logical pixels. A page cannot: this does not
+/// compile for the web.
+pub fn setWindowSizeLimits(limits: SizeLimits) void {
+    platform.current.setWindowSizeLimits(limits);
+}
+
+/// Keeps the screen on (`on`) - no dimming, no screen saver, no sleep - as a video player does, or lets it rest again.
+pub fn keepAwake(on: bool) void {
+    platform.current.keepAwake(on);
+}
+
+/// Asks for the clipboard's text, delivered as a paste (`getPastedText`) a frame or more later - for a paste button
+/// or menu item. The system's own paste command (Ctrl+V) pastes without asking. A platform may decline: a browser
+/// without permission to read the clipboard pastes nothing.
+pub fn requestPaste() void {
+    platform.current.requestPaste();
+}
+
+/// The wall clock: milliseconds since the Unix epoch, UTC (`platform.current.epochMillis`).
+pub fn epochMillis() f64 {
+    return platform.current.epochMillis();
+}
+
+/// Puts text on the system clipboard.
+pub fn setClipboardText(text: []const u8) void {
+    platform.current.setClipboardText(text);
+}
+
+/// Files the person hands the app, and files it offers to save, on any platform (`platform.current`), with the names
+/// of the browser's module (`web.userfile`) they began as. The app draws its own Load and Save buttons and gives
+/// their areas each frame they show, in app pixels: a press there opens the platform's dialog - in the browser
+/// through an invisible element of the page over the button, natively through the system's own. Chosen and dropped
+/// files wait in a queue, oldest first.
+pub const userfile = struct {
+    /// How many files wait. Poll this each frame.
+    pub fn pendingCount() u32 {
+        return platform.current.pendingFileCount();
+    }
+
+    /// The oldest waiting file's size in bytes, to size the buffer for it; 0 when none waits.
+    pub fn nextSize() u32 {
+        return platform.current.nextFileSize();
+    }
+
+    /// Copies the oldest waiting file's name into `out` - the name without a path - and returns its length.
+    pub fn nextName(out: []u8) u32 {
+        return platform.current.nextFileName(out);
+    }
+
+    /// Copies the oldest waiting file's bytes into `out` and removes it from the queue; returns the bytes copied, 0
+    /// when `out` is too small, the file then kept for another try.
+    pub fn readNext(out: []u8) u32 {
+        return platform.current.readNextFile(out);
+    }
+
+    /// Removes the oldest waiting file unread.
+    pub fn discardNext() void {
+        platform.current.discardNextFile();
+    }
+
+    /// The area of the app's Load button, each frame it shows, and the file names it accepts (such as ".bvh"; empty
+    /// for any).
+    pub fn setPickerRect(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        accept: []const u8,
+    ) void {
+        platform.current.setFilePickerArea(.{ .x = x, .y = y, .width = width, .height = height }, accept);
+    }
+
+    /// The Load button is gone: a press there no longer opens a dialog.
+    pub fn hidePicker() void {
+        platform.current.hideFilePicker();
+    }
+
+    /// The file a press on the app's Save button saves, named `name`; copied at once.
+    pub fn offerDownload(bytes: []const u8, name: []const u8) void {
+        platform.current.offerFile(bytes, name);
+    }
+
+    /// The area of the app's Save button, each frame it shows.
+    pub fn setSaveRect(x: f32, y: f32, width: f32, height: f32) void {
+        platform.current.setSaveArea(.{ .x = x, .y = y, .width = width, .height = height });
+    }
+
+    /// The Save button is gone.
+    pub fn hideSave() void {
+        platform.current.hideSave();
+    }
+};
+
+/// The value saved under `key` in an earlier run, or this one, read into `buffer`: null when there is none, or when
+/// it does not fit. Values are bytes, kept per app: in the browser's storage for a web app, in files under the
+/// user's application data for a native one.
+pub fn loadValue(key: []const u8, buffer: []u8) ?[]u8 {
+    return platform.current.loadValue(key, buffer);
+}
+
+/// Saves `bytes` under `key`, to be read back by `loadValue` in this run or a later one.
+pub fn saveValue(key: []const u8, bytes: []const u8) void {
+    platform.current.saveValue(key, bytes);
+}
+
+/// Removes the value saved under `key`.
+pub fn removeValue(key: []const u8) void {
+    platform.current.removeValue(key);
+}
+
+/// Opens a web address in the browser: a new tab beside a web app, the default browser beside a native one.
+pub fn openUrl(url: []const u8) void {
+    platform.current.openUrl(url);
+}
+
+/// Sets the window's title: the browser tab's, or the native window's.
+pub fn setWindowTitle(title: []const u8) void {
+    platform.current.setTitle(title);
+}
+
+/// The contract's name for one of the engine's cursor shapes (raylib's set).
+fn contractCursorOf(cursor: input.MouseCursor) contract.Cursor {
+    return switch (cursor) {
+        .default, .arrow => .default,
+        .ibeam => .text,
+        .crosshair => .crosshair,
+        .pointing_hand => .pointer,
+        .resize_ew => .resize_horizontal,
+        .resize_ns => .resize_vertical,
+        .resize_nwse => .resize_diagonal_down,
+        .resize_nesw => .resize_diagonal_up,
+        .resize_all => .move,
+        .not_allowed => .not_allowed,
+    };
+}
+
+/// Shows the cursor the app asked for during the frame - its shape (`setMouseCursor`), or none while it is hidden
+/// (`hideCursor`, `disableCursor`) - through the platform, when it differs from the one shown. Any code may ask, the
+/// UI included, and the last wish of the frame is the one shown.
+fn showWantedCursor(app: *App) void {
+    const is_hidden: bool = input.isCursorHidden(&app.input_state);
+    const shape: contract.Cursor = contractCursorOf(input.getMouseCursor(&app.input_state));
+    const wanted: contract.Cursor = if (is_hidden) .hidden else shape;
+    if (wanted == app.shown_cursor) {
+        return;
+    }
+    app.shown_cursor = wanted;
+    platform.current.setCursor(wanted);
+}
+
+/// A text input area in the window's logical pixels, as the platform takes it: the app's own, except when the app
+/// draws at a fixed size fitted into the window (`.fit`), whose scale and offset map it back - `cssToLogical`,
+/// inverted.
+fn windowAreaOf(app: *App, area: contract.TextInputArea) contract.TextInputArea {
+    if (app.config.window.scale_mode != .fit) {
+        return area;
+    }
+    const css: wgpu.SurfaceSize = wgpu.getSurfaceCssSize(app.gpu_frame.surface);
+    const fit: FitXform = fitScaleOffset(
+        @floatFromInt(app.config.window.width),
+        @floatFromInt(app.config.window.height),
+        @floatFromInt(@max(css.width, 1)),
+        @floatFromInt(@max(css.height, 1)),
+    );
+    return .{
+        .x = area.x * fit.scale + fit.off_x,
+        .y = area.y * fit.scale + fit.off_y,
+        .width = area.width * fit.scale,
+        .height = area.height * fit.scale,
+        .caret_x = area.caret_x * fit.scale,
+    };
+}
+
+/// The text input the frame asked for (`wantTextInput`), through the platform: turned on when a field asks, with the
+/// field's options; its area placed whenever it moves; turned off when no field asks.
+fn applyTextInputWish(app: *App) void {
+    const wanted: ?input.TextInputWish = input.textInputWish(&app.input_state);
+    const shown: ?input.TextInputWish = app.shown_text_input;
+    app.shown_text_input = wanted;
+    const wish: input.TextInputWish = wanted orelse {
+        if (shown != null) {
+            platform.current.stopTextInput();
+        }
+        return;
+    };
+    const options_changed: bool = if (shown) |previous| !std.meta.eql(previous.options, wish.options) else true;
+    if (options_changed) {
+        platform.current.startTextInput(wish.options);
+    }
+    const area_changed: bool = if (shown) |previous| !std.meta.eql(previous.area, wish.area) else true;
+    if (options_changed or area_changed) {
+        platform.current.setTextInputArea(windowAreaOf(app, wish.area));
+    }
+}
 
 pub fn getMouseDelta(in: *const input.InputState) Vec2 {
     return input.getMouseDelta(in);
@@ -1986,6 +2372,15 @@ fn gestureMode(f: *Frame, touches: i32) GestureMode {
     return .none;
 }
 
+/// Position of touch point `index` (0-based) in logical/design pixels.
+pub fn getTouchPosition(in: *const input.InputState, index: i32) Vec2 {
+    return input.getTouchPosition(in, index);
+}
+
+pub fn getMousePosition(in: *const input.InputState) Vec2 {
+    return input.getMousePosition(in);
+}
+
 /// WHERE a gesture is, for the purpose of deciding which viewport owns it. A
 /// pinch has no single position, so it anchors at the MIDPOINT of the two
 /// fingers - which is exactly where the user thinks they are pinching.
@@ -2038,6 +2433,11 @@ pub const OrbitOptions = struct {
     /// controller's job.
     region: ?types.Rectangle = null,
 };
+
+/// Number of fingers currently down (0..MAX_TOUCH_POINTS). For pinch: read 2+.
+pub fn getTouchPointCount(in: *const input.InputState) i32 {
+    return input.getTouchPointCount(in);
+}
 
 /// A spherical orbit camera. Construct with `OrbitCamera.init`, then call
 /// `update` each frame. `target`, `yaw`, `pitch`, `distance` are public so an
@@ -2253,6 +2653,25 @@ pub fn reopenOverlayPass(gl: *WgpuGl) void {
 
 // ---- camera modes end -------------------------------------------------------
 
+/// Filled axis-aligned rectangle at `position` with `size` (logical pixels).
+pub fn drawRectangle(gl: *WgpuGl, position: Vec2, size: Vec2, color: Color) void {
+    const x: f32 = position[0];
+    const y: f32 = position[1];
+    const w: f32 = size[0];
+    const h: f32 = size[1];
+    gl.bindTexture(.{}); // shapes bind white up front (text leaves the atlas bound)
+    gl.begin(.triangles);
+    gl.color4ub(color.r, color.g, color.b, color.a);
+    // two triangles (x,y)-(x+w,y)-(x+w,y+h) and (x,y)-(x+w,y+h)-(x,y+h)
+    gl.vertex2f(x, y);
+    gl.vertex2f(x + w, y);
+    gl.vertex2f(x + w, y + h);
+    gl.vertex2f(x, y);
+    gl.vertex2f(x + w, y + h);
+    gl.vertex2f(x, y + h);
+    gl.end();
+}
+
 /// Filled rectangle from a Rectangle struct.
 pub fn drawRectangleRec(
     gl: *WgpuGl,
@@ -2297,25 +2716,6 @@ pub fn drawCircle(
     gl.end();
 }
 
-/// Filled axis-aligned rectangle at `position` with `size` (logical pixels).
-pub fn drawRectangle(gl: *WgpuGl, position: Vec2, size: Vec2, color: Color) void {
-    const x: f32 = position[0];
-    const y: f32 = position[1];
-    const w: f32 = size[0];
-    const h: f32 = size[1];
-    gl.bindTexture(.{}); // shapes bind white up front (text leaves the atlas bound)
-    gl.begin(.triangles);
-    gl.color4ub(color.r, color.g, color.b, color.a);
-    // two triangles (x,y)-(x+w,y)-(x+w,y+h) and (x,y)-(x+w,y+h)-(x,y+h)
-    gl.vertex2f(x, y);
-    gl.vertex2f(x + w, y);
-    gl.vertex2f(x + w, y + h);
-    gl.vertex2f(x, y);
-    gl.vertex2f(x + w, y + h);
-    gl.vertex2f(x, y + h);
-    gl.end();
-}
-
 /// Filled ellipse at `center` with horizontal/vertical radii.
 pub fn drawEllipse(
     gl: *WgpuGl,
@@ -2340,6 +2740,34 @@ pub fn drawEllipse(
         gl.vertex2f(cx + @cos(a1) * rx, cy + @sin(a1) * ry);
         gl.vertex2f(cx + @cos(a0) * rx, cy + @sin(a0) * ry);
     }
+    gl.end();
+}
+
+/// A line between two Vec2 endpoints with a given thickness (thin quad).
+pub fn drawLine(
+    gl: *WgpuGl,
+    a: Vec2,
+    b: Vec2,
+    thick: f32,
+    color: Color,
+) void {
+    const dx: f32 = b[0] - a[0];
+    const dy: f32 = b[1] - a[1];
+    const len: f32 = @sqrt(dx * dx + dy * dy);
+    if (len < 1.0e-6) {
+        return;
+    }
+    const nx: f32 = -dy / len * (thick * 0.5);
+    const ny: f32 = dx / len * (thick * 0.5);
+    gl.bindTexture(.{}); // shapes bind white up front (text leaves the atlas bound)
+    gl.begin(.triangles);
+    gl.color4ub(color.r, color.g, color.b, color.a);
+    gl.vertex2f(a[0] + nx, a[1] + ny);
+    gl.vertex2f(a[0] - nx, a[1] - ny);
+    gl.vertex2f(b[0] - nx, b[1] - ny);
+    gl.vertex2f(a[0] + nx, a[1] + ny);
+    gl.vertex2f(b[0] - nx, b[1] - ny);
+    gl.vertex2f(b[0] + nx, b[1] + ny);
     gl.end();
 }
 
@@ -2409,34 +2837,6 @@ pub fn checkCollisionPointRec(point: Vec2, rec: types.Rectangle) bool {
         point[1] >= rec.y and point[1] <= rec.y + rec.height;
 }
 
-/// A line between two Vec2 endpoints with a given thickness (thin quad).
-pub fn drawLine(
-    gl: *WgpuGl,
-    a: Vec2,
-    b: Vec2,
-    thick: f32,
-    color: Color,
-) void {
-    const dx: f32 = b[0] - a[0];
-    const dy: f32 = b[1] - a[1];
-    const len: f32 = @sqrt(dx * dx + dy * dy);
-    if (len < 1.0e-6) {
-        return;
-    }
-    const nx: f32 = -dy / len * (thick * 0.5);
-    const ny: f32 = dx / len * (thick * 0.5);
-    gl.bindTexture(.{}); // shapes bind white up front (text leaves the atlas bound)
-    gl.begin(.triangles);
-    gl.color4ub(color.r, color.g, color.b, color.a);
-    gl.vertex2f(a[0] + nx, a[1] + ny);
-    gl.vertex2f(a[0] - nx, a[1] - ny);
-    gl.vertex2f(b[0] - nx, b[1] - ny);
-    gl.vertex2f(a[0] + nx, a[1] + ny);
-    gl.vertex2f(b[0] - nx, b[1] - ny);
-    gl.vertex2f(b[0] + nx, b[1] + ny);
-    gl.end();
-}
-
 /// Circle outline at a Vec2 center (raylib DrawCircleLinesV) via line segments.
 pub fn drawCircleLines(
     gl: *WgpuGl,
@@ -2475,6 +2875,8 @@ pub fn drawSplineLinear(
         drawLine(gl, points[i], points[i + 1], thick, color);
     }
 }
+
+const shapes2d = @import("shapes2d.zig");
 
 /// B-spline through `points` (does not pass through endpoints). Sampled into 24
 /// line segments per span and drawn as a thick polyline.
@@ -2942,6 +3344,29 @@ pub fn drawRectangleRounded(
     drawCircleSector(gl, .{ x + r, y + h - r }, r, 0.25, 0.5, seg, color); // bottom-left
 }
 
+/// Outlined rectangle at `position`/`size` with a `thickness` border (inset bands).
+pub fn drawRectangleLines(
+    gl: *WgpuGl,
+    position: Vec2,
+    size: Vec2,
+    thickness: f32,
+    color: Color,
+) void {
+    const rx: f32 = position[0];
+    const ry: f32 = position[1];
+    const rw: f32 = size[0];
+    const rh: f32 = size[1];
+    var t: f32 = thickness;
+    const max_t: f32 = @min(rw, rh) * 0.5;
+    if (t > max_t) {
+        t = max_t;
+    }
+    drawRectangle(gl, .{ rx, ry }, .{ rw, t }, color); // top
+    drawRectangle(gl, .{ rx, ry + rh - t }, .{ rw, t }, color); // bottom
+    drawRectangle(gl, .{ rx, ry + t }, .{ t, rh - 2 * t }, color); // left
+    drawRectangle(gl, .{ rx + rw - t, ry + t }, .{ t, rh - 2 * t }, color); // right
+}
+
 /// Outlined rounded rectangle with thickness (raylib DrawRectangleRoundedLinesEx): four straight
 /// edges plus four corner arcs.
 pub fn drawRectangleRoundedLines(
@@ -2969,29 +3394,6 @@ pub fn drawRectangleRoundedLines(
     strokeArc(gl, x + w - r, y + r, r, pi * 1.5, pi * 2.0, seg, thick, color);
     strokeArc(gl, x + w - r, y + h - r, r, 0.0, pi * 0.5, seg, thick, color);
     strokeArc(gl, x + r, y + h - r, r, pi * 0.5, pi, seg, thick, color);
-}
-
-/// Outlined rectangle at `position`/`size` with a `thickness` border (inset bands).
-pub fn drawRectangleLines(
-    gl: *WgpuGl,
-    position: Vec2,
-    size: Vec2,
-    thickness: f32,
-    color: Color,
-) void {
-    const rx: f32 = position[0];
-    const ry: f32 = position[1];
-    const rw: f32 = size[0];
-    const rh: f32 = size[1];
-    var t: f32 = thickness;
-    const max_t: f32 = @min(rw, rh) * 0.5;
-    if (t > max_t) {
-        t = max_t;
-    }
-    drawRectangle(gl, .{ rx, ry }, .{ rw, t }, color); // top
-    drawRectangle(gl, .{ rx, ry + rh - t }, .{ rw, t }, color); // bottom
-    drawRectangle(gl, .{ rx, ry + t }, .{ t, rh - 2 * t }, color); // left
-    drawRectangle(gl, .{ rx + rw - t, ry + t }, .{ t, rh - 2 * t }, color); // right
 }
 
 /// Rectangle with an origin offset and rotation (raylib DrawRectanglePro).
@@ -3663,26 +4065,9 @@ pub const Font = types.Font;
 // input, and supplies a ShapesTextureState (id 0 = WgpuGl's white/untextured
 // bind group, so solid shapes sample white) + a FontCache wrapping the font.
 const ui = @import("ui.zig");
-const shapes2d = @import("shapes2d.zig");
-const raster = @import("raster.zig");
 const shader_interface = @import("shader_interface");
 const shader_introspect = @import("shader_introspect.zig");
 const shader_runtime = @import("shader_runtime_wgpu.zig");
-const web = @import("web.zig");
-
-pub fn getMousePosition(in: *const input.InputState) Vec2 {
-    return input.getMousePosition(in);
-}
-
-/// Number of fingers currently down (0..MAX_TOUCH_POINTS). For pinch: read 2+.
-pub fn getTouchPointCount(in: *const input.InputState) i32 {
-    return input.getTouchPointCount(in);
-}
-
-/// Position of touch point `index` (0-based) in logical/design pixels.
-pub fn getTouchPosition(in: *const input.InputState, index: i32) Vec2 {
-    return input.getTouchPosition(in, index);
-}
 
 pub fn isMouseButtonReleased(
     in: *const input.InputState,
@@ -3776,7 +4161,7 @@ pub const UiHost = struct {
         const sh_f: f32 = float(f.gl.render_h) / @max(dpr_y, 0.0001);
         self.window.screen_width = @trunc(@max(1.0, sw_f));
         self.window.screen_height = @trunc(@max(1.0, sh_f));
-        const snap: ui.InputSnapshot = .{
+        var snap: ui.InputSnapshot = .{
             .mouse_pos = m,
             .mouse_left_down = isMouseButtonDown(f.input, .left),
             .mouse_left_clicked = isMouseButtonPressed(f.input, .left),
@@ -3787,6 +4172,9 @@ pub const UiHost = struct {
             .touch_pos = .{ getTouchPosition(f.input, 0), getTouchPosition(f.input, 1) },
             .delta_time = f.time.delta_time,
         };
+        // The keys, from the engine's input state; their held durations count on from last frame's snapshot, which
+        // the context still holds.
+        ui.fillSnapshotKeys(&snap, f.input, &self.ctx.input);
         const ui_handle: ui.Ui = self.ctx.beginFrameRaw(
             snap,
             f.input,
@@ -3803,103 +4191,13 @@ pub const UiHost = struct {
     /// widget calls, before endDrawing.
     pub fn render(self: *UiHost, f: *Frame) void {
         self.ctx.endFrameNoRender();
+        // The UI's active native field asks the platform for text input, at its caret (`applyTextInputWish`).
+        if (self.ctx.text_input_wish) |wish| {
+            input.wantTextInput(f.input, wish.options, wish.area);
+        }
         ui.uiRenderNow(&self.ctx, f.gl, &self.window, &self.shapes, &self.font_cache);
     }
 };
-
-/// Load a TTF/OTF font (ASCII 32..126) for the WebGPU 2D path.
-///
-/// Text drawn with it is rasterized at the size it LANDS AT on screen - `size`
-/// x devicePixelRatio x any `.fit` scale, camera zoom or viewport scale - the
-/// first time it is drawn at that size, then kept in the shared glyph cache
-/// (see `glyph_atlas.zig`). So it stays sharp at any drawn size, after a
-/// resize, in fullscreen, at any browser zoom. `size` is the nominal size
-/// (`baseSize` metrics, and the size of the baked fallback atlas the CPU
-/// backends draw from); it does not limit the sizes you can draw at.
-///
-/// The Font keeps a copy of `ttf_bytes`, so the caller's buffer may be freed.
-/// The glyph/rec slices and that copy are gpa-owned (free with `z.unloadFont`).
-/// Must be called from initState (needs the App's renderer + device; the
-/// renderer is created lazily on first beginDrawing, so this triggers that).
-pub fn loadFont(
-    f: *Frame,
-    gpa: Allocator,
-    ttf_bytes: []const u8,
-    size: i32,
-) !Font {
-    // ASCII 32..126 - the printable set the FPS counter / labels need.
-    var codepoints: [95]u21 = undefined;
-    for (&codepoints, 0..) |*cp, k| {
-        cp.* = @intCast(32 + k);
-    }
-    return loadFontEx(f, gpa, ttf_bytes, size, &codepoints);
-}
-
-/// Release a font COMPLETELY: free its CPU glyph/rec arrays AND its GPU atlas
-/// (texture + material bind group), recycling the registry slot.
-///
-/// Use this when REPLACING a font while the app runs - e.g. re-baking it with
-/// more codepoints. `z.unloadFont` frees only the CPU side, which is right at
-/// teardown (`deinit` has no `gl`, and the registry reset reclaims every
-/// engine-owned texture anyway) but wrong mid-run: each re-bake would register a
-/// NEW atlas and abandon the old one. After `max_registered_textures` (64) of
-/// those, `registerTexture` runs out of slots and hands back the white texture -
-/// and the text silently turns into solid blocks.
-///
-/// The batch is flushed first when a pass is open, because staged geometry can
-/// still reference the bind group being destroyed.
-pub fn releaseFont(gl: *WgpuGl, gpa: Allocator, font: Font) void {
-    const app: *App = appOf(gl);
-    if (app.renderer_2d) |*r| {
-        if (app.drawing_active) {
-            gl.flushBeforeMaterialSwap();
-        }
-        r.releaseTextureById(font.texture.id);
-    }
-    text2d.unloadFontOwned(gpa, font);
-}
-
-/// Like `loadFont`, but bakes an EXPLICIT codepoint set instead of ASCII 32..126
-/// (raylib `LoadFontEx` with a `codepoints` array). This is how you get accented
-/// Latin, Greek, Cyrillic, CJK, arrows, box-drawing - anything outside ASCII.
-///
-/// Only the codepoints you ask for exist in the font (others draw as '?'), so
-/// pass the ranges the app actually renders, not "all of Unicode". A codepoint
-/// the TTF has no glyph for bakes as the font's fallback/notdef rather than
-/// failing. Glyphs are rasterized at their drawn size exactly as for `loadFont`.
-/// The slice is consumed during the call, so a stack array is fine.
-pub fn loadFontEx(
-    f: *Frame,
-    gpa: Allocator,
-    ttf_bytes: []const u8,
-    size: i32,
-    codepoints: []const u21,
-) !Font {
-    var font: Font = try bakeAtlasFont(f, gpa, ttf_bytes, size, codepoints, .mipmapped);
-    errdefer text2d.unloadFontOwned(gpa, font);
-    const glyph_count: usize = @intCast(font.glyphCount);
-    font.face = try text2d.createFontFace(gpa, ttf_bytes, font.glyphs[0..glyph_count]);
-    return font;
-}
-
-/// raylib's `LoadFontEx` exactly: the atlas is baked ONCE at `size` px (times
-/// the devicePixelRatio, so it is 1:1 at `size` on any screen), point-sampled,
-/// and text at any other size is that atlas scaled. No face, so it is never
-/// rasterized again at the drawn size - use it when magnifying a fixed bitmap
-/// IS the point (the filter demo; a deliberately pixelated look). For ordinary
-/// text use `loadFont`. ASCII 32..126.
-pub fn loadFontBaked(
-    f: *Frame,
-    gpa: Allocator,
-    ttf_bytes: []const u8,
-    size: i32,
-) !Font {
-    var codepoints: [95]u21 = undefined;
-    for (&codepoints, 0..) |*cp, k| {
-        cp.* = @intCast(32 + k);
-    }
-    return bakeAtlasFont(f, gpa, ttf_bytes, size, &codepoints, .point);
-}
 
 /// How a baked atlas is sampled when drawn at a size other than its own.
 const AtlasSampling = enum {
@@ -3972,6 +4270,107 @@ fn bakeAtlasFont(
     };
 }
 
+/// Like `loadFont`, but bakes an EXPLICIT codepoint set instead of ASCII 32..126
+/// (raylib `LoadFontEx` with a `codepoints` array). This is how you get accented
+/// Latin, Greek, Cyrillic, CJK, arrows, box-drawing - anything outside ASCII.
+///
+/// Only the codepoints you ask for exist in the font (others draw as '?'), so
+/// pass the ranges the app actually renders, not "all of Unicode". A codepoint
+/// the TTF has no glyph for bakes as the font's fallback/notdef rather than
+/// failing. Glyphs are rasterized at their drawn size exactly as for `loadFont`.
+/// The slice is consumed during the call, so a stack array is fine.
+pub fn loadFontEx(
+    f: *Frame,
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    size: i32,
+    codepoints: []const u21,
+) !Font {
+    var font: Font = try bakeAtlasFont(f, gpa, ttf_bytes, size, codepoints, .mipmapped);
+    errdefer text2d.unloadFontOwned(gpa, font);
+    const glyph_count: usize = @intCast(font.glyphCount);
+    font.face = try text2d.createFontFace(gpa, ttf_bytes, font.glyphs[0..glyph_count]);
+    return font;
+}
+
+/// Load a TTF/OTF font for the WebGPU 2D path, with the printable characters of ASCII (32..126) and of Latin-1's upper
+/// half (160..255): the letters, accented letters and signs of the languages of Western Europe - what the built-in
+/// bitmap font covers. A codepoint outside them draws as '?'; `loadFontEx` takes a list of your own.
+///
+/// Text drawn with it is rasterized at the size it LANDS AT on screen - `size`
+/// x devicePixelRatio x any `.fit` scale, camera zoom or viewport scale - the
+/// first time it is drawn at that size, then kept in the shared glyph cache
+/// (see `glyph_atlas.zig`). So it stays sharp at any drawn size, after a
+/// resize, in fullscreen, at any browser zoom. `size` is the nominal size
+/// (`baseSize` metrics, and the size of the baked fallback atlas the CPU
+/// backends draw from); it does not limit the sizes you can draw at.
+///
+/// The Font keeps a copy of `ttf_bytes`, so the caller's buffer may be freed.
+/// The glyph/rec slices and that copy are gpa-owned (free with `z.unloadFont`).
+/// Must be called from initState (needs the App's renderer + device; the
+/// renderer is created lazily on first beginDrawing, so this triggers that).
+pub fn loadFont(
+    f: *Frame,
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    size: i32,
+) !Font {
+    // Printable ASCII, then Latin-1's upper half: 127..159 are control codes, and 160 is the no-break space.
+    const ascii_count: usize = 126 - 32 + 1;
+    const latin1_count: usize = 255 - 160 + 1;
+    var codepoints: [ascii_count + latin1_count]u21 = undefined;
+    for (codepoints[0..ascii_count], 0..) |*codepoint, offset| {
+        codepoint.* = @intCast(32 + offset);
+    }
+    for (codepoints[ascii_count..], 0..) |*codepoint, offset| {
+        codepoint.* = @intCast(160 + offset);
+    }
+    return loadFontEx(f, gpa, ttf_bytes, size, &codepoints);
+}
+
+/// Release a font COMPLETELY: free its CPU glyph/rec arrays AND its GPU atlas
+/// (texture + material bind group), recycling the registry slot.
+///
+/// Use this when REPLACING a font while the app runs - e.g. re-baking it with
+/// more codepoints. `z.unloadFont` frees only the CPU side, which is right at
+/// teardown (`deinit` has no `gl`, and the registry reset reclaims every
+/// engine-owned texture anyway) but wrong mid-run: each re-bake would register a
+/// NEW atlas and abandon the old one. After `max_registered_textures` (64) of
+/// those, `registerTexture` runs out of slots and hands back the white texture -
+/// and the text silently turns into solid blocks.
+///
+/// The batch is flushed first when a pass is open, because staged geometry can
+/// still reference the bind group being destroyed.
+pub fn releaseFont(gl: *WgpuGl, gpa: Allocator, font: Font) void {
+    const app: *App = appOf(gl);
+    if (app.renderer_2d) |*r| {
+        if (app.drawing_active) {
+            gl.flushBeforeMaterialSwap();
+        }
+        r.releaseTextureById(font.texture.id);
+    }
+    text2d.unloadFontOwned(gpa, font);
+}
+
+/// raylib's `LoadFontEx` exactly: the atlas is baked ONCE at `size` px (times
+/// the devicePixelRatio, so it is 1:1 at `size` on any screen), point-sampled,
+/// and text at any other size is that atlas scaled. No face, so it is never
+/// rasterized again at the drawn size - use it when magnifying a fixed bitmap
+/// IS the point (the filter demo; a deliberately pixelated look). For ordinary
+/// text use `loadFont`. ASCII 32..126.
+pub fn loadFontBaked(
+    f: *Frame,
+    gpa: Allocator,
+    ttf_bytes: []const u8,
+    size: i32,
+) !Font {
+    var codepoints: [95]u21 = undefined;
+    for (&codepoints, 0..) |*cp, k| {
+        cp.* = @intCast(32 + k);
+    }
+    return bakeAtlasFont(f, gpa, ttf_bytes, size, &codepoints, .point);
+}
+
 /// raylib's `LoadFontData(..., FONT_SDF, ...)` - bake a font as a SIGNED
 /// DISTANCE FIELD. Unlike the coverage atlas (`loadFont`/`loadFontEx`), an SDF
 /// atlas stays crisp when magnified far past its bake size, because a
@@ -4019,7 +4418,7 @@ pub fn loadFontSdf(
     const pixels: []const u8 = @as([*]const u8, @ptrCast(atlas.image.data.?))[0 .. aw * ah * 4];
     // LINEAR (bilinear) sampling: the shader reads a smoothly interpolated
     // distance and thresholds it. NEAREST would step the field and re-alias.
-    const tex: WgpuTexture = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
+    const tex: WgpuTexture = .createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
         .pixels = pixels,
         .width = aw,
         .height = ah,
@@ -4106,7 +4505,7 @@ pub fn loadFontFromImage(
     const app: *App = appOf(gl);
     _ = try app.ensureRenderer2D();
     const r: *Renderer2D = &app.renderer_2d.?;
-    const tex: WgpuTexture = WgpuTexture.createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
+    const tex: WgpuTexture = .createFromPixels(app.gpu_frame.device, app.gpu_frame.queue, .{
         .pixels = cleaned,
         .width = @intCast(w),
         .height = @intCast(h),
@@ -4128,12 +4527,12 @@ pub fn loadFontFromImage(
             .advanceX = 0,
             // XNA image fonts have no per-glyph CPU bitmap; a zeroed Image is
             // null-data, so unloadImage no-ops on it (safe teardown).
-            .image = std.mem.zeroes(types.Image),
+            .image = zeroes(types.Image),
         };
     }
 
     return .{
-        .baseSize = @intFromFloat(recs[0].height),
+        .baseSize = @round(recs[0].height),
         .glyphCount = @intCast(count),
         .glyphPadding = 0,
         .texture = .{ .id = tex_id, .width = @intCast(w), .height = @intCast(h) },
@@ -4291,7 +4690,12 @@ pub fn pushViewport(f: *Frame, placement: Placement) void {
     const r: [4]u32 = logicalToBacking(app, rr.x, rr.y, rr.width, rr.height);
     wgpu.render_pass.setScissorRect(app.pass.pass, r[0], r[1], r[2], r[3]);
     // The child sees its own logical size as the window.
-    f.window = .{ .screen_width = @trunc(lw), .screen_height = @trunc(lh) };
+    f.window = .{
+        .screen_width = @trunc(lw),
+        .screen_height = @trunc(lh),
+        .focused = app.window_focused,
+        .fullscreen = app.is_fullscreen,
+    };
 }
 
 /// Restore the drawing state saved by the matching `pushViewport`: modelview,
@@ -4471,6 +4875,10 @@ pub const Launcher = struct {
         if (!rec.alive) {
             return;
         }
+        // The children share the engine's sound: it stops before the child's deinit frees what its voices may read,
+        // and its device is closed, so that the next child's `init` starts it anew.
+        sound.audio_device.close(f.audio_device);
+        f.mixer.stop();
         rec.vt.deinit(rec.dbg.allocator(), @ptrCast(rec.state.ptr));
         if (rec.dbg.deinit() == .leak) {
             std.log.warn(
@@ -4520,6 +4928,27 @@ pub fn endScissorMode(gl: *WgpuGl) void {
 // a single triangle that covers clip space ([-1,-1],[3,-1],[-1,3]). The shader's
 // VS passes positions straight to clip space, so the 2D ortho doesn't apply.
 
+/// Compile-time guard: `bindFullscreenShader` + `drawFullscreenTriangle` route
+/// the draw through the 2D shapes batch, whose flush re-binds `@group(N)` (N =
+/// `gpu_iface.batch_reserved_group`) to its texture atlas. A shader that uses
+/// that group - e.g. ANY texture sampler - would have its binding silently
+/// clobbered and sample the atlas instead (the postprocess "bars" bug). This
+/// turns that footgun into a compile error pointing at the safe path. Cost:
+/// zero at runtime; it fires before anything ships.
+fn assertFullscreenBatchSafe(comptime SchemaT: type) void {
+    const si = shader_introspect;
+    const layout: si.ResolvedLayout = si.solveLayout(SchemaT);
+    const reserved: u32 = gpu_iface.batch_reserved_group;
+    if (layout.groups_used & (@as(u8, 1) << @intCast(reserved)) != 0) {
+        @compileError("Schema `" ++ @typeName(SchemaT) ++ "` binds a resource at @group(1), " ++
+            "but bindFullscreenShader/drawFullscreenTriangle draw through the 2D shapes batch, " ++
+            "which binds @group(1) to its texture atlas on flush — your binding (e.g. a texture " ++
+            "sampler) would be silently clobbered and the shader would sample the atlas instead. " ++
+            "Use `z.drawFullscreenShader(gl, " ++ @typeName(SchemaT) ++ ", &loaded)` instead: it " ++
+            "draws through the shader's OWN pipeline + bind groups and never touches the batch.");
+    }
+}
+
 /// Bind a loaded fullscreen shader's pipeline + bind groups on the current
 /// drawing pass. Flushes any pending 2D batch first (it belongs to the shapes
 /// pipeline). Generic over the shader's schema. Pair with drawFullscreenTriangle.
@@ -4554,27 +4983,6 @@ comptime {
         @compileError("gpu_iface.batch_reserved_group must equal shader_interface.sampler_group: " ++
             "the 2D shapes batch binds its atlas at the material-sampler group, and the " ++
             "fullscreen-batch-safety guard relies on that equality.");
-    }
-}
-
-/// Compile-time guard: `bindFullscreenShader` + `drawFullscreenTriangle` route
-/// the draw through the 2D shapes batch, whose flush re-binds `@group(N)` (N =
-/// `gpu_iface.batch_reserved_group`) to its texture atlas. A shader that uses
-/// that group - e.g. ANY texture sampler - would have its binding silently
-/// clobbered and sample the atlas instead (the postprocess "bars" bug). This
-/// turns that footgun into a compile error pointing at the safe path. Cost:
-/// zero at runtime; it fires before anything ships.
-fn assertFullscreenBatchSafe(comptime SchemaT: type) void {
-    const si = shader_introspect;
-    const layout: si.ResolvedLayout = si.solveLayout(SchemaT);
-    const reserved: u32 = gpu_iface.batch_reserved_group;
-    if (layout.groups_used & (@as(u8, 1) << @intCast(reserved)) != 0) {
-        @compileError("Schema `" ++ @typeName(SchemaT) ++ "` binds a resource at @group(1), " ++
-            "but bindFullscreenShader/drawFullscreenTriangle draw through the 2D shapes batch, " ++
-            "which binds @group(1) to its texture atlas on flush — your binding (e.g. a texture " ++
-            "sampler) would be silently clobbered and the shader would sample the atlas instead. " ++
-            "Use `z.drawFullscreenShader(gl, " ++ @typeName(SchemaT) ++ ", &loaded)` instead: it " ++
-            "draws through the shader's OWN pipeline + bind groups and never touches the batch.");
     }
 }
 
@@ -4623,7 +5031,7 @@ fn ensureFullscreenVbo(app: *App) wgpu.BufferHandle {
             .usage = .{ .vertex = true, .copy_dst = true },
             .label = "engine_fullscreen_vbo",
         });
-        wgpu.queueWriteBuffer(app.gpu_frame.queue, app.fullscreen_vbo, 0, std.mem.sliceAsBytes(&fullscreen_verts));
+        wgpu.queueWriteBuffer(app.gpu_frame.queue, app.fullscreen_vbo, 0, sliceAsBytes(&fullscreen_verts));
     }
     return app.fullscreen_vbo;
 }
@@ -4657,15 +5065,58 @@ pub fn drawFullscreenShader(
 
 // `@import("root").zimr_app` - a single bridge pointer, not mutable app state.
 // (Audited the same way: it's a bridge handle, not user data.)
+/// Saves the frame a script's run last drew as a PNG file at `path` (`native_loop.script.CaptureFunction`): the frame
+/// read back - from the headless screen, or the window's last presented frame - encoded, and written with the run's
+/// `io`, its directory made when missing. Returns whether it could; why it could not is in the log.
+fn saveFrame(io: Io, path: []const u8) bool {
+    const screen_size: [2]u32 = native_loop.script.lastFrameSize();
+    const width: u32 = screen_size[0];
+    const height: u32 = screen_size[1];
+    const pixels: []u8 = host.heap.alloc(u8, @as(usize, width) * height * 4) catch {
+        native_log.err("no memory to read the screen into", .{});
+        return false;
+    };
+    defer host.heap.free(pixels);
+    if (!native_loop.script.readLastFrame(pixels)) {
+        native_log.err("reading the frame back failed", .{});
+        return false;
+    }
+    const png_bytes: []u8 = codecs.png.encode(host.heap, pixels, width, height) catch |err| {
+        native_log.err("encoding the frame as PNG failed: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer host.heap.free(png_bytes);
+    if (std.fs.path.dirname(path)) |directory| {
+        Io.Dir.cwd().createDirPath(io, directory) catch |err| {
+            native_log.err("making the directory {s} failed: {s}", .{ directory, @errorName(err) });
+            return false;
+        };
+    }
+    Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = png_bytes }) catch |err| {
+        native_log.err("writing {s} failed: {s}", .{ path, @errorName(err) });
+        return false;
+    };
+    return true;
+}
+
 // lint:off module-var: previous-frame timestamp for delta_time, owned by the frame driver
 var prev_frame_ms: f64 = 0;
+// lint:off module-var: the frame clock's filter, carried from frame to frame by the frame driver
+var frame_time_filter: FrameTimeFilter = .{};
 
-/// The wasm `update` export the JS RAF loop calls each tick. Builds a fresh
-/// Frame (live window dims + dt) and dispatches to the user's update. No-op
-/// until `App.run` has set `active_app`, so a RAF tick firing between wasm
-/// instantiation and `main` running is harmless.
-pub export fn update(dt_seconds: f32) void {
-    _ = dt_seconds; // we compute dt from timestamps for monotonicity
+/// Reads every gamepad slot from the platform into the input state, before the app's update: what the app's gamepad
+/// queries answer this frame (`input.setGamepad`).
+fn readGamepads(app: *App) void {
+    for (0..input.max_gamepads) |slot| {
+        input.setGamepad(&app.input_state, slot, platform.current.gamepad(@intCast(slot)));
+    }
+}
+
+/// The frame driver's call, once per frame - the browser's frame tick, the native window's loop, a headless run's
+/// script - with `frame_ms`, the frame's time in milliseconds on the driver's clock. Frame time is given, not read:
+/// the engine's own clock (`wgpu.nowMs`) measures work, and a headless run's frames happen at the times its script
+/// says, so that every run of it draws the same frames.
+pub export fn update(frame_ms: f64) void {
     const app: *App = active_app orelse return;
     const thunk: UpdateThunk = app.update_fn orelse return;
 
@@ -4675,20 +5126,25 @@ pub export fn update(dt_seconds: f32) void {
     const zframe: profiler.Zone = profiler.zoneNamed(@src(), "frame");
     defer zframe.end();
 
-    var frame: Frame = app.makeFrame();
-    // delta_time from successive timestamps (the JS dt arg can be unreliable
-    // across the first tick / tab-switch; a monotonic diff is steadier).
-    const t_ms: f64 = wgpu.nowMs();
+    var frame: Frame = app.makeFrame(frame_ms);
+    // The frame's duration: the time between this frame's and the last one's, on the frame driver's clock.
     if (prev_frame_ms != 0) {
-        frame.time.delta_time = @floatCast((t_ms - prev_frame_ms) / 1000.0);
+        const measured_seconds: f64 = (frame_ms - prev_frame_ms) / 1000.0;
+        frame.time.raw_delta_time = @floatCast(measured_seconds);
+        frame.time.delta_time = @floatCast(frame_time_filter.next(measured_seconds));
     }
-    prev_frame_ms = t_ms;
+    prev_frame_ms = frame_ms;
 
+    readGamepads(app);
     {
         const zu: profiler.Zone = profiler.zoneNamed(@src(), "update");
         defer zu.end();
         thunk(&frame, app.state);
     }
+    app.mixer.mixFrame();
+    sound.audio_device.reportToDiagnostics(&app.audio_device);
+    showWantedCursor(app);
+    applyTextInputWish(app);
     // Advance input (current->previous) so just-pressed/released edge queries
     // work next frame, and clear the per-frame wheel/char deltas.
     {
@@ -4702,85 +5158,293 @@ pub export fn update(dt_seconds: f32) void {
 }
 
 // ============================================================================
-// Input ingress - the wasm exports the JS bridge calls on DOM events. Each
-// routes into the active App's input state. Coordinates arrive in LOGICAL
-// pixels (the bridge converts clientX/Y -> canvas-local at the JS edge), the
-// same contract as the GL path. No-ops before App.run sets active_app.
+// The browser's input - the wasm exports the JS bridge calls on DOM events. Each builds the contract's event
+// (`platform/contract.zig`) and hands it to `receiveEvent`, as every platform does. Positions arrive in CSS pixels,
+// relative to the canvas (the bridge converts at its edge); mouse buttons in the DOM's numbering; keys as the
+// engine's numbers, which the bridge's table gives each DOM code; touches by the pointer's id.
+//
+// Every number here comes from JavaScript, so none is converted by a cast that could trap: a key number the engine
+// does not know, a button outside a byte, is dropped; a touch's id, which only names a finger, is reinterpreted
+// rather than range-checked.
 // ============================================================================
 
-fn inputState() ?*input.InputState {
-    const app: *App = active_app orelse return null;
-    return &app.input_state;
+// The pointer's last position on the web, in CSS pixels: a button event happens where the pointer last moved (the
+// bridge sends a move before every press), and a move's movement is its distance from the last one.
+// lint:off module-var: the browser's pointer, between its events
+var web_pointer: [2]f32 = .{ 0, 0 };
+
+/// A mouse button event where the browser's pointer last moved, or null for a number outside a byte - which no
+/// browser sends.
+fn webButton(dom_button: i32) ?contract.MouseButton {
+    const in_byte: bool = dom_button >= 0 and dom_button <= 255;
+    if (!in_byte) {
+        return null;
+    }
+    const button_number: u8 = @intCast(dom_button);
+    return .{
+        .button = @fromBackingInt(button_number),
+        .x = web_pointer[0],
+        .y = web_pointer[1],
+        .modifiers = .{},
+    };
 }
 
-pub export fn input_push_mouse_move(x: f32, y: f32) void {
-    const app: *App = active_app orelse return;
-    // CSS px (from the bridge) -> the app's logical space (see cssToLogical).
-    const p: [2]f32 = cssToLogical(app, x, y);
-    input.pushMouseMove(&app.input_state, p[0], p[1]);
-}
-/// The JS `devicemotion` handler calls this with accelerationIncludingGravity
-/// (m/s^2, device natural frame) and screen.orientation.angle. Routes into the
-/// active App's motion state; `z.getDeviceGravity(f.input)` reads it back. One
-/// channel is all we need - it already fuses gravity and motion (equivalence
-/// principle), so there's no separate "linear acceleration" to plumb.
-pub export fn input_push_motion(ax: f32, ay: f32, az: f32, screen_angle: f32) void {
-    const app: *App = active_app orelse return;
-    input.pushMotion(&app.input_state, ax, ay, az, screen_angle);
-}
-pub export fn input_push_mouse_button_down(button: i32) void {
-    if (inputState()) |s| {
-        input.pushMouseButtonDown(s, button);
+/// The pointer moved to (`x`, `y`), in CSS pixels. While the pointer is locked (`is_locked` 1) browsers hold the
+/// position still and report the motion alone, as `movement_x` and `movement_y`; otherwise the motion is the step
+/// between positions, which every browser reports alike for mice and for touches.
+pub fn inputPushMouseMove(
+    x: f32,
+    y: f32,
+    movement_x: f32,
+    movement_y: f32,
+    is_locked: i32,
+) callconv(.c) void {
+    const previous: [2]f32 = web_pointer;
+    // While locked the position is held where the lock began - some browsers report zero instead.
+    if (is_locked == 0) {
+        web_pointer = .{ x, y };
     }
+    const step: [2]f32 = if (is_locked != 0) .{ movement_x, movement_y } else .{ x - previous[0], y - previous[1] };
+    receiveEvent(.{ .mouse_move = .{
+        .x = web_pointer[0],
+        .y = web_pointer[1],
+        .dx = step[0],
+        .dy = step[1],
+        .modifiers = .{},
+    } });
 }
-pub export fn input_push_mouse_button_up(button: i32) void {
-    if (inputState()) |s| {
-        input.pushMouseButtonUp(s, button);
+
+/// The JS `devicemotion` handler calls this with accelerationIncludingGravity (m/s^2, the device's own frame) and
+/// `screen.orientation.angle`. One channel is all the engine needs: it already fuses gravity and motion (the
+/// equivalence principle), so there is no separate linear acceleration to carry.
+pub fn inputPushMotion(ax: f32, ay: f32, az: f32, screen_angle: f32) callconv(.c) void {
+    receiveEvent(.{ .motion = .{ .ax = ax, .ay = ay, .az = az, .screen_angle = screen_angle } });
+}
+
+pub fn inputPushMouseButtonDown(dom_button: i32) callconv(.c) void {
+    receiveEvent(.{ .mouse_button_down = webButton(dom_button) orelse return });
+}
+
+pub fn inputPushMouseButtonUp(dom_button: i32) callconv(.c) void {
+    receiveEvent(.{ .mouse_button_up = webButton(dom_button) orelse return });
+}
+
+pub fn inputPushMouseWheel(dx: f32, dy: f32) callconv(.c) void {
+    receiveEvent(.{ .mouse_wheel = .{ .dx = dx, .dy = dy, .modifiers = .{} } });
+}
+
+/// A key going down: the engine's number for it, whether the browser repeats it, and what it types on the current
+/// layout as the bridge reads `KeyboardEvent.key` (0 for nothing; a number that is no code point counts as nothing).
+pub fn inputPushKeyDown(
+    key: i32,
+    repeat: i32,
+    label: i32,
+) callconv(.c) void {
+    const known_key: contract.KeyboardKey = std.enums.fromInt(contract.KeyboardKey, key) orelse return;
+    const is_code_point: bool = label > 0 and label <= 0x10ffff;
+    const key_label: u21 = if (is_code_point) @intCast(label) else 0;
+    receiveEvent(.{ .key_down = .{ .key = known_key, .repeat = repeat != 0, .label = key_label, .modifiers = .{} } });
+}
+
+pub fn inputPushKeyUp(key: i32) callconv(.c) void {
+    const known_key: contract.KeyboardKey = std.enums.fromInt(contract.KeyboardKey, key) orelse return;
+    receiveEvent(.{ .key_up = .{ .key = known_key, .modifiers = .{} } });
+}
+
+/// One typed character, as its UTF-8 text. A number that is no code point, or one that cannot be encoded, is dropped.
+pub fn inputPushChar(codepoint: i32) callconv(.c) void {
+    const is_code_point: bool = codepoint >= 0 and codepoint <= 0x10ffff;
+    if (!is_code_point) {
+        return;
     }
+    var bytes: [4]u8 = undefined;
+    const byte_count: u3 = std.unicode.utf8Encode(@intCast(codepoint), &bytes) catch return;
+    receiveEvent(.{ .text = .{ .bytes = bytes[0..byte_count] } });
 }
-pub export fn input_push_mouse_wheel(dx: f32, dy: f32) void {
-    if (inputState()) |s| {
-        input.pushMouseWheel(s, dx, dy);
-    }
+
+/// The page gaining (`gained` 1) or losing (0) the keyboard's focus: the window's `focus` and `blur` events.
+pub fn inputPushFocus(gained: i32) callconv(.c) void {
+    receiveEvent(if (gained != 0) .focus_gained else .focus_lost);
 }
-pub export fn input_push_key_down(key: i32, repeat: i32) void {
-    if (inputState()) |s| {
-        input.pushKeyDown(s, key, repeat);
-    }
+
+/// The page shown (`visible` 1) or hidden (0): the document's `visibilitychange` - a tab in the background, a minimized
+/// browser.
+pub fn inputPushVisibility(visible: i32) callconv(.c) void {
+    receiveEvent(if (visible != 0) .shown else .hidden);
 }
-pub export fn input_push_key_up(key: i32) void {
-    if (inputState()) |s| {
-        input.pushKeyUp(s, key);
-    }
+
+/// The canvas resized: its size in CSS pixels, and `devicePixelRatio`, from the bridge's `ResizeObserver`.
+pub fn inputPushResized(
+    width: f32,
+    height: f32,
+    scale: f32,
+) callconv(.c) void {
+    receiveEvent(.{ .resized = .{ .width = width, .height = height, .scale = scale } });
 }
-pub export fn input_push_char(codepoint: i32) void {
-    if (inputState()) |s| {
-        input.pushChar(s, codepoint);
-    }
+
+/// The pointer entered the canvas (`is_inside` 1) or left it (0): the canvas's `mouseenter` and `mouseleave`.
+pub fn inputPushPointerPresence(is_inside: i32) callconv(.c) void {
+    receiveEvent(if (is_inside != 0) .mouse_enter else .mouse_leave);
 }
-pub export fn zimr_input_push_touch_down(
+
+/// The page's pointer lock began (`is_locked` 1) or ended (0): the document's `pointerlockchange`.
+pub fn inputPushPointerLock(is_locked: i32) callconv(.c) void {
+    receiveEvent(.{ .pointer_lock_changed = is_locked != 0 });
+}
+
+// lint:off module-var: the bridge writes a pasted text here, between the page's paste and its report
+var web_paste_bytes: [input.paste_capacity]u8 = undefined;
+
+/// Where the bridge writes a pasted text, as UTF-8, before reporting its length (`inputPushPaste`).
+pub fn inputPasteBuffer() callconv(.c) [*]u8 {
+    return &web_paste_bytes;
+}
+
+/// How many bytes `inputPasteBuffer` holds; the bridge writes no more, cutting at a character boundary.
+pub fn inputPasteCapacity() callconv(.c) u32 {
+    return web_paste_bytes.len;
+}
+
+/// A text was pasted - the document's `paste`, or `navigator.clipboard.readText` answering `requestPaste` - and its
+/// `length` bytes are in `inputPasteBuffer`.
+pub fn inputPushPaste(length: u32) callconv(.c) void {
+    const text_length: usize = @min(length, web_paste_bytes.len);
+    receiveEvent(.{ .paste = .{ .bytes = web_paste_bytes[0..text_length] } });
+}
+
+/// The page entered fullscreen (`is_on` 1) or left it (0): the document's `fullscreenchange`.
+pub fn inputPushFullscreen(is_on: i32) callconv(.c) void {
+    receiveEvent(.{ .fullscreen_changed = is_on != 0 });
+}
+
+pub fn inputPushTouchDown(
     id: i32,
     x: f32,
     y: f32,
-) void {
-    const app: *App = active_app orelse return;
-    // Same CSS->logical mapping as the mouse, so touch and mouse agree in BOTH
-    // scale modes (previously touch skipped the .fit inverse - a latent gap).
-    const p: [2]f32 = cssToLogical(app, x, y);
-    input.pushTouchDown(&app.input_state, id, p[0], p[1]);
+) callconv(.c) void {
+    receiveEvent(.{ .touch_begin = .{ .id = @bitCast(id), .x = x, .y = y } });
 }
-pub export fn zimr_input_push_touch_move(
+
+pub fn inputPushTouchMove(
     id: i32,
     x: f32,
     y: f32,
-) void {
-    const app: *App = active_app orelse return;
-    const p: [2]f32 = cssToLogical(app, x, y);
-    input.pushTouchMove(&app.input_state, id, p[0], p[1]);
+) callconv(.c) void {
+    receiveEvent(.{ .touch_move = .{ .id = @bitCast(id), .x = x, .y = y } });
 }
-pub export fn zimr_input_push_touch_up(id: i32) void {
-    if (inputState()) |s| {
-        input.pushTouchUp(s, id);
+
+pub fn inputPushTouchUp(
+    id: i32,
+    x: f32,
+    y: f32,
+) callconv(.c) void {
+    receiveEvent(.{ .touch_end = .{ .id = @bitCast(id), .x = x, .y = y } });
+}
+
+// The input calls, exported under the names the browser's bridge calls them by.
+comptime {
+    @export(&inputPushMouseMove, .{ .name = "input_push_mouse_move" });
+    @export(&inputPushMotion, .{ .name = "input_push_motion" });
+    @export(&inputPushMouseButtonDown, .{ .name = "input_push_mouse_button_down" });
+    @export(&inputPushMouseButtonUp, .{ .name = "input_push_mouse_button_up" });
+    @export(&inputPushMouseWheel, .{ .name = "input_push_mouse_wheel" });
+    @export(&inputPushKeyDown, .{ .name = "input_push_key_down" });
+    @export(&inputPushKeyUp, .{ .name = "input_push_key_up" });
+    @export(&inputPushChar, .{ .name = "input_push_char" });
+    @export(&inputPushFocus, .{ .name = "input_push_focus" });
+    @export(&inputPushVisibility, .{ .name = "input_push_visibility" });
+    @export(&inputPushPointerPresence, .{ .name = "input_push_pointer_presence" });
+    @export(&inputPushPointerLock, .{ .name = "input_push_pointer_lock" });
+    @export(&inputPushFullscreen, .{ .name = "input_push_fullscreen" });
+    @export(&inputPasteBuffer, .{ .name = "input_paste_buffer" });
+    @export(&inputPasteCapacity, .{ .name = "input_paste_capacity" });
+    @export(&inputPushPaste, .{ .name = "input_push_paste" });
+    @export(&inputPushResized, .{ .name = "input_push_resized" });
+    @export(&inputPushTouchDown, .{ .name = "zimr_input_push_touch_down" });
+    @export(&inputPushTouchMove, .{ .name = "zimr_input_push_touch_move" });
+    @export(&inputPushTouchUp, .{ .name = "zimr_input_push_touch_up" });
+}
+
+// The audio worklet's entry points: in the browser, the audio worklet runs a second instance of this module, and
+// renders the sound there through them (`sound.mixer.worklet_abi`).
+comptime {
+    if (host.kind == .web) {
+        sound.mixer.exportWorkletEntryPoints();
+    }
+}
+
+// The platform this build runs on keeps the contract - checked in every build of the engine.
+comptime {
+    contract.requirePlatform(platform.current);
+}
+
+/// The engine's one place for events: every platform hands each event here, in order, before the frame that sees it
+/// (`platform/contract.zig`). Each lands in the running app's input state, which the frame reads. Positions arrive in
+/// logical (CSS) pixels and are mapped into the app's own space (`cssToLogical`, which its scaling mode decides); a
+/// mouse button arrives in the DOM's numbering and is mapped to the engine's; text arrives as UTF-8 and is handed
+/// over a code point at a time - the platforms hand over valid UTF-8, and text that is not is dropped whole rather
+/// than guessed at. A touch's id only names a finger, so it is reinterpreted, never range-checked. Before `App.run`
+/// there is no app, and an event changes nothing.
+fn receiveEvent(event: contract.Event) void {
+    const app: *App = active_app orelse return;
+    const state: *input.InputState = &app.input_state;
+    switch (event) {
+        .key_down => |down| {
+            input.setKeyLabel(state, @backingInt(down.key), down.label);
+            input.pushKeyDown(state, @backingInt(down.key), @intFromBool(down.repeat));
+        },
+        .key_up => |up| input.pushKeyUp(state, @backingInt(up.key)),
+        .text => |text| {
+            var code_points: std.unicode.Utf8Iterator = (std.unicode.Utf8View.init(text.bytes) catch return).iterator();
+            while (code_points.nextCodepoint()) |code_point| {
+                input.pushChar(state, @intCast(code_point));
+            }
+        },
+        .mouse_move => |move| {
+            const position: [2]f32 = cssToLogical(app, move.x, move.y);
+            input.pushMouseMove(state, position[0], position[1]);
+            const movement: [2]f32 = cssMovementToLogical(app, move.dx, move.dy);
+            input.pushMouseMovement(state, movement[0], movement[1]);
+        },
+        .mouse_button_down => |button| {
+            input.pushMouseButtonDown(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
+        },
+        .mouse_button_up => |button| {
+            input.pushMouseButtonUp(state, dom_input.mouseButtonFromDomButton(@backingInt(button.button)));
+        },
+        .mouse_wheel => |wheel| input.pushMouseWheel(state, wheel.dx, wheel.dy),
+        .pointer_lock_changed => |is_locked| input.pushPointerLock(state, is_locked),
+        .paste => |text| input.pushPaste(state, text.bytes),
+        .fullscreen_changed => |is_on| app.is_fullscreen = is_on,
+        .mouse_enter => input.pushPointerPresence(state, true),
+        .mouse_leave => input.pushPointerPresence(state, false),
+        .touch_begin => |touch| {
+            const position: [2]f32 = cssToLogical(app, touch.x, touch.y);
+            input.pushTouchDown(state, @bitCast(touch.id), position[0], position[1]);
+        },
+        .touch_move => |touch| {
+            const position: [2]f32 = cssToLogical(app, touch.x, touch.y);
+            input.pushTouchMove(state, @bitCast(touch.id), position[0], position[1]);
+        },
+        .touch_end, .touch_cancel => |touch| input.pushTouchUp(state, @bitCast(touch.id)),
+        .motion => |motion| input.pushMotion(state, motion.ax, motion.ay, motion.az, motion.screen_angle),
+        // The releases of what is held go to whichever window has the focus now: the engine releases it all.
+        .focus_lost => {
+            app.window_focused = false;
+            input.releaseHeld(state);
+        },
+        .focus_gained => app.window_focused = true,
+        // No frame runs while the app is hidden - the native loop sleeps, the browser stops its animation frames -
+        // so a frame has nothing to read; these are where sound would stop and resume.
+        .hidden, .shown => {},
+        // Each frame reads the drawing area's size from the surface itself, so a resize needs no record here.
+        .resized => {},
+        // No platform reports these yet, and the engine has nothing to do for them so far.
+        .composition,
+        .quit_requested,
+        .gamepad_connected,
+        .gamepad_disconnected,
+        => {},
     }
 }
 
@@ -4823,5 +5487,5 @@ test "refAllDecls: every decl compiles (catches removed-API / non-generic breaka
     // removals) fails here instead of silently slipping through. NOTE: it does
     // NOT analyze generic fn bodies until they're instantiated, so it's a
     // partial net -- real generic coverage comes from tests that call them.
-    std.testing.refAllDecls(@This());
+    refAllDecls(@This());
 }

@@ -61,6 +61,34 @@ fn nearestPoint(pts: []const Vec2, m: Vec2) i32 {
     return best;
 }
 
+/// Cubic-Bezier: build the interleaved start/c1/c2/end array (controls auto-derived as a
+/// horizontal offset off each anchor), draw the curve, then the control handles + tangents.
+fn drawBezier(f: *z.Frame, s: *State, thick: f32, stroke: Color) void {
+    var inter: [3 * (point_count - 1) + 1]Vec2 = undefined;
+    var i: usize = 0;
+    while (i + 1 < point_count) : (i += 1) {
+        const c_start: Vec2 = .{ s.points[i][0] + 60, s.points[i][1] };
+        const c_end: Vec2 = .{ s.points[i + 1][0] - 60, s.points[i + 1][1] };
+        inter[3 * i] = s.points[i];
+        inter[3 * i + 1] = c_start;
+        inter[3 * i + 2] = c_end;
+    }
+    inter[3 * (point_count - 1)] = s.points[point_count - 1];
+
+    f.gl.splineBezierCubic(inter[0..], thick, .{ .color = stroke });
+
+    // control handles + tangent lines
+    i = 0;
+    while (i + 1 < point_count) : (i += 1) {
+        const c_start: Vec2 = inter[3 * i + 1];
+        const c_end: Vec2 = inter[3 * i + 2];
+        f.gl.line(s.points[i], c_start, .{ .color = common.palette.ink_dim, .thickness = 1.5 });
+        f.gl.line(s.points[i + 1], c_end, .{ .color = common.palette.ink_dim, .thickness = 1.5 });
+        f.gl.circle(c_start, 5.0, .{ .color = common.palette.warn, .segments = 16 });
+        f.gl.circle(c_end, 5.0, .{ .color = common.palette.warn, .segments = 16 });
+    }
+}
+
 fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, common.palette.bg);
     s.t += 0.016;
@@ -128,34 +156,6 @@ fn update(f: *z.Frame, s: *State) void {
     ) catch "";
     common.caption(f.gl, s.font, line);
     z.endDrawing(f.gl);
-}
-
-/// Cubic-Bezier: build the interleaved start/c1/c2/end array (controls auto-derived as a
-/// horizontal offset off each anchor), draw the curve, then the control handles + tangents.
-fn drawBezier(f: *z.Frame, s: *State, thick: f32, stroke: Color) void {
-    var inter: [3 * (point_count - 1) + 1]Vec2 = undefined;
-    var i: usize = 0;
-    while (i + 1 < point_count) : (i += 1) {
-        const c_start: Vec2 = .{ s.points[i][0] + 60, s.points[i][1] };
-        const c_end: Vec2 = .{ s.points[i + 1][0] - 60, s.points[i + 1][1] };
-        inter[3 * i] = s.points[i];
-        inter[3 * i + 1] = c_start;
-        inter[3 * i + 2] = c_end;
-    }
-    inter[3 * (point_count - 1)] = s.points[point_count - 1];
-
-    f.gl.splineBezierCubic(inter[0..], thick, .{ .color = stroke });
-
-    // control handles + tangent lines
-    i = 0;
-    while (i + 1 < point_count) : (i += 1) {
-        const c_start: Vec2 = inter[3 * i + 1];
-        const c_end: Vec2 = inter[3 * i + 2];
-        f.gl.line(s.points[i], c_start, .{ .color = common.palette.ink_dim, .thickness = 1.5 });
-        f.gl.line(s.points[i + 1], c_end, .{ .color = common.palette.ink_dim, .thickness = 1.5 });
-        f.gl.circle(c_start, 5.0, .{ .color = common.palette.warn, .segments = 16 });
-        f.gl.circle(c_end, 5.0, .{ .color = common.palette.warn, .segments = 16 });
-    }
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

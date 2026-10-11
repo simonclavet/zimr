@@ -20,6 +20,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -186,14 +188,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(verts),
+        sliceAsBytes(verts),
         .{ .vertex = true, .copy_dst = true },
         "cel_vbo",
     );
     const ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(mesh.indices),
+        sliceAsBytes(mesh.indices),
         .{ .index = true, .copy_dst = true },
         "cel_ibo",
     );
@@ -242,7 +244,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const ink_fs_mod: z.wgpu.ShaderModuleHandle =
         z.wgpu.createShaderModuleWgsl(device, depth_fs_wgsl, "depth_fs");
 
-    const toon_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const toon_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -267,7 +269,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         "cel_pipe",
     );
 
-    const hull_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const hull_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -430,7 +432,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var toon_vs_io: toon_vs.Io = undefined;
     toon_vs_io.u = .{ .mvp = mvp, .model = model, .normal_matrix = spin };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.toon_vs_ubo, 0, std.mem.asBytes(&toon_vs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.toon_vs_ubo, 0, asBytes(&toon_vs_io.u));
 
     var toon_fs_io: toon_fs.Io = undefined;
     toon_fs_io.u = .{
@@ -438,14 +440,14 @@ fn update(f: *z.Frame, s: *State) void {
         .light_dir = .{ sun[0], sun[1], sun[2], 0 },
         .params = .{ @round(s.bands), 0, 0, 0 },
     };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.toon_fs_ubo, 0, std.mem.asBytes(&toon_fs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.toon_fs_ubo, 0, asBytes(&toon_fs_io.u));
 
     var hull_io: hull_vs.Io = undefined;
     // Slider is WORLD units; extrusion is MODEL-space pre-scale, so
     // convert (the raw value once inflated the hull ~14x into a blob).
     const thickness_model: f32 = s.thickness / s.scale;
     hull_io.u = .{ .mvp = mvp, .ink_color = ink, .params = .{ thickness_model, 0, 0, 0 } };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.hull_ubo, 0, std.mem.asBytes(&hull_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.hull_ubo, 0, asBytes(&hull_io.u));
 
     const Backend: type = z.WgpuBackend;
 

@@ -21,6 +21,9 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const parseInt = std.fmt.parseInt;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -43,7 +46,7 @@ const State = struct {
     ui_host: z.UiHost,
     font: z.Font,
     ui_font: z.Font,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     rand_col: Color = .{ .r = 230, .g = 41, .b = 55, .a = 255 },
     line_buf: [96]u8 = undefined,
     fade: f32 = 255.0, // base alpha - proves tag colors inherit it
@@ -55,7 +58,7 @@ fn parseHex8(s: []const u8) ?Color {
     if (s.len != 8) {
         return null;
     }
-    const v: u32 = std.fmt.parseInt(u32, s, 16) catch return null;
+    const v: u32 = parseInt(u32, s, 16) catch return null;
     return .{
         .r = @intCast((v >> 24) & 0xFF),
         .g = @intCast((v >> 16) & 0xFF),
@@ -118,7 +121,7 @@ fn walkStyled(
             i += 1;
             continue;
         }
-        const close: usize = std.mem.indexOfScalarPos(u8, text, i, ']') orelse break;
+        const close: usize = indexOfScalarPos(u8, text, i, ']') orelse break;
         const tag: []const u8 = text[i + 1 .. close];
 
         // A malformed tag is not a tag - leave it in the text as literal chars.
@@ -191,7 +194,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .ui_font = ui_font,
         .ui_host = z.UiHost.init(gpa, ui_font),
         .font = font,
-        .rng = .init(0xC0FFEE_1234),
+        .rng = Random.DefaultPrng.init(0xC0FFEE_1234),
     };
 }
 
@@ -202,7 +205,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn rollColor(s: *State) void {
-    const r: std.Random = s.rng.random();
+    const r: Random = s.rng.random();
     s.rand_col = .{
         .r = r.intRangeAtMost(u8, 60, 255),
         .g = r.intRangeAtMost(u8, 60, 255),
@@ -244,7 +247,7 @@ fn update(f: *z.Frame, s: *State) void {
         .{ .color = s.rand_col },
     );
 
-    const base: Color = .{ .r = 40, .g = 40, .b = 48, .a = @intFromFloat(s.fade) };
+    const base: Color = .{ .r = 40, .g = 40, .b = 48, .a = @round(s.fade) };
     var y: f32 = 280;
 
     drawStyled(

@@ -35,7 +35,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     // CPU-backend self-check: run the SAME kernel on the CPU and verify doubling.
-    var cpu: z.Compute(double_it) = z.Compute(double_it).initCpu();
+    var cpu: z.Compute(double_it) = .initCpu();
     cpu.element_count = 5;
     cpu.params = .{ .count = 5 };
     const probe = [_]f32{ 1, 2, 3, 4, 5 };
@@ -46,7 +46,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     // GPU-backend round-trip via z.Compute (storage/uniform/staging/pipeline derived
     // from the kernel's schema; the minBindingSize footgun cannot recur).
-    var pipe: z.Compute(double_it) = try z.Compute(double_it).initGpu(
+    var pipe: z.Compute(double_it) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,

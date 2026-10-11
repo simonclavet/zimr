@@ -30,6 +30,9 @@ const urdf = @import("urdf.zig");
 
 const zm = @import("zm");
 const allocPrint = std.fmt.allocPrint;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 const float = zm.float;
 const Vec = zm.Vec;
 const splat = zm.splat;
@@ -44,6 +47,21 @@ pub const Error = error{
 /// gearbox. Matches the emitter's default so both paths produce the same model.
 pub const default_armature: f32 = 0.01;
 
+/// Half the extent of a point cloud's axis-aligned bounding box.
+///
+/// The hull's mass properties come from this box rather than its true volume - an
+/// overestimate, which is the safe direction, and moot for any URDF that states
+/// `<inertial>`. See the note on `robot.GeomShape.hull`.
+fn boundsHalfExtent(points: []const Vec) Vec {
+    var lo: Vec = points[0];
+    var hi: Vec = points[0];
+    for (points) |p| {
+        lo = @min(lo, p);
+        hi = @max(hi, p);
+    }
+    return (hi - lo) * splat(0.5);
+}
+
 /// Build a live model from a parsed URDF.
 ///
 /// The returned `Model` owns its memory and is freed with `deinit`, exactly as one built
@@ -55,12 +73,12 @@ pub fn buildModel(
     options: rbt.Options,
 ) Error!rbt.Model {
     // Scratch for the spec. Freed before returning - the model does not alias it.
-    var scratch: std.heap.ArenaAllocator = .init(gpa);
+    var scratch: ArenaAllocator = .init(gpa);
     defer scratch.deinit();
     const a: Allocator = scratch.allocator();
 
     var bodies: []rbt.BodySpec = try a.alloc(rbt.BodySpec, robot.bodies.len);
-    var tendons: std.ArrayListUnmanaged(rbt.TendonSpec) = .empty;
+    var tendons: ArrayListUnmanaged(rbt.TendonSpec) = .empty;
 
     for (robot.bodies, 0..) |body, i| {
         // A URDF `fixed` joint arrives as no joint at all, so an empty slice is the whole
@@ -100,7 +118,7 @@ pub fn buildModel(
 
         // Mesh geoms are skipped - the same omission the emitter makes, and the caller can
         // count them with `urdf.meshCount` to report it.
-        var geoms: std.ArrayListUnmanaged(rbt.GeomSpec) = .empty;
+        var geoms: ArrayListUnmanaged(rbt.GeomSpec) = .empty;
         for (body.geoms) |geom| {
             const shape: rbt.GeomShape = switch (geom.shape) {
                 .box => |half| .{ .box = .{ .half_extent = half } },
@@ -146,21 +164,6 @@ pub fn buildModel(
     });
 }
 
-/// Half the extent of a point cloud's axis-aligned bounding box.
-///
-/// The hull's mass properties come from this box rather than its true volume - an
-/// overestimate, which is the safe direction, and moot for any URDF that states
-/// `<inertial>`. See the note on `robot.GeomShape.hull`.
-fn boundsHalfExtent(points: []const Vec) Vec {
-    var lo: Vec = points[0];
-    var hi: Vec = points[0];
-    for (points) |p| {
-        lo = @min(lo, p);
-        hi = @max(hi, p);
-    }
-    return (hi - lo) * splat(0.5);
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -181,7 +184,7 @@ test "runtime load: the KUKA loaded at runtime matches the generated one" {
     // Without this the two paths would drift the moment one gained a field the other
     // missed, and the drift would show up as a robot that behaves differently depending on
     // how it was loaded, which is close to undebuggable.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/kuka_iiwa.urdf");
 
     var robot: urdf.Robot = try urdf.parse(gpa, source, null);
@@ -214,9 +217,9 @@ test "runtime load: the KUKA loaded at runtime matches the generated one" {
 
     // And the dynamics agree, which is the check that would catch a difference in something
     // the field-by-field comparison above does not reach.
-    var da: rbt.Data = try rbt.Data.init(gpa, &built);
+    var da: rbt.Data = try .init(gpa, &built);
     defer da.deinit();
-    var db: rbt.Data = try rbt.Data.init(gpa, &loaded);
+    var db: rbt.Data = try .init(gpa, &loaded);
     defer db.deinit();
     for (0..built.nv) |i| {
         const angle: f32 = 0.3 + 0.1 * float(i);
@@ -231,13 +234,13 @@ test "runtime load: the KUKA loaded at runtime matches the generated one" {
 }
 
 test "runtime load: a loaded model simulates like any other" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/kuka_iiwa.urdf");
     var robot: urdf.Robot = try urdf.parse(gpa, source, null);
     defer robot.deinit();
     var model: rbt.Model = try buildModel(gpa, &robot, .{ .timestep = 1.0 / 240.0 });
     defer model.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &model);
+    var data: rbt.Data = try .init(gpa, &model);
     defer data.deinit();
 
     try expectEqual(@as(u32, 7), model.nv);
@@ -285,14 +288,14 @@ test "warm start: a bad warm start is thrown away, not fought" {
     // iteration whatever it starts from, so a bad start costs nothing and the guard looks
     // pointless. It takes a coupled set to show the difference - which is itself worth
     // knowing about testing solvers.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
     var m: rbt.Model = try kuka.Model.build(gpa);
     defer m.deinit();
     for (0..m.njnt) |ji| {
         m.jnt_range[ji] = .{ -0.05, 0.05 };
     }
-    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    var d: rbt.Data = try .init(gpa, &m);
     defer d.deinit();
 
     // Settle against the limits so a healthy warm start exists on several coupled rows.
@@ -332,10 +335,10 @@ test "import: the generated KUKA model builds and simulates" {
     // That is the payoff for section 4i-ter's decision to generate source rather than build a
     // model at runtime: the type system checks the importer's homework.
     const kuka = @import("tests/fixtures/robot/kuka_iiwa.zig");
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var m: rbt.Model = try kuka.Model.build(gpa);
     defer m.deinit();
-    var d: rbt.Data = try rbt.Data.init(gpa, &m);
+    var d: rbt.Data = try .init(gpa, &m);
     defer d.deinit();
 
     // A seven-axis arm: 8 bodies (world + 8 links means nbody 9), 7 hinges, 7 DOFs.
@@ -401,10 +404,10 @@ test "*** applied_force persists across step, and a ctrl-driven controller inher
     // the contract has a witness: if someone later makes `step` clear the array, this fails and
     // they find out that steady external forces (wind, a tether) depended on persistence. If
     // someone relies on it NOT persisting, the doc comment above now says otherwise.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var model: rbt.Model = try rbt.buildRuntime(gpa, @import("tests/fixtures/robot/kuka_iiwa.zig").spec);
     defer model.deinit();
-    var d: rbt.Data = try rbt.Data.init(gpa, &model);
+    var d: rbt.Data = try .init(gpa, &model);
     defer d.deinit();
     @memcpy(d.pos, model.qpos0);
     @memset(d.vel, 0);

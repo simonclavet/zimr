@@ -37,6 +37,24 @@ pub const Ubo = shader_io.Ubo;
 /// side-by-side can feed the decal texture to `io.decal(uv)` on the CPU path.
 pub const TextureRef = shader_externs.TextureRef;
 
+/// `1.0` when `|x| <= half`, else `0.0` - one axis of the box-membership test
+/// as an arithmetic mask (a value-select, so the sample stays at uniform
+/// control flow; nothing branches around the `textureSample`).
+fn axisMask(x: f32, half: f32) f32 {
+    return if (@abs(x) <= half) 1.0 else 0.0;
+}
+
+/// `1.0` when the surface (normal `n`) faces toward the projector, else `0.0`.
+/// `fwd` is the surface normal at the hit - it points OUTWARD from the target.
+/// A fragment on the SAME (near) surface has its own outward normal pointing the
+/// same way, so `dot(n, fwd) > 0`; the far wall points the opposite way. Keep
+/// the front side, with a small negative threshold so nearly edge-on faces
+/// still count. Value-select, not control flow.
+fn ndotf(n: Vec3, fwd: Vec) f32 {
+    const d: f32 = n[0] * fwd[0] + n[1] * fwd[1] + n[2] * fwd[2];
+    return if (d > -0.1) 1.0 else 0.0;
+}
+
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
 
@@ -65,24 +83,6 @@ pub fn shaderMain(io_in: Io) Out {
     out.final_color = .{ t[0] * c[0], t[1] * c[1], t[2] * c[2], a };
 
     return out;
-}
-
-/// `1.0` when `|x| <= half`, else `0.0` - one axis of the box-membership test
-/// as an arithmetic mask (a value-select, so the sample stays at uniform
-/// control flow; nothing branches around the `textureSample`).
-fn axisMask(x: f32, half: f32) f32 {
-    return if (@abs(x) <= half) 1.0 else 0.0;
-}
-
-/// `1.0` when the surface (normal `n`) faces toward the projector, else `0.0`.
-/// `fwd` is the surface normal at the hit - it points OUTWARD from the target.
-/// A fragment on the SAME (near) surface has its own outward normal pointing the
-/// same way, so `dot(n, fwd) > 0`; the far wall points the opposite way. Keep
-/// the front side, with a small negative threshold so nearly edge-on faces
-/// still count. Value-select, not control flow.
-fn ndotf(n: Vec3, fwd: Vec) f32 {
-    const d: f32 = n[0] * fwd[0] + n[1] * fwd[1] + n[2] * fwd[2];
-    return if (d > -0.1) 1.0 else 0.0;
 }
 
 comptime {

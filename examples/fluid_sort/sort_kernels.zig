@@ -27,6 +27,7 @@ const std = @import("std");
 const expect = std.testing.expect;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
 const expectEqual = std.testing.expectEqual;
+const Random = std.Random;
 
 /// MATCHED TO `fluid_gpu` so the two are directly comparable: same particle count, same
 /// interaction radius, same domain, same spawn, same physics constants. The ONLY thing
@@ -642,8 +643,8 @@ test "counting sort: every particle in its cell range; density matches brute for
         .n_cols = grid_cols,
         .n_rows = grid_rows,
     };
-    var rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xC0FFEE);
-    const r: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(0xC0FFEE);
+    const r: Random = rng.random();
     var p: u32 = 0;
     while (p < N) : (p += 1) {
         g.B.pos[p] = .{ r.float(f32) * domain_w, r.float(f32) * domain_h };

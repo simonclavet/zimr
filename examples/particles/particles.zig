@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -38,7 +39,7 @@ const State = struct {
     particles: [max_particles]Particle,
     count: usize,
     emitter: Vec2,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     // UI-controlled:
     rate: f32,
     gravity: f32,
@@ -58,7 +59,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .particles = undefined,
         .count = 0,
         .emitter = .{ @as(f32, width) * 0.5, @as(f32, height) * 0.35 },
-        .rng = std.Random.DefaultPrng.init(0x1234),
+        .rng = Random.DefaultPrng.init(0x1234),
         .rate = 12,
         .gravity = 320,
         .size = 4,
@@ -69,7 +70,7 @@ fn spawn(s: *State) void {
     if (s.count >= max_particles) {
         return;
     }
-    const r: std.Random = s.rng.random();
+    const r: Random = s.rng.random();
     const ang: f32 = -pi * 0.5 + (r.float(f32) - 0.5) * 1.2;
     const speed: f32 = 120 + r.float(f32) * 180;
     s.particles[s.count] = .{

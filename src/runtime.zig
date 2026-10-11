@@ -13,6 +13,8 @@
 // `const core = core`.
 
 const std = @import("std");
+const platform = @import("platform.zig");
+const contract = @import("platform/contract.zig");
 const ArrayList = std.ArrayList;
 const bufPrint = std.fmt.bufPrint;
 const eql = std.mem.eql;
@@ -21,6 +23,9 @@ const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 const meta = std.meta;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
 const builtin = @import("builtin");
 const zm = @import("zm");
 const turnsFromRad = zm.turnsFromRad;
@@ -37,47 +42,20 @@ const angle3 = zm.angle3;
 const mulMatVec = zm.mulMatVec;
 const scaling = zm.scaling;
 const mulMat = zm.mulMat;
+const Vec2 = zm.Vec2;
+const Mat = zm.Mat;
+const Camera2D = zm.Camera2D;
+const Camera3D = zm.Camera3D;
+const Ray = zm.Ray;
+const radFromDeg = zm.radFromDeg;
+const sqrt1_2 = zm.sqrt1_2;
+const clamp = zm.clamp;
 
-/// Host-side monotonic clock in milliseconds.  Returns null when no
-/// monotonic source is available - caller decides the fallback
-/// (browserWallMs uses a 60fps synthetic tick for tests; loader's
-/// nowMs returns 0).
-/// Platform-conditional because `extern "c" clock_gettime` requires
-/// libc, which `zig test` on Windows doesn't link by default
-/// ("libc must be explicitly specified" compile error).  We pick the
-/// right backend per OS so consumers don't have to:
-///   - **Linux / macOS / BSD**: POSIX `clock_gettime(MONOTONIC, ...)`.
-///     Symbol is `extern "c"`, but those targets link libc by
-///     default for `zig test`, so it Just Works.
-///   - **Windows**: `RtlQueryPerformanceCounter` /
-///     `RtlQueryPerformanceFrequency` from `ntdll`.  These are
-///     `extern "ntdll"` (Win32 ABI), NOT libc - works without
-///     `link_libc`.
-///   - **Anywhere else**: null.  Caller falls back.
-/// Lives at module scope so both the `clock` and `loader` namespaces
-/// can call it - they're sibling `pub const X = struct { ... }`s
-/// inside this file and need a shared helper.
-fn hostMonotonicMs() ?f64 {
-    if (comptime builtin.os.tag == .windows) {
-        var qpc: std.os.windows.LARGE_INTEGER = undefined;
-        var qpf: std.os.windows.LARGE_INTEGER = undefined;
-        if (std.os.windows.ntdll.RtlQueryPerformanceCounter(&qpc).toBool() and
-            std.os.windows.ntdll.RtlQueryPerformanceFrequency(&qpf).toBool())
-        {
-            return float64(qpc) * 1000.0 /
-                float64(qpf);
-        }
-        return null;
-    }
-    if (comptime @hasDecl(std.posix.system, "clock_gettime")) {
-        var ts: std.posix.timespec = undefined;
-        if (std.posix.system.clock_gettime(.MONOTONIC, &ts) == 0) {
-            return float64(ts.sec) * 1000.0 +
-                float64(ts.nsec) / 1_000_000.0;
-        }
-        return null;
-    }
-    return null;
+/// The platform's clock, in milliseconds: `platform.current.now()` - monotonic, in nanoseconds - which every platform
+/// implements: `performance.now()` in the browser, the performance counter on Windows, the monotonic clock elsewhere.
+/// Every clock of the runtime reads it.
+fn platformMilliseconds() f64 {
+    return float64(platform.current.now()) / 1_000_000.0;
 }
 
 // ============================================================================
@@ -85,7 +63,46 @@ fn hostMonotonicMs() ?f64 {
 // ============================================================================
 
 pub const core = struct {
-    const Vec2 = zm.Vec2;
+    /// The frame clock's filter: from each frame's measured duration, the duration animation advances by. A display
+    /// shows frames at an even pace - once per refresh - but the moments a program measures between them jitter by a
+    /// millisecond or two, as the system schedules it; animation advanced by the measured durations moves unevenly
+    /// across frames shown evenly, which the eye sees as stutter. The filter recovers the even pace, after sokol_app's
+    /// own:
+    ///
+    ///   1. Each measured duration is first held between a microsecond - never zero, which would divide by zero - and
+    ///      a tenth of a second, so that a pause in a debugger, or a long hitch, advances animation by one ordinary
+    ///      long step rather than by its whole length.
+    ///   2. A duration within 4 ms of the filtered one is jitter: it moves an average a fortieth of the way toward
+    ///      it (an exponential moving average, its time constant forty frames), and the average is the result.
+    ///   3. A duration further off is a change of pace - a display switched from 60 to 120 frames a second, a load
+    ///      that lasts - and the filter adopts it at once, rather than over forty frames.
+    ///
+    /// The average of a steady pace is that pace, so animation keeps in step with real time over any stretch; and a
+    /// clock that measures the same duration every frame, as a scripted one does, comes through unchanged.
+    pub const FrameTimeFilter = struct {
+        pub const shortest_seconds: f64 = 0.000001;
+        pub const longest_seconds: f64 = 0.1;
+        pub const change_of_pace_seconds: f64 = 0.004;
+        pub const smoothing: f64 = 0.025;
+
+        /// The moving average, and the duration last given out; both start at a likely 60 frames a second.
+        average_seconds: f64 = 1.0 / 60.0,
+        filtered_seconds: f64 = 1.0 / 60.0,
+
+        /// Takes a frame's measured duration, in seconds, and returns the duration animation advances by.
+        pub fn next(filter: *FrameTimeFilter, measured_seconds: f64) f64 {
+            const held_seconds: f64 = clamp(measured_seconds, shortest_seconds, longest_seconds);
+            const deviation_seconds: f64 = @abs(held_seconds - filter.filtered_seconds);
+            if (deviation_seconds > change_of_pace_seconds) {
+                filter.average_seconds = held_seconds;
+                filter.filtered_seconds = held_seconds;
+            } else {
+                filter.average_seconds += smoothing * (held_seconds - filter.average_seconds);
+                filter.filtered_seconds = clamp(filter.average_seconds, shortest_seconds, longest_seconds);
+            }
+            return filter.filtered_seconds;
+        }
+    };
 
     /// Per-frame time bookkeeping.  Owned by `Runtime` (or constructed
     /// fresh for tests).  Functions in this namespace take a
@@ -98,9 +115,13 @@ pub const core = struct {
         current: f64 = 0,
         /// Time the previous frame started.
         previous: f64 = 0,
-        /// Total elapsed time of the *previous* frame in seconds
-        /// what `getFrameTime` returns.
+        /// The previous frame's duration as animation should advance by it - filtered (`FrameTimeFilter`) - in
+        /// seconds: what `getFrameTime` returns.
         delta_time: f32 = 0,
+        /// The previous frame's duration as measured, unfiltered: for timing and profiling.
+        raw_delta_time: f32 = 0,
+        /// The filter `delta_time` comes from.
+        frame_time_filter: FrameTimeFilter = .{},
         /// User-requested target seconds per frame (0 = unlimited /
         /// vsync-only).  Informational on web; the browser drives RAF.
         target: f64 = 0,
@@ -226,7 +247,11 @@ pub const core = struct {
         callback: ?TraceLogCallback = null,
     };
 
-    pub const TraceLogCallback = *const fn (level: i32, msg_ptr: [*]const u8, msg_len: usize) callconv(.c) void;
+    pub const TraceLogCallback = *const fn (
+        level: i32,
+        msg_ptr: [*]const u8,
+        msg_len: usize,
+    ) callconv(.c) void;
 
     // `nowFn` is a function pointer through which we read wall-clock
     // milliseconds.  Defaults to a host-friendly `std.time.milliTimestamp`
@@ -235,14 +260,9 @@ pub const core = struct {
     // `dom.now_ms` import (which reads `performance.now`).
     var nowFn: *const fn () f64 = hostNow; // lint:off module-var: JS-bridge clock (set by wasm runtime startup)
 
+    /// The default clock: the platform's (`platformMilliseconds`). A wasm build may still set its own (`setNowFn`).
     fn hostNow() f64 {
-        // Host-side default - used only by tests (the wasm build replaces
-        // this via `setNowFn` with the `dom.now_ms` import).  Zig 0.16
-        // dropped `std.time.nanoTimestamp`; the simplest portable fallback
-        // is to read the POSIX monotonic clock directly when available
-        // and fall back to 0 otherwise.  Tests never rely on this - they
-        // install their own deterministic clock via `_testSetNowFn`.
-        return 0;
+        return platformMilliseconds();
     }
 
     /// Install the browser-backed clock source.  Called by `App.create`
@@ -278,7 +298,9 @@ pub const core = struct {
     ) void {
         time.previous = time.current;
         time.current = (nowFn() / 1000.0) - time.base;
-        time.delta_time = @floatCast(time.current - time.previous);
+        const measured_seconds: f64 = time.current - time.previous;
+        time.raw_delta_time = @floatCast(measured_seconds);
+        time.delta_time = @floatCast(time.frame_time_filter.next(measured_seconds));
         time.frameCounter += 1;
         updateFpsAverage(time, fps);
     }
@@ -288,8 +310,8 @@ pub const core = struct {
         time: *const TimeState,
         fps: *FpsState,
     ) void {
-        const FPS_AVG_TIME: f32 = 0.5;
-        const FPS_STEP: f32 = FPS_AVG_TIME / float(FpsState.N);
+        const fps_avg_time: f32 = 0.5;
+        const fps_step: f32 = fps_avg_time / float(FpsState.N);
 
         if (time.frameCounter == 1) {
             // First frame: reset history.
@@ -303,7 +325,7 @@ pub const core = struct {
         }
 
         const tnow: f32 = @floatCast(time.current);
-        if ((tnow - fps.last) <= FPS_STEP) {
+        if ((tnow - fps.last) <= fps_step) {
             return;
         }
 
@@ -359,19 +381,6 @@ pub const core = struct {
     // ===========================================================================
     // traceLog
     // ===========================================================================
-
-    /// raylib-style log-level aliases.  Named exactly like raylib's
-    /// `LOG_INFO` etc. for source compatibility, but typed as
-    /// `TraceLogLevel` enum tags rather than `i32` so call sites
-    /// like `setTraceLogLevel(core.globalTracelog(), .warning)` work without any cast.
-    pub const LOG_ALL: TraceLogLevel = .all;
-    pub const LOG_TRACE: TraceLogLevel = .trace;
-    pub const LOG_DEBUG: TraceLogLevel = .debug;
-    pub const LOG_INFO: TraceLogLevel = .info;
-    pub const LOG_WARNING: TraceLogLevel = .warning;
-    pub const LOG_ERROR: TraceLogLevel = .err;
-    pub const LOG_FATAL: TraceLogLevel = .fatal;
-    pub const LOG_NONE: TraceLogLevel = .none;
 
     pub fn setTraceLogLevel(
         tracelog: *TraceLogState,
@@ -525,341 +534,56 @@ pub const core = struct {
     }
 
     // ===========================================================================
-    // Browser bridges - window/clipboard/screenshot operations the browser
-    // permits us to do.  raylib lumps these into core too (rcore.c).  All
-    // are no-ops on host builds; the comptime arch.isWasm() check is the
-    // gate.
+    // Window, clipboard and screenshot requests, as raylib's core has them (rcore.c). Those the platform contract
+    // carries - the title, opening an address, writing the clipboard - go through it, and work on every platform;
+    // the rest still reach the browser alone, and do nothing elsewhere.
     // ===========================================================================
 
     /// Set the browser tab's title (`document.title`).
     pub fn setWindowTitle(title: []const u8) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.set_title(title);
+        platform.current.setTitle(title);
     }
 
-    /// Return `(devicePixelRatio, devicePixelRatio)` - both axes share
-    /// the same DPR in a browser.  Returns `(1, 1)` on host.
-    pub fn getWindowScaleDPI() zm.Vec2 {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return .{ 1, 1 };
-        }
-        const dpr: f32 = @import("web.zig").dom.get_dpi_scale();
-        return .{ dpr, dpr };
-    }
-
-    /// Toggle browser fullscreen on the canvas element.  Most browsers
-    /// require this be called from a user-gesture handler - if you call
-    /// it outside one, the call is silently rejected by the browser.
-    pub fn toggleFullscreen() void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.toggle_fullscreen();
-    }
-
-    /// True if `document.fullscreenElement` is non-null.
-    pub fn isFullscreen() bool {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return false;
-        }
-        return @import("web.zig").dom.is_fullscreen();
-    }
-
-    // ===========================================================================
-    // Phase-1A bridge-the-gap: window UX raylib parity.  Each is a thin
-    // wrapper over a `dom.*` JS bridge call, gated by an `is_wasm` check
-    // so host-target code compiles to a no-op (matches the existing
-    // setWindowTitle / toggleFullscreen pattern).
-    // ===========================================================================
-
-    /// Set the canvas CSS opacity in [0, 1].  raylib: `SetWindowOpacity`.
-    pub fn setWindowOpacity(opacity: f32) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.set_window_opacity(opacity);
-    }
-
-    /// Programmatically focus the canvas.  raylib: `SetWindowFocused`.
-    /// (zimr also tracks focus state internally - `isWindowFocused` reads
-    /// that, this updates the DOM focus.)
-    pub fn setWindowFocused() void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.set_window_focused();
-    }
-
-    /// Read-and-clear the "canvas was resized since last call" flag.
-    /// raylib: `IsWindowResized`.  Backed by a `ResizeObserver`; first
-    /// call after a resize returns true and clears the flag, subsequent
-    /// calls return false until the next resize.
-    pub fn isWindowResized() bool {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return false;
-        }
-        return @import("web.zig").dom.window_resized_take();
-    }
-
-    /// Set the browser tab's favicon to PNG bytes.  raylib's
-    // ===========================================================================
-    // Phase-1A bridge-the-gap: drag-drop file capture.  JS captures
-    // `drop` events on the canvas, reads each file's bytes via
-    // `FileReader.readAsArrayBuffer`, and stores `{name, bytes}` in a
-    // table.  `loadDroppedFiles` pulls the whole table into Zig-owned
-    // memory; `unloadDroppedFiles` frees the result + clears the
-    // JS-side table.
-    // ===========================================================================
-
-    /// raylib's FilePathList - a list of (path, bytes) pairs.  zimr
-    /// fills both: `path` is the original filename, `bytes` is the
-    /// file contents (raylib stores only paths because it can re-read
-    /// them; on the web we don't have FS so we capture bytes).
-    pub const DroppedFile = struct {
-        name: []u8, // owned: caller frees via unloadDroppedFiles
-        bytes: []u8, // owned: same
-    };
-    pub const DroppedFiles = []DroppedFile;
-
-    /// True if there are unconsumed dropped files.  raylib: `IsFileDropped`.
-    pub fn isFileDropped() bool {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return false;
-        }
-        return @import("web.zig").dom.dropped_files_count() > 0;
-    }
-
-    /// Pull all dropped files into Zig-owned memory.  Returns a slice
-    /// of `DroppedFile`; both `name` and `bytes` are owned by `gpa`
-    /// and must be freed via `unloadDroppedFiles(gpa, files)`.
-    /// raylib: `LoadDroppedFiles()`.  After this returns, the JS-side
-    /// table is NOT yet cleared - call `unloadDroppedFiles` to clear.
-    pub fn loadDroppedFiles(gpa: Allocator) Allocator.Error!DroppedFiles {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return try gpa.alloc(DroppedFile, 0);
-        }
-        const dom = @import("web.zig").dom;
-        const count: u32 = dom.dropped_files_count();
-        const out = try gpa.alloc(DroppedFile, @intCast(count));
-        errdefer gpa.free(out);
-        var i: u32 = 0;
-        // On allocator failure mid-loop, free everything allocated so far.
-        errdefer for (out[0..@intCast(i)]) |df| {
-            gpa.free(df.name);
-            gpa.free(df.bytes);
-        };
-        while (i < count) : (i += 1) {
-            // Lengths come back from the host FIRST, so the buffers can be sized exactly before the
-            // second call copies into them - the bridge cannot allocate on zimr's behalf.
-            const blen: u32 = dom.dropped_file_byte_len(i);
-            const nlen: u32 = dom.dropped_file_name_len(i);
-            const bytes = try gpa.alloc(u8, @intCast(blen));
-            errdefer gpa.free(bytes);
-            const name = try gpa.alloc(u8, @intCast(nlen));
-            // A zero-length file or name is legal; skipping the copy avoids handing the host a
-            // pointer into a zero-sized allocation.
-            if (blen > 0) {
-                dom.dropped_file_bytes(i, bytes.ptr, blen);
-            }
-            if (nlen > 0) {
-                dom.dropped_file_name(i, name.ptr, nlen);
-            }
-            out[@intCast(i)] = .{ .name = name, .bytes = bytes };
-        }
-        return out;
-    }
-
-    /// Free a `DroppedFiles` returned by `loadDroppedFiles` AND clear
-    /// the JS-side table so `isFileDropped` reads false.
-    /// raylib: `UnloadDroppedFiles(FilePathList files)`.
-    pub fn unloadDroppedFiles(
-        gpa: Allocator,
-        files: DroppedFiles,
-    ) void {
-        for (files) |df| {
-            gpa.free(df.name);
-            gpa.free(df.bytes);
-        }
-        gpa.free(files);
-        if (comptime builtin.target.cpu.arch.isWasm()) {
-            @import("web.zig").dom.dropped_files_clear();
-        }
+    /// The drawing area's scale - device pixels per logical pixel - on both axes, as the platform reports it
+    /// (`platform.current.size`): the browser's device pixel ratio, a Windows monitor's scale, 1 headless.
+    pub fn getWindowScaleDPI() Vec2 {
+        const scale: f32 = platform.current.size().scale;
+        return .{ scale, scale };
     }
 
     /// Open `url` in a new tab.  Browsers block this if the call isn't
     /// inside a user-gesture handler.  Use `noopener,noreferrer` flags.
     pub fn openURL(url: []const u8) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.open_url(url);
+        platform.current.openUrl(url);
     }
 
     /// Write `text` to the system clipboard.  Fire-and-forget - the
     /// browser may reject the call if the document doesn't have focus
     /// or the user hasn't granted permission.
     pub fn setClipboardText(text: []const u8) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.set_clipboard_text(text);
+        platform.current.setClipboardText(text);
     }
 
-    /// Async clipboard-text-read handle.  Returned by
-    /// `getClipboardTextAsync`; passed to `pollClipboardText` and
-    /// `releaseClipboardText`.  Zero means "not started" / "host stub".
-    pub const ClipboardHandle = u32;
-
-    /// Result of polling a clipboard-text read.
-    pub const ClipboardTextPoll = union(enum) {
-        /// The browser is still resolving the clipboard read.
-        pending,
-        /// Read complete.  `bytes` is valid until `releaseClipboardText`.
-        ready: []const u8,
-        /// Permission denied, no text on clipboard, or host build.
-        failed,
-    };
-
-    /// Begin reading the system clipboard's text contents.  Returns a
-    /// handle to be passed to `pollClipboardText` over subsequent
-    /// frames.  Returns 0 on host (no clipboard).
-    pub fn getClipboardTextAsync() ClipboardHandle {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return 0;
-        }
-        return @import("web.zig").dom.get_clipboard_text_start();
-    }
-
-    /// Poll a previously-started clipboard read.  Bytes are owned by
-    /// the runtime; valid until `releaseClipboardText(handle)`.
-    pub fn pollClipboardText(handle: ClipboardHandle) ClipboardTextPoll {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return .failed;
-        }
-        if (handle == 0) {
-            return .failed;
-        }
-        const loader = @import("web.zig").fetch;
-        const status: @import("web.zig").fetch.Status = loader.poll(handle);
-        return switch (status) {
-            .pending => .pending,
-            .ok => |bytes| .{ .ready = bytes },
-            .failed => .failed,
-        };
-    }
-
-    /// Release a clipboard-read handle.  Safe to call multiple times.
-    pub fn releaseClipboardText(handle: ClipboardHandle) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        if (handle == 0) {
-            return;
-        }
-        @import("web.zig").fetch.release(handle);
-    }
-
-    /// Result of polling a clipboard-image read.  The `ready` arm holds
-    /// the raw PNG bytes - caller is responsible for decoding via
-    /// `z.textures.loadImageFromMemory(gpa, ".png", bytes)`.
-    pub const ClipboardImagePoll = union(enum) {
-        pending,
-        /// Raw PNG bytes; valid until `releaseClipboardImage(handle)`.
-        ready: []const u8,
-        /// Permission denied, no image on clipboard, or host build.
-        failed,
-    };
-
-    /// Begin reading the system clipboard's image (PNG only).  Returns
-    /// 0 on host builds.
-    pub fn getClipboardImageAsync() ClipboardHandle {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return 0;
-        }
-        return @import("web.zig").dom.get_clipboard_image_start();
-    }
-
-    /// Poll a previously-started clipboard image read.
-    pub fn pollClipboardImage(handle: ClipboardHandle) ClipboardImagePoll {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return .failed;
-        }
-        if (handle == 0) {
-            return .failed;
-        }
-        const status = @import("web.zig").fetch.poll(handle);
-        return switch (status) {
-            .pending => .pending,
-            .ok => |bytes| .{ .ready = bytes },
-            .failed => .failed,
-        };
-    }
-
-    /// Release a clipboard-image-read handle.  Same fn as text release
-    /// since they share the handle table on the JS side, but kept as a
-    /// distinct name for clarity at call sites.
-    pub fn releaseClipboardImage(handle: ClipboardHandle) void {
-        releaseClipboardText(handle);
-    }
-
-    /// Trigger a `<a download>` of the canvas contents as PNG.  The
-    /// browser pops a "Save File" dialog (or downloads silently to the
-    /// Downloads folder, depending on browser settings).
-    pub fn takeScreenshot(filename: []const u8) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        @import("web.zig").dom.take_screenshot(filename);
-    }
-
-    test "clipboard image async: host stub returns failed" {
-        const h: ClipboardHandle = getClipboardImageAsync();
-        try expectEqual(@as(ClipboardHandle, 0), h);
-        try expect(pollClipboardImage(0) == .failed);
-        releaseClipboardImage(0);
-    }
-
-    test "takeScreenshot: host build is a no-op" {
-        takeScreenshot("test.png");
-        takeScreenshot("");
-    }
-
-    test "openURL: host build is a no-op" {
+    test "openURL goes to the platform: logged, headless" {
         openURL("https://example.com/");
         openURL(""); // edge case - empty string
     }
 
-    test "setClipboardText: host build is a no-op" {
+    test "setClipboardText goes to the platform: kept, headless" {
         setClipboardText("hello");
         setClipboardText("");
     }
 
-    test "clipboard text async: host stub returns failed immediately" {
-        const h: ClipboardHandle = getClipboardTextAsync();
-        try expectEqual(@as(ClipboardHandle, 0), h); // host returns 0
-        // Polling a 0 handle is also failed.
-        try expect(pollClipboardText(0) == .failed);
-        // Releasing 0 is safe no-op.
-        releaseClipboardText(0);
-    }
-
-    test "setWindowTitle: host build is a no-op" {
+    test "setWindowTitle goes to the platform: kept, headless" {
         // Just verify the comptime branch compiles and returns cleanly.
         setWindowTitle("test title");
         setWindowTitle(""); // empty string - must also be safe
     }
 
-    test "getWindowScaleDPI: host returns (1, 1)" {
-        const dpr: zm.Vec2 = getWindowScaleDPI();
+    test "getWindowScaleDPI is the platform's scale: 1, headless" {
+        const dpr: Vec2 = getWindowScaleDPI();
         try expectEqual(@as(f32, 1), dpr[0]);
         try expectEqual(@as(f32, 1), dpr[1]);
-    }
-
-    test "toggleFullscreen + isFullscreen: host is no-op + always false" {
-        toggleFullscreen();
-        try expectEqual(false, isFullscreen());
     }
 
     // ===========================================================================
@@ -1095,7 +819,7 @@ pub const core = struct {
         try expect(@abs(getTime(&t) - 0.250) < 1e-6);
     }
 
-    test "getFrameTime equals time between begin-frames" {
+    test "the measured frame time is the time between begin-frames; getFrameTime is it filtered" {
         _testReset();
         var t: TimeState = .{};
         var f: FpsState = .{};
@@ -1105,12 +829,16 @@ pub const core = struct {
 
         setFakeNow(16); // ~60fps
         beginFrame(&t, &f);
-        // First frame's `frame` is current - previous = 0.016 - 0.
-        try expect(@abs(getFrameTime(&t) - 0.016) < 1e-5);
+        // The first frame's measured duration is current - previous = 0.016 - 0.
+        try expect(@abs(t.raw_delta_time - 0.016) < 1e-5);
+        // Within 4 ms of the filter's start, a sixtieth of a second, the filtered duration moves a fortieth of the
+        // way toward it (`FrameTimeFilter`): close to both.
+        try expect(@abs(getFrameTime(&t) - 0.0166) < 0.001);
 
         setFakeNow(33);
         beginFrame(&t, &f);
-        try expect(@abs(getFrameTime(&t) - 0.017) < 1e-5);
+        try expect(@abs(t.raw_delta_time - 0.017) < 1e-5);
+        try expect(@abs(getFrameTime(&t) - 0.0166) < 0.001);
     }
 
     test "setTargetFPS = 60 stores 1/60 internally; 0/negative clears" {
@@ -1168,13 +896,13 @@ pub const core = struct {
         resetCaptured();
         setDefaultSink(&captureSink);
 
-        traceLog(&ts, LOG_TRACE, "tracey", .{});
-        traceLog(&ts, LOG_DEBUG, "debugy", .{});
+        traceLog(&ts, .trace, "tracey", .{});
+        traceLog(&ts, .debug, "debugy", .{});
         try expect(Captured.count == 0);
 
-        traceLog(&ts, LOG_INFO, "infoy", .{});
+        traceLog(&ts, .info, "infoy", .{});
         try expect(Captured.count == 1);
-        try expect(Captured.last_level == LOG_INFO);
+        try expect(Captured.last_level == .info);
         try expect(eql(u8, Captured.last_msg[0..Captured.last_msg_len], "infoy"));
     }
 
@@ -1184,10 +912,10 @@ pub const core = struct {
         resetCaptured();
         setDefaultSink(&captureSink);
 
-        setTraceLogLevel(&ts, LOG_NONE);
-        traceLog(&ts, LOG_FATAL, "boom", .{});
-        traceLog(&ts, LOG_ERROR, "err", .{});
-        traceLog(&ts, LOG_WARNING, "warn", .{});
+        setTraceLogLevel(&ts, .none);
+        traceLog(&ts, .fatal, "boom", .{});
+        traceLog(&ts, .err, "err", .{});
+        traceLog(&ts, .warning, "warn", .{});
         try expect(Captured.count == 0);
     }
 
@@ -1197,13 +925,13 @@ pub const core = struct {
         resetCaptured();
         setDefaultSink(&captureSink);
 
-        setTraceLogLevel(&ts, LOG_ALL);
-        traceLog(&ts, LOG_TRACE, "t", .{});
-        traceLog(&ts, LOG_DEBUG, "d", .{});
-        traceLog(&ts, LOG_INFO, "i", .{});
-        traceLog(&ts, LOG_WARNING, "w", .{});
-        traceLog(&ts, LOG_ERROR, "e", .{});
-        traceLog(&ts, LOG_FATAL, "f", .{});
+        setTraceLogLevel(&ts, .all);
+        traceLog(&ts, .trace, "t", .{});
+        traceLog(&ts, .debug, "d", .{});
+        traceLog(&ts, .info, "i", .{});
+        traceLog(&ts, .warning, "w", .{});
+        traceLog(&ts, .err, "e", .{});
+        traceLog(&ts, .fatal, "f", .{});
         try expect(Captured.count == 6);
     }
 
@@ -1213,7 +941,7 @@ pub const core = struct {
         resetCaptured();
         setDefaultSink(&captureSink);
 
-        traceLog(&ts, LOG_INFO, "fps={d} delta={d:.3}", .{ 60, 0.016 });
+        traceLog(&ts, .info, "fps={d} delta={d:.3}", .{ 60, 0.016 });
         try expect(Captured.count == 1);
         const msg: []const u8 = Captured.last_msg[0..Captured.last_msg_len];
         try expect(eql(u8, msg, "fps=60 delta=0.016"));
@@ -1243,13 +971,13 @@ pub const core = struct {
         Callback.count = 0;
         setTraceLogCallback(&ts, &Callback.cb);
 
-        traceLog(&ts, LOG_INFO, "hello", .{});
+        traceLog(&ts, .info, "hello", .{});
         try expect(Callback.count == 1);
         try expect(Captured.count == 0); // default sink bypassed
 
         // Removing the callback restores default-sink routing.
         setTraceLogCallback(&ts, null);
-        traceLog(&ts, LOG_INFO, "world", .{});
+        traceLog(&ts, .info, "world", .{});
         try expect(Callback.count == 1);
         try expect(Captured.count == 1);
     }
@@ -1263,7 +991,7 @@ pub const core = struct {
         const msg: []const u8 = "from C ABI";
         // `traceLogRaw` is the JS-FFI entry; level stays `i32` for ABI
         // shape, so the call needs an explicit `@intFromEnum`.
-        traceLogRaw(&ts, @backingInt(LOG_INFO), msg.ptr, msg.len);
+        traceLogRaw(&ts, @backingInt(TraceLogLevel.info), msg.ptr, msg.len);
         try expect(Captured.count == 1);
         try expect(eql(u8, Captured.last_msg[0..Captured.last_msg_len], msg));
     }
@@ -1276,7 +1004,7 @@ pub const core = struct {
 
         // Length 0 - silently drop.
         const empty: []const u8 = "";
-        traceLogRaw(&ts, @backingInt(LOG_FATAL), empty.ptr, 0);
+        traceLogRaw(&ts, @backingInt(TraceLogLevel.fatal), empty.ptr, 0);
         try expect(Captured.count == 0);
     }
 
@@ -1310,9 +1038,9 @@ pub const core = struct {
         // raylib code that says `setTraceLogLevel(&ts, LOG_WARNING)` keeps
         // working - `LOG_WARNING` is a `TraceLogLevel` constant, not a
         // `i32` like in raylib C.  Pin the equivalence:
-        try expect(LOG_WARNING == .warning);
-        try expect(LOG_INFO == .info);
-        try expect(LOG_NONE == .none);
+        try expect(.warning == .warning);
+        try expect(.info == .info);
+        try expect(.none == .none);
     }
 
     test "level filtering works with the typed setTraceLogLevel" {
@@ -1412,7 +1140,7 @@ pub const core = struct {
     // ===========================================================================
 
     test "loadRandomSequence: count of N draws N distinct values in range" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const seq: []i32 = try loadRandomSequence(ta, 5, 1, 10);
         defer unloadRandomSequence(ta, seq);
 
@@ -1429,7 +1157,7 @@ pub const core = struct {
     }
 
     test "loadRandomSequence: count == 0 returns empty slice (not error)" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const seq: []i32 = try loadRandomSequence(ta, 0, 0, 10);
         // Empty slice is the well-defined no-op path.  Free is still fine
         // because unloadRandomSequence early-outs on len==0.
@@ -1438,7 +1166,7 @@ pub const core = struct {
     }
 
     test "loadRandomSequence: count > range returns empty slice" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         // range is [0, 4] = 5 values; asking for 100 is impossible to
         // satisfy without repeats, so we get the empty-slice no-op.
         const seq: []i32 = try loadRandomSequence(ta, 100, 0, 4);
@@ -1447,7 +1175,7 @@ pub const core = struct {
     }
 
     test "loadRandomSequence: swapped min/max still works" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         // min > max: function silently swaps them.
         const seq: []i32 = try loadRandomSequence(ta, 3, 10, 1);
         defer unloadRandomSequence(ta, seq);
@@ -1461,8 +1189,8 @@ pub const core = struct {
     test "loadRandomSequence: OOM surfaces as error.OutOfMemory" {
         // FailingAllocator pre-fails every allocation - exercises the new
         // error path that used to silently return `&.{}`.
-        var failing: std.testing.FailingAllocator = std.testing.FailingAllocator.init(
-            std.testing.allocator,
+        var failing: std.testing.FailingAllocator = .init(
+            testing_allocator,
             .{ .fail_index = 0 },
         );
         try expectError(error.OutOfMemory, loadRandomSequence(failing.allocator(), 5, 1, 10));
@@ -1472,8 +1200,8 @@ pub const core = struct {
         // First alloc (the output) succeeds, second (the pool) fails.
         // errdefer must free the output - std.testing.FailingAllocator
         // tracks deallocations and a leak would surface as a test failure.
-        var failing: std.testing.FailingAllocator = std.testing.FailingAllocator.init(
-            std.testing.allocator,
+        var failing: std.testing.FailingAllocator = .init(
+            testing_allocator,
             .{ .fail_index = 1 },
         );
         try expectError(error.OutOfMemory, loadRandomSequence(failing.allocator(), 5, 1, 10));
@@ -1484,20 +1212,6 @@ pub const core = struct {
     // capture) only fires inside the JS bridge - exercised by smoke tests.
     // On the host these are all no-ops via `is_wasm` guards, so the host
     // tests just verify the safe defaults: returns false / empty / etc.
-    test "Phase 1A: isFileDropped is false on host (no JS bridge)" {
-        try expect(isFileDropped() == false);
-    }
-
-    test "Phase 1A: loadDroppedFiles returns empty slice on host" {
-        const ta: Allocator = std.testing.allocator;
-        const files: DroppedFiles = try loadDroppedFiles(ta);
-        defer unloadDroppedFiles(ta, files);
-        try expect(files.len == 0);
-    }
-
-    test "Phase 1A: isWindowResized is false on host" {
-        try expect(isWindowResized() == false);
-    }
 };
 
 // ============================================================================
@@ -1505,33 +1219,41 @@ pub const core = struct {
 // ============================================================================
 
 pub const input = struct {
-    const Vec2 = zm.Vec2;
-
-    pub const MAX_KEYBOARD_KEYS: usize = 512;
-    pub const MAX_KEY_PRESSED_QUEUE: usize = 16;
-    pub const MAX_CHAR_PRESSED_QUEUE: usize = 16;
-    pub const MAX_MOUSE_BUTTONS: usize = 8;
-    pub const MAX_GAMEPADS: usize = 4;
-    pub const MAX_GAMEPAD_BUTTONS: usize = 32;
-    pub const MAX_GAMEPAD_AXES: usize = 8;
+    pub const max_keyboard_keys: usize = 512;
+    pub const max_key_pressed_queue: usize = 16;
+    pub const max_char_pressed_queue: usize = 16;
+    pub const max_mouse_buttons: usize = 8;
+    pub const max_gamepads: usize = 4;
+    pub const max_gamepad_buttons: usize = 32;
+    pub const max_gamepad_axes: usize = 8;
 
     /// Keyboard sub-state.
     const Keyboard = struct {
         /// Whether the key is held this frame.  Updated by event push.
-        current: [MAX_KEYBOARD_KEYS]u8 = @splat(0),
+        current: [max_keyboard_keys]u8 = @splat(0),
         /// Snapshot of `current` at the start of the most recent frame.
         /// Copied from `current` by `endFrame`.
-        previous: [MAX_KEYBOARD_KEYS]u8 = @splat(0),
+        previous: [max_keyboard_keys]u8 = @splat(0),
         /// Set on every frame in which the OS reports a key-repeat event
         /// for the given key.  Cleared by `endFrame`.
-        repeat: [MAX_KEYBOARD_KEYS]u8 = @splat(0),
+        repeat: [max_keyboard_keys]u8 = @splat(0),
+        /// Whether the key went down among this frame's events (`pushKeyDown`), and whether it came up
+        /// (`pushKeyUp`); both cleared by `endFrame`. A press is a transition, not a state: a key tapped faster than a
+        /// frame - down and up between two frames, as a phone delivers a tap - was pressed and released this frame,
+        /// though it is not down at either frame's start, which a comparison of `previous` with `current` would miss.
+        pressed_this_frame: [max_keyboard_keys]u8 = @splat(0),
+        released_this_frame: [max_keyboard_keys]u8 = @splat(0),
+        /// What each key types on the current layout, without modifiers and lowercased, as its platform last
+        /// reported with the key going down (`setKeyLabel`); 0 where nothing has been reported. Letter shortcuts
+        /// match by it (`isKeyChordPressed`), so Ctrl+Z is the key that types z, wherever it sits.
+        label: [max_keyboard_keys]u21 = @splat(0),
         /// FIFO of recent keycode press events - drained by
         /// `getKeyPressed`.
-        queue: [MAX_KEY_PRESSED_QUEUE]i32 = @splat(0),
+        queue: [max_key_pressed_queue]i32 = @splat(0),
         queue_count: usize = 0,
-        /// FIFO of recent unicode codepoints from text input - drained
-        /// by `getCharPressed`.
-        char_queue: [MAX_CHAR_PRESSED_QUEUE]i32 = @splat(0),
+        /// FIFO of the unicode codepoints typed this frame - drained by `getCharPressed`, read without draining by
+        /// `charsTyped` (the UI), and emptied by `endFrame`, as raylib empties it at each frame's start.
+        char_queue: [max_char_pressed_queue]i32 = @splat(0),
         char_queue_count: usize = 0,
         /// raylib-historical: which key, if pressed, exits the program.
         /// We honour the value but don't auto-quit.
@@ -1540,8 +1262,13 @@ pub const input = struct {
 
     /// Mouse sub-state.
     const Mouse = struct {
-        current_button: [MAX_MOUSE_BUTTONS]u8 = @splat(0),
-        previous_button: [MAX_MOUSE_BUTTONS]u8 = @splat(0),
+        current_button: [max_mouse_buttons]u8 = @splat(0),
+        previous_button: [max_mouse_buttons]u8 = @splat(0),
+        /// Whether the button went down among this frame's events, and whether it came up; cleared by `endFrame`.
+        /// A tap shorter than a frame - a phone's tap arrives as a down and an up together - is pressed and released
+        /// this frame, and never down at a frame's start (see `Keyboard.pressed_this_frame`).
+        pressed_this_frame: [max_mouse_buttons]u8 = @splat(0),
+        released_this_frame: [max_mouse_buttons]u8 = @splat(0),
         /// Mouse position in canvas pixels.  Set by `pushMouseMove`.
         current_position: Vec2 = @splat(0),
         /// Position at start of frame.  Used by `getMouseDelta`.
@@ -1554,7 +1281,7 @@ pub const input = struct {
         /// to the call point rather than the original press).  Reads
         /// are meaningless unless `current_button[i]` is also held,
         /// so the drag helpers gate on that first.
-        press_position: [MAX_MOUSE_BUTTONS]Vec2 = @splat(@splat(0)),
+        press_position: [max_mouse_buttons]Vec2 = @splat(@splat(0)),
         /// Sticky "this button's press has crossed the drag threshold
         /// at least once" flag, set on the first frame where
         /// `current_position` exceeds the per-call threshold relative
@@ -1567,7 +1294,7 @@ pub const input = struct {
         /// large) but breaks slow touch drag (frame-to-frame movement
         /// can be 1-2 px).  Once a press has been promoted to a
         /// drag, every move counts until release.
-        drag_started: [MAX_MOUSE_BUTTONS]bool = @splat(false),
+        drag_started: [max_mouse_buttons]bool = @splat(false),
         /// Cumulative wheel offset for the *current* frame; cleared by
         /// `endFrame`.  Both axes - vertical (.y) is the common one,
         /// horizontal (.x) shows up on trackpads.
@@ -1575,11 +1302,16 @@ pub const input = struct {
         /// Last frame's wheel value, used by `getMouseWheelMove` so the
         /// reading survives one extra frame after the user lifts off.
         previous_wheel: Vec2 = @splat(0),
-        /// raylib's per-frame "did the cursor move at all" indicator.
-        /// We don't expose it as a public API - it's used internally to
-        /// know whether `previous_position` should be retained or reset.
+        /// How far the mouse moved during the current frame, summed from the platform's move events: its own
+        /// motion, which keeps coming while the pointer is locked and its position stands still. What
+        /// `getMouseDelta` returns; cleared by `endFrame`.
+        movement: Vec2 = @splat(0),
+        /// Whether the pointer is over the drawing area, as the platform last reported (`pushPointerPresence`);
+        /// what `isCursorOnScreen` answers. True until the platform says otherwise.
         cursor_on_screen: bool = true,
         cursor_hidden: bool = false,
+        /// Whether the platform holds the pointer locked, as it last reported (`pushPointerLock`).
+        pointer_locked: bool = false,
         /// The last value passed to `setMouseCursor`.  CSS doesn't let
         /// us query the canvas's current cursor style; we mirror it
         /// here so `getMouseCursor` can answer correctly.  Defaults
@@ -1592,11 +1324,11 @@ pub const input = struct {
     /// `gamepadconnected` events yet.  Tracking as a Phase 11 cleanup;
     /// `isGamepadAvailable` will keep returning false until then.
     const Gamepad = struct {
-        ready: [MAX_GAMEPADS]bool = @splat(false),
-        current_button: [MAX_GAMEPADS][MAX_GAMEPAD_BUTTONS]u8 = @splat(@splat(0)),
-        previous_button: [MAX_GAMEPADS][MAX_GAMEPAD_BUTTONS]u8 = @splat(@splat(0)),
-        axis: [MAX_GAMEPADS][MAX_GAMEPAD_AXES]f32 = @splat(@splat(0)),
-        axis_count: [MAX_GAMEPADS]u8 = @splat(0),
+        ready: [max_gamepads]bool = @splat(false),
+        current_button: [max_gamepads][max_gamepad_buttons]u8 = @splat(@splat(0)),
+        previous_button: [max_gamepads][max_gamepad_buttons]u8 = @splat(@splat(0)),
+        axis: [max_gamepads][max_gamepad_axes]f32 = @splat(@splat(0)),
+        axis_count: [max_gamepads]u8 = @splat(0),
         last_button_pressed: i32 = 0,
     };
 
@@ -1604,7 +1336,7 @@ pub const input = struct {
     /// every multi-touch device (we'd need a separate hand for the
     /// 11th finger).  Matches raylib's MAX_TOUCH_POINTS = 8 with a
     /// small buffer.
-    pub const MAX_TOUCH_POINTS: usize = 10;
+    pub const max_touch_points: usize = 10;
 
     /// Single tracked finger.  `id == -1` means the slot is free.
     pub const TouchPoint = struct {
@@ -1617,7 +1349,7 @@ pub const input = struct {
         /// Slot table.  Order is "first-empty wins" for downs;
         /// compacted on up so the active fingers are always at slots
         /// 0..count-1 in arrival order.
-        points: [MAX_TOUCH_POINTS]TouchPoint = @splat(.{}),
+        points: [max_touch_points]TouchPoint = @splat(.{}),
         /// Number of currently-down fingers (0..MAX_TOUCH_POINTS).
         count: usize = 0,
     };
@@ -1650,12 +1382,38 @@ pub const input = struct {
         ok: bool = false,
     };
 
+    pub const TextInputOptions = contract.TextInputOptions;
+    pub const TextInputArea = contract.TextInputArea;
+
+    /// A text field's request for text input, made each frame the field is active (`wantTextInput`): what the field
+    /// expects, and where it is with its caret - so the platform turns its input method on, or keeps it off for a
+    /// password, and opens its windows at the caret.
+    pub const TextInputWish = struct {
+        options: TextInputOptions,
+        area: TextInputArea,
+    };
+
     pub const InputState = struct {
         keyboard: Keyboard = .{},
         mouse: Mouse = .{},
         gamepad: Gamepad = .{},
         touch: Touch = .{},
         motion: Motion = .{},
+        paste: Paste = .{},
+        /// The frame's request for text input (`wantTextInput`); `endFrame` clears it.
+        text_input_wish: ?TextInputWish = null,
+    };
+
+    /// The most a paste keeps: a longer text keeps its first part, cut at a character boundary.
+    pub const paste_capacity: usize = 32 * 1024;
+
+    /// Text pasted during the current frame - the platform's `paste` event, from the system's paste command (Ctrl+V)
+    /// or a `requestPaste` - kept until `endFrame`. A copy: the event's own bytes last only while it is handled. When
+    /// several pastes arrive in one frame, the last is kept.
+    pub const Paste = struct {
+        bytes: [paste_capacity]u8 = undefined,
+        length: usize = 0,
+        has_text: bool = false,
     };
 
     // ===========================================================================
@@ -1673,29 +1431,61 @@ pub const input = struct {
         key: i32,
         is_repeat: i32,
     ) void {
-        if (key <= 0 or key >= MAX_KEYBOARD_KEYS) {
+        if (key <= 0 or key >= max_keyboard_keys) {
             return;
         }
         const idx: usize = @intCast(key);
         const was_down: bool = state.keyboard.current[idx] != 0;
         state.keyboard.current[idx] = 1;
+        if (!was_down) {
+            state.keyboard.pressed_this_frame[idx] = 1;
+        }
         if (is_repeat != 0) {
             state.keyboard.repeat[idx] = 1;
         }
         // Only enqueue a press event on the rising edge - auto-repeat
         // doesn't push to the press queue.  Matches raylib's wiring.
-        if (!was_down and state.keyboard.queue_count < MAX_KEY_PRESSED_QUEUE) {
+        if (!was_down and state.keyboard.queue_count < max_key_pressed_queue) {
             state.keyboard.queue[state.keyboard.queue_count] = key;
             state.keyboard.queue_count += 1;
         }
     }
 
+    /// Records what `key` types on the current layout (`Keyboard.label`), as its platform reports with each key going
+    /// down. A layout can change while the app runs, so each report replaces the last.
+    pub fn setKeyLabel(state: *InputState, key: i32, label: u21) void {
+        if (key <= 0 or key >= max_keyboard_keys) {
+            return;
+        }
+        state.keyboard.label[@intCast(key)] = label;
+    }
+
     pub fn pushKeyUp(state: *InputState, key: i32) void {
-        if (key <= 0 or key >= MAX_KEYBOARD_KEYS) {
+        if (key <= 0 or key >= max_keyboard_keys) {
             return;
         }
         const idx: usize = @intCast(key);
+        const was_down: bool = state.keyboard.current[idx] != 0;
         state.keyboard.current[idx] = 0;
+        if (was_down) {
+            state.keyboard.released_this_frame[idx] = 1;
+        }
+    }
+
+    /// Releases every key and mouse button held: the app lost the keyboard's focus, and the releases of what was held
+    /// go to whichever window has it now, so they would never arrive. Each release reaches the app as one would - the
+    /// key is up from now on, and the frame sees it released.
+    ///
+    /// The release belongs here, above every platform, as SDL3 places it: its shared keyboard code resets the
+    /// keyboard when focus leaves (`SDL_SetKeyboardFocus` calls `SDL_ResetKeyboard`, which sends a release for every
+    /// key down). sokol and Mach only report the focus change and leave held keys to the app.
+    pub fn releaseHeld(state: *InputState) void {
+        for (1..max_keyboard_keys) |key| {
+            pushKeyUp(state, @intCast(key));
+        }
+        for (0..max_mouse_buttons) |button| {
+            pushMouseButtonUp(state, @intCast(button));
+        }
     }
 
     /// Push a unicode codepoint from text input (e.g. `keypress` event
@@ -1706,14 +1496,14 @@ pub const input = struct {
         if (codepoint <= 0) {
             return;
         }
-        if (state.keyboard.char_queue_count < MAX_CHAR_PRESSED_QUEUE) {
+        if (state.keyboard.char_queue_count < max_char_pressed_queue) {
             state.keyboard.char_queue[state.keyboard.char_queue_count] = codepoint;
             state.keyboard.char_queue_count += 1;
         }
     }
 
     pub fn pushMouseButtonDown(state: *InputState, button: i32) void {
-        if (button < 0 or button >= MAX_MOUSE_BUTTONS) {
+        if (button < 0 or button >= max_mouse_buttons) {
             return;
         }
         const idx: usize = @intCast(button);
@@ -1724,15 +1514,19 @@ pub const input = struct {
         if (state.mouse.current_button[idx] == 0) {
             state.mouse.press_position[idx] = state.mouse.current_position;
             state.mouse.drag_started[idx] = false;
+            state.mouse.pressed_this_frame[idx] = 1;
         }
         state.mouse.current_button[idx] = 1;
     }
 
     pub fn pushMouseButtonUp(state: *InputState, button: i32) void {
-        if (button < 0 or button >= MAX_MOUSE_BUTTONS) {
+        if (button < 0 or button >= max_mouse_buttons) {
             return;
         }
         const idx: usize = @intCast(button);
+        if (state.mouse.current_button[idx] != 0) {
+            state.mouse.released_this_frame[idx] = 1;
+        }
         state.mouse.current_button[idx] = 0;
         // Clear the sticky drag flag on release - the next press
         // starts a fresh drag-or-click decision against threshold.
@@ -1746,6 +1540,48 @@ pub const input = struct {
     ) void {
         state.mouse.current_position[0] = x;
         state.mouse.current_position[1] = y;
+    }
+
+    /// The pointer entered the drawing area (`is_inside`) or left it.
+    pub fn pushPointerPresence(state: *InputState, is_inside: bool) void {
+        state.mouse.cursor_on_screen = is_inside;
+    }
+
+    /// Whether cutting `text` at `cut` would split a character: the byte there continues one (UTF-8 continuation
+    /// bytes are `10xxxxxx`). Cutting at either end splits nothing.
+    fn cutsCharacter(text: []const u8, cut: usize) bool {
+        const is_within_text: bool = cut > 0 and cut < text.len;
+        return is_within_text and text[cut] & 0xc0 == 0x80;
+    }
+
+    /// Keeps a pasted text for the frame, cut at a character boundary when it is longer than `paste_capacity`.
+    pub fn pushPaste(state: *InputState, text: []const u8) void {
+        var kept_length: usize = @min(text.len, paste_capacity);
+        // A UTF-8 continuation byte (10xxxxxx) at the cut means the cut splits a character: move the cut back.
+        while (cutsCharacter(text, kept_length)) {
+            kept_length -= 1;
+        }
+        @memcpy(state.paste.bytes[0..kept_length], text[0..kept_length]);
+        state.paste.length = kept_length;
+        state.paste.has_text = true;
+    }
+
+    /// The text pasted this frame, or null: from the system's paste command (Ctrl+V), or the outcome of
+    /// `requestPaste`, which arrives a frame or more after the request.
+    pub fn getPastedText(state: *const InputState) ?[]const u8 {
+        if (!state.paste.has_text) {
+            return null;
+        }
+        return state.paste.bytes[0..state.paste.length];
+    }
+
+    /// Adds one move event's motion (`dx`, `dy`, in logical pixels) to the frame's `movement`.
+    pub fn pushMouseMovement(
+        state: *InputState,
+        dx: f32,
+        dy: f32,
+    ) void {
+        state.mouse.movement += Vec2{ dx, dy };
     }
 
     /// Feed one accelerometer sample (accelerationIncludingGravity, m/s^2) plus
@@ -1798,7 +1634,7 @@ pub const input = struct {
                 return;
             }
         }
-        if (state.touch.count >= MAX_TOUCH_POINTS) {
+        if (state.touch.count >= max_touch_points) {
             return;
         }
         state.touch.points[state.touch.count] = .{ .id = id, .x = x, .y = y };
@@ -1845,20 +1681,44 @@ pub const input = struct {
     // `previous` so the next frame's edge-detection works.
     // ===========================================================================
 
+    /// Asks for text input this frame: a field expecting `options` is active at `area`, in the app's logical pixels.
+    /// The request lasts the frame - `endFrame` clears it - so a frame in which no field asks turns text input off.
+    pub fn wantTextInput(
+        state: *InputState,
+        options: TextInputOptions,
+        area: TextInputArea,
+    ) void {
+        state.text_input_wish = .{ .options = options, .area = area };
+    }
+
+    /// The frame's request for text input, or null.
+    pub fn textInputWish(state: *const InputState) ?TextInputWish {
+        return state.text_input_wish;
+    }
+
     pub fn endFrame(state: *InputState) void {
+        state.text_input_wish = null;
         @memcpy(&state.keyboard.previous, &state.keyboard.current);
         @memcpy(&state.mouse.previous_button, &state.mouse.current_button);
         state.mouse.previous_position = state.mouse.current_position;
         state.mouse.previous_wheel = state.mouse.current_wheel;
 
-        // Wheel accumulates *within* a frame; reset for the next.
+        // Wheel accumulates *within* a frame; reset for the next. So does the movement; a paste, and the characters
+        // typed, last one frame.
         state.mouse.current_wheel = @splat(0);
+        state.mouse.movement = @splat(0);
+        state.paste.has_text = false;
+        state.keyboard.char_queue_count = 0;
 
-        // Repeat flag is per-frame; clear it.
+        // Repeat flag is per-frame; clear it. So are the transitions.
         @memset(&state.keyboard.repeat, 0);
+        @memset(&state.keyboard.pressed_this_frame, 0);
+        @memset(&state.keyboard.released_this_frame, 0);
+        @memset(&state.mouse.pressed_this_frame, 0);
+        @memset(&state.mouse.released_this_frame, 0);
 
         // Gamepad button history.
-        inline for (0..MAX_GAMEPADS) |i| {
+        inline for (0..max_gamepads) |i| {
             @memcpy(&state.gamepad.previous_button[i], &state.gamepad.current_button[i]);
         }
     }
@@ -1872,11 +1732,11 @@ pub const input = struct {
         key: KeyboardKey,
     ) bool {
         const i: i32 = @backingInt(key);
-        if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
+        if (i <= 0 or i >= max_keyboard_keys) {
             return false;
         }
         const u: usize = @intCast(i);
-        return state.keyboard.previous[u] == 0 and state.keyboard.current[u] != 0;
+        return state.keyboard.pressed_this_frame[u] != 0;
     }
 
     pub fn isKeyPressedRepeat(
@@ -1884,7 +1744,7 @@ pub const input = struct {
         key: KeyboardKey,
     ) bool {
         const i: i32 = @backingInt(key);
-        if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
+        if (i <= 0 or i >= max_keyboard_keys) {
             return false;
         }
         return state.keyboard.repeat[@intCast(i)] != 0;
@@ -1895,7 +1755,7 @@ pub const input = struct {
         key: KeyboardKey,
     ) bool {
         const i: i32 = @backingInt(key);
-        if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
+        if (i <= 0 or i >= max_keyboard_keys) {
             return false;
         }
         return state.keyboard.current[@intCast(i)] != 0;
@@ -1906,11 +1766,11 @@ pub const input = struct {
         key: KeyboardKey,
     ) bool {
         const i: i32 = @backingInt(key);
-        if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
+        if (i <= 0 or i >= max_keyboard_keys) {
             return false;
         }
         const u: usize = @intCast(i);
-        return state.keyboard.previous[u] != 0 and state.keyboard.current[u] == 0;
+        return state.keyboard.released_this_frame[u] != 0;
     }
 
     pub fn isKeyUp(
@@ -1918,7 +1778,7 @@ pub const input = struct {
         key: KeyboardKey,
     ) bool {
         const i: i32 = @backingInt(key);
-        if (i <= 0 or i >= MAX_KEYBOARD_KEYS) {
+        if (i <= 0 or i >= max_keyboard_keys) {
             return true;
         }
         return state.keyboard.current[@intCast(i)] == 0;
@@ -1951,6 +1811,12 @@ pub const input = struct {
     /// Returns `null` when empty.  `u21` covers the full Unicode range
     /// (max codepoint `0x10FFFF` = 1 114 111 fits in 21 bits).
     /// Mutating: drains the queue.
+    /// The codepoints typed this frame that `getCharPressed` has not yet taken, read without taking them: the UI's
+    /// text fields see them, and the app's own `getCharPressed` still finds them.
+    pub fn charsTyped(state: *const InputState) []const i32 {
+        return state.keyboard.char_queue[0..state.keyboard.char_queue_count];
+    }
+
     pub fn getCharPressed(state: *InputState) ?u21 {
         if (state.keyboard.char_queue_count == 0) {
             return null;
@@ -2114,7 +1980,7 @@ pub const input = struct {
         button: @import("types.zig").MouseButton,
     ) bool {
         const i: usize = @intCast(@backingInt(button));
-        return state.mouse.previous_button[i] == 0 and state.mouse.current_button[i] != 0;
+        return state.mouse.pressed_this_frame[i] != 0;
     }
 
     pub fn isMouseButtonDown(
@@ -2129,7 +1995,7 @@ pub const input = struct {
         button: @import("types.zig").MouseButton,
     ) bool {
         const i: usize = @intCast(@backingInt(button));
-        return state.mouse.previous_button[i] != 0 and state.mouse.current_button[i] == 0;
+        return state.mouse.released_this_frame[i] != 0;
     }
 
     pub fn isMouseButtonUp(
@@ -2225,8 +2091,89 @@ pub const input = struct {
         return .{ m[0] * dpr, rh - m[1] * dpr };
     }
 
+    /// How far the mouse moved this frame: the motion its move events carried, summed. It equals the step between
+    /// last frame's position and this frame's while the pointer is free, and keeps measuring the hand's motion while
+    /// the pointer is locked and the position stands still - what turns a first-person camera.
     pub fn getMouseDelta(state: *const InputState) Vec2 {
-        return state.mouse.current_position - state.mouse.previous_position;
+        return state.mouse.movement;
+    }
+
+    test "typed characters last one frame: read without taking them, and gone after it" {
+        var state: InputState = .{};
+        pushChar(&state, 'h');
+        pushChar(&state, 'i');
+        try expectEqual(@as(usize, 2), charsTyped(&state).len);
+        try expect(getCharPressed(&state) == 'h');
+        try expectEqual(@as(usize, 1), charsTyped(&state).len);
+        endFrame(&state);
+        try expectEqual(@as(usize, 0), charsTyped(&state).len);
+        try expect(getCharPressed(&state) == null);
+    }
+
+    test "a tap shorter than a frame is pressed and released in it, and down at neither frame's start" {
+        var state: InputState = .{};
+        // A phone delivers a tap as a button going down and coming up together, between two frames.
+        pushMouseButtonDown(&state, 0);
+        pushMouseButtonUp(&state, 0);
+        try expect(isMouseButtonPressed(&state, .left));
+        try expect(isMouseButtonReleased(&state, .left));
+        try expect(!isMouseButtonDown(&state, .left));
+        endFrame(&state);
+        try expect(!isMouseButtonPressed(&state, .left));
+        try expect(!isMouseButtonReleased(&state, .left));
+        // A key tapped as quickly.
+        const space_key: i32 = @backingInt(KeyboardKey.space);
+        pushKeyDown(&state, space_key, 0);
+        pushKeyUp(&state, space_key);
+        try expect(isKeyPressed(&state, .space));
+        try expect(isKeyReleased(&state, .space));
+        try expect(!isKeyDown(&state, .space));
+        endFrame(&state);
+        try expect(!isKeyPressed(&state, .space));
+        // A button held across frames: pressed in its first frame only, released in the frame it comes up.
+        pushMouseButtonDown(&state, 0);
+        try expect(isMouseButtonPressed(&state, .left));
+        endFrame(&state);
+        try expect(!isMouseButtonPressed(&state, .left));
+        try expect(isMouseButtonDown(&state, .left));
+        pushMouseButtonUp(&state, 0);
+        try expect(isMouseButtonReleased(&state, .left));
+    }
+
+    test "a text input request lasts the frame it is made in" {
+        var state: InputState = .{};
+        try expectEqual(@as(?TextInputWish, null), textInputWish(&state));
+        const area: TextInputArea = .{ .x = 10, .y = 20, .width = 300, .height = 24, .caret_x = 42 };
+        wantTextInput(&state, .{ .kind = .password }, area);
+        try expectEqual(TextInputOptions.Kind.password, textInputWish(&state).?.options.kind);
+        try expectEqual(@as(f32, 42), textInputWish(&state).?.area.caret_x);
+        endFrame(&state);
+        try expectEqual(@as(?TextInputWish, null), textInputWish(&state));
+    }
+
+    test "a paste longer than the capacity keeps its first part, whole characters only" {
+        var state: InputState = .{};
+        var text: [paste_capacity + 1]u8 = undefined;
+        @memset(text[0 .. paste_capacity - 1], 'a');
+        // U+00E9 (e with an acute accent) is two bytes, C3 A9: the capacity falls between them, so the cut moves
+        // back before it.
+        text[paste_capacity - 1] = 0xc3;
+        text[paste_capacity] = 0xa9;
+        pushPaste(&state, &text);
+        try expectEqual(@as(usize, paste_capacity - 1), getPastedText(&state).?.len);
+        endFrame(&state);
+        try expect(getPastedText(&state) == null);
+    }
+
+    test "the mouse delta is the motion its events carried, also while the position stands still" {
+        var state: InputState = .{};
+        pushMouseMove(&state, 100, 100);
+        pushMouseMovement(&state, 5, -3);
+        pushMouseMove(&state, 100, 100);
+        pushMouseMovement(&state, 5, -3);
+        try expect(getMouseDelta(&state)[0] == 10 and getMouseDelta(&state)[1] == -6);
+        endFrame(&state);
+        try expect(getMouseDelta(&state)[0] == 0 and getMouseDelta(&state)[1] == 0);
     }
 
     pub fn getMouseWheelMove(state: *const InputState) f32 {
@@ -2272,7 +2219,7 @@ pub const input = struct {
         state: *const InputState,
         index: i32,
     ) Vec2 {
-        if (index < 0 or index >= MAX_TOUCH_POINTS) {
+        if (index < 0 or index >= max_touch_points) {
             return @splat(0);
         }
         const i: usize = @intCast(index);
@@ -2291,7 +2238,7 @@ pub const input = struct {
         state: *const InputState,
         index: i32,
     ) i32 {
-        if (index < 0 or index >= MAX_TOUCH_POINTS) {
+        if (index < 0 or index >= max_touch_points) {
             return -1;
         }
         const i: usize = @intCast(index);
@@ -2377,11 +2324,71 @@ pub const input = struct {
     // Phase 11 cleanup once an example needs gamepad support.
     // ===========================================================================
 
+    /// Where each of the contract's gamepad buttons - the W3C standard gamepad's, by position - sits among raylib's
+    /// (`GamepadButton`): the face buttons are raylib's right face, the d-pad its left face, the shoulders and
+    /// triggers its first and second triggers, back and start its middle left and right, the guide its middle.
+    const gamepad_button_places = [_]struct {
+        contract: platform.contract.GamepadButton,
+        raylib: @import("types.zig").GamepadButton,
+    }{
+        .{ .contract = .south, .raylib = .right_face_down },
+        .{ .contract = .east, .raylib = .right_face_right },
+        .{ .contract = .west, .raylib = .right_face_left },
+        .{ .contract = .north, .raylib = .right_face_up },
+        .{ .contract = .left_shoulder, .raylib = .left_trigger_1 },
+        .{ .contract = .right_shoulder, .raylib = .right_trigger_1 },
+        .{ .contract = .left_trigger, .raylib = .left_trigger_2 },
+        .{ .contract = .right_trigger, .raylib = .right_trigger_2 },
+        .{ .contract = .back, .raylib = .middle_left },
+        .{ .contract = .start, .raylib = .middle_right },
+        .{ .contract = .left_stick, .raylib = .left_thumb },
+        .{ .contract = .right_stick, .raylib = .right_thumb },
+        .{ .contract = .dpad_up, .raylib = .left_face_up },
+        .{ .contract = .dpad_down, .raylib = .left_face_down },
+        .{ .contract = .dpad_left, .raylib = .left_face_left },
+        .{ .contract = .dpad_right, .raylib = .left_face_right },
+        .{ .contract = .guide, .raylib = .middle },
+    };
+
+    /// The gamepad in a slot as the platform reads it this frame (`platform.current.gamepad`), written into the input
+    /// state - null empties the slot. Each button lands at raylib's number (`gamepad_button_places`), down from half
+    /// its travel, which matters for the analog triggers; the sticks are axes 0 to 3, and the triggers also axes 4 and
+    /// 5, from 0 released to 1 pressed.
+    pub fn setGamepad(
+        state: *InputState,
+        slot: usize,
+        read: ?platform.contract.Gamepad,
+    ) void {
+        if (slot >= max_gamepads) {
+            return;
+        }
+        const pad: platform.contract.Gamepad = read orelse {
+            state.gamepad.ready[slot] = false;
+            @memset(&state.gamepad.current_button[slot], 0);
+            @memset(&state.gamepad.axis[slot], 0);
+            state.gamepad.axis_count[slot] = 0;
+            return;
+        };
+        state.gamepad.ready[slot] = true;
+        for (gamepad_button_places) |place| {
+            const button_index: usize = @intCast(@backingInt(place.raylib));
+            const is_down: bool = pad.buttons.get(place.contract) >= 0.5;
+            state.gamepad.current_button[slot][button_index] = if (is_down) 1 else 0;
+        }
+        state.gamepad.axis[slot][0] = pad.axes.get(.left_x);
+        state.gamepad.axis[slot][1] = pad.axes.get(.left_y);
+        state.gamepad.axis[slot][2] = pad.axes.get(.right_x);
+        state.gamepad.axis[slot][3] = pad.axes.get(.right_y);
+        state.gamepad.axis[slot][4] = pad.buttons.get(.left_trigger);
+        state.gamepad.axis[slot][5] = pad.buttons.get(.right_trigger);
+        state.gamepad.axis_count[slot] = 6;
+    }
+
     pub fn isGamepadAvailable(
         state: *const InputState,
         gamepad: i32,
     ) bool {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return false;
         }
         return state.gamepad.ready[@intCast(gamepad)];
@@ -2392,7 +2399,7 @@ pub const input = struct {
         gamepad: i32,
         button: @import("types.zig").GamepadButton,
     ) bool {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return false;
         }
         return state.gamepad.current_button[@intCast(gamepad)][@intCast(@backingInt(button))] != 0;
@@ -2403,7 +2410,7 @@ pub const input = struct {
         gamepad: i32,
         button: @import("types.zig").GamepadButton,
     ) bool {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return false;
         }
         const g: usize = @intCast(gamepad);
@@ -2417,7 +2424,7 @@ pub const input = struct {
         gamepad: i32,
         button: @import("types.zig").GamepadButton,
     ) bool {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return false;
         }
         const g: usize = @intCast(gamepad);
@@ -2431,7 +2438,7 @@ pub const input = struct {
         gamepad: i32,
         button: @import("types.zig").GamepadButton,
     ) bool {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return true; // out-of-range -> up
         }
         return state.gamepad.current_button[@intCast(gamepad)][@intCast(@backingInt(button))] == 0;
@@ -2443,11 +2450,11 @@ pub const input = struct {
     /// `@import("types.zig").GamepadButton.unknown` value (raylib used 0 here even though it's
     /// a legitimate enum tag).
     pub fn getGamepadButtonPressed(state: *const InputState) ?@import("types.zig").GamepadButton {
-        for (0..MAX_GAMEPADS) |g| {
+        for (0..max_gamepads) |g| {
             if (!state.gamepad.ready[g]) {
                 continue;
             }
-            for (0..MAX_GAMEPAD_BUTTONS) |b| {
+            for (0..max_gamepad_buttons) |b| {
                 if (state.gamepad.current_button[g][b] != 0) {
                     return @fromBackingInt(@intCast(b));
                 }
@@ -2461,7 +2468,7 @@ pub const input = struct {
         gamepad: i32,
         axis: @import("types.zig").GamepadAxis,
     ) f32 {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return 0;
         }
         return state.gamepad.axis[@intCast(gamepad)][@intCast(@backingInt(axis))];
@@ -2477,13 +2484,13 @@ pub const input = struct {
         state: *const InputState,
         gamepad: i32,
     ) i32 {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return 0;
         }
         if (!state.gamepad.ready[@intCast(gamepad)]) {
             return 0;
         }
-        return MAX_GAMEPAD_AXES;
+        return max_gamepad_axes;
     }
 
     /// Return a static name string for the gamepad, or `null` if not
@@ -2495,7 +2502,7 @@ pub const input = struct {
         state: *const InputState,
         gamepad: i32,
     ) ?[*:0]const u8 {
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return null;
         }
         if (!state.gamepad.ready[@intCast(gamepad)]) {
@@ -2510,11 +2517,9 @@ pub const input = struct {
         };
     }
 
-    /// Trigger a dual-rumble vibration on `gamepad` (0..MAX_GAMEPADS).
-    /// `left_motor` and `right_motor` are normalized magnitudes in
-    /// [0, 1] (clamped on the JS side).  `duration` is in seconds.
-    /// Silent no-op for invalid pad index, disconnected pad, or
-    /// browser/hardware that doesn't expose `vibrationActuator`.
+    /// A dual rumble on `gamepad` (0 to MAX_GAMEPADS - 1), through the platform (`setGamepadRumble`): `left_motor` the
+    /// heavy motor, `right_motor` the light one, each 0 to 1, for `duration` seconds. Nothing happens for a slot
+    /// without a gamepad, or a gamepad without motors.
     pub fn setGamepadVibration(
         state: *const InputState,
         gamepad: i32,
@@ -2522,18 +2527,21 @@ pub const input = struct {
         right_motor: f32,
         duration: f32,
     ) void {
-        if (comptime !builtin.target.cpu.arch.isWasm()) {
-            return;
-        }
-        if (gamepad < 0 or gamepad >= MAX_GAMEPADS) {
+        if (gamepad < 0 or gamepad >= max_gamepads) {
             return;
         }
         if (!state.gamepad.ready[@intCast(gamepad)]) {
             return;
         }
-        const ms_f: f32 = @max(0.0, duration * 1000.0);
-        const ms: u32 = @trunc(@min(ms_f, @as(f32, zm.maxInt(u32))));
-        @import("web.zig").dom.gamepad_vibrate(gamepad, left_motor, right_motor, ms);
+        // In f64, which holds the largest u32 exactly - an f32 cannot - so the clamp below is exact.
+        const duration_seconds: f64 = duration;
+        const milliseconds_float: f64 = @max(0.0, duration_seconds * 1000.0);
+        const milliseconds: u32 = @trunc(@min(milliseconds_float, 4294967295.0));
+        platform.current.setGamepadRumble(@intCast(gamepad), .{
+            .low = left_motor,
+            .high = right_motor,
+            .milliseconds = milliseconds,
+        });
     }
 
     test "setGamepadVibration: out-of-range pad is silent no-op" {
@@ -2541,7 +2549,7 @@ pub const input = struct {
         // arch check.  We just verify it compiles + doesn't trap.
         var state: InputState = .{};
         setGamepadVibration(&state, -1, 1.0, 1.0, 0.5);
-        setGamepadVibration(&state, MAX_GAMEPADS, 1.0, 1.0, 0.5);
+        setGamepadVibration(&state, max_gamepads, 1.0, 1.0, 0.5);
         setGamepadVibration(&state, 0, 0.5, 0.5, 1.0);
     }
 
@@ -2577,7 +2585,7 @@ pub const input = struct {
         state: *const InputState,
         key: i32,
     ) bool {
-        if (key <= 0 or key >= MAX_KEYBOARD_KEYS) {
+        if (key <= 0 or key >= max_keyboard_keys) {
             return false;
         }
         return state.keyboard.current[@intCast(key)] != 0;
@@ -2587,7 +2595,7 @@ pub const input = struct {
         state: *const InputState,
         key: i32,
     ) bool {
-        if (key <= 0 or key >= MAX_KEYBOARD_KEYS) {
+        if (key <= 0 or key >= max_keyboard_keys) {
             return false;
         }
         return state.keyboard.previous[@intCast(key)] != 0;
@@ -2597,23 +2605,18 @@ pub const input = struct {
     // Cursor / pointer-lock - Phase 12 port
     // ===========================================================================
 
-    const builtin_for_cursor = builtin;
-    const dom_for_cursor = if (builtin_for_cursor.target.cpu.arch.isWasm()) @import("web.zig").dom else struct {};
+    // The cursor functions record what the app wants - a shape, or none - in the input state. The engine shows it
+    // through the platform once a frame, after the update (`wgpu_app.showWantedCursor`), so any code may ask - the UI
+    // included - and a frame that asks several times costs one platform call.
 
     /// Show the OS cursor over the canvas.  Pairs with `hideCursor`.
     pub fn showCursor(state: *InputState) void {
         state.mouse.cursor_hidden = false;
-        if (comptime builtin_for_cursor.target.cpu.arch.isWasm()) {
-            dom_for_cursor.set_cursor_style(0);
-        }
     }
 
     /// Hide the OS cursor over the canvas.  Pairs with `showCursor`.
     pub fn hideCursor(state: *InputState) void {
         state.mouse.cursor_hidden = true;
-        if (comptime builtin_for_cursor.target.cpu.arch.isWasm()) {
-            dom_for_cursor.set_cursor_style(1);
-        }
     }
 
     /// Reports whether the cursor is hidden, including via pointer-lock.
@@ -2626,23 +2629,26 @@ pub const input = struct {
         return state.mouse.cursor_on_screen;
     }
 
-    /// Lock the pointer to the canvas (capture for first-person controls)
-    /// and hide the OS cursor.  Browser may show a permission UI.
+    /// The input side of locking the pointer for first-person controls: the cursor recorded as hidden, and hidden
+    /// in the browser. The lock itself is the platform's to grant (`wgpu_app.disableCursor`, which apps call).
     pub fn disableCursor(state: *InputState) void {
         state.mouse.cursor_hidden = true;
-        if (comptime builtin_for_cursor.target.cpu.arch.isWasm()) {
-            dom_for_cursor.set_cursor_style(1);
-            dom_for_cursor.request_pointer_lock();
-        }
     }
 
-    /// Release pointer-lock and show the cursor.
+    /// The input side of releasing the pointer: the cursor recorded as shown, and shown in the browser.
     pub fn enableCursor(state: *InputState) void {
         state.mouse.cursor_hidden = false;
-        if (comptime builtin_for_cursor.target.cpu.arch.isWasm()) {
-            dom_for_cursor.exit_pointer_lock();
-            dom_for_cursor.set_cursor_style(0);
-        }
+    }
+
+    /// The platform granted the pointer lock (`is_locked`) or ended it - a lock ends when focus leaves, and in a
+    /// browser when the user presses Escape.
+    pub fn pushPointerLock(state: *InputState, is_locked: bool) void {
+        state.mouse.pointer_locked = is_locked;
+    }
+
+    /// Whether the pointer is locked: hidden, held still, its motion still reported (`getMouseDelta`).
+    pub fn isPointerLocked(state: *const InputState) bool {
+        return state.mouse.pointer_locked;
     }
 
     // ===========================================================================
@@ -2674,10 +2680,6 @@ pub const input = struct {
             return;
         }
         state.mouse.current_cursor = cursor;
-        if (comptime !builtin_for_cursor.target.cpu.arch.isWasm()) {
-            return;
-        }
-        dom_for_cursor.set_mouse_cursor(@intCast(@backingInt(cursor)));
     }
 
     /// Return the last cursor value set via `setMouseCursor`.  Defaults
@@ -2697,7 +2699,7 @@ pub const input = struct {
     /// move more than this from the press position before
     /// `isMouseDragging` reports true.  Calls passing a negative
     /// `lock_threshold` fall back to this value.
-    pub const MOUSE_DRAG_THRESHOLD_DEFAULT: f32 = 6.0;
+    pub const mouse_drag_threshold_default: f32 = 6.0;
 
     /// True when `button` is held AND the cursor has moved more than
     /// `lock_threshold` pixels from the position it was pressed at.
@@ -2723,7 +2725,7 @@ pub const input = struct {
         if (state.mouse.drag_started[idx]) {
             return true;
         }
-        const t: f32 = if (lock_threshold < 0) MOUSE_DRAG_THRESHOLD_DEFAULT else lock_threshold;
+        const t: f32 = if (lock_threshold < 0) mouse_drag_threshold_default else lock_threshold;
         const dx: f32 = state.mouse.current_position[0] - state.mouse.press_position[idx][0];
         const dy: f32 = state.mouse.current_position[1] - state.mouse.press_position[idx][1];
         if ((dx * dx + dy * dy) > (t * t)) {
@@ -2758,7 +2760,7 @@ pub const input = struct {
         if (state.mouse.drag_started[idx]) {
             return state.mouse.current_position - state.mouse.press_position[idx];
         }
-        const t: f32 = if (lock_threshold < 0) MOUSE_DRAG_THRESHOLD_DEFAULT else lock_threshold;
+        const t: f32 = if (lock_threshold < 0) mouse_drag_threshold_default else lock_threshold;
         const dx: f32 = state.mouse.current_position[0] - state.mouse.press_position[idx][0];
         const dy: f32 = state.mouse.current_position[1] - state.mouse.press_position[idx][1];
         if ((dx * dx + dy * dy) <= (t * t)) {
@@ -2845,6 +2847,37 @@ pub const input = struct {
         repeat: bool = false,
     };
 
+    /// The lowercase letter a key's position names on a US layout - 'a' for `.a` - or null for a key that is not a
+    /// letter. The engine numbers the letter keys by their ASCII capitals, 'A' (65) to 'Z' (90).
+    fn letterOf(key_number: i32) ?u21 {
+        if (key_number < 'A' or key_number > 'Z') {
+            return null;
+        }
+        return @intCast(key_number - 'A' + 'a');
+    }
+
+    /// Whether a key that types `letter` went down this frame - or repeated, when `repeat` - judging each key by what
+    /// it types on the current layout (`Keyboard.label`), or, for a key whose platform reported nothing, by the
+    /// letter its position names. On a French keyboard the key in QWERTY's W position types z and answers for z; the
+    /// key in Z's position types w and does not.
+    fn letterKeyPressed(state: *const InputState, letter: u21, repeat: bool) bool {
+        for (1..max_keyboard_keys) |index| {
+            const went_down: bool = state.keyboard.pressed_this_frame[index] != 0;
+            const repeated: bool = repeat and state.keyboard.repeat[index] != 0;
+            if (!went_down and !repeated) {
+                continue;
+            }
+            const label: u21 = state.keyboard.label[index];
+            const key_letter: ?u21 = if (label != 0) label else letterOf(@intCast(index));
+            if (key_letter) |found| {
+                if (found == letter) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /// True if `chord.key` was pressed THIS frame AND the modifier
     /// state matches exactly.  Edge-triggered on the key, level-
     /// triggered on modifiers.  Pass `opts.repeat = true` to also
@@ -2854,6 +2887,9 @@ pub const input = struct {
     /// physical key.  `chord.ctrl = true` matches if `left_control`
     /// OR `right_control` is held.  `chord.ctrl = false` requires
     /// BOTH released - Ctrl+S won't fire a bare-S chord.
+    /// A letter key matches the key that TYPES the letter on the current
+    /// layout (`letterKeyPressed`), so Ctrl+Z is undo on a French keyboard
+    /// too; every other key matches by its position.
     pub fn isKeyChordPressed(
         state: *const InputState,
         chord: KeyChord,
@@ -2875,6 +2911,9 @@ pub const input = struct {
         if (super_down != chord.super) {
             return false;
         }
+        if (letterOf(@backingInt(chord.key))) |letter| {
+            return letterKeyPressed(state, letter, opts.repeat);
+        }
         if (isKeyPressed(state, chord.key)) {
             return true;
         }
@@ -2892,81 +2931,96 @@ pub const input = struct {
     // keep these literals for driving the input state machine.  The
     // matching enum tags are used for `isKey*` reads which now take
     // `KeyboardKey` directly.
-    const KEY_A: i32 = 65;
-    const KEY_B: i32 = 66;
-    const KEY_S: i32 = 83;
-    const KEY_SPACE: i32 = 32;
-    const KEY_ESCAPE: i32 = 256;
-    const K_A: KeyboardKey = .a;
-    const K_B: KeyboardKey = .b;
-    const K_SPACE: KeyboardKey = .space;
-    const K_ESCAPE: KeyboardKey = .escape;
+    const key_a: i32 = 65;
+    const key_b: i32 = 66;
+    const key_s: i32 = 83;
+    const key_space: i32 = 32;
+    const key_escape: i32 = 256;
+    const k_a: KeyboardKey = .a;
+    const k_b: KeyboardKey = .b;
+    const k_space: KeyboardKey = .space;
+    const k_escape: KeyboardKey = .escape;
 
     // ===========================================================================
     // Keyboard edge detection
     // ===========================================================================
 
+    test "a letter chord matches the key that types the letter; without a label, the key in its position" {
+        // A French keyboard: the key in QWERTY's W position types z, so Ctrl+Z is that key.
+        var french: InputState = .{};
+        pushKeyDown(&french, @backingInt(KeyboardKey.left_control), 0);
+        setKeyLabel(&french, @backingInt(KeyboardKey.w), 'z');
+        pushKeyDown(&french, @backingInt(KeyboardKey.w), 0);
+        try expect(isKeyChordPressed(&french, .{ .key = .z, .ctrl = true }, .{}));
+        try expect(!isKeyChordPressed(&french, .{ .key = .w, .ctrl = true }, .{}));
+        // A platform that reports no label: the key in Z's position answers for z, as before.
+        var unlabelled: InputState = .{};
+        pushKeyDown(&unlabelled, @backingInt(KeyboardKey.left_control), 0);
+        pushKeyDown(&unlabelled, @backingInt(KeyboardKey.z), 0);
+        try expect(isKeyChordPressed(&unlabelled, .{ .key = .z, .ctrl = true }, .{}));
+    }
+
     test "fresh state: nothing is pressed/down" {
         var state: InputState = .{};
-        try expect(!isKeyDown(&state, K_A));
-        try expect(!isKeyPressed(&state, K_A));
-        try expect(!isKeyReleased(&state, K_A));
-        try expect(isKeyUp(&state, K_A));
+        try expect(!isKeyDown(&state, k_a));
+        try expect(!isKeyPressed(&state, k_a));
+        try expect(!isKeyReleased(&state, k_a));
+        try expect(isKeyUp(&state, k_a));
     }
 
     test "rising edge: down + first frame yields isKeyPressed true exactly once" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
 
         // Before endFrame: previous is still 0, current is 1.
         // isKeyPressed = previous == 0 && current == 1 -> true.
-        try expect(isKeyPressed(&state, K_A));
-        try expect(isKeyDown(&state, K_A));
-        try expect(!isKeyReleased(&state, K_A));
-        try expect(!isKeyUp(&state, K_A));
+        try expect(isKeyPressed(&state, k_a));
+        try expect(isKeyDown(&state, k_a));
+        try expect(!isKeyReleased(&state, k_a));
+        try expect(!isKeyUp(&state, k_a));
 
         // After endFrame promotes current -> previous, isKeyPressed should
         // go false because the rising edge has been "consumed".
         _testEndFrame(&state);
-        try expect(!isKeyPressed(&state, K_A));
-        try expect(isKeyDown(&state, K_A));
+        try expect(!isKeyPressed(&state, k_a));
+        try expect(isKeyDown(&state, k_a));
     }
 
     test "falling edge: release + frame yields isKeyReleased exactly once" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
         _testEndFrame(&state); // Now both prev and current are 1.
 
-        _testKeyUp(&state, KEY_A);
+        _testKeyUp(&state, key_a);
         // previous == 1, current == 0 -> released.
-        try expect(isKeyReleased(&state, K_A));
-        try expect(!isKeyDown(&state, K_A));
-        try expect(isKeyUp(&state, K_A));
+        try expect(isKeyReleased(&state, k_a));
+        try expect(!isKeyDown(&state, k_a));
+        try expect(isKeyUp(&state, k_a));
 
         _testEndFrame(&state);
-        try expect(!isKeyReleased(&state, K_A));
+        try expect(!isKeyReleased(&state, k_a));
     }
 
     test "holding a key: isKeyDown stays true across many frames" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
         var i: usize = 0;
         while (i < 60) : (i += 1) {
-            try expect(isKeyDown(&state, K_A));
+            try expect(isKeyDown(&state, k_a));
             _testEndFrame(&state);
         }
     }
 
     test "holding a key: isKeyPressed only fires on the first frame" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
-        try expect(isKeyPressed(&state, K_A));
+        _testKeyDown(&state, key_a);
+        try expect(isKeyPressed(&state, k_a));
         _testEndFrame(&state);
 
         var i: usize = 0;
         while (i < 30) : (i += 1) {
-            try expect(!isKeyPressed(&state, K_A));
-            try expect(isKeyDown(&state, K_A));
+            try expect(!isKeyPressed(&state, k_a));
+            try expect(isKeyDown(&state, k_a));
             _testEndFrame(&state);
         }
     }
@@ -2977,9 +3031,9 @@ pub const input = struct {
 
     test "getKeyPressed drains FIFO order" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
-        _testKeyDown(&state, KEY_B);
-        _testKeyDown(&state, KEY_SPACE);
+        _testKeyDown(&state, key_a);
+        _testKeyDown(&state, key_b);
+        _testKeyDown(&state, key_space);
 
         try expect(getKeyPressed(&state) == .a);
         try expect(getKeyPressed(&state) == .b);
@@ -2991,19 +3045,19 @@ pub const input = struct {
 
     test "auto-repeat (is_repeat=1) does NOT enqueue a press" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
         try expect(getKeyPressed(&state) == .a);
 
         // Simulate an OS auto-repeat event for the same key (still down).
-        pushKeyDown(&state, KEY_A, 1);
+        pushKeyDown(&state, key_a, 1);
         // Queue should remain empty - the rising-edge guard kicks in.
         try expect(getKeyPressed(&state) == null);
         // But isKeyPressedRepeat should report true for this frame.
-        try expect(isKeyPressedRepeat(&state, K_A));
+        try expect(isKeyPressedRepeat(&state, k_a));
 
         // After endFrame, repeat flag clears.
         _testEndFrame(&state);
-        try expect(!isKeyPressedRepeat(&state, K_A));
+        try expect(!isKeyPressedRepeat(&state, k_a));
     }
 
     test "press queue saturates at MAX_KEY_PRESSED_QUEUE" {
@@ -3029,17 +3083,17 @@ pub const input = struct {
 
     test "press queue: pressing same key twice without release is one entry" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
-        _testKeyDown(&state, KEY_A); // Second push without release.
+        _testKeyDown(&state, key_a);
+        _testKeyDown(&state, key_a); // Second push without release.
         try expect(getKeyPressed(&state) == .a);
         try expect(getKeyPressed(&state) == null); // Only one entry.
     }
 
     test "press queue: re-press after release adds a second entry" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
-        _testKeyUp(&state, KEY_A);
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
+        _testKeyUp(&state, key_a);
+        _testKeyDown(&state, key_a);
         try expect(getKeyPressed(&state) == .a);
         try expect(getKeyPressed(&state) == .a);
         try expect(getKeyPressed(&state) == null);
@@ -3088,42 +3142,42 @@ pub const input = struct {
     // ===========================================================================
 
     const MouseButton = @import("types.zig").MouseButton;
-    const MB_LEFT: i32 = 0;
-    const MB_RIGHT: i32 = 1;
-    const M_LEFT: MouseButton = .left;
-    const M_RIGHT: MouseButton = .right;
+    const mb_left: i32 = 0;
+    const mb_right: i32 = 1;
+    const m_left: MouseButton = .left;
+    const m_right: MouseButton = .right;
 
     test "mouse button rising/falling edge mirrors keys" {
         var state: InputState = .{};
-        pushMouseButtonDown(&state, MB_LEFT);
-        try expect(isMouseButtonPressed(&state, M_LEFT));
-        try expect(isMouseButtonDown(&state, M_LEFT));
+        pushMouseButtonDown(&state, mb_left);
+        try expect(isMouseButtonPressed(&state, m_left));
+        try expect(isMouseButtonDown(&state, m_left));
 
         _testEndFrame(&state);
-        try expect(!isMouseButtonPressed(&state, M_LEFT));
-        try expect(isMouseButtonDown(&state, M_LEFT));
+        try expect(!isMouseButtonPressed(&state, m_left));
+        try expect(isMouseButtonDown(&state, m_left));
 
-        pushMouseButtonUp(&state, MB_LEFT);
-        try expect(isMouseButtonReleased(&state, M_LEFT));
-        try expect(!isMouseButtonDown(&state, M_LEFT));
+        pushMouseButtonUp(&state, mb_left);
+        try expect(isMouseButtonReleased(&state, m_left));
+        try expect(!isMouseButtonDown(&state, m_left));
 
         _testEndFrame(&state);
-        try expect(!isMouseButtonReleased(&state, M_LEFT));
+        try expect(!isMouseButtonReleased(&state, m_left));
     }
 
     test "two mouse buttons are tracked independently" {
         var state: InputState = .{};
-        pushMouseButtonDown(&state, MB_LEFT);
-        try expect(isMouseButtonDown(&state, M_LEFT));
-        try expect(!isMouseButtonDown(&state, M_RIGHT));
+        pushMouseButtonDown(&state, mb_left);
+        try expect(isMouseButtonDown(&state, m_left));
+        try expect(!isMouseButtonDown(&state, m_right));
 
-        pushMouseButtonDown(&state, MB_RIGHT);
-        try expect(isMouseButtonDown(&state, M_LEFT));
-        try expect(isMouseButtonDown(&state, M_RIGHT));
+        pushMouseButtonDown(&state, mb_right);
+        try expect(isMouseButtonDown(&state, m_left));
+        try expect(isMouseButtonDown(&state, m_right));
 
-        pushMouseButtonUp(&state, MB_LEFT);
-        try expect(!isMouseButtonDown(&state, M_LEFT));
-        try expect(isMouseButtonDown(&state, M_RIGHT));
+        pushMouseButtonUp(&state, mb_left);
+        try expect(!isMouseButtonDown(&state, m_left));
+        try expect(isMouseButtonDown(&state, m_right));
     }
 
     // ===========================================================================
@@ -3138,17 +3192,6 @@ pub const input = struct {
         const p: Vec2 = getMousePosition(&state);
         try expect(p[0] == 123.5);
         try expect(p[1] == 456.0);
-    }
-
-    test "mouse delta = current - previous, computed at query time" {
-        var state: InputState = .{};
-        pushMouseMove(&state, 100, 100);
-        _testEndFrame(&state);
-        // After endFrame, previous = (100, 100).  Now move.
-        pushMouseMove(&state, 150, 80);
-        const d: Vec2 = getMouseDelta(&state);
-        try expect(d[0] == 50);
-        try expect(d[1] == -20);
     }
 
     // ===========================================================================
@@ -3309,18 +3352,18 @@ pub const input = struct {
     // B2: KeyChord + isKeyChordPressed
     test "B2: bare key chord fires on press, only when no modifier held" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_S);
+        _testKeyDown(&state, key_s);
         try expect(isKeyChordPressed(&state, .{ .key = .s }, .{}));
         _testEndFrame(&state);
         // Released this frame - no chord.
-        _testKeyUp(&state, KEY_S);
+        _testKeyUp(&state, key_s);
         try expect(!isKeyChordPressed(&state, .{ .key = .s }, .{}));
     }
 
     test "B2: Ctrl+S fires only when ctrl is held" {
         var state: InputState = .{};
         _testKeyDown(&state, 341); // KEY_LEFT_CONTROL
-        _testKeyDown(&state, KEY_S);
+        _testKeyDown(&state, key_s);
         try expect(isKeyChordPressed(&state, .{ .key = .s, .ctrl = true }, .{}));
         // The bare-S chord should NOT also fire - strict modifier matching.
         try expect(!isKeyChordPressed(&state, .{ .key = .s }, .{}));
@@ -3329,7 +3372,7 @@ pub const input = struct {
     test "B2: right-side modifier counts the same as left-side" {
         var state: InputState = .{};
         _testKeyDown(&state, 345); // KEY_RIGHT_CONTROL
-        _testKeyDown(&state, KEY_S);
+        _testKeyDown(&state, key_s);
         try expect(isKeyChordPressed(&state, .{ .key = .s, .ctrl = true }, .{}));
     }
 
@@ -3337,7 +3380,7 @@ pub const input = struct {
         var state: InputState = .{};
         _testKeyDown(&state, 341); // KEY_LEFT_CONTROL
         _testKeyDown(&state, 340); // KEY_LEFT_SHIFT
-        _testKeyDown(&state, KEY_S);
+        _testKeyDown(&state, key_s);
         // Ctrl+S chord should NOT fire when Shift is also held.
         try expect(!isKeyChordPressed(&state, .{ .key = .s, .ctrl = true }, .{}));
         // Ctrl+Shift+S DOES fire.
@@ -3346,21 +3389,21 @@ pub const input = struct {
 
     test "B2: chord is edge-triggered - held key doesn't keep firing" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
         try expect(isKeyChordPressed(&state, .{ .key = .a }, .{}));
         _testEndFrame(&state);
         // Still down, but not pressed-this-frame any more.
-        try expect(isKeyDown(&state, K_A));
+        try expect(isKeyDown(&state, k_a));
         try expect(!isKeyChordPressed(&state, .{ .key = .a }, .{}));
     }
 
     test "B2: opts.repeat = true fires on auto-repeat events" {
         var state: InputState = .{};
-        _testKeyDown(&state, KEY_A);
+        _testKeyDown(&state, key_a);
         try expect(isKeyChordPressed(&state, .{ .key = .a }, .{ .repeat = true }));
         _testEndFrame(&state);
         // Simulate OS auto-repeat.
-        pushKeyDown(&state, KEY_A, 1);
+        pushKeyDown(&state, key_a, 1);
         try expect(!isKeyChordPressed(&state, .{ .key = .a }, .{}));
         try expect(isKeyChordPressed(&state, .{ .key = .a }, .{ .repeat = true }));
     }
@@ -3412,11 +3455,11 @@ pub const input = struct {
         _testEndFrame(&state);
 
         // Frame 1: down event happens this frame.
-        _testKeyDown(&state, KEY_A);
-        if (isKeyPressed(&state, K_A)) {
+        _testKeyDown(&state, key_a);
+        if (isKeyPressed(&state, k_a)) {
             pressed_count += 1;
         }
-        if (isKeyReleased(&state, K_A)) {
+        if (isKeyReleased(&state, k_a)) {
             released_count += 1;
         }
         _testEndFrame(&state);
@@ -3424,31 +3467,31 @@ pub const input = struct {
         // Frames 2-30: holding.
         var f: usize = 2;
         while (f <= 30) : (f += 1) {
-            if (isKeyPressed(&state, K_A)) {
+            if (isKeyPressed(&state, k_a)) {
                 pressed_count += 1;
             }
-            if (isKeyReleased(&state, K_A)) {
+            if (isKeyReleased(&state, k_a)) {
                 released_count += 1;
             }
             _testEndFrame(&state);
         }
 
         // Frame 31: release event happens this frame.
-        _testKeyUp(&state, KEY_A);
-        if (isKeyPressed(&state, K_A)) {
+        _testKeyUp(&state, key_a);
+        if (isKeyPressed(&state, k_a)) {
             pressed_count += 1;
         }
-        if (isKeyReleased(&state, K_A)) {
+        if (isKeyReleased(&state, k_a)) {
             released_count += 1;
         }
         _testEndFrame(&state);
 
         // Frames 32-60: idle.
         while (f <= 60) : (f += 1) {
-            if (isKeyPressed(&state, K_A)) {
+            if (isKeyPressed(&state, k_a)) {
                 pressed_count += 1;
             }
-            if (isKeyReleased(&state, K_A)) {
+            if (isKeyReleased(&state, k_a)) {
                 released_count += 1;
             }
             _testEndFrame(&state);
@@ -3545,22 +3588,18 @@ pub const input = struct {
     }
 };
 
-test "Phase 1A: setMouseCursor / setWindowOpacity / setWindowFocused are safe no-ops on host" {
-    // Just verify the calls compile and run without panicking on a host build.
-    // The JS bridge stubs in smoke.ts cover wasm. Cross-namespace integration test
-    // (input cursor state + core window ops), so it lives at file scope after both.
+test "setMouseCursor sets the cursor the input state reports" {
     var input_state: input.InputState = .{};
     input.setMouseCursor(&input_state, .crosshair);
     try expectEqual(input.MouseCursor.crosshair, input.getMouseCursor(&input_state));
     input.setMouseCursor(&input_state, .default);
     try expectEqual(input.MouseCursor.default, input.getMouseCursor(&input_state));
-    core.setWindowOpacity(0.5);
-    core.setWindowFocused();
 }
 
 // ============================================================================
 // SECTION - gestures (state-machine on top of touch primitives)
 // ============================================================================
+
 // Ported from raylib's `rgestures.h` with these zimr adaptations:
 //   - Zig enum (`Gesture`) instead of #defines.
 //   - Slot-table positions read from `input.STATE.touch` (the
@@ -3570,7 +3609,6 @@ test "Phase 1A: setMouseCursor / setWindowOpacity / setWindowFocused are safe no
 //   - One global state struct, accessed only through this namespace.
 
 pub const gestures = struct {
-    const Vec2 = zm.Vec2;
     const input_mod = input;
     const core_mod = core;
 
@@ -3581,15 +3619,15 @@ pub const gestures = struct {
 
     /// All gestures enabled by default - the lower 10 bits cover
     /// every Gesture variant.
-    pub const ALL_GESTURES_FLAG: u32 = 0b1111111111;
+    pub const all_gestures_flag: u32 = 0b1111111111;
 
     // ----- Tunables (raylib-parity) ----------------------------------------
-    const FORCE_TO_SWIPE: f32 = 0.2; // pixels/sec normalized
-    const MINIMUM_PINCH: f32 = 0.005;
-    const TAP_TIMEOUT: f64 = 0.3; // seconds
-    const DOUBLETAP_RANGE: f32 = 0.03;
-    const HOLD_DURATION_THRESHOLD: f64 = 0.5;
-    const DRAG_TIMEOUT: f64 = 0.3;
+    const force_to_swipe: f32 = 0.2; // pixels/sec normalized
+    const minimum_pinch: f32 = 0.005;
+    const tap_timeout: f64 = 0.3; // seconds
+    const doubletap_range: f32 = 0.03;
+    const hold_duration_threshold: f64 = 0.5;
+    const drag_timeout: f64 = 0.3;
 
     // ----- State
     const TouchSubstate = struct {
@@ -3645,7 +3683,7 @@ pub const gestures = struct {
     /// constructed fresh for tests).
     pub const GesturesState = struct {
         current: u32 = @backingInt(Gesture.none),
-        enabled_flags: u32 = ALL_GESTURES_FLAG,
+        enabled_flags: u32 = all_gestures_flag,
         touch: TouchSubstate = .{},
         hold: HoldSubstate = .{},
         drag: DragSubstate = .{},
@@ -3707,8 +3745,8 @@ pub const gestures = struct {
                     const now: f64 = currentTime(time);
                     if (state.current == @backingInt(Gesture.none) and
                         state.touch.tap_counter >= 2 and
-                        (now - state.touch.event_time) < TAP_TIMEOUT and
-                        vec2Distance(state.touch.down_position_a, p0) < DOUBLETAP_RANGE)
+                        (now - state.touch.event_time) < tap_timeout and
+                        vec2Distance(state.touch.down_position_a, p0) < doubletap_range)
                     {
                         state.current = @backingInt(Gesture.doubletap);
                         state.touch.tap_counter = 0;
@@ -3732,7 +3770,7 @@ pub const gestures = struct {
                     const dt: f64 = currentTime(time) - state.swipe.start_time;
                     state.drag.intensity = if (dt > 0) state.drag.distance / @as(f32, @floatCast(dt)) else 0;
 
-                    if (state.drag.intensity > FORCE_TO_SWIPE and state.current != @backingInt(Gesture.drag)) {
+                    if (state.drag.intensity > force_to_swipe and state.current != @backingInt(Gesture.drag)) {
                         const drag_deg: f32 = vec2AngleDeg(state.touch.down_position_a, state.touch.up_position);
                         state.drag.angle_deg = 360.0 - drag_deg;
                         if (state.drag.angle_deg < 30 or state.drag.angle_deg > 330) {
@@ -3762,7 +3800,7 @@ pub const gestures = struct {
                             state.touch.down_position_a = p0;
                         }
                         state.hold.reset_required = false;
-                        if ((currentTime(time) - state.touch.event_time) > DRAG_TIMEOUT) {
+                        if ((currentTime(time) - state.touch.event_time) > drag_timeout) {
                             state.touch.event_time = currentTime(time);
                             state.current = @backingInt(Gesture.drag);
                         }
@@ -3794,8 +3832,8 @@ pub const gestures = struct {
                     state.pinch.vector[0] = p1[0] - p0[0];
                     state.pinch.vector[1] = p1[1] - p0[1];
 
-                    if (vec2Distance(state.touch.previous_position_a, p0) >= MINIMUM_PINCH or
-                        vec2Distance(state.touch.previous_position_b, p1) >= MINIMUM_PINCH)
+                    if (vec2Distance(state.touch.previous_position_a, p0) >= minimum_pinch or
+                        vec2Distance(state.touch.previous_position_b, p1) >= minimum_pinch)
                     {
                         if (vec2Distance(state.touch.previous_position_a, state.touch.previous_position_b) >
                             vec2Distance(p0, p1))
@@ -4073,7 +4111,7 @@ pub const gestures = struct {
 };
 
 // ============================================================================
-// SECTION - camera (was: src/camera.zig)
+// SECTION - effects (was: src/effects.zig)
 // ============================================================================
 
 pub const effects = struct {
@@ -4095,8 +4133,6 @@ pub const effects = struct {
         // `Clock` is a 16-byte value type (userdata + vtable pointer).
 
         // (deduped intra-cluster import) const core = core;
-
-        const is_wasm = builtin.cpu.arch.isWasm();
 
         pub const Clock = struct {
             userdata: ?*anyopaque,
@@ -4192,21 +4228,10 @@ pub const effects = struct {
             return core.getFPS(f);
         }
 
+        /// The wall clock the loader measures with: the platform's (`platformMilliseconds`).
         fn browserWallMs(_: ?*anyopaque) f64 {
-            if (comptime is_wasm) {
-                return @import("web.zig").dom.now_ms();
-            }
-            if (hostMonotonicMs()) |t| {
-                return t;
-            }
-            // No monotonic source available - for tests, return a
-            // synthetic 60-fps tick so frame-time-dependent code is
-            // deterministic-ish.
-            host_fake_ms += 16.0;
-            return host_fake_ms;
+            return platformMilliseconds();
         }
-
-        var host_fake_ms: f64 = 0.0; // lint:off module-var: synthetic 60-fps tick for host-side default clock
 
         // ===========================================================================
         // Mock - deterministic Clock for tests.  Every value freely settable.
@@ -4468,10 +4493,10 @@ pub const effects = struct {
         // ===========================================================================
 
         pub const Seeded = struct {
-            prng: std.Random.DefaultPrng,
+            prng: Random.DefaultPrng,
 
             pub fn init(seed: u64) Seeded {
-                return .{ .prng = std.Random.DefaultPrng.init(seed) };
+                return .{ .prng = Random.DefaultPrng.init(seed) };
             }
 
             pub fn rng(self: *Seeded) Rng {
@@ -4506,7 +4531,7 @@ pub const effects = struct {
 
         fn seededSeed(userdata: ?*anyopaque, seed: u64) void {
             const s: *Seeded = @ptrCast(@alignCast(userdata));
-            s.prng = std.Random.DefaultPrng.init(seed);
+            s.prng = Random.DefaultPrng.init(seed);
         }
 
         fn seededFloat01(userdata: ?*anyopaque) f32 {
@@ -4863,7 +4888,7 @@ pub const effects = struct {
             /// `expect(capture.contains("started"))`.
             pub fn contains(self: *const Capture, needle: []const u8) bool {
                 for (self.lines.items) |entry| {
-                    if (std.mem.indexOf(u8, entry.msg, needle) != null) {
+                    if (indexOf(u8, entry.msg, needle) != null) {
                         return true;
                     }
                 }
@@ -4972,7 +4997,7 @@ pub const effects = struct {
         }
 
         test "Capture: collects emitted messages" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var cap = Capture.init(ta);
             defer cap.deinit();
             const log: Logger = cap.logger();
@@ -4988,7 +5013,7 @@ pub const effects = struct {
         }
 
         test "Capture: contains() finds substrings" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var cap = Capture.init(ta);
             defer cap.deinit();
             const log: Logger = cap.logger();
@@ -5002,7 +5027,7 @@ pub const effects = struct {
         }
 
         test "Capture: countAtLevel filters by level threshold" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var cap = Capture.init(ta);
             defer cap.deinit();
             const log: Logger = cap.logger();
@@ -5020,7 +5045,7 @@ pub const effects = struct {
         }
 
         test "Capture: each Logger method maps to the right Level" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var cap = Capture.init(ta);
             defer cap.deinit();
             const log: Logger = cap.logger();
@@ -5042,7 +5067,7 @@ pub const effects = struct {
         }
 
         test "Capture: emit() bypasses formatting" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var cap = Capture.init(ta);
             defer cap.deinit();
             const log: Logger = cap.logger();
@@ -5063,11 +5088,11 @@ pub const effects = struct {
         }
 
         test "Prefixed: prepends prefix to each emitted line" {
-            const ta: Allocator = std.testing.allocator;
-            var cap: Capture = Capture.init(ta);
+            const ta: Allocator = testing_allocator;
+            var cap: Capture = .init(ta);
             defer cap.deinit();
 
-            const prefixed: Prefixed = Prefixed.init(cap.logger(), "child-app");
+            const prefixed: Prefixed = .init(cap.logger(), "child-app");
             const log: Logger = prefixed.logger();
 
             log.info("hello", .{});
@@ -5081,11 +5106,11 @@ pub const effects = struct {
         }
 
         test "Prefixed: preserves the level on each line" {
-            const ta: Allocator = std.testing.allocator;
-            var cap: Capture = Capture.init(ta);
+            const ta: Allocator = testing_allocator;
+            var cap: Capture = .init(ta);
             defer cap.deinit();
 
-            const prefixed: Prefixed = Prefixed.init(cap.logger(), "x");
+            const prefixed: Prefixed = .init(cap.logger(), "x");
             const log: Logger = prefixed.logger();
 
             log.trace("t", .{});
@@ -5104,11 +5129,11 @@ pub const effects = struct {
         }
 
         test "Prefixed: Logger.emit() bypass also gets the prefix" {
-            const ta: Allocator = std.testing.allocator;
-            var cap: Capture = Capture.init(ta);
+            const ta: Allocator = testing_allocator;
+            var cap: Capture = .init(ta);
             defer cap.deinit();
 
-            const prefixed: Prefixed = Prefixed.init(cap.logger(), "app1");
+            const prefixed: Prefixed = .init(cap.logger(), "app1");
             const log: Logger = prefixed.logger();
 
             // Bypassing the formatted helpers - direct emit.
@@ -5117,12 +5142,12 @@ pub const effects = struct {
         }
 
         test "Prefixed: nesting two Prefixeds stacks both prefixes" {
-            const ta: Allocator = std.testing.allocator;
-            var cap: Capture = Capture.init(ta);
+            const ta: Allocator = testing_allocator;
+            var cap: Capture = .init(ta);
             defer cap.deinit();
 
-            const inner: Prefixed = Prefixed.init(cap.logger(), "outer");
-            const outer: Prefixed = Prefixed.init(inner.logger(), "inner");
+            const inner: Prefixed = .init(cap.logger(), "outer");
+            const outer: Prefixed = .init(inner.logger(), "inner");
             const log: Logger = outer.logger();
 
             log.info("hi", .{});
@@ -5164,9 +5189,8 @@ pub const effects = struct {
         //   app.setLoader(mock.loader());
         // `Loader` is a 16-byte value type (userdata + vtable pointer).
 
+        // lint:off browser-call: the browser's fetch loads by URL; loading by path natively comes with C10
         const fetch = @import("web.zig").fetch;
-
-        const is_wasm = builtin.cpu.arch.isWasm();
 
         pub const Handle = u32;
 
@@ -5252,6 +5276,7 @@ pub const effects = struct {
 
         fn browserLoadFileData(userdata: ?*anyopaque, path: []const u8) Handle {
             const self: *Browser = @ptrCast(@alignCast(userdata));
+            // lint:off browser-call: the browser's fetch loads by URL; loading by path natively comes with C10
             const h: @import("web.zig").fetch.Handle = fetch.start(path);
             if (h == 0) {
                 return 0;
@@ -5305,13 +5330,9 @@ pub const effects = struct {
             return null;
         }
 
-        /// Local time helper duplicated from clock.zig to avoid circular
-        /// import.  A few lines saved by sharing aren't worth the dependency.
+        /// The loader's clock: the platform's (`platformMilliseconds`).
         fn nowMs() f64 {
-            if (comptime is_wasm) {
-                return @import("web.zig").dom.now_ms();
-            }
-            return hostMonotonicMs() orelse 0.0;
+            return platformMilliseconds();
         }
 
         // ===========================================================================
@@ -5535,7 +5556,7 @@ pub const effects = struct {
         }
 
         test "Mock: unknown URL -> not_found on poll" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             const l: Loader = mock.loader();
@@ -5545,7 +5566,7 @@ pub const effects = struct {
         }
 
         test "Mock: put + load + poll -> ok with bytes" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             const payload = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
@@ -5560,7 +5581,7 @@ pub const effects = struct {
         }
 
         test "Mock: handles are unique across simultaneous loads" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             try mock.put(ta, "a", "x");
@@ -5573,7 +5594,7 @@ pub const effects = struct {
         }
 
         test "Mock: unloadFileData frees the slot" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             try mock.put(ta, "x", "ok");
@@ -5585,7 +5606,7 @@ pub const effects = struct {
         }
 
         test "Mock: elapsedMs respects mock.advance" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             try mock.put(ta, "x", "yo");
@@ -5631,7 +5652,7 @@ pub const effects = struct {
         }
 
         test "Integration: Mock drives loader to completion in 2 frames" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             const payload = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 };
@@ -5651,7 +5672,7 @@ pub const effects = struct {
         }
 
         test "Integration: missing asset -> 404 path" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
 
@@ -5665,14 +5686,14 @@ pub const effects = struct {
         }
 
         test "Scoped: loadFileData prepends base_path before forwarding" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
 
             const payload = [_]u8{ 1, 2, 3 };
             try mock.put(ta, "apps/dungeon/hero.png", payload[0..]);
 
-            const scoped: Scoped = Scoped.init(mock.loader(), "apps/dungeon/");
+            const scoped: Scoped = .init(mock.loader(), "apps/dungeon/");
             const l: Loader = scoped.loader();
 
             const h: Handle = l.loadFileData("hero.png");
@@ -5688,11 +5709,11 @@ pub const effects = struct {
         }
 
         test "Scoped: missing-after-prefix -> not_found" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
 
-            const scoped: Scoped = Scoped.init(mock.loader(), "apps/x/");
+            const scoped: Scoped = .init(mock.loader(), "apps/x/");
             const l: Loader = scoped.loader();
 
             const h: Handle = l.loadFileData("nope.png");
@@ -5701,13 +5722,13 @@ pub const effects = struct {
         }
 
         test "Scoped: pollFileData / unloadFileData / elapsedMs delegate 1:1" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             const payload = [_]u8{0x42};
             try mock.put(ta, "ns/file.bin", payload[0..]);
 
-            const scoped: Scoped = Scoped.init(mock.loader(), "ns/");
+            const scoped: Scoped = .init(mock.loader(), "ns/");
             const l: Loader = scoped.loader();
 
             const h: Handle = l.loadFileData("file.bin");
@@ -5724,13 +5745,13 @@ pub const effects = struct {
         }
 
         test "Scoped: empty base_path acts as identity" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             const payload = [_]u8{0xAA};
             try mock.put(ta, "raw.bin", payload[0..]);
 
-            const scoped: Scoped = Scoped.init(mock.loader(), "");
+            const scoped: Scoped = .init(mock.loader(), "");
             const l: Loader = scoped.loader();
 
             const h: Handle = l.loadFileData("raw.bin");
@@ -5740,14 +5761,14 @@ pub const effects = struct {
         }
 
         test "Scoped: nesting two Scopeds stacks both prefixes" {
-            const ta: Allocator = std.testing.allocator;
+            const ta: Allocator = testing_allocator;
             var mock = Mock.init();
             defer mock.deinit(ta);
             const payload = [_]u8{0xCC};
             try mock.put(ta, "apps/game/levels/intro.json", payload[0..]);
 
-            const inner: Scoped = Scoped.init(mock.loader(), "apps/game/");
-            const outer: Scoped = Scoped.init(inner.loader(), "levels/");
+            const inner: Scoped = .init(mock.loader(), "apps/game/");
+            const outer: Scoped = .init(inner.loader(), "levels/");
             const l: Loader = outer.loader();
 
             const h: Handle = l.loadFileData("intro.json");
@@ -5765,6 +5786,10 @@ pub const effects = struct {
 
 };
 
+// ============================================================================
+// SECTION - camera (was: src/camera.zig)
+// ============================================================================
+
 pub const camera = struct {
     const types = @import("types.zig");
     const enums = @import("types.zig");
@@ -5775,12 +5800,9 @@ pub const camera = struct {
     // dependency remains; `Vec` storage->`@Vector` conversion
     // happens in `v3ToZm`/`v3FromZm`, and `add`/`sub`/`scale` use the
     // `Vec` struct's own methods.
-    const sqrt1_2 = zm.sqrt1_2;
     // (deduped intra-cluster import) const core = core;
     const Clock = effects.clock.Clock;
 
-    const Vec2 = zm.Vec2;
-    const Camera3D = zm.Camera3D;
     const Camera = types.Camera;
 
     // ---- Z4a compute-surface bridges ------------------------------------
@@ -5860,17 +5882,12 @@ pub const camera = struct {
     /// Debug throttle counter - `beginMode3D` logs only its first 2
     /// invocations, then goes silent.  Residual global; will move to
     /// `Runtime.debug` (or similar) in Phase 2.
-    pub var DEBUG_3D_LOG_COUNT: u32 = 0; // lint:off module-var: debug throttle counter (will move to Runtime.debug)
-    const Camera2D = zm.Camera2D;
-    const Mat = zm.Mat;
+    pub var debug_3d_log_count: u32 = 0; // lint:off module-var: debug throttle counter (will move to Runtime.debug)
     const Matrix = Mat;
-    const Ray = zm.Ray;
-
-    const radFromDeg = zm.radFromDeg;
 
     /// Camera projection enum values matching raylib's `CameraProjection`.
-    const CAMERA_PERSPECTIVE: i32 = 0;
-    const CAMERA_ORTHOGRAPHIC: i32 = 1;
+    const camera_perspective: i32 = 0;
+    const camera_orthographic: i32 = 1;
 
     // ===========================================================================
     // BeginMode3D / EndMode3D
@@ -5902,15 +5919,15 @@ pub const camera = struct {
         // translate to the screen offset.  As a matrix product
         // (applied to a column vector, rightmost applied first):
         //   T(offset) * S(zoom) * R(rot) * T(-target)
-        const mat_origin: zm.Mat = zm.translation(-cam.target[0], -cam.target[1], 0);
-        const mat_rotation: zm.Mat = zm.rotationZ(cam.rotation);
-        const mat_scale: zm.Mat = scaling(cam.zoom, cam.zoom, 1);
-        const mat_translation: zm.Mat = zm.translation(cam.offset[0], cam.offset[1], 0);
+        const mat_origin: Mat = zm.translation(-cam.target[0], -cam.target[1], 0);
+        const mat_rotation: Mat = zm.rotationZ(cam.rotation);
+        const mat_scale: Mat = scaling(cam.zoom, cam.zoom, 1);
+        const mat_translation: Mat = zm.translation(cam.offset[0], cam.offset[1], 0);
 
         // zimr's `matrixMul(A,B)` is math A*B; zmath's row-vector `mul`
         // reverses the operands.  The chain below builds, step by step,
         // math `T(offset) * S(zoom) * R(rot) * T(-target)`.
-        var result: zm.Mat = mulMat(mat_rotation, mat_origin); // math R * T(-target)
+        var result: Mat = mulMat(mat_rotation, mat_origin); // math R * T(-target)
         result = mulMat(mat_scale, result); // math S * R * T(-target)
         result = mulMat(mat_translation, result); // math T(offset) * S * R * T(-target)
         return result;
@@ -5942,7 +5959,7 @@ pub const camera = struct {
 
         // Compose projection.
         var proj: Matrix = undefined;
-        if (cam.projection == CAMERA_PERSPECTIVE) {
+        if (cam.projection == camera_perspective) {
             proj = zm.perspectiveFovRhGl(
                 radFromDeg(cam.fovy_deg),
                 aspect,
@@ -5997,7 +6014,7 @@ pub const camera = struct {
 
     /// Inverse: screen-space pixel -> world-space point under a Camera2D.
     pub fn getScreenToWorld2D(position: Vec2, cam: Camera2D) Vec2 {
-        const m: zm.Mat = zm.inverse(getCameraMatrix2D(cam));
+        const m: Mat = zm.inverse(getCameraMatrix2D(cam));
         const transformed: Vec = v3Transform(vec(position[0], position[1], 0), m);
         return .{ transformed[0], transformed[1] };
     }
@@ -6039,7 +6056,7 @@ pub const camera = struct {
 
         // Projection matrix.
         var proj: Matrix = undefined;
-        if (cam.projection == CAMERA_PERSPECTIVE) {
+        if (cam.projection == camera_perspective) {
             proj = zm.perspectiveFovRhGl(
                 radFromDeg(cam.fovy_deg),
                 aspect,
@@ -6069,7 +6086,7 @@ pub const camera = struct {
         // unprojected near point.  For perspective the origin is the
         // cam position.
         const direction: Vec = v3Normalize(v3Sub(far_pt, near_pt));
-        const origin: Vec = if (cam.projection == CAMERA_PERSPECTIVE)
+        const origin: Vec = if (cam.projection == camera_perspective)
             vec(cam.position[0], cam.position[1], cam.position[2])
         else
             // For ortho: unproject z=-1 (cam plane) for the origin.
@@ -6101,11 +6118,11 @@ pub const camera = struct {
     const input_for_camera = input;
     const core_for_camera = core;
 
-    const CAMERA_MOVE_SPEED: f32 = 5.4; // units per second
-    const CAMERA_ROTATION_SPEED: f32 = 0.03;
-    const CAMERA_PAN_SPEED: f32 = 0.2;
-    const CAMERA_MOUSE_MOVE_SENSITIVITY: f32 = 0.003;
-    const CAMERA_ORBITAL_SPEED: f32 = 0.5; // radians per second
+    const camera_move_speed: f32 = 5.4; // units per second
+    const camera_rotation_speed: f32 = 0.03;
+    const camera_pan_speed: f32 = 0.2;
+    const camera_mouse_move_sensitivity: f32 = 0.003;
+    const camera_orbital_speed: f32 = 0.5; // radians per second
 
     pub const CameraMode = enum(i32) {
         custom = 0,
@@ -6118,19 +6135,19 @@ pub const camera = struct {
     // Key constants (from raylib enum) used by the driver.
     const KbK = @import("types.zig").KeyboardKey;
     const MB = @import("types.zig").MouseButton;
-    const KEY_W: KbK = .w;
-    const KEY_A: KbK = .a;
-    const KEY_S: KbK = .s;
-    const KEY_D: KbK = .d;
-    const KEY_Q: KbK = .q;
-    const KEY_E: KbK = .e;
-    const KEY_UP: KbK = .up;
-    const KEY_DOWN: KbK = .down;
-    const KEY_LEFT: KbK = .left;
-    const KEY_RIGHT: KbK = .right;
-    const KEY_SPACE: KbK = .space;
-    const KEY_LEFT_CONTROL: KbK = .left_control;
-    const MOUSE_BUTTON_MIDDLE: MB = .middle;
+    const key_w: KbK = .w;
+    const key_a: KbK = .a;
+    const key_s: KbK = .s;
+    const key_d: KbK = .d;
+    const key_q: KbK = .q;
+    const key_e: KbK = .e;
+    const key_up: KbK = .up;
+    const key_down: KbK = .down;
+    const key_left: KbK = .left;
+    const key_right: KbK = .right;
+    const key_space: KbK = .space;
+    const key_left_control: KbK = .left_control;
+    const mouse_button_middle: MB = .middle;
 
     // ---- Basis vectors
     pub fn getCameraForward(cam: *Camera3D) Vec {
@@ -6284,10 +6301,10 @@ pub const camera = struct {
             (mode == .orbital);
         const rotate_up: bool = false;
 
-        const move_speed: f32 = CAMERA_MOVE_SPEED * dt;
-        const rot_speed: f32 = CAMERA_ROTATION_SPEED;
-        const pan_speed: f32 = CAMERA_PAN_SPEED;
-        const orbit_speed: f32 = CAMERA_ORBITAL_SPEED * dt;
+        const move_speed: f32 = camera_move_speed * dt;
+        const rot_speed: f32 = camera_rotation_speed;
+        const pan_speed: f32 = camera_pan_speed;
+        const orbit_speed: f32 = camera_orbital_speed * dt;
 
         if (mode == .custom) {
             // Caller drives manually.
@@ -6296,33 +6313,33 @@ pub const camera = struct {
             // directly.  `view` is a direction, `mul(view, rotation)` is the
             // row-vector transform.
             const up: Vec = getCameraUp(cam);
-            const rotation: zm.Mat = zm.matFromAxisAngle(up, orbit_speed);
+            const rotation: Mat = zm.matFromAxisAngle(up, orbit_speed);
             var view: Vec = cam.position - cam.target;
             view = mulMatVec(rotation, view);
             cam.position = cam.target + view;
         } else {
             // Keyboard rotation.
-            if (input_for_camera.isKeyDown(input_state, KEY_DOWN)) {
+            if (input_for_camera.isKeyDown(input_state, key_down)) {
                 cameraPitch(cam, -rot_speed, lock_view, rotate_around_target, rotate_up);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_UP)) {
+            if (input_for_camera.isKeyDown(input_state, key_up)) {
                 cameraPitch(cam, rot_speed, lock_view, rotate_around_target, rotate_up);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_RIGHT)) {
+            if (input_for_camera.isKeyDown(input_state, key_right)) {
                 cameraYaw(cam, -rot_speed, rotate_around_target);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_LEFT)) {
+            if (input_for_camera.isKeyDown(input_state, key_left)) {
                 cameraYaw(cam, rot_speed, rotate_around_target);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_Q)) {
+            if (input_for_camera.isKeyDown(input_state, key_q)) {
                 cameraRoll(cam, -rot_speed);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_E)) {
+            if (input_for_camera.isKeyDown(input_state, key_e)) {
                 cameraRoll(cam, rot_speed);
             }
 
             // Pan with middle mouse in CAMERA_FREE.
-            if (mode == .free and input_for_camera.isMouseButtonDown(input_state, MOUSE_BUTTON_MIDDLE)) {
+            if (mode == .free and input_for_camera.isMouseButtonDown(input_state, mouse_button_middle)) {
                 const md: Vec2 = input_for_camera.getMouseDelta(input_state);
                 if (md[0] > 0.0) {
                     cameraMoveRight(cam, pan_speed, move_in_world_plane);
@@ -6341,10 +6358,10 @@ pub const camera = struct {
                 const mouse_delta: Vec2 = input_for_camera.getMouseDelta(input_state);
                 // First-person inverts horizontal look (drag right turns left).
                 const yaw_sign: f32 = if (mode == .first_person) 1.0 else -1.0;
-                cameraYaw(cam, yaw_sign * mouse_delta[0] * CAMERA_MOUSE_MOVE_SENSITIVITY, rotate_around_target);
+                cameraYaw(cam, yaw_sign * mouse_delta[0] * camera_mouse_move_sensitivity, rotate_around_target);
                 cameraPitch(
                     cam,
-                    -mouse_delta[1] * CAMERA_MOUSE_MOVE_SENSITIVITY,
+                    -mouse_delta[1] * camera_mouse_move_sensitivity,
                     lock_view,
                     rotate_around_target,
                     rotate_up,
@@ -6352,24 +6369,24 @@ pub const camera = struct {
             }
 
             // WASD.
-            if (input_for_camera.isKeyDown(input_state, KEY_W)) {
+            if (input_for_camera.isKeyDown(input_state, key_w)) {
                 cameraMoveForward(cam, move_speed, move_in_world_plane);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_A)) {
+            if (input_for_camera.isKeyDown(input_state, key_a)) {
                 cameraMoveRight(cam, -move_speed, move_in_world_plane);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_S)) {
+            if (input_for_camera.isKeyDown(input_state, key_s)) {
                 cameraMoveForward(cam, -move_speed, move_in_world_plane);
             }
-            if (input_for_camera.isKeyDown(input_state, KEY_D)) {
+            if (input_for_camera.isKeyDown(input_state, key_d)) {
                 cameraMoveRight(cam, move_speed, move_in_world_plane);
             }
 
             if (mode == .free) {
-                if (input_for_camera.isKeyDown(input_state, KEY_SPACE)) {
+                if (input_for_camera.isKeyDown(input_state, key_space)) {
                     cameraMoveUp(cam, move_speed);
                 }
-                if (input_for_camera.isKeyDown(input_state, KEY_LEFT_CONTROL)) {
+                if (input_for_camera.isKeyDown(input_state, key_left_control)) {
                     cameraMoveUp(cam, -move_speed);
                 }
             }
@@ -6595,18 +6612,15 @@ pub const camera = struct {
 };
 
 // ============================================================================
-// SECTION - effects (was: src/effects.zig)
-// ============================================================================
-
-// ============================================================================
 // SECTION - allocator (was: src/allocator.zig)
 // ============================================================================
 
 pub const allocator = struct {
+    // lint:off arch-check: wasm has no libc: this shim is its malloc and free
     const is_wasm = builtin.target.cpu.arch.isWasm();
 
-    const HEADER_SIZE: usize = 16;
-    const ALIGN: std.mem.Alignment = .@"16";
+    const header_size: usize = 16;
+    const block_alignment: std.mem.Alignment = .@"16";
 
     // Use a generous align for the underlying allocation so the user
     // pointer at offset 16 is still 16-byte aligned.
@@ -6620,14 +6634,14 @@ pub const allocator = struct {
             return null;
         }
 
-        const total: usize = size + HEADER_SIZE;
-        const slice = std.heap.wasm_allocator.alignedAlloc(u8, ALIGN, total) catch return null;
+        const total: usize = size + header_size;
+        const slice = std.heap.wasm_allocator.alignedAlloc(u8, block_alignment, total) catch return null;
 
         // Store user-visible size in the last `usize` of the header so
         // `free` can read it relative to the user pointer.
         writeHeader(slice.ptr, size);
 
-        return @ptrCast(slice.ptr + HEADER_SIZE);
+        return @ptrCast(slice.ptr + header_size);
     }
 
     /// libc calloc - like malloc(nmemb * size) followed by memset to 0.
@@ -6682,15 +6696,15 @@ pub const allocator = struct {
         }
         const p: *anyopaque = ptr orelse return;
         const user_bytes: [*]u8 = @ptrCast(p);
-        const base: [*]align(@backingInt(ALIGN)) u8 = @alignCast(user_bytes - HEADER_SIZE);
+        const base: [*]align(@backingInt(block_alignment)) u8 = @alignCast(user_bytes - header_size);
         const size: usize = readHeader(p);
-        const slice: []align(@backingInt(ALIGN)) u8 = base[0 .. size + HEADER_SIZE];
+        const slice: []align(@backingInt(block_alignment)) u8 = base[0 .. size + header_size];
         std.heap.wasm_allocator.free(slice);
     }
 
     // ---- Internal helpers
     inline fn writeHeader(base: [*]u8, size: usize) void {
-        const size_field: *usize = @ptrCast(@alignCast(base + HEADER_SIZE - @sizeOf(usize)));
+        const size_field: *usize = @ptrCast(@alignCast(base + header_size - @sizeOf(usize)));
         size_field.* = size;
     }
 
@@ -6732,7 +6746,7 @@ pub const allocator = struct {
 
     // ---- tests
     test "freeMany: round-trips an alloc through a [*c]T" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const buf: []f32 = try ta.alloc(f32, 16);
         @memset(buf, 1.0);
         // Stash as `[*c]` like a Mesh/Material field would.
@@ -6742,7 +6756,7 @@ pub const allocator = struct {
     }
 
     test "freeMany: works with [*]T as well as [*c]T" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const buf: []u8 = try ta.alloc(u8, 32);
         @memset(buf, 0xAA);
         const many: [*]u8 = buf.ptr;
@@ -6750,7 +6764,7 @@ pub const allocator = struct {
     }
 
     test "freeMany: len == 0 is a no-op (does not free)" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         // We can't easily test "doesn't free" without a real ptr, so
         // the contract here is: if len is 0, the function returns
         // without touching the pointer.  Pass an aliased pointer; if
@@ -6764,7 +6778,7 @@ pub const allocator = struct {
     }
 
     test "freeMany: deduces T from pointer types of varied widths" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const a: []u16 = try ta.alloc(u16, 8);
         const b: []i32 = try ta.alloc(i32, 8);
         const c: []f64 = try ta.alloc(f64, 8);
@@ -6798,4 +6812,71 @@ comptime {
     _ = effects.rng;
     _ = effects.loader;
     _ = allocator;
+}
+
+test "the frame time filter smooths jitter around a steady pace, and keeps time with it" {
+    var filter: core.FrameTimeFilter = .{};
+    // 60 frames a second, measured with up to 2 ms of jitter either way - jitter that averages out, as scheduling's
+    // does - repeating.
+    const jitter_seconds = [_]f64{ 0.0, 0.0015, -0.002, 0.001, -0.0005, 0.002, -0.0015, -0.0005 };
+    const pace_seconds: f64 = 1.0 / 60.0;
+    var measured_total: f64 = 0;
+    var filtered_total: f64 = 0;
+    var widest_late_deviation: f64 = 0;
+    for (0..960) |frame_index| {
+        const measured: f64 = pace_seconds + jitter_seconds[frame_index % jitter_seconds.len];
+        const filtered: f64 = filter.next(measured);
+        measured_total += measured;
+        filtered_total += filtered;
+        if (frame_index >= 240) {
+            widest_late_deviation = @max(widest_late_deviation, @abs(filtered - pace_seconds));
+        }
+    }
+    // Once settled, the filtered duration stays within a fifth of a millisecond of the pace...
+    try expect(widest_late_deviation < 0.0002);
+    // ...and animation keeps time: over 16 seconds the totals differ by under a hundredth of a second.
+    try expect(@abs(filtered_total - measured_total) < 0.01);
+}
+
+test "the frame time filter adopts a change of pace at once, and holds a spike to a tenth of a second" {
+    var filter: core.FrameTimeFilter = .{};
+    for (0..100) |_| {
+        _ = filter.next(1.0 / 60.0);
+    }
+    // The display switches to 120 frames a second: adopted on the first frame, not forty frames later.
+    try expectEqual(@as(f64, 1.0 / 120.0), filter.next(1.0 / 120.0));
+    // A half-second hitch advances animation a tenth of a second; the next ordinary frame is ordinary again.
+    try expectEqual(core.FrameTimeFilter.longest_seconds, filter.next(0.5));
+    try expectEqual(@as(f64, 1.0 / 120.0), filter.next(1.0 / 120.0));
+    // A duration of zero - two frames on one clock tick - never reaches animation as zero.
+    try expect(filter.next(0) > 0);
+}
+
+test "the frame time filter passes a constant duration through unchanged, as a scripted clock measures" {
+    var at_sixty: core.FrameTimeFilter = .{};
+    var at_thirty: core.FrameTimeFilter = .{};
+    for (0..50) |_| {
+        try expectEqual(@as(f64, 1.0 / 60.0), at_sixty.next(1.0 / 60.0));
+        try expectEqual(@as(f64, 1.0 / 30.0), at_thirty.next(1.0 / 30.0));
+    }
+}
+
+test "a gamepad read lands at raylib's buttons and axes" {
+    var input_state: input.InputState = .{};
+    var read: platform.contract.Gamepad = .{ .buttons = .initFill(0), .axes = .initFill(0) };
+    read.buttons.set(.south, 1);
+    read.buttons.set(.dpad_left, 1);
+    read.buttons.set(.left_trigger, 0.4);
+    read.buttons.set(.right_trigger, 0.6);
+    read.axes.set(.left_y, -0.5);
+    input.setGamepad(&input_state, 1, read);
+    try expect(input.isGamepadAvailable(&input_state, 1));
+    try expect(input.isGamepadButtonDown(&input_state, 1, .right_face_down));
+    try expect(input.isGamepadButtonDown(&input_state, 1, .left_face_left));
+    try expect(!input.isGamepadButtonDown(&input_state, 1, .left_trigger_2));
+    try expect(input.isGamepadButtonDown(&input_state, 1, .right_trigger_2));
+    try expectEqual(@as(f32, -0.5), input.getGamepadAxisMovement(&input_state, 1, .left_y));
+    try expectEqual(@as(f32, 0.6), input.getGamepadAxisMovement(&input_state, 1, .right_trigger));
+    input.setGamepad(&input_state, 1, null);
+    try expect(!input.isGamepadAvailable(&input_state, 1));
 }

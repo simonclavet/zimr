@@ -26,12 +26,20 @@
 //! Usage: `docfmt < page.html > page.out.html`
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const indexOf = std.mem.indexOf;
+const indexOfPos = std.mem.indexOfPos;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Writer = std.Io.Writer;
-const File = std.Io.File;
+const Writer = Io.Writer;
+const File = Io.File;
 const Token = std.zig.Token;
 const Tag = std.zig.Token.Tag;
+const eql = std.mem.eql;
+const startsWith = std.mem.startsWith;
 
 const style_marker = "<!--docfmt:style-->";
 
@@ -126,11 +134,11 @@ const style =
     \\  list-style:none;user-select:none;
     \\}
     \\summary::-webkit-details-marker{display:none;}
-    \\summary::before{content:"\\25b8\\00a0";color:var(--faint);}
-    \\details[open]>summary::before{content:"\\25be\\00a0";}
+    \\summary::before{content:"\25b8\00a0";color:var(--faint);}
+    \\details[open]>summary::before{content:"\25be\00a0";}
     \\summary:hover{color:var(--fg);}
     \\details>pre{margin:0;border:0;border-top:1px solid var(--rule);border-radius:0;}
-    \\.src-fold>summary::after{content:" \\2014 source";color:var(--faint);}
+    \\.src-fold>summary::after{content:" \2014 source";color:var(--faint);}
     \\/* callouts — one box, a coloured left rule says which kind */
     \\.note,.warn,.good,.bad{
     \\  margin:1.2em 0;padding:.7em 1em;background:var(--panel);
@@ -292,11 +300,59 @@ const style =
     \\.g-stage{flex:1;position:relative;min-height:0;}
     \\.g-stage iframe{position:absolute;inset:0;width:100%;height:100%;max-width:none;border:0;border-radius:0;}
     \\.g-intro{max-width:36em;margin:12vh auto 0;padding:0 1.5em;}
+    \\/* The code pane under the example: web/<name>/source.json, highlighted at
+    \\   build time by this file's highlightZig. `code-open` shows it; --f is the
+    \\   stage's share of the height below the bar, set by dragging the divider. */
+    \\.g-main{--f:.58;}
+    \\.code-open .g-stage{flex:0 0 calc((100% - 44px) * var(--f));}
+    \\.g-btn.g-wide{width:auto;padding:0 .7em;font-size:.85em;}
+    \\.g-btn.on{color:var(--fg);border-color:var(--tok-fn);}
+    \\.g-split{
+    \\  display:none;flex:none;height:9px;margin:-4px 0;position:relative;z-index:2;
+    \\  cursor:row-resize;touch-action:none;
+    \\}
+    \\.g-split::after{content:"";position:absolute;left:0;right:0;top:4px;height:1px;background:var(--rule);}
+    \\.g-split:hover::after,.dragging .g-split::after{top:3px;height:3px;background:var(--tok-fn);}
+    \\.code-open .g-split{display:block;}
+    \\.dragging{cursor:row-resize;user-select:none;}
+    \\.dragging iframe{pointer-events:none;}
+    \\.g-code{display:none;flex:1 1 0;min-height:0;flex-direction:column;background:var(--bg);}
+    \\.code-open .g-code{display:flex;}
+    \\.g-tabs{
+    \\  flex:none;display:flex;overflow-x:auto;background:var(--panel);
+    \\  border-bottom:1px solid var(--rule);font-size:12px;
+    \\}
+    \\.g-tab{
+    \\  flex:none;padding:.45em .9em;background:none;color:var(--dim);font:inherit;cursor:pointer;white-space:nowrap;
+    \\  border:0;border-right:1px solid var(--rule);border-bottom:2px solid transparent;
+    \\}
+    \\.g-tab:hover{color:var(--fg);}
+    \\.g-tab.on{color:#fff;background:var(--bg);border-bottom-color:var(--tok-fn);}
+    \\.g-tab .n{margin-left:.6em;color:var(--faint);font-size:.9em;}
+    \\.g-tab.g-copy{margin-left:auto;border-left:1px solid var(--rule);border-right:0;}
+    \\.g-src{flex:1;min-height:0;overflow:auto;}
+    \\.g-src:focus{outline:none;}
+    \\.g-src:focus-visible{outline:1px solid var(--tok-fn);outline-offset:-1px;}
+    \\.g-src pre{
+    \\  margin:0;padding:8px 0 3em;background:none;border:0;border-radius:0;overflow:visible;
+    \\  font-size:12.5px;line-height:1.55;
+    \\}
+    \\/* one row per source line; the number is a CSS counter, so it is never
+    \\   selected or copied, and it stays on the first row of a wrapped line */
+    \\.g-src code{display:block;counter-reset:ln;padding:0;}
+    \\.g-src .l{display:block;position:relative;min-height:1.55em;padding:0 1.2em 0 calc(4ch + 2.2em);}
+    \\.g-src .l::before{
+    \\  counter-increment:ln;content:counter(ln);position:absolute;left:0;top:0;bottom:0;
+    \\  width:calc(4ch + 1em);padding-right:.9em;box-sizing:border-box;
+    \\  text-align:right;color:var(--faint);border-right:1px solid var(--rule);
+    \\}
+    \\.g-src-msg{padding:1em 1.2em;color:var(--faint);}
     \\@media(max-width:700px){
     \\  body.gallery.list-open{grid-template-columns:1fr;}
-    \\  .g-side{position:fixed;inset:44px 0 0 0;z-index:1;border-right:0;}
+    \\  .g-side{position:fixed;inset:44px 0 0 0;z-index:3;border-right:0;}
     \\  .g-item{padding:.45em 1em;}
     \\  .g-desc{display:none;}
+    \\  .g-src .l{white-space:pre-wrap;overflow-wrap:anywhere;}
     \\}
     \\/* A tutorial pointer, sitting directly under the heading whose subject it
     \\   covers rather than pooled in a list at the foot of the page. */
@@ -315,20 +371,31 @@ const style =
     \\</style>
 ;
 
-pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
-    defer arena.deinit();
-    const gpa: Allocator = arena.allocator();
-    const io: std.Io = init.io;
+/// The command line (std's cli, `src/command_line.zig`): none - but the parser still gives it `--help` and refuses
+/// an argument it would otherwise ignore.
+const NoArgs = struct {};
 
-    const src: []u8 = try readAllStdin(gpa, io);
+const docfmt_cli: cli.Config(NoArgs) = .{
+    .prog = "docfmt",
+    .description = "Formats a doc page for publishing: the page on stdin, styled and highlighted on stdout.",
+};
 
-    var aw: Writer.Allocating = .init(gpa);
-    const w: *Writer = &aw.writer;
-
-    try transform(gpa, w, src);
-
-    try File.stdout().writeStreamingAll(io, aw.written());
+fn readAllStdin(gpa: Allocator, io: Io) ![]u8 {
+    var list: ArrayList(u8) = .empty;
+    var buf: [64 * 1024]u8 = undefined;
+    const in: File = .stdin();
+    while (true) {
+        var iov = [_][]u8{&buf};
+        const n: usize = in.readStreaming(io, &iov) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        if (n == 0) {
+            break;
+        }
+        try list.appendSlice(gpa, buf[0..n]);
+    }
+    return list.toOwnedSlice(gpa);
 }
 
 /// Which highlighter a `<code class="...">` value selects.  An unrecognised class
@@ -337,85 +404,134 @@ pub fn main(init: std.process.Init) !void {
 const Lang = enum { zig, wgsl };
 
 fn langOf(class: []const u8) ?Lang {
-    if (std.mem.eql(u8, class, "zig")) {
+    if (eql(u8, class, "zig")) {
         return .zig;
     }
-    if (std.mem.eql(u8, class, "language-zig")) {
+    if (eql(u8, class, "language-zig")) {
         return .zig;
     }
-    if (std.mem.eql(u8, class, "wgsl")) {
+    if (eql(u8, class, "wgsl")) {
         return .wgsl;
     }
-    if (std.mem.eql(u8, class, "language-wgsl")) {
+    if (eql(u8, class, "language-wgsl")) {
         return .wgsl;
     }
     return null;
 }
 
-fn transform(gpa: Allocator, w: *Writer, src: []const u8) !void {
-    const code_open: []const u8 = "<code class=\"";
-    var i: usize = 0;
-    while (i < src.len) {
-        // Whichever comes first: the style marker or the next classed code block.
-        const marker_at: ?usize = std.mem.indexOfPos(u8, src, i, style_marker);
-        const code_at: ?usize = std.mem.indexOfPos(u8, src, i, code_open);
-
-        const next: usize = @min(
-            marker_at orelse src.len,
-            code_at orelse src.len,
-        );
-        if (next == src.len) {
-            break;
-        }
-        try w.writeAll(src[i..next]);
-
-        if (marker_at != null and next == marker_at.?) {
-            try w.writeAll(style);
-            i = next + style_marker.len;
+// Decode the handful of entities the pages actually use, and normalize line
+// endings.  A bare `&` (Zig address-of, e.g. `&sw`) that isn't a known entity is
+// kept literal - the pages write those unescaped.
+fn htmlDecode(gpa: Allocator, s: []const u8) ![]u8 {
+    var out: ArrayList(u8) = .empty;
+    var j: usize = 0;
+    while (j < s.len) {
+        const c: u8 = s[j];
+        if (c == '\r') {
+            try out.append(gpa, '\n');
+            j += if (j + 1 < s.len and s[j + 1] == '\n') @as(usize, 2) else 1;
             continue;
         }
-
-        // A classed <code>. Read the class value, then decide.
-        const class_start: usize = next + code_open.len;
-        const class_end: usize = std.mem.indexOfScalarPos(u8, src, class_start, '"') orelse {
-            try w.writeAll(src[next..]);
-            return;
-        };
-        const gt_at: usize = std.mem.indexOfScalarPos(u8, src, class_end, '>') orelse {
-            try w.writeAll(src[next..]);
-            return;
-        };
-        const class: []const u8 = src[class_start..class_end];
-        const body_start: usize = gt_at + 1;
-        const lang: ?Lang = langOf(class);
-        if (lang == null) {
-            // Not a language we highlight - emit the opener and carry on from
-            // just past it, so a nested classed block is still found.
-            try w.writeAll(src[next..body_start]);
-            i = body_start;
-            continue;
+        if (c == '&') {
+            const rest: []const u8 = s[j..];
+            if (startsWith(u8, rest, "&lt;")) {
+                try out.append(gpa, '<');
+                j += 4;
+                continue;
+            }
+            if (startsWith(u8, rest, "&gt;")) {
+                try out.append(gpa, '>');
+                j += 4;
+                continue;
+            }
+            if (startsWith(u8, rest, "&amp;")) {
+                try out.append(gpa, '&');
+                j += 5;
+                continue;
+            }
+            if (startsWith(u8, rest, "&quot;")) {
+                try out.append(gpa, '"');
+                j += 6;
+                continue;
+            }
+            if (startsWith(u8, rest, "&#39;")) {
+                try out.append(gpa, '\'');
+                j += 5;
+                continue;
+            }
         }
-        const close_at: usize = std.mem.indexOfPos(u8, src, body_start, "</code>") orelse {
-            try w.writeAll(src[next..]);
-            return;
+        try out.append(gpa, c);
+        j += 1;
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+// Re-escape for HTML text content.  Only &, <, > matter; quotes stay literal,
+// matching the existing convention (e.g. `"zimr"` unescaped in code).
+fn escapeInto(w: *Writer, s: []const u8) !void {
+    var start: usize = 0;
+    var j: usize = 0;
+    while (j < s.len) : (j += 1) {
+        const rep: ?[]const u8 = switch (s[j]) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            else => null,
         };
-        try w.writeAll(src[next..body_start]);
-        try highlightBlock(gpa, w, src[body_start..close_at], lang.?);
-        i = close_at;
+        if (rep) |r| {
+            try w.writeAll(s[start..j]);
+            try w.writeAll(r);
+            start = j + 1;
+        }
     }
-    try w.writeAll(src[i..]);
+    try w.writeAll(s[start..]);
 }
 
-fn highlightBlock(gpa: Allocator, w: *Writer, escaped: []const u8, lang: Lang) !void {
-    // HTML-decode back to real source (normalizing CRLF -> LF).
-    const decoded: []const u8 = try htmlDecode(gpa, escaped);
-    switch (lang) {
-        .zig => try highlightZig(gpa, w, decoded),
-        .wgsl => try highlightWgsl(w, decoded),
+// Emit an inter-token gap, wrapping `//` line comments in a comment span and
+// passing whitespace through untouched.
+fn emitGap(w: *Writer, gap: []const u8) !void {
+    var run_start: usize = 0;
+    var j: usize = 0;
+    while (j < gap.len) {
+        if (gap[j] == '/' and j + 1 < gap.len and gap[j + 1] == '/') {
+            try escapeInto(w, gap[run_start..j]);
+            var k: usize = j;
+            while (k < gap.len and gap[k] != '\n') {
+                k += 1;
+            }
+            try w.writeAll("<span class=\"tok-comment\">");
+            try escapeInto(w, gap[j..k]);
+            try w.writeAll("</span>");
+            j = k;
+            run_start = k;
+        } else {
+            j += 1;
+        }
     }
+    try escapeInto(w, gap[run_start..]);
 }
 
-// ---------------------------------------------------------------- Zig
+fn classOfZig(tag: Tag) ?[]const u8 {
+    return switch (tag) {
+        .string_literal, .multiline_string_literal_line, .char_literal => "tok-str",
+        .number_literal => "tok-num",
+        .builtin => "tok-builtin",
+        .doc_comment, .container_doc_comment => "tok-comment",
+        else => if (startsWith(u8, @tagName(tag), "keyword_")) "tok-kw" else null,
+    };
+}
+
+fn emitSpan(w: *Writer, cls: ?[]const u8, text: []const u8) !void {
+    if (cls) |c| {
+        try w.writeAll("<span class=\"");
+        try w.writeAll(c);
+        try w.writeAll("\">");
+        try escapeInto(w, text);
+        try w.writeAll("</span>");
+    } else {
+        try escapeInto(w, text);
+    }
+}
 
 /// Writes `decoded` (plain Zig source, LF line endings) as escaped HTML with
 /// `tok-*` spans. `pub` for its one other caller, tools/example_source.zig,
@@ -442,24 +558,37 @@ pub fn highlightZig(gpa: Allocator, w: *Writer, decoded: []const u8) !void {
         // context std.zig.Token does not carry, and the one that makes a code
         // block readable at a glance.
         const is_call: bool = t.tag == .identifier and
-            std.mem.indexOfScalarPos(u8, decoded, t.loc.end, '(') == t.loc.end;
+            indexOfScalarPos(u8, decoded, t.loc.end, '(') == t.loc.end;
         const cls: ?[]const u8 = if (is_call) "tok-fn" else classOfZig(t.tag);
         try emitSpan(w, cls, text);
         cursor = t.loc.end;
     }
 }
 
-fn classOfZig(tag: Tag) ?[]const u8 {
-    return switch (tag) {
-        .string_literal, .multiline_string_literal_line, .char_literal => "tok-str",
-        .number_literal => "tok-num",
-        .builtin => "tok-builtin",
-        .doc_comment, .container_doc_comment => "tok-comment",
-        else => if (std.mem.startsWith(u8, @tagName(tag), "keyword_")) "tok-kw" else null,
-    };
+fn isIdentStart(c: u8) bool {
+    return c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
 }
 
-// ---------------------------------------------------------------- WGSL
+fn isDigit(c: u8) bool {
+    return c >= '0' and c <= '9';
+}
+
+fn isIdentPart(c: u8) bool {
+    return isIdentStart(c) or isDigit(c);
+}
+
+fn isHexDigit(c: u8) bool {
+    return isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+}
+
+fn isWgslWord(list: []const []const u8, w: []const u8) bool {
+    for (list) |k| {
+        if (eql(u8, k, w)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // WGSL's lexical shape is C-like and its keyword set is small, so a single
 // left-to-right pass is enough - and being one pass is what stops a keyword
@@ -469,6 +598,7 @@ const wgsl_kw = [_][]const u8{
     "for",     "while",    "loop",  "break",  "continue", "switch", "case",  "default",
     "discard", "override", "alias", "enable", "requires", "true",   "false", "bitcast",
 };
+
 const wgsl_ty = [_][]const u8{
     "u32",        "i32",     "f32",     "f16",       "bool",     "vec2",    "vec3",  "vec4",
     "vec2u",      "vec3u",   "vec4u",   "vec2f",     "vec3f",    "vec4f",   "vec2i", "vec3i",
@@ -476,15 +606,6 @@ const wgsl_ty = [_][]const u8{
     "sampler",    "storage", "uniform", "workgroup", "function", "private", "read",  "write",
     "read_write",
 };
-
-fn isWgslWord(list: []const []const u8, w: []const u8) bool {
-    for (list) |k| {
-        if (std.mem.eql(u8, k, w)) {
-            return true;
-        }
-    }
-    return false;
-}
 
 fn highlightWgsl(w: *Writer, src: []const u8) !void {
     var i: usize = 0;
@@ -500,7 +621,7 @@ fn highlightWgsl(w: *Writer, src: []const u8) !void {
         }
         // block comment
         if (c == '/' and i + 1 < src.len and src[i + 1] == '*') {
-            const end: usize = std.mem.indexOfPos(u8, src, i + 2, "*/") orelse src.len;
+            const end: usize = indexOfPos(u8, src, i + 2, "*/") orelse src.len;
             const stop: usize = @min(end + 2, src.len);
             try emitSpan(w, "tok-comment", src[i..stop]);
             i = stop;
@@ -549,139 +670,99 @@ fn highlightWgsl(w: *Writer, src: []const u8) !void {
     }
 }
 
-fn isDigit(c: u8) bool {
-    return c >= '0' and c <= '9';
+fn highlightBlock(gpa: Allocator, w: *Writer, escaped: []const u8, lang: Lang) !void {
+    // HTML-decode back to real source (normalizing CRLF -> LF).
+    const decoded: []const u8 = try htmlDecode(gpa, escaped);
+    switch (lang) {
+        .zig => try highlightZig(gpa, w, decoded),
+        .wgsl => try highlightWgsl(w, decoded),
+    }
 }
-fn isHexDigit(c: u8) bool {
-    return isDigit(c) or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+
+fn transform(gpa: Allocator, w: *Writer, src: []const u8) !void {
+    const code_open: []const u8 = "<code class=\"";
+    var i: usize = 0;
+    while (i < src.len) {
+        // Whichever comes first: the style marker or the next classed code block.
+        const marker_at: ?usize = indexOfPos(u8, src, i, style_marker);
+        const code_at: ?usize = indexOfPos(u8, src, i, code_open);
+
+        const next: usize = @min(
+            marker_at orelse src.len,
+            code_at orelse src.len,
+        );
+        if (next == src.len) {
+            break;
+        }
+        try w.writeAll(src[i..next]);
+
+        if (marker_at != null and next == marker_at.?) {
+            try w.writeAll(style);
+            i = next + style_marker.len;
+            continue;
+        }
+
+        // A classed <code>. Read the class value, then decide.
+        const class_start: usize = next + code_open.len;
+        const class_end: usize = indexOfScalarPos(u8, src, class_start, '"') orelse {
+            try w.writeAll(src[next..]);
+            return;
+        };
+        const gt_at: usize = indexOfScalarPos(u8, src, class_end, '>') orelse {
+            try w.writeAll(src[next..]);
+            return;
+        };
+        const class: []const u8 = src[class_start..class_end];
+        const body_start: usize = gt_at + 1;
+        const lang: ?Lang = langOf(class);
+        if (lang == null) {
+            // Not a language we highlight - emit the opener and carry on from
+            // just past it, so a nested classed block is still found.
+            try w.writeAll(src[next..body_start]);
+            i = body_start;
+            continue;
+        }
+        const close_at: usize = indexOfPos(u8, src, body_start, "</code>") orelse {
+            try w.writeAll(src[next..]);
+            return;
+        };
+        try w.writeAll(src[next..body_start]);
+        try highlightBlock(gpa, w, src[body_start..close_at], lang.?);
+        i = close_at;
+    }
+    try w.writeAll(src[i..]);
 }
-fn isIdentStart(c: u8) bool {
-    return c == '_' or (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+
+pub fn main(init: std.process.Init) !void {
+    _ = cli.args(&init, NoArgs, docfmt_cli);
+    var arena: ArenaAllocator = .init(init.gpa);
+    defer arena.deinit();
+    const gpa: Allocator = arena.allocator();
+    const io: Io = init.io;
+
+    const src: []u8 = try readAllStdin(gpa, io);
+
+    var aw: Writer.Allocating = .init(gpa);
+    const w: *Writer = &aw.writer;
+
+    try transform(gpa, w, src);
+
+    try File.stdout().writeStreamingAll(io, aw.written());
 }
-fn isIdentPart(c: u8) bool {
-    return isIdentStart(c) or isDigit(c);
-}
+
+// ---------------------------------------------------------------- Zig
+
+// ---------------------------------------------------------------- WGSL
 
 // ---------------------------------------------------------------- shared
 
-fn emitSpan(w: *Writer, cls: ?[]const u8, text: []const u8) !void {
-    if (cls) |c| {
-        try w.writeAll("<span class=\"");
-        try w.writeAll(c);
-        try w.writeAll("\">");
-        try escapeInto(w, text);
-        try w.writeAll("</span>");
-    } else {
-        try escapeInto(w, text);
-    }
-}
+const expect = std.testing.expect;
 
-// Emit an inter-token gap, wrapping `//` line comments in a comment span and
-// passing whitespace through untouched.
-fn emitGap(w: *Writer, gap: []const u8) !void {
-    var run_start: usize = 0;
-    var j: usize = 0;
-    while (j < gap.len) {
-        if (gap[j] == '/' and j + 1 < gap.len and gap[j + 1] == '/') {
-            try escapeInto(w, gap[run_start..j]);
-            var k: usize = j;
-            while (k < gap.len and gap[k] != '\n') {
-                k += 1;
-            }
-            try w.writeAll("<span class=\"tok-comment\">");
-            try escapeInto(w, gap[j..k]);
-            try w.writeAll("</span>");
-            j = k;
-            run_start = k;
-        } else {
-            j += 1;
-        }
-    }
-    try escapeInto(w, gap[run_start..]);
-}
-
-// Re-escape for HTML text content.  Only &, <, > matter; quotes stay literal,
-// matching the existing convention (e.g. `"zimr"` unescaped in code).
-fn escapeInto(w: *Writer, s: []const u8) !void {
-    var start: usize = 0;
-    var j: usize = 0;
-    while (j < s.len) : (j += 1) {
-        const rep: ?[]const u8 = switch (s[j]) {
-            '&' => "&amp;",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            else => null,
-        };
-        if (rep) |r| {
-            try w.writeAll(s[start..j]);
-            try w.writeAll(r);
-            start = j + 1;
-        }
-    }
-    try w.writeAll(s[start..]);
-}
-
-// Decode the handful of entities the pages actually use, and normalize line
-// endings.  A bare `&` (Zig address-of, e.g. `&sw`) that isn't a known entity is
-// kept literal - the pages write those unescaped.
-fn htmlDecode(gpa: Allocator, s: []const u8) ![]u8 {
-    var out: ArrayList(u8) = .empty;
-    var j: usize = 0;
-    while (j < s.len) {
-        const c: u8 = s[j];
-        if (c == '\r') {
-            try out.append(gpa, '\n');
-            j += if (j + 1 < s.len and s[j + 1] == '\n') @as(usize, 2) else 1;
-            continue;
-        }
-        if (c == '&') {
-            const rest: []const u8 = s[j..];
-            if (std.mem.startsWith(u8, rest, "&lt;")) {
-                try out.append(gpa, '<');
-                j += 4;
-                continue;
-            }
-            if (std.mem.startsWith(u8, rest, "&gt;")) {
-                try out.append(gpa, '>');
-                j += 4;
-                continue;
-            }
-            if (std.mem.startsWith(u8, rest, "&amp;")) {
-                try out.append(gpa, '&');
-                j += 5;
-                continue;
-            }
-            if (std.mem.startsWith(u8, rest, "&quot;")) {
-                try out.append(gpa, '"');
-                j += 6;
-                continue;
-            }
-            if (std.mem.startsWith(u8, rest, "&#39;")) {
-                try out.append(gpa, '\'');
-                j += 5;
-                continue;
-            }
-        }
-        try out.append(gpa, c);
-        j += 1;
-    }
-    return out.toOwnedSlice(gpa);
-}
-
-fn readAllStdin(gpa: Allocator, io: std.Io) ![]u8 {
-    var list: ArrayList(u8) = .empty;
-    var buf: [64 * 1024]u8 = undefined;
-    const in: File = File.stdin();
-    while (true) {
-        var iov = [_][]u8{&buf};
-        const n: usize = in.readStreaming(io, &iov) catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-        if (n == 0) {
-            break;
-        }
-        try list.appendSlice(gpa, buf[0..n]);
-    }
-    return list.toOwnedSlice(gpa);
+test "docfmt: the stylesheet's CSS escapes are single backslashes - a multiline literal takes them as written" {
+    // CSS decodes `\25b8` into a character (a small right triangle); `\\25b8` is an ESCAPED backslash followed by
+    // the digits, which the browser prints as text - it did, in the title of every source fold on every page. Inside a
+    // Zig multiline string literal nothing is escaped, so the stylesheet holds its CSS exactly as the browser reads
+    // it: one backslash per CSS escape, and no doubled one anywhere.
+    try expect(indexOf(u8, style, "\\\\") == null);
+    try expect(indexOf(u8, style, "content:\"\\25b8\\00a0\"") != null);
 }

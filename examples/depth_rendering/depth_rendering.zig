@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec = zm.Vec;
@@ -150,14 +151,14 @@ fn initState(
         .usage = .{ .vertex = true, .copy_dst = true },
         .label = "depth_vbo",
     });
-    z.wgpu.queueWriteBuffer(queue, vertex_buffer, 0, std.mem.sliceAsBytes(&verts));
+    z.wgpu.queueWriteBuffer(queue, vertex_buffer, 0, sliceAsBytes(&verts));
 
     const index_buffer: z.wgpu.BufferHandle = z.wgpu.createBuffer(device, .{
         .size = @sizeOf(@TypeOf(idxs)),
         .usage = .{ .index = true, .copy_dst = true },
         .label = "depth_ibo",
     });
-    z.wgpu.queueWriteBuffer(queue, index_buffer, 0, std.mem.sliceAsBytes(&idxs));
+    z.wgpu.queueWriteBuffer(queue, index_buffer, 0, sliceAsBytes(&idxs));
 
     // ---- Vertex layout: position only (location 0). ----
     const depth_layout = z.gpu.VertexBufferLayout{
@@ -198,7 +199,7 @@ fn initState(
     const vs_module: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, depth_vs_wgsl, "depth_vs");
     const fs_module: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, depth_fs_wgsl, "depth_fs");
 
-    const state_combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const state_combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less, // depth test LESS

@@ -48,6 +48,11 @@ const Allocator = std.mem.Allocator;
 const expectEqual = std.testing.expectEqual;
 const expectEqualStrings = std.testing.expectEqualStrings;
 const expect = std.testing.expect;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const sortSlice = std.mem.sort;
 
 /// One live allocation, and the scope that made it.
 pub const Entry = struct {
@@ -69,8 +74,8 @@ pub const Entry = struct {
 
 pub const LeakWatch = struct {
     child: Allocator,
-    live: std.AutoHashMapUnmanaged(usize, Entry),
-    scopes: std.ArrayListUnmanaged([]const u8),
+    live: AutoHashMapUnmanaged(usize, Entry),
+    scopes: ArrayListUnmanaged([]const u8),
     bookkeeping: Allocator,
     next_ordinal: u64,
     /// Set to a byte count to trace every allocation of exactly that size - the fastest way to
@@ -157,13 +162,13 @@ pub const LeakWatch = struct {
         std.log.err(who ++ ": {d} live allocations, {d} bytes", .{ self.live.count(), self.liveBytes() });
         // Ordered by ordinal: allocation order reconstructs the call sequence better than
         // address order, which is whatever the allocator happened to hand out.
-        var ordered: std.ArrayListUnmanaged(Entry) = .empty;
+        var ordered: ArrayListUnmanaged(Entry) = .empty;
         defer ordered.deinit(self.bookkeeping);
         var it: @TypeOf(self.live).ValueIterator = self.live.valueIterator();
         while (it.next()) |entry| {
             ordered.append(self.bookkeeping, entry.*) catch break;
         }
-        std.mem.sort(Entry, ordered.items, {}, struct {
+        sortSlice(Entry, ordered.items, {}, struct {
             fn before(_: void, a: Entry, b: Entry) bool {
                 return a.ordinal < b.ordinal;
             }
@@ -189,7 +194,7 @@ pub const LeakWatch = struct {
     /// with its side, phase, scope and - when it looks like one - the container growth that
     /// made it. Returns how many there were.
     pub fn reportSinceMark(self: *const LeakWatch, comptime who: []const u8) usize {
-        var ordered: std.ArrayListUnmanaged(Entry) = .empty;
+        var ordered: ArrayListUnmanaged(Entry) = .empty;
         defer ordered.deinit(self.bookkeeping);
         var it: @TypeOf(self.live).ValueIterator = self.live.valueIterator();
         while (it.next()) |entry| {
@@ -201,7 +206,7 @@ pub const LeakWatch = struct {
         if (ordered.items.len == 0) {
             return 0;
         }
-        std.mem.sort(Entry, ordered.items, {}, struct {
+        sortSlice(Entry, ordered.items, {}, struct {
             fn before(_: void, a: Entry, b: Entry) bool {
                 return a.ordinal < b.ordinal;
             }
@@ -342,7 +347,7 @@ pub const LeakWatch = struct {
             if (just_allocated != 0) {
                 if (self.live.getPtr(just_allocated)) |new| {
                     const old_is_older: bool = old.ordinal < new.ordinal;
-                    const same_scope: bool = std.mem.eql(u8, old.label, new.label);
+                    const same_scope: bool = eql(u8, old.label, new.label);
                     if (old_is_older and same_scope and new.len > old.len) {
                         new.grew_from = old.len;
                     }
@@ -354,7 +359,7 @@ pub const LeakWatch = struct {
 };
 
 test "leakwatch: names the scope that leaked" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var watch: LeakWatch = .init(gpa, gpa);
     defer watch.deinit();
     const a: Allocator = watch.allocator();
@@ -397,13 +402,13 @@ test "leakwatch: a grown buffer is attributed to where it GREW, and why" {
     //
     // (`remap` IS handled and does carry the label, for the allocators and sizes where it
     // happens. It simply is not the path a growing `ArrayList` takes.)
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var watch: LeakWatch = .init(gpa, gpa);
     defer watch.deinit();
     const a: Allocator = watch.allocator();
 
     watch.push("born here");
-    var list: std.ArrayListUnmanaged(u32) = .empty;
+    var list: ArrayListUnmanaged(u32) = .empty;
     // * `defer` BEFORE THE ASSERTIONS. A failed expectation would otherwise skip the cleanup
     // and report a LEAK on top of the mismatch - two failures for one cause, the second
     // pointing somewhere else entirely. The first version of this test did exactly that, and it
@@ -433,11 +438,11 @@ test "leakwatch: since a mark, a container that grew is told apart from a missed
     // The smoke gate's shape, in miniature: lifecycle 1 fills a table, the gate marks,
     // lifecycle 2 appends more to the SAME table (it grows by copying) and also forgets one
     // plain allocation. The report must list both, flag the first as growth, and not the second.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var watch: LeakWatch = .init(gpa, gpa);
     defer watch.deinit();
     const a: Allocator = watch.allocator();
-    var table: std.AutoHashMapUnmanaged(u32, u64) = .empty;
+    var table: AutoHashMapUnmanaged(u32, u64) = .empty;
     defer table.deinit(a);
 
     watch.push("frame");
@@ -474,10 +479,10 @@ test "leakwatch: since a mark, a container that grew is told apart from a missed
         if (entry.ordinal < watch.mark_ordinal) {
             continue;
         }
-        if (std.mem.eql(u8, entry.label, "glyph_cache")) {
+        if (eql(u8, entry.label, "glyph_cache")) {
             saw_growth = entry.grew_from != 0 and entry.grew_from < entry.len;
             try expectEqualStrings("frame", entry.phase);
-        } else if (std.mem.eql(u8, entry.label, "forgotten")) {
+        } else if (eql(u8, entry.label, "forgotten")) {
             saw_missed_free = entry.grew_from == 0 and entry.len == 48;
         }
     }

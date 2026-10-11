@@ -16,6 +16,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -198,7 +200,7 @@ fn makePipeline(
     fs_mod: z.wgpu.ShaderModuleHandle,
     label: []const u8,
 ) !z.wgpu.RenderPipelineHandle {
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -231,14 +233,14 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const vbo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(cube_verts[0..]),
+        sliceAsBytes(cube_verts[0..]),
         .{ .vertex = true, .copy_dst = true },
         "dw_vbo",
     );
     const ibo: z.wgpu.BufferHandle = z.wgpu.createBufferInit(
         device,
         queue,
-        std.mem.sliceAsBytes(cube_indices[0..]),
+        sliceAsBytes(cube_indices[0..]),
         .{ .index = true, .copy_dst = true },
         "dw_ibo",
     );
@@ -402,14 +404,14 @@ fn update(f: *z.Frame, s: *State) void {
         );
         var vs_io: mat_vs.Io = undefined;
         vs_io.u = .{ .mvp = mulMat(cam_vp, model), .model = model, .normal_matrix = spin };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.vs_ubo, 0, asBytes(&vs_io.u));
 
         var lie_io: lie_fs.Io = undefined;
         lie_io.u = .{
             .base_color = p.color,
             .light_dir = .{ sun_dir[0], sun_dir[1], sun_dir[2], 0 },
         };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.lie_ubo, 0, std.mem.asBytes(&lie_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.lie_ubo, 0, asBytes(&lie_io.u));
 
         var hon_io: honest_fs.Io = undefined;
         hon_io.u = .{
@@ -419,7 +421,7 @@ fn update(f: *z.Frame, s: *State) void {
             .fog_color = .{ 0, 0, 0, 1 },
             .params = .{ 0, 0, 0, 0 }, // density 0: fog_fs degrades to plain lambert+blinn
         };
-        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.honest_ubo, 0, std.mem.asBytes(&hon_io.u));
+        z.wgpu.queueWriteBuffer(f.gpu.queue, obj.honest_ubo, 0, asBytes(&hon_io.u));
     }
 
     const Backend: type = z.WgpuBackend;

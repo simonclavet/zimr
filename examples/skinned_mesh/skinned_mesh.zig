@@ -26,6 +26,7 @@
 const std = @import("std");
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const z = @import("zimr");
 
 const zm = @import("zm");
@@ -269,7 +270,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.skinned[vi * 3 + 1] = acc[1];
         s.skinned[vi * 3 + 2] = acc[2];
     }
-    z.updateMeshBuffer(s.model.meshes[0], 0, std.mem.sliceAsBytes(s.skinned), 0);
+    z.updateMeshBuffer(s.model.meshes[0], 0, sliceAsBytes(s.skinned), 0);
 
     // ---- draw: the deformed quad + the live skeleton over it ----
     const vw: f32 = @max(f.window.widthf(), 1);

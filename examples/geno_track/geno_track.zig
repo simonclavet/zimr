@@ -145,137 +145,6 @@ const State = struct {
     best_run: f32 = 0.0,
 };
 
-fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{
-        .gpa = gpa,
-        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 16),
-        .ui_host = undefined,
-        .cam = z.OrbitCamera.init(vec(0.0, 0.9, 0), 3.2),
-        .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
-        .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
-        .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
-        .transform = .{zm.identity()},
-        .doc = undefined,
-        .robot = undefined,
-        .imported = undefined,
-        .data = undefined,
-        .reference = undefined,
-        .hips = 0,
-        .world = undefined,
-        .bridge = undefined,
-        .floor = undefined,
-        .clips = undefined,
-        .stance = undefined,
-        .held = &.{},
-        .accel = &.{},
-        .scratch = &.{},
-        .dense = &.{},
-        .full = &.{},
-        .torque = &.{},
-    };
-    s.ui_host = z.UiHost.init(gpa, s.font);
-
-    // The robot, from its checked model file - at the clips' own rate, with room for a whole body's
-    // contacts.
-    s.doc = try codecs.xml.parse(gpa, z.robot_geno_model, null);
-    s.robot = try mjcf.readRobot(gpa, &s.doc);
-    // Armature 2 on every joint: in this servo a joint's strength is its free-flight inertia, and this makes
-    // each as strong standing as the load it carries needs (it costs the dance nothing).
-    for (s.robot.joints) |*joint| {
-        if (joint.kind == .ball) {
-            joint.armature = geno.standing_armature;
-        }
-    }
-    s.imported = try robot_mjcf.build(gpa, &s.robot, .{
-        .gravity = vec(0, 0, -9.81),
-        .timestep = frame_time,
-        .max_contacts = 256,
-    });
-    const m: *const rbt.Model = &s.imported.model;
-    s.data = try rbt.Data.init(gpa, m);
-    // The judge resolves the task's per-robot names (the feet it exempts, the head it watches) through the model's
-    // body names - the same list the fleets get.
-    s.check = try .init(gpa, m, s.imported.names);
-    s.reference = try rbt.Data.init(gpa, m);
-    s.hips = s.imported.bodyIndex("Hips") orelse return error.NoHips;
-
-    // The clips: each capture, copied onto the robot.
-    var bind: geno.Posed = try geno.readPose(gpa, bind_bvh);
-    defer bind.deinit(gpa);
-    for ([_][]const u8{ walk_bvh, getup_bvh }, 0..) |bytes, k| {
-        var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
-        defer capture.deinit();
-        s.clips[k] = try geno.copyClip(gpa, &s.imported, bind, capture);
-    }
-    var stance_capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, stance_bvh, null);
-    defer stance_capture.deinit();
-    s.stance = try geno.copyClip(gpa, &s.imported, bind, stance_capture);
-    s.held = try gpa.alloc(f32, s.stance.nq);
-    bendKnees(s);
-
-    // The floor: a static box whose top face is the engine's z = 0.
-    s.world = try .init(gpa, 64);
-    const floor_shape: zimrphysics.ShapeId = try s.world.shapes.add(gpa, .{
-        .box = .{ .half_extent = vec(50, 50, 0.5), .convex_radius = 0.001 },
-    });
-    s.floor = try s.world.createBody(.{
-        .shape = floor_shape,
-        .position = vec(0, 0, -0.5),
-        .rotation = zm.qidentity(),
-        .motion_type = .static,
-        .friction = s.floor_friction,
-    });
-
-    const nv: usize = m.nv;
-    s.accel = try gpa.alloc(f32, nv);
-    s.scratch = try gpa.alloc(f32, nv);
-    s.dense = try gpa.alloc(f32, nv * nv);
-    s.full = try gpa.alloc(f32, nv);
-    s.torque = try gpa.alloc(f32, nv);
-    s.balanced_goal = try gpa.alloc(f32, m.nq);
-    s.reflex = try .init(&s.imported, s.imported.bodyIndex("Hips") orelse return error.NoHips);
-
-    restart(s);
-    s.bridge = try .init(gpa, &s.world, m, &s.data, 256);
-    s.bridge.listen(&s.world);
-}
-
-fn deinit(gpa: Allocator, s: *State) void {
-    s.bridge.deinit(&s.world);
-    s.world.deinit(gpa);
-    for (&s.clips) |*clip| {
-        clip.deinit();
-    }
-    gpa.free(s.held);
-    s.stance.deinit();
-    gpa.free(s.torque);
-    gpa.free(s.balanced_goal);
-    gpa.free(s.full);
-    gpa.free(s.dense);
-    gpa.free(s.scratch);
-    gpa.free(s.accel);
-    s.reference.deinit();
-    s.check.deinit(gpa);
-    s.data.deinit();
-    s.imported.deinit();
-    s.robot.deinit();
-    s.doc.deinit();
-    z.unloadMesh(gpa, s.cylinder);
-    z.unloadMesh(gpa, s.sphere);
-    z.unloadMesh(gpa, s.cube);
-    s.ui_host.deinit();
-    z.unloadFont(gpa, s.font);
-}
-
-/// The pose the servo pulls toward this frame: the clip's, or the held one.
-fn target(s: *const State) []const f32 {
-    if (s.hold_pose) {
-        return s.held;
-    }
-    const clip: *const dance.Clip = &s.clips[s.which];
-    return clip.targets[s.frame * clip.nq ..][0..clip.nq];
-}
-
 /// Build the held pose: the T-pose, bent. Each bend is a turn about the world's sideways axis applied AT
 /// a joint - so everything below it turns with it - the hips by -b/2, the knees by +b, the ankles by -b/2:
 /// the thigh ends turned -b/2, the shin +b/2, the foot level again. All three turn about one axis, so they
@@ -344,6 +213,15 @@ fn bendKnees(s: *State) void {
     s.held[2] += 0.005;
 }
 
+/// The pose the servo pulls toward this frame: the clip's, or the held one.
+fn target(s: *const State) []const f32 {
+    if (s.hold_pose) {
+        return s.held;
+    }
+    const clip: *const dance.Clip = &s.clips[s.which];
+    return clip.targets[s.frame * clip.nq ..][0..clip.nq];
+}
+
 /// Back to the start: the robot placed exactly on the reference - a copy - and still.
 fn restart(s: *State) void {
     // Back to the clip's start FIRST: the placement below reads the frame (a run that ended mid-clip must
@@ -371,6 +249,128 @@ fn restart(s: *State) void {
     s.bridge.teleported();
     s.reflex.forget();
     s.up_frames = 0;
+}
+
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{
+        .gpa = gpa,
+        .font = try z.loadFont(f, gpa, roboto_mono_ttf, 16),
+        .ui_host = undefined,
+        .cam = z.OrbitCamera.init(vec(0.0, 0.9, 0), 3.2),
+        .cube = try z.genMeshCube(gpa, 1.0, 1.0, 1.0),
+        .sphere = try z.genMeshSphere(gpa, 1.0, 10, 8),
+        .cylinder = try z.genMeshCylinder(gpa, 1.0, 1.0, 16, 2),
+        .transform = .{zm.identity()},
+        .doc = undefined,
+        .robot = undefined,
+        .imported = undefined,
+        .data = undefined,
+        .reference = undefined,
+        .hips = 0,
+        .world = undefined,
+        .bridge = undefined,
+        .floor = undefined,
+        .clips = undefined,
+        .stance = undefined,
+        .held = &.{},
+        .accel = &.{},
+        .scratch = &.{},
+        .dense = &.{},
+        .full = &.{},
+        .torque = &.{},
+    };
+    s.ui_host = z.UiHost.init(gpa, s.font);
+
+    // The robot, from its checked model file - at the clips' own rate, with room for a whole body's
+    // contacts.
+    s.doc = try codecs.xml.parse(gpa, z.robot_geno_model, null);
+    s.robot = try mjcf.readRobot(gpa, &s.doc);
+    // Armature 2 on every joint: in this servo a joint's strength is its free-flight inertia, and this makes
+    // each as strong standing as the load it carries needs (it costs the dance nothing).
+    for (s.robot.joints) |*joint| {
+        if (joint.kind == .ball) {
+            joint.armature = geno.standing_armature;
+        }
+    }
+    s.imported = try robot_mjcf.build(gpa, &s.robot, .{
+        .gravity = vec(0, 0, -9.81),
+        .timestep = frame_time,
+        .max_contacts = 256,
+    });
+    const m: *const rbt.Model = &s.imported.model;
+    s.data = try rbt.Data.init(gpa, m);
+    // The judge resolves the task's per-robot names (the feet it exempts, the head it watches) through the model's
+    // body names - the same list the fleets get.
+    s.check = try geno.FailureCheck.init(gpa, m, s.imported.names);
+    s.reference = try rbt.Data.init(gpa, m);
+    s.hips = s.imported.bodyIndex("Hips") orelse return error.NoHips;
+
+    // The clips: each capture, copied onto the robot.
+    var bind: geno.Posed = try geno.readPose(gpa, bind_bvh);
+    defer bind.deinit(gpa);
+    for ([_][]const u8{ walk_bvh, getup_bvh }, 0..) |bytes, k| {
+        var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, bytes, null);
+        defer capture.deinit();
+        s.clips[k] = try geno.copyClip(gpa, &s.imported, bind, capture);
+    }
+    var stance_capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, stance_bvh, null);
+    defer stance_capture.deinit();
+    s.stance = try geno.copyClip(gpa, &s.imported, bind, stance_capture);
+    s.held = try gpa.alloc(f32, s.stance.nq);
+    bendKnees(s);
+
+    // The floor: a static box whose top face is the engine's z = 0.
+    s.world = try zimrphysics.World.init(gpa, 64);
+    const floor_shape: zimrphysics.ShapeId = try s.world.shapes.add(gpa, .{
+        .box = .{ .half_extent = vec(50, 50, 0.5), .convex_radius = 0.001 },
+    });
+    s.floor = try s.world.createBody(.{
+        .shape = floor_shape,
+        .position = vec(0, 0, -0.5),
+        .rotation = zm.qidentity(),
+        .motion_type = .static,
+        .friction = s.floor_friction,
+    });
+
+    const nv: usize = m.nv;
+    s.accel = try gpa.alloc(f32, nv);
+    s.scratch = try gpa.alloc(f32, nv);
+    s.dense = try gpa.alloc(f32, nv * nv);
+    s.full = try gpa.alloc(f32, nv);
+    s.torque = try gpa.alloc(f32, nv);
+    s.balanced_goal = try gpa.alloc(f32, m.nq);
+    s.reflex = try geno.Reflex.init(&s.imported, s.imported.bodyIndex("Hips") orelse return error.NoHips);
+
+    restart(s);
+    s.bridge = try robot_physics.Bridge.init(gpa, &s.world, m, &s.data, 256);
+    s.bridge.listen(&s.world);
+}
+
+fn deinit(gpa: Allocator, s: *State) void {
+    s.bridge.deinit(&s.world);
+    s.world.deinit(gpa);
+    for (&s.clips) |*clip| {
+        clip.deinit();
+    }
+    gpa.free(s.held);
+    s.stance.deinit();
+    gpa.free(s.torque);
+    gpa.free(s.balanced_goal);
+    gpa.free(s.full);
+    gpa.free(s.dense);
+    gpa.free(s.scratch);
+    gpa.free(s.accel);
+    s.reference.deinit();
+    s.check.deinit(gpa);
+    s.data.deinit();
+    s.imported.deinit();
+    s.robot.deinit();
+    s.doc.deinit();
+    z.unloadMesh(gpa, s.cylinder);
+    z.unloadMesh(gpa, s.sphere);
+    z.unloadMesh(gpa, s.cube);
+    s.ui_host.deinit();
+    z.unloadFont(gpa, s.font);
 }
 
 /// A run ends - by a fall, or by reaching the clip's end: note how long the robot stood, and start again.
@@ -444,105 +444,6 @@ fn toYUp(p: Vec) Vec {
     return rotate(to_y_up, p);
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    if (s.playing) {
-        step(s) catch |err| std.log.err("geno_track: step failed: {t}", .{err});
-    }
-    placeReference(s);
-    // Fallen: the reference LOST, by the one failure criterion (`geno.FailureCheck`: the task's own) - which ends
-    // the run, unless the ragdoll is being watched on the floor. The hips' distance is still shown.
-    s.off = length3(s.data.body_xpos[s.hips] - s.reference.body_xpos[s.hips]);
-    const clip: *const dance.Clip = &s.clips[s.which];
-    if (s.reset_on_fall and s.check.lost(&s.imported.model, &s.data, clip, s.frame)) {
-        endRun(s, true);
-        placeReference(s);
-    }
-
-    z.clearViewport(f, bg);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(s, f);
-    // The view follows the robot as the clip carries it across the floor.
-    if (s.follow_camera) {
-        const hips: Vec = toYUp(s.data.body_xpos[s.hips]);
-        s.cam.target = vec(hips[0], 0.9, hips[2]);
-    }
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 10.0 });
-    const gl = f.gl;
-    z.beginMode3D(gl, cam);
-    z.drawGrid(gl, 40, 0.25);
-    s.transform[0] = mulMat(translation(0, -0.1, 0), scaling(40, 0.2, 40));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
-    drawBodies(s, gl, &s.data, robot_col, foot_col);
-    // Last, so the robot shows through it.
-    if (s.show_reference) {
-        drawBodies(s, gl, &s.reference, ghost_col, ghost_col);
-    }
-    z.endMode3D(gl);
-}
-
-/// Every shape the model carries, where `d` puts its body - turned from the engine's z-up world into the
-/// page's y-up one. MJCF capsules lie along their own z axis, `size` holding the radius and half length.
-fn drawBodies(
-    s: *State,
-    gl: *z.WgpuGl,
-    d: *const rbt.Data,
-    round: Color,
-    flat: Color,
-) void {
-    for (s.robot.bodies) |body| {
-        const b: u32 = s.imported.bodyIndex(body.name) orelse continue;
-        for (s.robot.geoms[body.geom_start..][0..body.geom_count]) |geom| {
-            const at: Vec = toYUp(d.body_xpos[b] + rotate(d.body_xrot[b], geom.pos));
-            const turn: Quat = qmul(to_y_up, qmul(d.body_xrot[b], geom.rot));
-            switch (geom.kind) {
-                .capsule => {
-                    const half: Vec = rotate(turn, vec(0, 0, geom.size[1]));
-                    drawCapsule(s, gl, at - half, at + half, geom.size[0], round);
-                },
-                .sphere => drawBall(s, gl, at, geom.size[0], round),
-                .box => {
-                    s.transform[0] = mulMat(
-                        mulMat(translation(at[0], at[1], at[2]), quatToMat(turn)),
-                        scaling(2.0 * geom.size[0], 2.0 * geom.size[1], 2.0 * geom.size[2]),
-                    );
-                    z.drawMeshInstanced(gl, &s.cube, &s.transform, flat);
-                },
-                else => {},
-            }
-        }
-    }
-}
-
-fn drawBall(
-    s: *State,
-    gl: *z.WgpuGl,
-    at: Vec,
-    radius: f32,
-    colour: Color,
-) void {
-    s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(radius, radius, radius));
-    z.drawMeshInstanced(gl, &s.sphere, &s.transform, colour);
-}
-
-/// A capsule: a cylinder between two points - the mesh runs up its own y from 0 to 1 - and a ball on
-/// each end.
-fn drawCapsule(
-    s: *State,
-    gl: *z.WgpuGl,
-    a: Vec,
-    b: Vec,
-    radius: f32,
-    colour: Color,
-) void {
-    const along: Vec = b - a;
-    const span: f32 = length3(along);
-    const upright: Quat = if (span > 1.0e-6) quatFromTo(vec(0, 1, 0), along * splat(1.0 / span)) else zm.qidentity();
-    s.transform[0] = mulMat(mulMat(translation(a[0], a[1], a[2]), quatToMat(upright)), scaling(radius, span, radius));
-    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, colour);
-    drawBall(s, gl, a, radius, colour);
-    drawBall(s, gl, b, radius, colour);
-}
-
 fn drawPanel(s: *State, f: *z.Frame) bool {
     const u: ui.Ui = s.ui_host.begin(f);
     const captured: bool = u.wantCaptureMouse();
@@ -598,6 +499,105 @@ fn drawPanel(s: *State, f: *z.Frame) bool {
         });
     }
     return captured;
+}
+
+fn drawBall(
+    s: *State,
+    gl: *z.WgpuGl,
+    at: Vec,
+    radius: f32,
+    colour: Color,
+) void {
+    s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(radius, radius, radius));
+    z.drawMeshInstanced(gl, &s.sphere, &s.transform, colour);
+}
+
+/// A capsule: a cylinder between two points - the mesh runs up its own y from 0 to 1 - and a ball on
+/// each end.
+fn drawCapsule(
+    s: *State,
+    gl: *z.WgpuGl,
+    a: Vec,
+    b: Vec,
+    radius: f32,
+    colour: Color,
+) void {
+    const along: Vec = b - a;
+    const span: f32 = length3(along);
+    const upright: Quat = if (span > 1.0e-6) quatFromTo(vec(0, 1, 0), along * splat(1.0 / span)) else zm.qidentity();
+    s.transform[0] = mulMat(mulMat(translation(a[0], a[1], a[2]), quatToMat(upright)), scaling(radius, span, radius));
+    z.drawMeshInstanced(gl, &s.cylinder, &s.transform, colour);
+    drawBall(s, gl, a, radius, colour);
+    drawBall(s, gl, b, radius, colour);
+}
+
+/// Every shape the model carries, where `d` puts its body - turned from the engine's z-up world into the
+/// page's y-up one. MJCF capsules lie along their own z axis, `size` holding the radius and half length.
+fn drawBodies(
+    s: *State,
+    gl: *z.WgpuGl,
+    d: *const rbt.Data,
+    round: Color,
+    flat: Color,
+) void {
+    for (s.robot.bodies) |body| {
+        const b: u32 = s.imported.bodyIndex(body.name) orelse continue;
+        for (s.robot.geoms[body.geom_start..][0..body.geom_count]) |geom| {
+            const at: Vec = toYUp(d.body_xpos[b] + rotate(d.body_xrot[b], geom.pos));
+            const turn: Quat = qmul(to_y_up, qmul(d.body_xrot[b], geom.rot));
+            switch (geom.kind) {
+                .capsule => {
+                    const half: Vec = rotate(turn, vec(0, 0, geom.size[1]));
+                    drawCapsule(s, gl, at - half, at + half, geom.size[0], round);
+                },
+                .sphere => drawBall(s, gl, at, geom.size[0], round),
+                .box => {
+                    s.transform[0] = mulMat(
+                        mulMat(translation(at[0], at[1], at[2]), quatToMat(turn)),
+                        scaling(2.0 * geom.size[0], 2.0 * geom.size[1], 2.0 * geom.size[2]),
+                    );
+                    z.drawMeshInstanced(gl, &s.cube, &s.transform, flat);
+                },
+                else => {},
+            }
+        }
+    }
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    if (s.playing) {
+        step(s) catch |err| std.log.err("geno_track: step failed: {t}", .{err});
+    }
+    placeReference(s);
+    // Fallen: the reference LOST, by the one failure criterion (`geno.FailureCheck`: the task's own) - which ends
+    // the run, unless the ragdoll is being watched on the floor. The hips' distance is still shown.
+    s.off = length3(s.data.body_xpos[s.hips] - s.reference.body_xpos[s.hips]);
+    const clip: *const dance.Clip = &s.clips[s.which];
+    if (s.reset_on_fall and s.check.lost(&s.imported.model, &s.data, clip, s.frame)) {
+        endRun(s, true);
+        placeReference(s);
+    }
+
+    z.clearViewport(f, bg);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(s, f);
+    // The view follows the robot as the clip carries it across the floor.
+    if (s.follow_camera) {
+        const hips: Vec = toYUp(s.data.body_xpos[s.hips]);
+        s.cam.target = vec(hips[0], 0.9, hips[2]);
+    }
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 1.0, .max_distance = 10.0 });
+    const gl = f.gl;
+    z.beginMode3D(gl, cam);
+    z.drawGrid(gl, 40, 0.25);
+    s.transform[0] = mulMat(translation(0, -0.1, 0), scaling(40, 0.2, 40));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_col);
+    drawBodies(s, gl, &s.data, robot_col, foot_col);
+    // Last, so the robot shows through it.
+    if (s.show_reference) {
+        drawBodies(s, gl, &s.reference, ghost_col, ghost_col);
+    }
+    z.endMode3D(gl);
 }
 
 pub const app: z.AppSpec(State) = .{

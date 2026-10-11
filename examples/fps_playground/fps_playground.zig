@@ -14,6 +14,8 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const clamp = zm.clamp;
@@ -78,9 +80,9 @@ const Rect = struct {
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     gestures: z.GesturesState = .{},
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
 
     world: zp.World,
     player: zp.CharacterVirtual,
@@ -112,7 +114,7 @@ const State = struct {
 };
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    var world: zp.World = try zp.World.init(gpa, 256);
+    var world: zp.World = try .init(gpa, 256);
 
     // Floor: a big flat static box centred at the origin, top at y = 0.
     const floor_shape: zp.ShapeId = try world.shapes.add(gpa, .{
@@ -125,8 +127,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .material = 0,
     });
 
-    var rng: std.Random.DefaultPrng = std.Random.DefaultPrng.init(0xF00D_CA75);
-    const rand: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(0xF00D_CA75);
+    const rand: Random = rng.random();
 
     // A scatter of random-sized dynamic cubes that fall into a loose pile.
     var i: usize = 0;
@@ -152,7 +154,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
 
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .rng = rng,
         .world = world,
         .player = .{
@@ -209,6 +211,119 @@ fn jumpButtonRect(f: *z.Frame) Rect {
 /// Read all input and produce a horizontal wish-direction (world units, unit-ish)
 /// The per-frame control output.
 const Controls = struct { wish: Vec, jump: bool };
+
+fn overUi(f: *z.Frame, p: Vec2) bool {
+    return jumpButtonRect(f).contains(p);
+}
+
+fn touchAlive(f: *z.Frame, id: i32) bool {
+    const count: i32 = z.getTouchPointCount(f.input);
+    var i: i32 = 0;
+    while (i < count) : (i += 1) {
+        if (z.getTouchPointId(f.input, i) == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Multi-touch handling: assign one finger to the move stick (left half), one to
+/// look (right half), and detect a tap on the jump button.
+fn gatherTouch(
+    f: *z.Frame,
+    s: *State,
+    wish: *Vec,
+    jump: *bool,
+    b: Basis,
+) void {
+    const count: i32 = z.getTouchPointCount(f.input);
+    const sw: f32 = f.window.widthf();
+
+    // Drop fingers that lifted.
+    if (s.stick_touch) |id| {
+        if (!touchAlive(f, id)) {
+            s.stick_touch = null;
+        }
+    }
+    if (s.look_touch) |id| {
+        if (!touchAlive(f, id)) {
+            s.look_touch = null;
+        }
+    }
+    if (s.jump_touch) |id| {
+        if (!touchAlive(f, id)) {
+            s.jump_touch = null;
+        }
+    }
+
+    var i: i32 = 0;
+    while (i < count) : (i += 1) {
+        const id: i32 = z.getTouchPointId(f.input, i);
+        const p: Vec2 = z.getTouchPosition(f.input, i);
+
+        // ROUTE BY OWNER FIRST. A finger's role is decided once, on the frame it
+        // arrives, and is never re-tested afterwards. The half-screen split used
+        // to be re-evaluated from the finger's CURRENT position every frame, so
+        // dragging a stick finger across the midline handed it to look (the
+        // camera span) while the stick froze at its last left-half sample, and
+        // dragging a look finger the other way grabbed the move stick. Where a
+        // finger STARTED is what decides; where it travels is just motion.
+        if (s.jump_touch != null and s.jump_touch.? == id) {
+            continue;
+        }
+        if (s.stick_touch != null and s.stick_touch.? == id) {
+            s.stick_cur = p;
+            continue;
+        }
+        if (s.look_touch != null and s.look_touch.? == id) {
+            const dx: f32 = p[0] - s.look_prev[0];
+            const dy: f32 = p[1] - s.look_prev[1];
+            s.yaw += dx * drag_sens;
+            s.pitch -= dy * drag_sens;
+            s.look_prev = p;
+            continue;
+        }
+
+        // An unclaimed finger: assign its role from where it landed.
+        // Jump is EDGE-triggered -- firing every frame a finger rested on the
+        // button would re-jump the instant we touched down again.
+        if (jumpButtonRect(f).contains(p)) {
+            if (s.jump_touch == null) {
+                s.jump_touch = id;
+                jump.* = true;
+            }
+            continue;
+        }
+        if (p[0] < sw * 0.5) {
+            if (s.stick_touch == null) {
+                s.stick_touch = id;
+                s.stick_origin = p;
+                s.stick_cur = p;
+            }
+        } else {
+            if (s.look_touch == null) {
+                s.look_touch = id;
+                s.look_prev = p;
+            }
+        }
+    }
+
+    // Apply the move stick as a wish-direction.
+    if (s.stick_touch != null) {
+        const dx: f32 = s.stick_cur[0] - s.stick_origin[0];
+        const dy: f32 = s.stick_cur[1] - s.stick_origin[1];
+        const dead: f32 = 8.0;
+        const maxr: f32 = 70.0;
+        const mag: f32 = @sqrt(dx * dx + dy * dy);
+        if (mag > dead) {
+            const scale: f32 = @min(mag, maxr) / maxr;
+            const nx: f32 = dx / mag;
+            const ny: f32 = dy / mag;
+            // Up on screen (negative y) = forward.
+            wish.* += b.fwd * splat(-ny * scale) + b.right * splat(nx * scale);
+        }
+    }
+}
 
 /// plus whether a jump was requested this frame.
 fn gatherControls(f: *z.Frame, s: *State) Controls {
@@ -311,117 +426,35 @@ fn gatherControls(f: *z.Frame, s: *State) Controls {
     return .{ .wish = wish, .jump = jump };
 }
 
-fn overUi(f: *z.Frame, p: Vec2) bool {
-    return jumpButtonRect(f).contains(p);
-}
-
-/// Multi-touch handling: assign one finger to the move stick (left half), one to
-/// look (right half), and detect a tap on the jump button.
-fn gatherTouch(
-    f: *z.Frame,
-    s: *State,
-    wish: *Vec,
-    jump: *bool,
-    b: Basis,
-) void {
-    const count: i32 = z.getTouchPointCount(f.input);
+fn drawHud(f: *z.Frame, s: *State, grounded: bool) void {
     const sw: f32 = f.window.widthf();
+    const sh: f32 = f.window.heightf();
 
-    // Drop fingers that lifted.
-    if (s.stick_touch) |id| {
-        if (!touchAlive(f, id)) {
-            s.stick_touch = null;
-        }
-    }
-    if (s.look_touch) |id| {
-        if (!touchAlive(f, id)) {
-            s.look_touch = null;
-        }
-    }
-    if (s.jump_touch) |id| {
-        if (!touchAlive(f, id)) {
-            s.jump_touch = null;
-        }
-    }
+    // Crosshair.
+    const cx: f32 = sw / 2.0;
+    const cy: f32 = sh / 2.0;
+    f.gl.line(.{ cx - 10, cy }, .{ cx + 10, cy }, .{ .color = cross_col, .thickness = 2.0 });
+    f.gl.line(.{ cx, cy - 10 }, .{ cx, cy + 10 }, .{ .color = cross_col, .thickness = 2.0 });
 
-    var i: i32 = 0;
-    while (i < count) : (i += 1) {
-        const id: i32 = z.getTouchPointId(f.input, i);
-        const p: Vec2 = z.getTouchPosition(f.input, i);
-
-        // ROUTE BY OWNER FIRST. A finger's role is decided once, on the frame it
-        // arrives, and is never re-tested afterwards. The half-screen split used
-        // to be re-evaluated from the finger's CURRENT position every frame, so
-        // dragging a stick finger across the midline handed it to look (the
-        // camera span) while the stick froze at its last left-half sample, and
-        // dragging a look finger the other way grabbed the move stick. Where a
-        // finger STARTED is what decides; where it travels is just motion.
-        if (s.jump_touch != null and s.jump_touch.? == id) {
-            continue;
-        }
-        if (s.stick_touch != null and s.stick_touch.? == id) {
-            s.stick_cur = p;
-            continue;
-        }
-        if (s.look_touch != null and s.look_touch.? == id) {
-            const dx: f32 = p[0] - s.look_prev[0];
-            const dy: f32 = p[1] - s.look_prev[1];
-            s.yaw += dx * drag_sens;
-            s.pitch -= dy * drag_sens;
-            s.look_prev = p;
-            continue;
-        }
-
-        // An unclaimed finger: assign its role from where it landed.
-        // Jump is EDGE-triggered -- firing every frame a finger rested on the
-        // button would re-jump the instant we touched down again.
-        if (jumpButtonRect(f).contains(p)) {
-            if (s.jump_touch == null) {
-                s.jump_touch = id;
-                jump.* = true;
-            }
-            continue;
-        }
-        if (p[0] < sw * 0.5) {
-            if (s.stick_touch == null) {
-                s.stick_touch = id;
-                s.stick_origin = p;
-                s.stick_cur = p;
-            }
-        } else {
-            if (s.look_touch == null) {
-                s.look_touch = id;
-                s.look_prev = p;
-            }
-        }
-    }
-
-    // Apply the move stick as a wish-direction.
+    // Move stick, drawn where the finger grabbed.
     if (s.stick_touch != null) {
-        const dx: f32 = s.stick_cur[0] - s.stick_origin[0];
-        const dy: f32 = s.stick_cur[1] - s.stick_origin[1];
-        const dead: f32 = 8.0;
-        const maxr: f32 = 70.0;
-        const mag: f32 = @sqrt(dx * dx + dy * dy);
-        if (mag > dead) {
-            const scale: f32 = @min(mag, maxr) / maxr;
-            const nx: f32 = dx / mag;
-            const ny: f32 = dy / mag;
-            // Up on screen (negative y) = forward.
-            wish.* += b.fwd * splat(-ny * scale) + b.right * splat(nx * scale);
-        }
+        f.gl.circle(s.stick_origin, 70.0, .{ .color = stick_col, .segments = 28 });
+        f.gl.circle(s.stick_cur, 30.0, .{ .color = stick_knob_col, .segments = 20 });
     }
-}
 
-fn touchAlive(f: *z.Frame, id: i32) bool {
-    const count: i32 = z.getTouchPointCount(f.input);
-    var i: i32 = 0;
-    while (i < count) : (i += 1) {
-        if (z.getTouchPointId(f.input, i) == id) {
-            return true;
-        }
-    }
-    return false;
+    // Jump button.
+    const jb: Rect = jumpButtonRect(f);
+    button(f, s, jb, "JUMP", false);
+
+    const status: []const u8 = allocPrint(
+        s.scratch.allocator(),
+        "fps playground - {s} - {s}",
+        .{
+            if (grounded) "on ground" else "in air",
+            if (s.mouse_locked) "mouse captured (esc to release)" else "drag to look - WASD to move",
+        },
+    ) catch "fps playground";
+    common.caption(f.gl, s.font, status);
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -501,37 +534,6 @@ fn update(f: *z.Frame, s: *State) void {
 
     drawHud(f, s, grounded);
     z.endDrawing(f.gl);
-}
-
-fn drawHud(f: *z.Frame, s: *State, grounded: bool) void {
-    const sw: f32 = f.window.widthf();
-    const sh: f32 = f.window.heightf();
-
-    // Crosshair.
-    const cx: f32 = sw / 2.0;
-    const cy: f32 = sh / 2.0;
-    f.gl.line(.{ cx - 10, cy }, .{ cx + 10, cy }, .{ .color = cross_col, .thickness = 2.0 });
-    f.gl.line(.{ cx, cy - 10 }, .{ cx, cy + 10 }, .{ .color = cross_col, .thickness = 2.0 });
-
-    // Move stick, drawn where the finger grabbed.
-    if (s.stick_touch != null) {
-        f.gl.circle(s.stick_origin, 70.0, .{ .color = stick_col, .segments = 28 });
-        f.gl.circle(s.stick_cur, 30.0, .{ .color = stick_knob_col, .segments = 20 });
-    }
-
-    // Jump button.
-    const jb: Rect = jumpButtonRect(f);
-    button(f, s, jb, "JUMP", false);
-
-    const status: []const u8 = allocPrint(
-        s.scratch.allocator(),
-        "fps playground - {s} - {s}",
-        .{
-            if (grounded) "on ground" else "in air",
-            if (s.mouse_locked) "mouse captured (esc to release)" else "drag to look - WASD to move",
-        },
-    ) catch "fps playground";
-    common.caption(f.gl, s.font, status);
 }
 
 /// Descriptor-only: the runner (standalone) or a launcher drives this.

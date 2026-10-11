@@ -1,32 +1,34 @@
 # zimr file atlas
 
-*Generated 2026-09-18 by `zig build files-md` (tools/gen_files_md.zig) — regenerate after structural changes; counts/deps are computed, descriptions come from `//!` headers (preferred) or tools/file_descriptions.zig.*
+*Generated 2026-10-11 by `zig build files-md` (tools/gen_files_md.zig) — regenerate after structural changes; counts/deps are computed, descriptions come from `//!` headers (preferred) or tools/file_descriptions.zig.*
 
-**788 .zig files, 462,195 lines of Zig.** Module-name dependencies (`zm`, `shader_interface`, `build_options`, `sw_runtime`, …) are build-wired; file dependencies are direct `@import` paths. *Dependents* are in-tree importers (plus `build.zig (wired)` when the build references the path).
+**873 .zig files, 567,912 lines of Zig.** Module-name dependencies (`zm`, `shader_interface`, `build_options`, `sw_runtime`, …) are build-wired; file dependencies are direct `@import` paths. *Dependents* are in-tree importers (plus `build.zig (wired)` when the build references the path).
 
 
 ## Topography
-The `src/*.zig` module import graph: **83 modules, 387 edges, 1 cycles** (126 edges after transitive reduction — see the graph below). The DAG levels below are longest-path layers — bottom-up: `L0` imports no in-tree module, and each level builds only on lower ones. This is the suggested reading order, and the order of the *src (core)* section.
-- **L0** (12): `bridge`, `jobs_abi`, `kompute`, `leakwatch`, `memwatch`, `net_core`, `physics_common`, `serialize`, `shader_codegen`, `spv2wgsl`, `wgpu_runner`, `zimrmath`
-- **L1** (17): `bvh_synth`, `easings`, `entities`, `frame_arena`, `jobs_worker`, `net_typed`, `plot_core`, `profiler`, `raster_pixel`, `shader_builtins`, `shader_connect`, `shader_interface`, `spv2wgsl_wasm`, `utils`, `web`, `wgpu`, `zimrnum`
-- **L2** (9): `BindGroupCache`, `jobs`, `net`, `raster`, `robot`, `shader_introspect`, `types`, `zimrphysics`, `zimrphysics2d`
-- **L3** (6): `codecs`, `draw2d`, `gpu`, `raster_shader`, `robot_scene`, `runtime`
-- **L4** (8): `compute_host`, `errors`, `gpu_iface`, `plot`, `shapes2d`, `sound`, `urdf`, `wgpu_texture`
-- **L5** (5): `image`, `mjcf`, `robot_urdf`, `shader_runtime_wgpu`, `wgpu_smoke_test`
-- **L6** (9): `Sprite`, `material`, `renderer_2d`, `robot_bench`, `robot_control`, `robot_mjcf`, `robot_mpc`, `robot_physics`, `text2d`
-- **L7** (5): `Canvas`, `SwAdapter`, `shader2d`, `sw_runtime`, `test_font_render`
-- **L8** (2): `canvas_render_test`, `renderer_trait`
-- **L9** (1): `WgpuGl`
-- **L10** (2): `draw3d`, `ui`
-- **L11** (4): `plot3d`, `plot_ui`, `profiler_ui`, `wgpu_app`
-- **L12** (2): `effects2d`, `tests`
-- **L13** (1): `zimr`
+The `src/*.zig` module import graph: **128 modules, 654 edges, 0 cycles** (206 edges after transitive reduction — see the graph below). The DAG levels below are longest-path layers — bottom-up: `L0` imports no in-tree module, and each level builds only on lower ones. This is the suggested reading order, and the order of the *src (core)* section.
+- **L0** (20): `cli`, `glyph_atlas`, `gpu_abi`, `host`, `jobs_abi`, `kompute`, `leakwatch`, `net_core`, `physics_common`, `robot_geno_shapes`, `serialize`, `shader_codegen`, `spv2wgsl`, `spv_vulkan`, `test_report`, `vk`, `wgpu_runner`, `wgsl_reflect`, `win32`, `zimrmath`
+- **L1** (23): `bvh_synth`, `command_line`, `easings`, `entities`, `frame_arena`, `jobs_worker`, `memwatch`, `native_os`, `net_typed`, `platform`, `plot_core`, `profiler`, `raster_pixel`, `robot_bmpc`, `shader_builtins`, `shader_connect`, `shader_interface`, `spv2wgsl_wasm`, `utils`, `vk_hello`, `web`, `zimrnum`, `zimrrl`
+- **L2** (8): `net`, `raster`, `robot`, `robot_bmpc_cartpole`, `types`, `wgpu_vulkan`, `zimrphysics`, `zimrphysics2d`
+- **L3** (7): `codecs`, `dom_input`, `draw2d`, `raster_shader`, `robot_scene`, `runtime`, `wgpu`
+- **L4** (10): `BindGroupCache`, `bridge`, `errors`, `jobs`, `native_input`, `plot`, `shader_introspect`, `shapes2d`, `sound`, `urdf`
+- **L5** (6): `audio_worklet`, `gpu`, `image`, `mjcf`, `native_loop`, `robot_urdf`
+- **L6** (6): `Sprite`, `compute_host`, `gpu_iface`, `robot_mjcf`, `text2d`, `wgpu_texture`
+- **L7** (8): `Canvas`, `SwAdapter`, `kit_mlp`, `robot_mpc`, `robot_physics`, `shader_runtime_wgpu`, `test_font_render`, `wgpu_smoke_test`
+- **L8** (7): `canvas_render_test`, `material`, `renderer_2d`, `renderer_trait`, `robot_bench`, `robot_control`, `robot_maximal`
+- **L9** (4): `WgpuGl`, `robot_dance`, `shader2d`, `sw_runtime`
+- **L10** (4): `draw3d`, `robot_gym`, `robot_track`, `ui`
+- **L11** (8): `plot3d`, `plot_ui`, `profiler_ui`, `robot_clip_bake`, `robot_latent`, `robot_policy`, `robot_supertrack`, `wgpu_app`
+- **L12** (7): `effects2d`, `gpu_learn_tests`, `robot_geno`, `robot_latent_kit`, `robot_mocap_tutorial`, `robot_track_env`, `robot_world`
+- **L13** (5): `robot_latent_kit_tests`, `robot_ppo_track`, `robot_sac_track`, `robot_st_bench`, `robot_track_resident`
+- **L14** (3): `robot_ppo_track_tests`, `robot_track_resident_tests`, `zimr`
+- **L15** (2): `robot_tests`, `tests`
 
-**Out-degree hubs:** `zimr` (53), `tests` (51), `wgpu_app` (25), `draw3d` (15), `ui` (14), `WgpuGl` (13), `shader_runtime_wgpu` (11), `Canvas` (8)
+**Out-degree hubs:** `zimr` (68), `tests` (46), `wgpu_app` (30), `robot_tests` (28), `ui` (16), `draw3d` (15), `robot_geno` (15), `WgpuGl` (14)
 
 
 ## Dependency graph
-Transitive reduction of the src import DAG (387 direct `@import` edges reduced to 126 covering edges; an edge already implied by a longer path is dropped). Top-to-bottom: an importer points down to what it directly needs.
+Transitive reduction of the src import DAG (654 direct `@import` edges reduced to 206 covering edges; an edge already implied by a longer path is dropped). Top-to-bottom: an importer points down to what it directly needs.
 
 ```mermaid
 graph TD
@@ -42,13 +44,18 @@ graph TD
   WgpuGl --> renderer_2d
   WgpuGl --> renderer_trait
   WgpuGl --> shapes2d
+  audio_worklet --> sound
+  bridge --> dom_input
   bvh_synth --> zimrmath
   canvas_render_test --> Canvas
   codecs --> bvh_synth
+  codecs --> platform
   codecs --> types
   codecs --> web
+  command_line --> cli
   compute_host --> gpu
   compute_host --> jobs
+  dom_input --> types
   draw2d --> types
   draw3d --> WgpuGl
   easings --> zimrmath
@@ -59,18 +66,30 @@ graph TD
   gpu --> BindGroupCache
   gpu --> shader_introspect
   gpu_iface --> gpu
+  gpu_learn_tests --> robot_supertrack
   image --> errors
   image --> runtime
   jobs --> jobs_abi
   jobs --> web
   jobs --> wgpu
   jobs_worker --> jobs_abi
+  kit_mlp --> compute_host
+  kit_mlp --> test_report
   material --> shader_runtime_wgpu
+  memwatch --> leakwatch
   mjcf --> urdf
+  native_input --> dom_input
+  native_input --> win32
+  native_loop --> native_input
+  native_loop --> wgpu_vulkan
+  native_os --> vk
+  native_os --> win32
   net --> net_core
   net --> net_typed
+  net --> platform
   net --> web
   net_typed --> serialize
+  platform --> host
   plot --> draw2d
   plot --> plot_core
   plot3d --> plot_core
@@ -85,15 +104,65 @@ graph TD
   raster --> raster_pixel
   raster_pixel --> zimrmath
   raster_shader --> raster
+  renderer_2d --> glyph_atlas
+  renderer_2d --> memwatch
   renderer_2d --> shader_runtime_wgpu
   renderer_trait --> SwAdapter
   robot --> profiler
-  robot_mjcf --> robot_physics
+  robot_bench --> robot_physics
+  robot_bmpc --> zimrmath
+  robot_bmpc_cartpole --> robot_bmpc
+  robot_clip_bake --> robot_track
+  robot_control --> robot_physics
+  robot_control --> test_report
+  robot_dance --> robot_maximal
+  robot_geno --> robot_geno_shapes
+  robot_geno --> robot_latent
+  robot_geno --> robot_policy
+  robot_gym --> compute_host
+  robot_gym --> robot_dance
+  robot_latent --> robot_gym
+  robot_latent --> robot_track
+  robot_latent_kit --> robot_latent
+  robot_latent_kit_tests --> robot_latent_kit
+  robot_maximal --> robot_physics
+  robot_maximal --> test_report
+  robot_mjcf --> mjcf
+  robot_mjcf --> robot_scene
+  robot_mocap_tutorial --> robot_supertrack
   robot_mpc --> robot_mjcf
   robot_physics --> robot_mjcf
+  robot_physics --> zimrphysics
+  robot_policy --> robot_track
+  robot_ppo_track --> robot_gym
+  robot_ppo_track --> robot_track_env
+  robot_ppo_track_tests --> robot_geno
+  robot_ppo_track_tests --> robot_ppo_track
+  robot_ppo_track_tests --> robot_sac_track
+  robot_sac_track --> robot_gym
+  robot_sac_track --> robot_track_env
   robot_scene --> robot
+  robot_st_bench --> robot_geno
+  robot_supertrack --> robot_gym
+  robot_tests --> gpu_learn_tests
+  robot_tests --> robot_bmpc
+  robot_tests --> robot_control
+  robot_tests --> robot_mocap_tutorial
+  robot_tests --> robot_mpc
+  robot_tests --> robot_ppo_track_tests
+  robot_tests --> robot_track_resident_tests
+  robot_tests --> robot_urdf
+  robot_tests --> robot_world
+  robot_track --> robot_dance
+  robot_track_env --> robot_policy
+  robot_track_resident --> robot_latent_kit
+  robot_track_resident_tests --> robot_latent_kit_tests
+  robot_track_resident_tests --> robot_track_resident
   robot_urdf --> robot
   robot_urdf --> urdf
+  robot_world --> kit_mlp
+  robot_world --> robot_latent
+  runtime --> platform
   runtime --> types
   runtime --> web
   shader2d --> renderer_2d
@@ -102,6 +171,7 @@ graph TD
   shader_interface --> zimrmath
   shader_introspect --> shader_interface
   shader_introspect --> wgpu
+  shader_introspect --> wgsl_reflect
   shader_runtime_wgpu --> gpu_iface
   shader_runtime_wgpu --> raster_shader
   shader_runtime_wgpu --> shader_connect
@@ -114,12 +184,12 @@ graph TD
   sw_runtime --> renderer_2d
   test_font_render --> text2d
   tests --> kompute
-  tests --> leakwatch
-  tests --> robot_urdf
   tests --> shader_codegen
   tests --> sw_runtime
   tests --> zimr
+  text2d --> glyph_atlas
   text2d --> image
+  text2d --> memwatch
   types --> shader_interface
   ui --> WgpuGl
   ui --> easings
@@ -127,18 +197,25 @@ graph TD
   ui --> utils
   urdf --> codecs
   utils --> zimrmath
+  vk_hello --> vk
+  vk_hello --> win32
+  vk_hello --> zimrmath
   web --> zimrmath
-  wgpu --> zimrmath
+  wgpu --> host
+  wgpu --> wgpu_vulkan
   wgpu_app --> draw3d
-  wgpu_app --> memwatch
+  wgpu_app --> native_loop
   wgpu_app --> profiler
   wgpu_app --> shader2d
   wgpu_app --> sound
   wgpu_app --> ui
   wgpu_smoke_test --> gpu_iface
   wgpu_texture --> gpu
+  wgpu_vulkan --> gpu_abi
+  wgpu_vulkan --> native_os
+  wgpu_vulkan --> spv_vulkan
+  wgpu_vulkan --> zimrmath
   zimr --> Canvas
-  zimr --> compute_host
   zimr --> effects2d
   zimr --> material
   zimr --> net
@@ -146,7 +223,11 @@ graph TD
   zimr --> plot_ui
   zimr --> profiler_ui
   zimr --> robot_control
+  zimr --> robot_geno
   zimr --> robot_mpc
+  zimr --> robot_ppo_track
+  zimr --> robot_supertrack
+  zimr --> robot_track_resident
   zimr --> zimrphysics2d
   zimrnum --> zimrmath
   zimrphysics --> entities
@@ -156,8 +237,7 @@ graph TD
   zimrphysics2d --> frame_arena
   zimrphysics2d --> physics_common
   zimrphysics2d --> profiler
-  bridge
-  robot_bench
+  zimrrl --> zimrmath
   wgpu_runner
 ```
 
@@ -174,17 +254,9 @@ Grouped entries (not per-file): `tests/fixtures/external/tint/` — 363 SPIR-V/W
 
 Ignore rules (caches, zig-out, prebuilt artifacts).
 
-*43 lines*  
+*44 lines*  
 **Deps:** —  
 **Dependents:** —
-
-### `.zenv.sh`
-
-Sourceable PATH exports for the vendored toolchains.
-
-*6 lines*  
-**Deps:** —  
-**Dependents:** `build.zig (wired)`
 
 ### `LICENSE`
 
@@ -198,27 +270,19 @@ Project license.
 
 The build graph: discovers shader sources, runs the SPIR-V→WGSL pipeline per engine/example shader, defines every wgpu example's wasm module + page install, the six native host demos, the host test target (with WGSL + externs wiring for the refAllDecls policy), lint (a hard dependency of every compile), smoke harnesses, docs, dist, and the standalone-HTML bakers. The single most load-bearing file in the repo; edit with exact-text anchors and verify with a full gate run.
 
-*5,716 lines · 33 fns*  
-**Deps:** `../X.zig`, `../shader_interface.zig`, `../spv2wgsl.zig`, `../x.zig`, `default_shapes_vs.zig`, `math.zig`, `src/shader_codegen.zig`, `tools/fs_space.zig`, `ui.zig`, `zimr.zig`, `zn_matmul.zig`, `<basename>` (module), `<name>_externs` (module), `build_options` (module), `io` (module), `kernels` (module), `math` (module), `shader_interface` (module), `zm` (module)  
+*8,650 lines · 80 fns*  
+**Deps:** `../X.zig`, `../shader_interface.zig`, `../spv2wgsl.zig`, `../x.zig`, `default_shapes_vs.zig`, `math.zig`, `src/shader_codegen.zig`, `tools/fs_space.zig`, `ui.zig`, `x.zig`, `zimr.zig`, `zn_matmul.zig`, `<basename>` (module), `<name>_externs` (module), `build_options` (module), `ex_<name>` (module), `io` (module), `kernels` (module), `math` (module), `shader_interface` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `build.zig.zon`
 
 Root package manifest (no external deps by design).
 
-*17 lines*  
+*24 lines*  
 **Deps:** —  
 **Dependents:** —
 
-### `cheatsheet.html`
-
-Generated API cheatsheet (from CHEATSHEET.md via scripts/build_cheatsheet.py); carried into dist.
-
-*339 lines*  
-**Deps:** —  
-**Dependents:** `build.zig (wired)`
-
-### `generate_vscode.bat`
+### `generate_editor_configs.bat`
 
 Windows convenience: regenerate launch.json.
 
@@ -230,7 +294,7 @@ Windows convenience: regenerate launch.json.
 
 Stops the dev server (Windows).
 
-*17 lines*  
+*22 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -238,7 +302,7 @@ Stops the dev server (Windows).
 
 Stops the dev server (POSIX).
 
-*17 lines*  
+*21 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -246,7 +310,7 @@ Stops the dev server (POSIX).
 
 Note: A zig port of raylib, imgui, implot, box2d / jolt physics, and MuJoCo-style robot
 
-*12 lines*  
+*23 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -254,32 +318,56 @@ Note: A zig port of raylib, imgui, implot, box2d / jolt physics, and MuJoCo-styl
 
 Serves zig-out/web via the bun dev server (Windows).
 
-*56 lines*  
+*57 lines*  
 **Deps:** —  
-**Dependents:** `build.zig (wired)`
+**Dependents:** —
 
 ### `serve.sh`
 
 Serves zig-out/web via the bun dev server (POSIX).
 
-*45 lines*  
+*46 lines*  
 **Deps:** —  
 **Dependents:** —
 
 
 ## src (core)
 
-### `src/bridge.zig`
+### `src/cli.zig`
 
-The browser runtime for the wgpu path: WASI shim, DOM/input glue, the WebGPU bridge (integer-registry handle protocol, encoder ops incl. copyTextureToBuffer), audio, and zimrRun boot. Bundled per-example and inlined by the standalone baker.
+(no description yet — add a //! header or a dict entry)
 
-*L0 · 6,835 lines · 540 fns*  
-**Deps:** `wz` (module)  
-**Dependents:** `build.zig (wired)`
+*L0 · 1,258 lines · 20 fns · 4 tests*  
+**Deps:** `src/cli/test.zig`  
+**Dependents:** `build.zig (wired)`, `src/cli/init_args.zig`, `src/cli/test.zig`, `src/command_line.zig`
+
+### `src/glyph_atlas.zig`
+
+lint:alias glyph_atlas src/glyph_atlas.zig - the CPU half of the glyph cache: which rasterized glyph lives where, and the shelf packer that places new ones.
+
+*L0 · 298 lines · 7 fns · 5 tests*  
+**Deps:** —  
+**Dependents:** `src/WgpuGl.zig`, `src/renderer_2d.zig`, `src/tests.zig`, `src/text2d.zig`
+
+### `src/gpu_abi.zig`
+
+THE GPU ABI - what the engine and its GPU hosts must agree on, in one place both can import.
+
+*L0 · 626 lines · 20 fns · 4 tests*  
+**Deps:** —  
+**Dependents:** `src/gpu.zig`, `src/wgpu.zig`, `src/wgpu_vulkan.zig`
+
+### `src/host.zig`
+
+THE HOST - which platform the engine runs on, stated as three comptime facts.
+
+*L0 · 55 lines · 1 fns*  
+**Deps:** `build_options` (module)  
+**Dependents:** `src/platform.zig`, `src/platform/headless.zig`, `src/text2d.zig`, `src/ui.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/jobs_abi.zig`
 
-lint:alias jobs_abi src/jobs_abi.zig — the names the three sides of the jobs system must agree on.
+lint:alias jobs_abi src/jobs_abi.zig - the names the three sides of the jobs system must agree on.
 
 *L0 · 74 lines · 0 fns*  
 **Deps:** —  
@@ -287,91 +375,139 @@ lint:alias jobs_abi src/jobs_abi.zig — the names the three sides of the jobs s
 
 ### `src/kompute.zig`
 
-kompute — the compute DSL. A kernel file declares `config` + `Buffers` + `Params` + one or more kernel `fn`s; this module generates the boilerplate so the same source runs as a GPU compute dispatch or a CPU loop (see `src/notes/tutorials/gpu-compute-tutorial.md`).
+kompute - the compute DSL. A kernel file declares `config` + `Buffers` + `Params` + one or more kernel `fn`s; this module generates the boilerplate so the same source runs as a GPU compute dispatch or a CPU loop (see `src/notes/tutorials/gpu-compute-tutorial.md`).
 
-*L0 · 469 lines · 22 fns*  
+*L0 · 552 lines · 31 fns · 1 tests*  
 **Deps:** `kompute` (module)  
 **Dependents:** `build.zig (wired)`, `src/tests.zig`
 
 ### `src/leakwatch.zig`
 
-lint:alias leakwatch LeakWatch — an allocator wrapper that says WHERE a leak came from.
+lint:alias leakwatch LeakWatch - an allocator wrapper that says WHERE a leak came from.
 
-*L0 · 335 lines · 13 fns · 2 tests*  
+*L0 · 492 lines · 17 fns · 3 tests*  
 **Deps:** —  
-**Dependents:** `src/tests.zig`
-
-### `src/memwatch.zig`
-
-lint:alias memwatch MemWatch — a per-frame wasm-linear-memory growth watchdog.
-
-*L0 · 152 lines · 6 fns*  
-**Deps:** `build_options` (module)  
-**Dependents:** `src/wgpu_app.zig`
+**Dependents:** `src/memwatch.zig`, `src/tests.zig`, `src/wgpu_app.zig`
 
 ### `src/net_core.zig`
 
-lint:alias net_core src/net.zig — the P2P session layer. This is the friendly front door to the whole multiplayer stack: you call `connect(url, room)`, then each frame you drain `poll()` for events (peers joining/leaving, messages) and use `broadcast()` / `sendTo()` to talk. Everything underneath — the WebSocket signaling handshake and the WebRTC offer/answer/ICE dance — is handled for you, for every peer in the…
+lint:alias net_core src/net.zig - the P2P session layer. This is the friendly front door to the whole multiplayer stack: you call `connect(url, room)`, then each frame you drain `poll()` for events (peers joining/leaving, messages) and use `broadcast()` / `sendTo()` to talk. Everything underneath - the WebSocket signaling handshake and the WebRTC offer/answer/ICE dance - is handled for you, for every peer in the…
 
-*L0 · 708 lines · 28 fns*  
+*L0 · 1,837 lines · 73 fns · 8 tests*  
 **Deps:** —  
-**Dependents:** `src/net.zig`
+**Dependents:** `build.zig (wired)`, `src/net.zig`, `src/platform/windows.zig`, `src/tests.zig`
 
 ### `src/physics_common.zig`
 
-lint:alias physics_common Shared, dimension-independent contract for the two physics engines — `zimrphysics` (3D / Jolt port) and `zimrphysics2d` (2D / Box2D v3 port). Defining the genuinely parallel parts here, and asserting the parallel surface at comptime, is what keeps the two engines feeling like one family rather than re-diverging over time: a developer who learns one can predict the other. See the engine…
+lint:alias physics_common Shared, dimension-independent contract for the two physics engines - `zimrphysics` (3D / Jolt port) and `zimrphysics2d` (2D / Box2D v3 port). Defining the genuinely parallel parts here, and asserting the parallel surface at comptime, is what keeps the two engines feeling like one family rather than re-diverging over time: a developer who learns one can predict the other. See the engine…
 
 *L0 · 58 lines · 1 fns*  
 **Deps:** —  
 **Dependents:** `src/zimr.zig`, `src/zimrphysics.zig`, `src/zimrphysics2d.zig`
 
+### `src/robot_geno_shapes.zig`
+
+GENERATED by tools/geno_fit.py from Geno's skinned mesh - do not edit by hand. Geoms in WORLD BIND coordinates (metres, y-up): the page places them on bones itself.
+
+*L0 · 166 lines · 0 fns*  
+**Deps:** —  
+**Dependents:** `src/robot_geno.zig`, `src/zimr.zig`
+
 ### `src/serialize.zig`
 
-lint:alias serialize serialize.zig — comptime protobuf-style serialization for plain Zig structs.
+lint:alias serialize serialize.zig - comptime protobuf-style serialization for plain Zig structs.
 
-*L0 · 800 lines · 29 fns · 8 tests*  
+*L0 · 803 lines · 28 fns · 8 tests*  
 **Deps:** —  
 **Dependents:** `src/net_typed.zig`, `src/zimr.zig`
 
 ### `src/shader_codegen.zig`
 
-lint:alias shader_codegen src/shader_codegen.zig — public build-time API for zimr.
+lint:alias shader_codegen src/shader_codegen.zig - public build-time API for zimr.
 
-*L0 · 778 lines · 7 fns*  
-**Deps:** `src/foo_fs.zig`, `src/src/shader_codegen.zig`, `<basename>_externs` (module), `<externs_module_name>` (module), `cube_split_vs_externs` (module), `gen` (module), `io` (module), `shader_builtins` (module), `shader_interface` (module), `shader_io` (module), `shadermath` (module), `zimr_build` (module), `zm` (module)  
+*L0 · 719 lines · 9 fns*  
+**Deps:** `src/foo_fs.zig`, `src/src/shader_codegen.zig`, `<basename>_externs` (module), `<externs_module_name>` (module), `cube_split_vs_externs` (module), `gen` (module), `io` (module), `shader_builtins` (module), `shader_interface` (module), `shader_io` (module), `shadermath` (module), `zm` (module)  
 **Dependents:** `build.zig`, `build.zig (wired)`, `src/tests.zig`
 
 ### `src/spv2wgsl.zig`
 
 The pure-Zig SPIR-V→WGSL transpiler entry: parses SPIR-V binaries, reconstructs structured control flow via the CFG walkers in src/spv2wgsl/, runs the sample-uniformity pass (Chrome/Tint uniform-control-flow), and emits WGSL. Known item: the recursive emitFunctionBody needs a big stack on one Tint fixture (iterative emitter queued in P6).
 
-*L0 · 11,869 lines · 216 fns · 12 tests*  
+*L0 · 12,018 lines · 223 fns · 15 tests*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`, `src/shader_runtime_wgpu.zig`, `src/spv2wgsl_wasm.zig`, `src/tests.zig`, `src/zimr.zig`
 
+### `src/spv_vulkan.zig`
+
+SPIR-V for the Vulkan host: reads a module, reflects an entry point's interface (sets, bindings, locations, vertex inputs), checks it against the rules zimr knows, and legalizes it at load time (DepthReplacing, NonWritable, unused pointer ArrayStrides; refuses Linkage). Std only.
+
+*L0 · 1,653 lines · 41 fns · 10 tests*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`, `src/wgpu_vulkan.zig`
+
+### `src/test_report.zig`
+
+lint:alias report test_report - the tables the robot tests print, silent unless `-Dtest-report` asks for them.
+
+*L0 · 42 lines · 2 fns*  
+**Deps:** `build_options` (module)  
+**Dependents:** `build.zig (wired)`, `src/gpu_learn_tests.zig`, `src/kit_mlp.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_maximal.zig`, `src/robot_policy.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_supertrack.zig`, `src/robot_track.zig`, `src/robot_track_resident_tests.zig`, `src/robot_world.zig`
+
+### `src/vk.zig`
+
+VULKAN, DECLARED BY HAND - exactly the part of the API zimr's Vulkan host calls, loaded at run time.
+
+*L0 · 3,838 lines · 17 fns*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`, `src/native_os.zig`, `src/vk_hello.zig`, `src/wgpu_vulkan.zig`
+
 ### `src/wgpu_runner.zig`
 
-wgpu_runner.zig — the generic standalone runner for a DESCRIPTOR-ONLY wgpu example. It is the exe root of an `addWgpuApp` build: it imports the example as the `user_app` module (which exposes `pub const app = z.AppSpec(State){...}` and nothing else — no `main`, no globals), owns the wasm entry and the single beginDrawing/clearBackground/endDrawing, and ticks the app full-screen.
+wgpu_runner.zig - the generic standalone runner for a DESCRIPTOR-ONLY wgpu example. It is the exe root of an `addWgpuApp` build: it imports the example as the `user_app` module (which exposes `pub const app = z.AppSpec(State){...}` and nothing else - no `main`, no globals), owns the wasm entry and the single beginDrawing/clearBackground/endDrawing, and ticks the app full-screen.
 
-*L0 · 160 lines · 3 fns*  
+*L0 · 224 lines · 4 fns*  
 **Deps:** `user_app` (module), `zimr` (module)  
 **Dependents:** `build.zig (wired)`
+
+### `src/wgsl_reflect.zig`
+
+wgsl_reflect.zig - pull the resource bindings out of WGSL source.
+
+*L0 · 176 lines · 7 fns*  
+**Deps:** —  
+**Dependents:** `src/shader_introspect.zig`
+
+### `src/win32.zig`
+
+THE WINDOWS LAYER - one window, its messages, a clock, and the Vulkan loader, declared by hand. lint:off screaming-const: Windows' own names (WM_SIZE, CW_USEDEFAULT), exactly as Microsoft documents them; win32-abi-check finds each one's twin in the headers by that same name.
+
+*L0 · 2,107 lines · 39 fns*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`, `src/native_input.zig`, `src/native_loop.zig`, `src/native_os.zig`, `src/platform/windows.zig`, `src/vk_hello.zig`, `src/wgpu_vulkan.zig`
 
 ### `src/zimrmath.zig`
 
 lint:alias zm SHADER-SAFE - this file may be @imported by shader sources (compiled through the SPIR-V pipeline) and by comptime executors. Lint enforces the tier: no allocators, no runtime std, no externs, no bridge imports outside `test` blocks.
 
-*L0 · 11,203 lines · 535 fns · 171 tests*  
+*L0 · 11,374 lines · 538 fns · 174 tests*  
 **Deps:** `build_options` (module), `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/notes/spikes/spike_sampler_oldpath.zig`, `src/notes/spikes/spike_ssbo_shader.zig`, `src/notes/spikes/spike_texture_shader.zig`
+**Dependents:** `build.zig (wired)`, `src/notes/spikes/spike_ssbo_shader.zig`, `src/notes/spikes/spike_texture_shader.zig`
 
 ### `src/bvh_synth.zig`
 
 Procedural BVH generation, for tests.
 
-*L1 · 266 lines · 5 fns · 2 tests*  
+*L1 · 268 lines · 5 fns · 2 tests*  
 **Deps:** `zm` (module)  
 **Dependents:** `src/codecs.zig`, `src/draw3d.zig`
+
+### `src/command_line.zig`
+
+command_line - every zimr tool's command line, through std's own parser (module `cli`).
+
+*L1 · 395 lines · 14 fns · 2 tests*  
+**Deps:** `src/cli.zig`, `src/cli/init_args.zig`  
+**Dependents:** `build.zig (wired)`
 
 ### `src/easings.zig`
 
@@ -385,37 +521,61 @@ Raylib's easing functions (linear through bounce/elastic, in/out/inout) used by 
 
 The ECS: comptime-dispatched Entities(T) pools with unified spawn, forEach, handles and generation checks (the pool/world_stamp/ecs consolidation).
 
-*L1 · 7,614 lines · 300 fns · 25 tests*  
+*L1 · 7,685 lines · 300 fns · 25 tests*  
 **Deps:** `zm` (module)  
 **Dependents:** `src/raster.zig`, `src/tests.zig`, `src/zimr.zig`, `src/zimrphysics.zig`, `src/zimrphysics2d.zig`
 
 ### `src/frame_arena.zig`
 
-FrameArena — an `ArenaAllocator` that enforces its own per-frame reset.
+FrameArena - an `ArenaAllocator` that enforces its own per-frame reset.
 
-*L1 · 162 lines · 10 fns · 1 tests*  
+*L1 · 164 lines · 10 fns · 1 tests*  
 **Deps:** `zm` (module)  
 **Dependents:** `src/ui.zig`, `src/zimrphysics2d.zig`
 
 ### `src/jobs_worker.zig`
 
-src/jobs_worker.zig — THE WEB WORKER, WRITTEN IN ZIG.
+src/jobs_worker.zig - THE WEB WORKER, WRITTEN IN ZIG.
 
 *L1 · 683 lines · 42 fns*  
 **Deps:** `src/jobs_abi.zig`  
 **Dependents:** `build.zig (wired)`
 
+### `src/memwatch.zig`
+
+lint:alias memwatch MemWatch - a per-frame wasm-linear-memory growth watchdog.
+
+*L1 · 308 lines · 12 fns · 3 tests*  
+**Deps:** `src/leakwatch.zig`, `build_options` (module)  
+**Dependents:** `src/renderer_2d.zig`, `src/text2d.zig`, `src/wgpu_app.zig`
+
+### `src/native_os.zig`
+
+THE NATIVE HOST'S OPERATING-SYSTEM SERVICES - what the Vulkan host asks of the operating system besides a window:
+
+*L1 · 123 lines · 4 fns · 2 tests*  
+**Deps:** `src/vk.zig`, `src/win32.zig`  
+**Dependents:** `build.zig (wired)`, `src/native_loop.zig`, `src/platform/windows.zig`, `src/wgpu_vulkan.zig`
+
 ### `src/net_typed.zig`
 
-lint:alias net_typed net_typed.zig — a small typed-message layer over a net Session.
+lint:alias net_typed net_typed.zig - a small typed-message layer over a net Session.
 
-*L1 · 96 lines · 6 fns*  
+*L1 · 97 lines · 6 fns*  
 **Deps:** `src/serialize.zig`  
-**Dependents:** `src/net.zig`
+**Dependents:** `build.zig (wired)`, `src/net.zig`
+
+### `src/platform.zig`
+
+src/platform.zig - the platforms, and the contract they keep.
+
+*L1 · 49 lines · 0 fns · 3 tests*  
+**Deps:** `src/host.zig`, `src/platform/contract.zig`, `src/platform/headless.zig`, `src/platform/template.zig`, `src/platform/web.zig`, `src/platform/windows.zig`  
+**Dependents:** `build.zig (wired)`, `src/codecs.zig`, `src/draw3d.zig`, `src/net.zig`, `src/runtime.zig`, `src/sound.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/plot_core.zig`
 
-lint:alias plot_core plot_core.zig — machinery shared by implot.zig and implot3d.zig.
+lint:alias plot_core plot_core.zig - machinery shared by implot.zig and implot3d.zig.
 
 *L1 · 297 lines · 15 fns*  
 **Deps:** `zm` (module)  
@@ -423,9 +583,9 @@ lint:alias plot_core plot_core.zig — machinery shared by implot.zig and implot
 
 ### `src/profiler.zig`
 
-lint:alias profiler profiler.zig — zimr's integrated, in-process profiler (Tracy-inspired).
+lint:alias profiler profiler.zig - zimr's integrated, in-process profiler (Tracy-inspired).
 
-*L1 · 726 lines · 41 fns · 3 tests*  
+*L1 · 732 lines · 41 fns · 3 tests*  
 **Deps:** `build_options` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`, `src/profiler_ui.zig`, `src/robot.zig`, `src/robot_bench.zig`, `src/wgpu_app.zig`, `src/zimr.zig`, `src/zimrphysics.zig`, `src/zimrphysics2d.zig`
 
@@ -437,27 +597,35 @@ Pixel-level primitives for the software rasterizer: blending, format packing/unp
 **Deps:** `zm` (module)  
 **Dependents:** `src/raster.zig`, `src/raster_shader.zig`, `src/tests.zig`
 
+### `src/robot_bmpc.zig`
+
+robot_bmpc.zig - BMPC (Bootstrapped Model Predictive Control) assembled from zimrnum's ingredients.
+
+*L1 · 3,548 lines · 64 fns · 43 tests*  
+**Deps:** `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `src/robot_bmpc_cartpole.zig`, `src/robot_tests.zig`
+
 ### `src/shader_builtins.zig`
 
-shader_builtins.zig — the SPIR-V shader DSL: stage-IO decorators, opaque texture / sampler / storage types, and the texture-sampling + storage-buffer intrinsics. These emit SPIR-V inline asm (or `@SpirvType` declarations) that only the SPIR-V backend lowers, so they are SHADER-ONLY.
+shader_builtins.zig - the SPIR-V shader DSL: opaque texture / sampler / storage types, and the texture-sampling + storage-buffer intrinsics. These emit SPIR-V inline asm (or `@SpirvType` declarations) that only the SPIR-V backend lowers, so they are SHADER-ONLY.
 
-*L1 · 414 lines · 18 fns*  
+*L1 · 321 lines · 16 fns*  
 **Deps:** `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `src/shader_connect.zig`
 
-src/shader_connect.zig — comptime-monomorphized varying connector.
+src/shader_connect.zig - comptime-monomorphized varying connector.
 
-*L1 · 73 lines · 2 fns · 1 tests*  
+*L1 · 75 lines · 2 fns · 1 tests*  
 **Deps:** `zm` (module)  
 **Dependents:** `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/tests/cpu_shadowmap_test.zig`, `src/zimr.zig`
 
 ### `src/shader_interface.zig`
 
-SHADER-SAFE — this file may be @imported by shader sources (compiled through the SPIR-V pipeline) and by comptime executors. Lint enforces the tier: no allocators, no runtime std, no externs, no bridge imports outside `test` blocks. `zm` is allowed: it is self-contained (build_options baked in; its host-only std.log branch is comptime-dead on the SPIR-V target) and every consumer already wires it alongside…
+SHADER-SAFE - this file may be @imported by shader sources (compiled through the SPIR-V pipeline) and by comptime executors. Lint enforces the tier: no allocators, no runtime std, no externs, no bridge imports outside `test` blocks. `zm` is allowed: it is self-contained (build_options baked in; its host-only std.log branch is comptime-dead on the SPIR-V target) and every consumer already wires it alongside…
 
-*L1 · [shader-safe] · 1,156 lines · 23 fns · 19 tests*  
+*L1 · [shader-safe] · 1,159 lines · 23 fns · 19 tests*  
 **Deps:** `common/fog.zig`, `common/lighting.zig`, `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
@@ -465,7 +633,7 @@ SHADER-SAFE — this file may be @imported by shader sources (compiled through t
 
 Wasm entry root exposing the transpiler to the browser dev page. Excluded from refAllDecls (wasm root).
 
-*L1 · 96 lines · 1 fns*  
+*L1 · 97 lines · 1 fns*  
 **Deps:** `src/spv2wgsl.zig`  
 **Dependents:** `build.zig (wired)`
 
@@ -473,103 +641,103 @@ Wasm entry root exposing the transpiler to the browser dev page. Excluded from r
 
 Comptime feature flags (`features`), the todo() marker, allow_assert wiring from build_options, and small shared utilities. zimr re-exports features/todo as the public surface.
 
-*L1 · 621 lines · 33 fns · 4 tests*  
+*L1 · 634 lines · 33 fns · 4 tests*  
 **Deps:** `src/utils.zig`, `zm` (module)  
 **Dependents:** `build.zig (wired)`, `src/tests.zig`, `src/ui.zig`, `src/utils.zig`, `src/zimr.zig`
+
+### `src/vk_hello.zig`
+
+VK_HELLO - a window that clears, through Vulkan, with no engine (vulkan_port_plan_v2.md stage S1).
+
+*L1 · 837 lines · 21 fns*  
+**Deps:** `src/vk.zig`, `src/win32.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`
 
 ### `src/web.zig`
 
 The dom namespace: log/now_ms/canvas-size externs with host fallbacks, plus fetch/file-loading glue. The function-pointer sinks runtime.effects route through live here.
 
-*L1 · 2,201 lines · 121 fns*  
+*L1 · 2,353 lines · 138 fns*  
 **Deps:** `src/web.zig`, `zm` (module)  
-**Dependents:** `src/codecs.zig`, `src/draw3d.zig`, `src/errors.zig`, `src/jobs.zig`, `src/net.zig`, `src/runtime.zig`, `src/sound.zig`, `src/tests.zig`, `src/ui.zig`, `src/web.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
-
-### `src/wgpu.zig`
-
-The WebGPU handle layer: typed handles (BufferHandle, TextureHandle, BindGroupHandle, PipelineHandle...) over the JS bridge's integer registry, the extern js_* bridge declarations (comptime-gated for wasm), device/queue/encoder operations, buffer mapping, copyTextureToBuffer, and createShaderModuleWgsl. Host builds get inert fallbacks so the same code analyzes everywhere.
-
-*L1 · 2,012 lines · 85 fns · 2 tests*  
-**Deps:** `src/wgpu.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/BindGroupCache.zig`, `src/WgpuGl.zig`, `src/compute_host.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/jobs.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/shader2d.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/tests/features_test.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`
+**Dependents:** `src/codecs.zig`, `src/errors.zig`, `src/jobs.zig`, `src/net.zig`, `src/platform/web.zig`, `src/runtime.zig`, `src/sound.zig`, `src/tests.zig`, `src/ui.zig`, `src/web.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/zimrnum.zig`
 
 lint:alias zn lint:off reserved-math-names: THE PRIMARY VOCABULARY OF THIS FILE IS THE TENSOR OPERATIONS. The rule exists so a file doing vector maths can write `sqrt(v)` rather than `zm.sqrt(v)`. Here the tensor `sqrt` is what a caller reaches for and zm's scalar is the visitor. Ten of the seventeen words the rule blocked - sqrt, log, exp, abs, pow, floor, ceil, atan2, hypot, lerp - had NO scalar use in this…
 
-*L1 · 33,112 lines · 715 fns · 223 tests*  
+*L1 · 31,569 lines · 730 fns · 243 tests*  
 **Deps:** `zm` (module), `zn` (module)  
 **Dependents:** `build.zig (wired)`
 
-### `src/BindGroupCache.zig`
+### `src/zimrrl.zig`
 
-Cache of bind groups keyed by (layout, resources) so per-frame draws don't re-create identical groups across the bridge.
+lint:alias zrl
 
-*L2 · 181 lines · 7 fns · 2 tests*  
-**Deps:** `src/BindGroupCache.zig`, `src/wgpu.zig`  
-**Dependents:** `src/BindGroupCache.zig`, `src/gpu.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/zimr.zig`
-
-### `src/jobs.zig`
-
-lint:alias jobs src/jobs.zig — run a PURE kernel off the main thread, on a Web Worker.
-
-*L2 · 1,209 lines · 35 fns · 17 tests*  
-**Deps:** `src/jobs_abi.zig`, `src/web.zig`, `src/wgpu.zig`  
-**Dependents:** `src/compute_host.zig`, `src/zimr.zig`
+*L1 · 11,244 lines · 162 fns · 113 tests*  
+**Deps:** `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`
 
 ### `src/net.zig`
 
 lint:alias net ============================================================================ zimr networking -- peer-to-peer multiplayer for the browser, all in Zig ============================================================================
 
-*L2 · 274 lines · 0 fns*  
-**Deps:** `src/net_core.zig`, `src/net_typed.zig`, `src/web.zig`  
+*L2 · 322 lines · 6 fns*  
+**Deps:** `src/net_core.zig`, `src/net_typed.zig`, `src/platform.zig`, `src/web.zig`  
 **Dependents:** `src/zimr.zig`
 
 ### `src/raster.zig`
 
 lint:alias raster src/raster.zig - software rasterizer.
 
-*L2 · 7,303 lines · 95 fns · 157 tests*  
+*L2 · 7,316 lines · 96 fns · 157 tests*  
 **Deps:** `src/entities.zig`, `src/raster_pixel.zig`, `zm` (module)  
 **Dependents:** `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/raster_shader.zig`, `src/renderer_trait.zig`, `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/robot.zig`
 
-robot.zig — reduced-coordinate articulated-body dynamics, in the style of MuJoCo.
+robot.zig - reduced-coordinate articulated-body dynamics, in the style of MuJoCo.
 
-*L2 · 16,412 lines · 190 fns · 127 tests*  
-**Deps:** `src/profiler.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/tests/fixtures/robot/reference.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_scene.zig`, `src/robot_urdf.zig`, `src/tests.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/zimr.zig`
+*L2 · 16,480 lines · 194 fns · 124 tests*  
+**Deps:** `src/profiler.zig`, `src/tests/fixtures/robot/reference.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_clip_bake.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_ppo_track.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_sac_track.zig`, `src/robot_scene.zig`, `src/robot_st_bench.zig`, `src/robot_tests.zig`, `src/robot_track.zig`, `src/robot_track_env.zig`, `src/robot_track_resident.zig`, `src/robot_urdf.zig`, `src/robot_world.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/zimr.zig`
 
-### `src/shader_introspect.zig`
+### `src/robot_bmpc_cartpole.zig`
 
-Comptime schema introspection: solveLayout (schema → ResolvedLayout of binding fields + groups), autoMaterial bind group layout emission, and assertVaryingsMatch (VS↔FS varying validation with comptime-marked conditions).
+robot_bmpc_cartpole.zig - BMPC learns to balance a cartpole: the end-to-end gate of the BMPC agent.
 
-*L2 · 1,245 lines · 20 fns · 20 tests*  
-**Deps:** `src/wgpu.zig`, `shader_interface` (module), `zm` (module)  
-**Dependents:** `src/compute_host.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/gpu.zig`, `src/material.zig`, `src/shader2d.zig`, `src/shader_runtime_wgpu.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+*L2 · 276 lines · 7 fns · 2 tests*  
+**Deps:** `src/robot_bmpc.zig`, `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`
 
 ### `src/types.zig`
 
 The shared vocabulary: Color, Rectangle (extern — embedded in extern ABI structs), Image, Texture, Mesh, Model, Material, ModelAnimation, Camera2D/3D, Ray/RayCollision/BoundingBox, PixelFormat, key/mouse/gesture enums. Almost everything imports this; it imports almost nothing.
 
-*L2 · 1,617 lines · 21 fns · 34 tests*  
+*L2 · 1,672 lines · 22 fns · 34 tests*  
 **Deps:** `src/types.zig`, `shader_interface` (module), `zm` (module)  
-**Dependents:** `src/Canvas.zig`, `src/Sprite.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/draw2d.zig`, `src/draw3d.zig`, `src/image.zig`, `src/runtime.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/errors_test.zig`, `src/tests/features_test.zig`, `src/tests/leak_test.zig`, `src/tests/shader_enum_test.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+**Dependents:** `build.zig (wired)`, `src/Canvas.zig`, `src/Sprite.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/dom_input.zig`, `src/draw2d.zig`, `src/draw3d.zig`, `src/image.zig`, `src/native_input.zig`, `src/platform/contract.zig`, `src/platform/web.zig`, `src/renderer_trait.zig`, `src/runtime.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/errors_test.zig`, `src/tests/features_test.zig`, `src/tests/leak_test.zig`, `src/tests/shader_enum_test.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/wgpu_vulkan.zig`
+
+THE VULKAN HOST - the native twin of `bridge.zig`: the same GPU calls, answered by Vulkan.
+
+*L2 · 4,577 lines · 181 fns*  
+**Deps:** `src/gpu_abi.zig`, `src/native_os.zig`, `src/spv_vulkan.zig`, `src/vk.zig`, `src/win32.zig`, `zm` (module)  
+**Dependents:** `src/native_loop.zig`, `src/wgpu.zig`
 
 ### `src/zimrphysics.zig`
 
-lint:alias zimrphysics physics.zig — a single-file, single-threaded rigid-body engine.
+lint:alias zimrphysics physics.zig - a single-file, single-threaded rigid-body engine.
 
-*L2 · 18,604 lines · 450 fns*  
+*L2 · 18,633 lines · 450 fns*  
 **Deps:** `src/entities.zig`, `src/physics_common.zig`, `src/profiler.zig`, `zm` (module)  
-**Dependents:** `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/tests.zig`, `src/tests/character_walk_test.zig`, `src/tests/zimrphysics_stack_test.zig`, `src/zimr.zig`
+**Dependents:** `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_maximal.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_physics.zig`, `src/robot_track.zig`, `src/robot_world.zig`, `src/tests.zig`, `src/tests/character_walk_test.zig`, `src/tests/zimrphysics_stack_test.zig`, `src/zimr.zig`
 
 ### `src/zimrphysics2d.zig`
 
-lint:alias zimrphysics2d zimrphysics2d.zig — a single-file, single-threaded 2D rigid-body engine.
+lint:alias zimrphysics2d zimrphysics2d.zig - a single-file, single-threaded 2D rigid-body engine.
 
-*L2 · 14,559 lines · 425 fns · 10 tests*  
+*L2 · 14,617 lines · 425 fns · 10 tests*  
 **Deps:** `src/entities.zig`, `src/frame_arena.zig`, `src/physics_common.zig`, `src/profiler.zig`, `zm` (module)  
 **Dependents:** `src/zimr.zig`
 
@@ -577,87 +745,119 @@ lint:alias zimrphysics2d zimrphysics2d.zig — a single-file, single-threaded 2D
 
 Asset codecs: PNG encode/decode, JPEG decode, glTF/GLB parse (meshes, skins, animations, JOINTS/WEIGHTS → Mesh bone arrays), OBJ export support, TTF font parsing + atlas baking.
 
-*L3 · 16,384 lines · 353 fns · 56 tests*  
-**Deps:** `src/bvh_synth.zig`, `src/codecs.zig`, `src/types.zig`, `src/web.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/Canvas.zig`, `src/codecs.zig`, `src/draw3d.zig`, `src/errors.zig`, `src/image.zig`, `src/mjcf.zig`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/sound.zig`, `src/sw_runtime.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/errors_test.zig`, `src/text2d.zig`, `src/ui.zig`, `src/urdf.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+*L3 · 16,489 lines · 354 fns · 57 tests*  
+**Deps:** `src/bvh_synth.zig`, `src/codecs.zig`, `src/platform.zig`, `src/types.zig`, `src/web.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/Canvas.zig`, `src/codecs.zig`, `src/draw3d.zig`, `src/errors.zig`, `src/image.zig`, `src/mjcf.zig`, `src/robot_bench.zig`, `src/robot_clip_bake.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_track.zig`, `src/robot_world.zig`, `src/sound.zig`, `src/sw_runtime.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/errors_test.zig`, `src/text2d.zig`, `src/ui.zig`, `src/urdf.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/dom_input.zig`
+
+lint:alias dom_input src/dom_input.zig - the browser's key and mouse-button numbering, translated to raylib's.
+
+*L3 · 501 lines · 7 fns · 10 tests*  
+**Deps:** `src/types.zig`  
+**Dependents:** `build.zig (wired)`, `src/bridge.zig`, `src/native_input.zig`, `src/tests.zig`, `src/wgpu_app.zig`
 
 ### `src/draw2d.zig`
 
-lint:alias draw2d Unified 2D primitive surface — the shared Options structs for the `sink.rect` / `image` / `text` / `line` / `circle` primitives. Immediate (WgpuGl / Sw / Gl), retained-GPU (`DrawList`), and retained-CPU (`Canvas`) all take these, so a `fn draw(sink: anytype)` scene runs against any backend. See `notes/drawing_api.md`. All angles are radians; all colors `Color`; all rects `Rectangle`.
+lint:alias draw2d Unified 2D primitive surface - the shared Options structs for the `sink.rect` / `image` / `text` / `line` / `circle` primitives. Immediate (WgpuGl / Sw / Gl), retained-GPU (`DrawList`), and retained-CPU (`Canvas`) all take these, so a `fn draw(sink: anytype)` scene runs against any backend. See `notes/drawing_api.md`. All angles are radians; all colors `Color`; all rects `Rectangle`.
 
-*L3 · 824 lines · 30 fns · 5 tests*  
+*L3 · 893 lines · 40 fns · 5 tests*  
 **Deps:** `src/types.zig`, `zm` (module)  
 **Dependents:** `src/Canvas.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/plot.zig`, `src/plot_ui.zig`, `src/ui.zig`
 
-### `src/gpu.zig`
-
-zimr's WebGPU resource layer over raw `wgpu` (merge of pipeline_cache + descriptor_encoder + gpu_frame): PipelineCache/StateCombo, the descriptor encoders (RenderPipelineDescriptor/BindGroupEntry/...), and per-frame GpuFrame.
-
-*L3 · 789 lines · 25 fns · 10 tests*  
-**Deps:** `src/BindGroupCache.zig`, `src/shader_introspect.zig`, `src/wgpu.zig`  
-**Dependents:** `src/compute_host.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/gpu_iface.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/shader2d.zig`, `src/shader_runtime_wgpu.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`
-
 ### `src/raster_shader.zig`
 
-lint:alias raster_shader src/raster_shader.zig — run zimr fragment shaders on the CPU.
+lint:alias raster_shader src/raster_shader.zig - run zimr fragment shaders on the CPU.
 
-*L3 · 1,827 lines · 40 fns · 15 tests*  
+*L3 · 1,828 lines · 40 fns · 15 tests*  
 **Deps:** `src/raster.zig`, `src/raster_pixel.zig`, `zm` (module)  
 **Dependents:** `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/tests/cpu_shadowmap_test.zig`, `src/zimr.zig`
 
 ### `src/robot_scene.zig`
 
-robot_scene.zig — a robot and the loose objects it interacts with, in ONE tree.
+robot_scene.zig - a robot and the loose objects it interacts with, in ONE tree.
 
-*L3 · 523 lines · 4 fns · 6 tests*  
+*L3 · 527 lines · 4 fns · 6 tests*  
 **Deps:** `src/robot.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/tests.zig`, `src/zimr.zig`
+**Dependents:** `build.zig (wired)`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/robot_tests.zig`, `src/zimr.zig`
 
 ### `src/runtime.zig`
 
 Engine runtime services, all backend-agnostic since P5: core (WindowState, screen/render dims, traceLog), input (keyboard/mouse/touch state machine + event queue), gestures, camera (updateCamera modes, camera math, screen↔world projection with explicit ClipPlanes), effects (clock, rng, logger with Prefixed/Scoped, loader), allocator helpers (freeMany etc.), and the wasm libc shims.
 
-*L3 · 6,802 lines · 269 fns · 1 tests*  
-**Deps:** `src/types.zig`, `src/web.zig`, `zm` (module)  
+*L3 · 6,883 lines · 270 fns · 5 tests*  
+**Deps:** `src/platform.zig`, `src/platform/contract.zig`, `src/types.zig`, `src/web.zig`, `zm` (module)  
 **Dependents:** `build.zig (wired)`, `src/draw3d.zig`, `src/image.zig`, `src/shapes2d.zig`, `src/tests.zig`, `src/tests/leak_test.zig`, `src/tests/multiapp_test.zig`, `src/text2d.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
-### `src/compute_host.zig`
+### `src/wgpu.zig`
 
-compute_host.zig — `z.Compute(M)`: run a kompute kernel module `M` on the CPU (a plain `for id` loop calling the kernel) OR the GPU (a WGSL compute dispatch), chosen at runtime via `.backend`. Same kernel source, same results.
+The WebGPU handle layer: typed handles (BufferHandle, TextureHandle, BindGroupHandle, PipelineHandle...) over the JS bridge's integer registry, the extern js_* bridge declarations (comptime-gated for wasm), device/queue/encoder operations, buffer mapping, copyTextureToBuffer, and createShaderModuleWgsl. Host builds get inert fallbacks so the same code analyzes everywhere.
 
-*L4 · 1,535 lines · 36 fns · 6 tests*  
-**Deps:** `src/add_kernel.zig`, `src/double_it.zig`, `src/gpu.zig`, `src/jobs.zig`, `src/shader_introspect.zig`, `src/wgpu.zig`, `zm` (module)  
-**Dependents:** `src/tests.zig`, `src/zimr.zig`
+*L3 · 1,978 lines · 86 fns · 2 tests*  
+**Deps:** `src/gpu_abi.zig`, `src/host.zig`, `src/wgpu_vulkan.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/BindGroupCache.zig`, `src/WgpuGl.zig`, `src/compute_host.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/jobs.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/shader2d.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/tests/features_test.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`
+
+### `src/BindGroupCache.zig`
+
+Cache of bind groups keyed by (layout, resources) so per-frame draws don't re-create identical groups across the bridge.
+
+*L4 · 183 lines · 7 fns · 2 tests*  
+**Deps:** `src/BindGroupCache.zig`, `src/wgpu.zig`  
+**Dependents:** `src/BindGroupCache.zig`, `src/gpu.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/zimr.zig`
+
+### `src/bridge.zig`
+
+The browser runtime for the wgpu path: WASI shim, DOM/input glue, the WebGPU bridge (integer-registry handle protocol, encoder ops incl. copyTextureToBuffer), audio, and zimrRun boot. Bundled per-example and inlined by the standalone baker.
+
+*L4 · 8,084 lines · 585 fns*  
+**Deps:** `src/dom_input.zig`, `wz` (module)  
+**Dependents:** `build.zig (wired)`
 
 ### `src/errors.zig`
 
 The shared error sets: LoadError, ImageGenError, GpuError and friends, plus error-formatting helpers.
 
-*L4 · 77 lines · 0 fns*  
+*L4 · 78 lines · 0 fns*  
 **Deps:** `src/codecs.zig`, `src/web.zig`  
 **Dependents:** `src/draw3d.zig`, `src/image.zig`, `src/tests.zig`, `src/tests/errors_test.zig`, `src/text2d.zig`
 
-### `src/gpu_iface.zig`
+### `src/jobs.zig`
 
-WgpuBackend — the backend handle the app/frame layer threads through draw3d, renderer_2d and friends; device/queue access plus PassState.
+lint:alias jobs src/jobs.zig - run a PURE kernel off the main thread, on a Web Worker.
 
-*L4 · 1,005 lines · 29 fns · 4 tests*  
-**Deps:** `src/gpu.zig`, `src/wgpu.zig`, `zm` (module)  
-**Dependents:** `src/WgpuGl.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/zimr.zig`
+*L4 · 1,214 lines · 35 fns · 17 tests*  
+**Deps:** `src/jobs_abi.zig`, `src/web.zig`, `src/wgpu.zig`  
+**Dependents:** `src/compute_host.zig`, `src/zimr.zig`
+
+### `src/native_input.zig`
+
+NATIVE INPUT - Windows' input messages, translated into the engine's input calls exactly as the browser bridge makes them.
+
+*L4 · 1,178 lines · 30 fns · 22 tests*  
+**Deps:** `src/dom_input.zig`, `src/platform/contract.zig`, `src/types.zig`, `src/win32.zig`  
+**Dependents:** `build.zig (wired)`, `src/native_loop.zig`, `src/platform/windows.zig`, `src/tests.zig`
 
 ### `src/plot.zig`
 
-lint:alias plot plot.zig — a native-Zig plotting library for zimr, in the spirit of Dear ImGui's ImPlot but redesigned to be idiomatic Zig.
+lint:alias plot plot.zig - a native-Zig plotting library for zimr, in the spirit of Dear ImGui's ImPlot but redesigned to be idiomatic Zig.
 
-*L4 · 2,840 lines · 93 fns · 17 tests*  
+*L4 · 2,915 lines · 99 fns · 18 tests*  
 **Deps:** `src/draw2d.zig`, `src/plot_core.zig`, `zm` (module)  
 **Dependents:** `src/Canvas.zig`, `src/plot_ui.zig`, `src/tests.zig`, `src/zimr.zig`
 
+### `src/shader_introspect.zig`
+
+Comptime schema introspection: solveLayout (schema → ResolvedLayout of binding fields + groups), autoMaterial bind group layout emission, and assertVaryingsMatch (VS↔FS varying validation with comptime-marked conditions).
+
+*L4 · 1,103 lines · 13 fns · 20 tests*  
+**Deps:** `src/wgpu.zig`, `src/wgsl_reflect.zig`, `shader_interface` (module), `zm` (module)  
+**Dependents:** `src/compute_host.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/gpu.zig`, `src/material.zig`, `src/shader2d.zig`, `src/shader_runtime_wgpu.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
 ### `src/shapes2d.zig`
 
-lint:alias shapes2d src/shapes2d.zig — the backend-generic 2D shape primitives, MOVED VERBATIM out of drawing.zig (GL retirement P1, t1173): rectangles, ellipses, polys, rings, splines, lines — all over `gl: anytype`, drawn by both backends (ui's widget rendering, wgpu_app's ShapesTextureState). GL-free since GL-retirement P5d.
+lint:alias shapes2d src/shapes2d.zig - the backend-generic 2D shape primitives, MOVED VERBATIM out of drawing.zig (GL retirement P1, t1173): rectangles, ellipses, polys, rings, splines, lines - all over `gl: anytype`, drawn by both backends (ui's widget rendering, wgpu_app's ShapesTextureState). GL-free since GL-retirement P5d.
 
-*L4 · 2,945 lines · 97 fns · 41 tests*  
+*L4 · 3,028 lines · 99 fns · 41 tests*  
 **Deps:** `src/runtime.zig`, `src/types.zig`, `zm` (module)  
 **Dependents:** `src/WgpuGl.zig`, `src/tests.zig`, `src/tests/snapshot_regression_test.zig`, `src/tests/ui_dock_screenshot_test.zig`, `src/tests/ui_screenshot_test.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
@@ -665,79 +865,191 @@ lint:alias shapes2d src/shapes2d.zig — the backend-generic 2D shape primitives
 
 Audio: sounds (one-shot), streams (ring-buffered PCM with FIFO recycle), and music, over web-audio bridge externs with host no-op fallbacks.
 
-*L4 · 3,434 lines · 93 fns*  
-**Deps:** `src/codecs.zig`, `src/types.zig`, `src/web.zig`, `zm` (module)  
-**Dependents:** `src/tests.zig`, `src/tests/features_test.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+*L4 · 6,229 lines · 190 fns*  
+**Deps:** `src/codecs.zig`, `src/platform.zig`, `src/types.zig`, `src/web.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/audio_worklet.zig`, `src/tests.zig`, `src/tests/features_test.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/urdf.zig`
 
-urdf.zig — read a URDF into a description zimr can build a robot from.
+urdf.zig - read a URDF into a description zimr can build a robot from.
 
-*L4 · 1,691 lines · 31 fns · 10 tests*  
+*L4 · 1,698 lines · 31 fns · 10 tests*  
 **Deps:** `../../robot.zig`, `src/codecs.zig`, `zimr` (module), `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/mjcf.zig`, `src/robot_urdf.zig`, `src/tests.zig`
+**Dependents:** `build.zig (wired)`, `src/mjcf.zig`, `src/robot_tests.zig`, `src/robot_urdf.zig`
 
-### `src/wgpu_texture.zig`
+### `src/audio_worklet.zig`
 
-WgpuTexture: creation from Image/raw RGBA8, view + sampler management, the texture registry that backs WgpuGl's id-based setTexture path, and mip/format plumbing.
+src/audio_worklet.zig - the browser's audio worklet program, written in Zig.
 
-*L4 · 559 lines · 13 fns · 5 tests*  
-**Deps:** `src/gpu.zig`, `src/wgpu.zig`, `zm` (module)  
-**Dependents:** `src/WgpuGl.zig`, `src/draw3d.zig`, `src/renderer_2d.zig`, `src/shader_runtime_wgpu.zig`, `src/tests.zig`, `src/tests/features_test.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+*L5 · 484 lines · 40 fns*  
+**Deps:** `src/sound.zig`  
+**Dependents:** `build.zig (wired)`
+
+### `src/gpu.zig`
+
+zimr's WebGPU resource layer over raw `wgpu` (merge of pipeline_cache + descriptor_encoder + gpu_frame): PipelineCache/StateCombo, the descriptor encoders (RenderPipelineDescriptor/BindGroupEntry/...), and per-frame GpuFrame.
+
+*L5 · 935 lines · 25 fns · 14 tests*  
+**Deps:** `src/BindGroupCache.zig`, `src/gpu_abi.zig`, `src/shader_introspect.zig`, `src/wgpu.zig`  
+**Dependents:** `build.zig (wired)`, `src/compute_host.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/gpu_iface.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/shader2d.zig`, `src/shader_runtime_wgpu.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`
 
 ### `src/image.zig`
 
-lint:alias image image — Image (CPU pixel buffer) type helpers + the full CPU image-processing library (merged from drawing.textures in GL-retirement P5): generators (color/checked/gradients/noise/ cellular), transforms (crop/resize×3/rotate/flip/blur/dither), draws-into-image (pixels/lines/shapes/text), color ops, format conversion, and PNG export glue.
+lint:alias image image - Image (CPU pixel buffer) type helpers + the full CPU image-processing library (merged from drawing.textures in GL-retirement P5): generators (color/checked/gradients/noise/ cellular), transforms (crop/resizex3/rotate/flip/blur/dither), draws-into-image (pixels/lines/shapes/text), color ops, format conversion, and PNG export glue.
 
-*L5 · 5,851 lines · 107 fns · 120 tests*  
+*L5 · 5,864 lines · 107 fns · 120 tests*  
 **Deps:** `src/codecs.zig`, `src/errors.zig`, `src/runtime.zig`, `src/types.zig`, `zm` (module)  
 **Dependents:** `src/Canvas.zig`, `src/Sprite.zig`, `src/WgpuGl.zig`, `src/canvas_render_test.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/leak_test.zig`, `src/text2d.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/mjcf.zig`
 
-mjcf.zig — reading MuJoCo's own model format.
+mjcf.zig - reading MuJoCo's own model format.
 
-*L5 · 2,132 lines · 38 fns · 17 tests*  
+*L5 · 2,180 lines · 39 fns · 17 tests*  
 **Deps:** `src/codecs.zig`, `src/urdf.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/tests.zig`, `src/zimr.zig`
+**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_clip_bake.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_tests.zig`, `src/robot_track.zig`, `src/robot_world.zig`, `src/zimr.zig`
+
+### `src/native_loop.zig`
+
+THE NATIVE LOOP - what the browser does for a zimr program, done by the program itself on a native host.
+
+*L5 · 1,537 lines · 81 fns*  
+**Deps:** `src/native_input.zig`, `src/native_os.zig`, `src/platform/console.zig`, `src/platform/contract.zig`, `src/platform/headless.zig`, `src/wgpu_vulkan.zig`, `src/win32.zig`, `zm` (module)  
+**Dependents:** `src/platform/windows.zig`, `src/wgpu_app.zig`
 
 ### `src/robot_urdf.zig`
 
-robot_urdf.zig — load a URDF into a live `robot.Model`.
+robot_urdf.zig - load a URDF into a live `robot.Model`.
 
-*L5 · 260 lines · 2 fns · 2 tests*  
+*L5 · 437 lines · 2 fns · 5 tests*  
 **Deps:** `src/robot.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/urdf.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/tests.zig`
-
-### `src/shader_runtime_wgpu.zig`
-
-lint:alias shader_runtime
-
-*L5 · 2,017 lines · 38 fns · 23 tests*  
-**Deps:** `src/gpu.zig`, `src/gpu_iface.zig`, `src/raster.zig`, `src/raster_shader.zig`, `src/shader_connect.zig`, `src/shader_introspect.zig`, `src/spv2wgsl.zig`, `src/wave_fs_io.zig`, `src/wave_vs_io.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
-**Dependents:** `src/draw3d.zig`, `src/effects2d.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
-
-### `src/wgpu_smoke_test.zig`
-
-Wasm-root smoke harness compiled per example by the smoke build: boots the app headlessly under webtests/runner.mjs (driving the dogfooded webtests/wgpu_smoke.zig logic), counts bridge calls per frame, and reports PASS lines the tier-a gate greps. Excluded from refAllDecls (wasm entry root).
-
-*L5 · 210 lines · 4 fns · 2 tests*  
-**Deps:** `src/BindGroupCache.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/wgpu.zig`  
-**Dependents:** —
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`
 
 ### `src/Sprite.zig`
 
-lint:alias Sprite Sprite — a portable, pixel-owning 2D image handle drawable on ANY backend (immediate GPU, retained DrawList, or CPU Canvas). It owns a copy of the CPU pixels; each backend caches its own residency (a GPU bind group, or nothing for Canvas) keyed by the monotonic `.id`. This is the seam that lets one `fn draw(sink: anytype)` scene sample the same texture on every backend. See notes/drawing_api.md.
+lint:alias Sprite Sprite - a portable, pixel-owning 2D image handle drawable on ANY backend (immediate GPU, retained DrawList, or CPU Canvas). It owns a copy of the CPU pixels; each backend caches its own residency (a GPU bind group, or nothing for Canvas) keyed by the monotonic `.id`. This is the seam that lets one `fn draw(sink: anytype)` scene sample the same texture on every backend. See notes/drawing_api.md.
 
 *L6 · 47 lines · 4 fns*  
 **Deps:** `src/image.zig`, `src/types.zig`  
 **Dependents:** `src/Canvas.zig`, `src/WgpuGl.zig`, `src/canvas_render_test.zig`, `src/ui.zig`, `src/zimr.zig`
 
+### `src/compute_host.zig`
+
+compute_host.zig - `z.Compute(M)`: run a kompute kernel module `M` on the CPU (a plain `for id` loop calling the kernel) OR the GPU (a WGSL compute dispatch), chosen at runtime via `.backend`. Same kernel source, same results.
+
+*L6 · 1,841 lines · 43 fns · 7 tests*  
+**Deps:** `src/add_kernel.zig`, `src/double_it.zig`, `src/gpu.zig`, `src/jobs.zig`, `src/shader_introspect.zig`, `src/wgpu.zig`, `zm` (module)  
+**Dependents:** `src/gpu_learn_tests.zig`, `src/kit_mlp.zig`, `src/robot_gym.zig`, `src/robot_latent_kit.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_ppo_track.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_supertrack.zig`, `src/robot_track_resident.zig`, `src/robot_track_resident_tests.zig`, `src/robot_world.zig`, `src/tests.zig`, `src/zimr.zig`
+
+### `src/gpu_iface.zig`
+
+WgpuBackend — the backend handle the app/frame layer threads through draw3d, renderer_2d and friends; device/queue access plus PassState.
+
+*L6 · 1,006 lines · 29 fns · 4 tests*  
+**Deps:** `src/gpu.zig`, `src/wgpu.zig`, `zm` (module)  
+**Dependents:** `src/WgpuGl.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/shader_runtime_wgpu.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/wgpu_smoke_test.zig`, `src/zimr.zig`
+
+### `src/robot_mjcf.zig`
+
+robot_mjcf.zig - turning a parsed MJCF file into something the engine can simulate.
+
+*L6 · 7,522 lines · 44 fns · 34 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_scene.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_clip_bake.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_maximal.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_tests.zig`, `src/robot_track.zig`, `src/robot_world.zig`, `src/zimr.zig`
+
+### `src/text2d.zig`
+
+lint:alias text2d src/text2d.zig - the backend-generic 2D text stack, MOVED VERBATIM out of drawing.zig (GL retirement P1, t1173): FontCache, TTF atlas bake (`bakeFontAtlas`), `drawWithFont`/`measureWithFont` over `gl: anytype`. Both backends draw text through this file (wgpu_app builds its Font on `bakeFontAtlas`; ui renders through `drawWithFont`). GL-free since GL-retirement P5d.
+
+*L6 · 3,450 lines · 78 fns · 55 tests*  
+**Deps:** `src/codecs.zig`, `src/errors.zig`, `src/glyph_atlas.zig`, `src/host.zig`, `src/image.zig`, `src/memwatch.zig`, `src/runtime.zig`, `src/types.zig`, `zm` (module)  
+**Dependents:** `src/Canvas.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/snapshot_regression_test.zig`, `src/tests/ui_dock_screenshot_test.zig`, `src/tests/ui_screenshot_test.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/wgpu_texture.zig`
+
+WgpuTexture: creation from Image/raw RGBA8, view + sampler management, the texture registry that backs WgpuGl's id-based setTexture path, and mip/format plumbing.
+
+*L6 · 560 lines · 13 fns · 5 tests*  
+**Deps:** `src/gpu.zig`, `src/wgpu.zig`, `zm` (module)  
+**Dependents:** `src/WgpuGl.zig`, `src/draw3d.zig`, `src/renderer_2d.zig`, `src/shader_runtime_wgpu.zig`, `src/tests.zig`, `src/tests/features_test.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/Canvas.zig`
+
+lint:alias Canvas `Canvas` - a pure-Zig, native, anti-aliased 2D drawing surface that exports PNG with zero third-party code. It renders into a supersampled RGBA8 buffer using zimr's own `imageDraw*` rasterizers + truetype text, then box-downsamples (premultiplied) for clean anti-aliasing, and encodes via zimr's own PNG codec.
+
+*L7 · 496 lines · 25 fns · 2 tests*  
+**Deps:** `src/Canvas.zig`, `src/Sprite.zig`, `src/codecs.zig`, `src/draw2d.zig`, `src/image.zig`, `src/plot.zig`, `src/text2d.zig`, `src/types.zig`, `zm` (module)  
+**Dependents:** `src/Canvas.zig`, `src/canvas_render_test.zig`, `src/tests.zig`, `src/zimr.zig`
+
+### `src/SwAdapter.zig`
+
+lint:alias SwAdapter src/SwAdapter.zig - the raster (software rasterizer) renderer-trait adapter.
+
+*L7 · 295 lines · 34 fns*  
+**Deps:** `src/SwAdapter.zig`, `src/draw2d.zig`, `src/raster.zig`, `src/text2d.zig`, `src/types.zig`, `zm` (module)  
+**Dependents:** `src/SwAdapter.zig`, `src/renderer_trait.zig`, `src/tests.zig`, `src/zimr.zig`
+
+### `src/kit_mlp.zig`
+
+kit_mlp - an ordinary multilayer perceptron, trained on the GPU kit.
+
+*L7 · 700 lines · 14 fns · 5 tests*  
+**Deps:** `src/compute_host.zig`, `src/gpu/zn_mlp.zig`, `src/test_report.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`, `src/robot_world.zig`
+
+### `src/robot_mpc.zig`
+
+robot_mpc.zig - iterative LQR over a horizon.
+
+*L7 · 6,934 lines · 80 fns · 36 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`, `src/zimr.zig`
+
+### `src/robot_physics.zig`
+
+robot_physics.zig - where `robot.zig` meets `zimrphysics.zig`.
+
+*L7 · 2,326 lines · 18 fns · 16 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `src/robot_scene.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_maximal.zig`, `src/robot_tests.zig`, `src/robot_track.zig`, `src/robot_world.zig`, `src/zimr.zig`
+
+### `src/shader_runtime_wgpu.zig`
+
+lint:alias shader_runtime
+
+*L7 · 2,145 lines · 44 fns · 24 tests*  
+**Deps:** `src/gpu.zig`, `src/gpu_iface.zig`, `src/raster.zig`, `src/raster_shader.zig`, `src/shader_connect.zig`, `src/shader_introspect.zig`, `src/spv2wgsl.zig`, `src/wave_fs_io.zig`, `src/wave_vs_io.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
+**Dependents:** `src/draw3d.zig`, `src/effects2d.zig`, `src/material.zig`, `src/renderer_2d.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/test_font_render.zig`
+
+HOST-ONLY debug harness (not shipped): exercises the pure-CPU text-into-image path - bakeFontAtlas -> imageDrawTextWithFont -> exportImageToMemory(PNG) - so the result can be viewed directly in the sandbox without a device round-trip.
+
+*L7 · 115 lines · 1 fns*  
+**Deps:** `src/codecs.zig`, `src/image.zig`, `src/text2d.zig`, `src/types.zig`  
+**Dependents:** `build.zig (wired)`
+
+### `src/wgpu_smoke_test.zig`
+
+Wasm-root smoke harness compiled per example by the smoke build: boots the app headlessly under webtests/runner.mjs (driving the dogfooded webtests/wgpu_smoke.zig logic), counts bridge calls per frame, and reports PASS lines the tier-a gate greps. Excluded from refAllDecls (wasm entry root).
+
+*L7 · 210 lines · 4 fns · 2 tests*  
+**Deps:** `src/BindGroupCache.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/wgpu.zig`  
+**Dependents:** —
+
+### `src/canvas_render_test.zig`
+
+HOST harness (not shipped): exercises the new Canvas primitive surface -> PNG so each slice of the drawing-API migration can be viewed in-sandbox with no device. Excluded from the style gate via build.zig `deletion_skip`.
+
+*L8 · 53 lines · 1 fns*  
+**Deps:** `src/Canvas.zig`, `src/Sprite.zig`, `src/image.zig`  
+**Dependents:** `build.zig (wired)`
+
 ### `src/material.zig`
 
-lint:alias material material.zig — the public custom-pipeline API ("complete WebGPU control").
+lint:alias material material.zig - the public custom-pipeline API ("complete WebGPU control").
 
-*L6 · 477 lines · 17 fns*  
+*L8 · 477 lines · 17 fns*  
 **Deps:** `src/gpu.zig`, `src/gpu_iface.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/wgpu.zig`  
 **Dependents:** `src/zimr.zig`
 
@@ -745,193 +1057,305 @@ lint:alias material material.zig — the public custom-pipeline API ("complete W
 
 The 2D batch renderer: shapes batch (vertex staging, per-texture bind groups via the registry — the turn-909 aliasing fix), orthoTopLeft (the GPU-UBO [16]f32 projection), per-frame UBO updates, and pipeline setup. Embeds default_shapes_vs/fs.wgsl.
 
-*L6 · 1,079 lines · 29 fns · 6 tests*  
-**Deps:** `src/gpu.zig`, `src/gpu_iface.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/default_shapes_fs_io.zig`, `src/shaders/default_shapes_vs_io.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
+*L8 · 1,189 lines · 32 fns · 6 tests*  
+**Deps:** `src/glyph_atlas.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/memwatch.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/default_shapes_fs_io.zig`, `src/shaders/default_shapes_vs_io.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/WgpuGl.zig`, `src/shader2d.zig`, `src/sw_runtime.zig`, `src/tests.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/renderer_trait.zig`
+
+The scene contract: requireGlScene - types.requireGl's 2D drawing surface plus scene setup (matrixMode, loadIdentity, multMatrix, frustum, vertex3f, clearColor, clear) - which WgpuGl, raster.Context and SwAdapter all satisfy, letting scene code take `gl: anytype`; re-exports SwAdapter and BlendMode.
+
+*L8 · 75 lines · 1 fns · 2 tests*  
+**Deps:** `src/SwAdapter.zig`, `src/raster.zig`, `src/types.zig`  
+**Dependents:** `src/WgpuGl.zig`, `src/tests.zig`, `src/zimr.zig`
 
 ### `src/robot_bench.zig`
 
-robot_bench — how fast is this, actually?
+robot_bench - how fast is this, actually?
 
-*L6 · 743 lines · 9 fns*  
+*L8 · 745 lines · 9 fns*  
 **Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/profiler.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/zimrphysics.zig`, `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `src/robot_control.zig`
 
-robot_control.zig — making a robot go where you want it.
+robot_control.zig - making a robot go where you want it.
 
-*L6 · 3,379 lines · 36 fns · 21 tests*  
-**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/zimrphysics.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/tests.zig`, `src/zimr.zig`
+*L8 · 3,402 lines · 36 fns · 21 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/test_report.zig`, `src/tests/fixtures/robot/kuka_iiwa.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`, `src/zimr.zig`
 
-### `src/robot_mjcf.zig`
+### `src/robot_maximal.zig`
 
-robot_mjcf.zig — turning a parsed MJCF file into something the engine can simulate.
+robot_maximal.zig - the same robot, rebuilt in maximal coordinates.
 
-*L6 · 7,602 lines · 44 fns · 35 tests*  
-**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_physics.zig`, `src/robot_scene.zig`, `src/zimrphysics.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/tests.zig`, `src/zimr.zig`
+*L8 · 2,090 lines · 29 fns · 11 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/test_report.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_tests.zig`, `src/robot_track.zig`, `src/zimr.zig`
 
-### `src/robot_mpc.zig`
+### `src/WgpuGl.zig`
 
-robot_mpc.zig — iterative LQR over a horizon.
+lint:alias WgpuGl src/WgpuGl.zig - the WebGPU `gl: anytype` adapter (the "third renderer").
 
-*L6 · 6,912 lines · 80 fns · 36 tests*  
-**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/tests.zig`, `src/zimr.zig`
+*L9 · 1,252 lines · 73 fns · 8 tests*  
+**Deps:** `src/Sprite.zig`, `src/WgpuGl.zig`, `src/draw2d.zig`, `src/glyph_atlas.zig`, `src/gpu_iface.zig`, `src/image.zig`, `src/raster.zig`, `src/renderer_2d.zig`, `src/renderer_trait.zig`, `src/shapes2d.zig`, `src/text2d.zig`, `src/types.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `zm` (module)  
+**Dependents:** `src/WgpuGl.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/tests.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
-### `src/robot_physics.zig`
+### `src/robot_dance.zig`
 
-robot_physics.zig — where `robot.zig` meets `zimrphysics.zig`.
+robot_dance.zig - a mocap clip retargeted onto a robot, as one target pose per frame.
 
-*L6 · 2,186 lines · 18 fns · 15 tests*  
-**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_mjcf.zig`, `src/robot_scene.zig`, `src/zimrphysics.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/tests.zig`, `src/zimr.zig`
-
-### `src/text2d.zig`
-
-lint:alias text2d src/text2d.zig — the backend-generic 2D text stack, MOVED VERBATIM out of drawing.zig (GL retirement P1, t1173): FontCache, TTF atlas bake (`bakeFontAtlas`), `drawWithFont`/`measureWithFont` over `gl: anytype`. Both backends draw text through this file (wgpu_app builds its Font on `bakeFontAtlas`; ui renders through `drawWithFont`). GL-free since GL-retirement P5d.
-
-*L6 · 3,028 lines · 65 fns · 55 tests*  
-**Deps:** `src/codecs.zig`, `src/errors.zig`, `src/image.zig`, `src/runtime.zig`, `src/types.zig`, `zm` (module)  
-**Dependents:** `src/Canvas.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/test_font_render.zig`, `src/tests.zig`, `src/tests/snapshot_regression_test.zig`, `src/tests/ui_dock_screenshot_test.zig`, `src/tests/ui_screenshot_test.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
-
-### `src/Canvas.zig`
-
-lint:alias Canvas `Canvas` — a pure-Zig, native, anti-aliased 2D drawing surface that exports PNG with zero third-party code. It renders into a supersampled RGBA8 buffer using zimr's own `imageDraw*` rasterizers + truetype text, then box-downsamples (premultiplied) for clean anti-aliasing, and encodes via zimr's own PNG codec.
-
-*L7 · 495 lines · 25 fns · 2 tests*  
-**Deps:** `src/Canvas.zig`, `src/Sprite.zig`, `src/codecs.zig`, `src/draw2d.zig`, `src/image.zig`, `src/plot.zig`, `src/text2d.zig`, `src/types.zig`, `zm` (module)  
-**Dependents:** `src/Canvas.zig`, `src/canvas_render_test.zig`, `src/tests.zig`, `src/zimr.zig`
-
-### `src/SwAdapter.zig`
-
-lint:alias SwAdapter src/SwAdapter.zig — the raster (software rasterizer) renderer-trait adapter.
-
-*L7 · 254 lines · 28 fns*  
-**Deps:** `src/SwAdapter.zig`, `src/draw2d.zig`, `src/raster.zig`, `src/text2d.zig`, `src/types.zig`, `zm` (module)  
-**Dependents:** `src/SwAdapter.zig`, `src/renderer_trait.zig`, `src/tests.zig`, `src/zimr.zig`
+*L9 · 3,791 lines · 61 fns · 21 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/test_report.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_clip_bake.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_policy.zig`, `src/robot_ppo_track.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_sac_track.zig`, `src/robot_st_bench.zig`, `src/robot_tests.zig`, `src/robot_track.zig`, `src/robot_track_env.zig`, `src/robot_track_resident.zig`, `src/robot_track_resident_tests.zig`, `src/robot_world.zig`, `src/zimr.zig`
 
 ### `src/shader2d.zig`
 
-src/shader2d.zig — a USER fragment shader, run over the ordinary 2D batch.
+src/shader2d.zig - a USER fragment shader, run over the ordinary 2D batch.
 
-*L7 · 189 lines · 3 fns*  
+*L9 · 190 lines · 3 fns*  
 **Deps:** `src/gpu.zig`, `src/renderer_2d.zig`, `src/shader_introspect.zig`, `src/wgpu.zig`  
 **Dependents:** `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/sw_runtime.zig`
 
-src/sw_runtime.zig — single-module entry point for native consumers of the software-renderer + codec pieces.  Bundles `raster`, `raster_shader`, `codecs`, and `shader_connect` so they share one module (avoiding Zig 0.16's one-file-per-module rule — they all transitively import `types.zig`).
+src/sw_runtime.zig - single-module entry point for native consumers of the software-renderer + codec pieces.  Bundles `raster`, `raster_shader`, `codecs`, and `shader_connect` so they share one module (avoiding Zig 0.16's one-file-per-module rule - they all transitively import `types.zig`).
 
-*L7 · 32 lines · 0 fns*  
+*L9 · 32 lines · 0 fns*  
 **Deps:** `src/codecs.zig`, `src/gpu_iface.zig`, `src/raster.zig`, `src/raster_shader.zig`, `src/renderer_2d.zig`, `src/shader_connect.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/default_shapes_fs.zig`, `src/shaders/default_shapes_vs.zig`, `src/wgpu.zig`  
 **Dependents:** `build.zig (wired)`, `src/tests.zig`
 
-### `src/test_font_render.zig`
-
-HOST-ONLY debug harness (not shipped): exercises the pure-CPU text-into-image path — bakeFontAtlas → imageDrawTextWithFont → exportImageToMemory(PNG) — so the result can be viewed directly in the sandbox without a device round-trip.
-
-*L7 · 114 lines · 1 fns*  
-**Deps:** `src/codecs.zig`, `src/image.zig`, `src/text2d.zig`, `src/types.zig`  
-**Dependents:** `build.zig (wired)`
-
-### `src/canvas_render_test.zig`
-
-HOST harness (not shipped): exercises the new Canvas primitive surface → PNG so each slice of the drawing-API migration can be viewed in-sandbox with no device. Excluded from the style gate via build.zig `deletion_skip`.
-
-*L8 · 52 lines · 1 fns*  
-**Deps:** `src/Canvas.zig`, `src/Sprite.zig`, `src/image.zig`  
-**Dependents:** `build.zig (wired)`
-
-### `src/renderer_trait.zig`
-
-The renderer trait: assertIsGlContext, the comptime contract (begin/end/vertex2f/color4ub/setTexture/...) that WgpuGl, raster adapters and the test stub all satisfy, letting 2D draw code take `gl: anytype`. The GL-era GlAdapter died in P5.
-
-*L8 · 169 lines · 1 fns · 3 tests*  
-**Deps:** `src/SwAdapter.zig`, `src/raster.zig`  
-**Dependents:** `src/WgpuGl.zig`, `src/tests.zig`
-
-### `src/WgpuGl.zig`
-
-lint:alias WgpuGl src/WgpuGl.zig — the WebGPU `gl: anytype` adapter (the "third renderer").
-
-*L9 · 1,169 lines · 68 fns · 8 tests*  
-**Deps:** `src/Sprite.zig`, `src/WgpuGl.zig`, `src/draw2d.zig`, `src/gpu_iface.zig`, `src/image.zig`, `src/raster.zig`, `src/renderer_2d.zig`, `src/renderer_trait.zig`, `src/shapes2d.zig`, `src/text2d.zig`, `src/types.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `zm` (module)  
-**Dependents:** `src/WgpuGl.zig`, `src/draw3d.zig`, `src/effects2d.zig`, `src/tests.zig`, `src/ui.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
-
 ### `src/draw3d.zig`
 
-lint:alias draw3d draw3d — the 3D library: immediate-mode primitives + the retained-mesh API for the WebGPU backend, AND (since GL-retirement P5) the CPU model/mesh library merged in from drawing.models: mesh generators (plane/cone/cylinder/torus/knot/poly/tangents), collision + bounds + raycast math, glTF model/animation loading, CPU pose evaluation (updateModelAnimation/Blend), and CPU material descriptors.
+lint:alias draw3d draw3d - the 3D library: immediate-mode primitives + the retained-mesh API for the WebGPU backend, AND (since GL-retirement P5) the CPU model/mesh library merged in from drawing.models: mesh generators (plane/cone/cylinder/torus/knot/poly/tangents), collision + bounds + raycast math, glTF model/animation loading, CPU pose evaluation (updateModelAnimation/Blend), and CPU material descriptors.
 
-*L10 · 9,722 lines · 208 fns · 17 tests*  
-**Deps:** `src/WgpuGl.zig`, `src/bvh_synth.zig`, `src/codecs.zig`, `src/errors.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/runtime.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/pbr_common_io.zig`, `src/shaders/pbr_fs_io.zig`, `src/types.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
+*L10 · 9,737 lines · 208 fns · 17 tests*  
+**Deps:** `src/WgpuGl.zig`, `src/bvh_synth.zig`, `src/codecs.zig`, `src/errors.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/platform.zig`, `src/runtime.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/pbr_common_io.zig`, `src/shaders/pbr_fs_io.zig`, `src/types.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/tests.zig`, `src/tests/leak_test.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
+
+### `src/robot_gym.zig`
+
+robot_gym.zig - the classic humanoid locomotion task, as an environment for `zimrnum`'s RL.
+
+*L10 · 2,968 lines · 89 fns · 6 tests*  
+**Deps:** `src/codecs.zig`, `src/compute_host.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/test_report.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`, `src/gpu_learn_tests.zig`, `src/robot_geno.zig`, `src/robot_latent.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_ppo_track.zig`, `src/robot_sac_track.zig`, `src/robot_supertrack.zig`, `src/robot_tests.zig`, `src/zimr.zig`
+
+### `src/robot_track.zig`
+
+robot_track - what a tracker sees, and how a predicted state moves forward.
+
+*L10 · 3,740 lines · 95 fns · 25 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/test_report.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_clip_bake.zig`, `src/robot_geno.zig`, `src/robot_latent.zig`, `src/robot_latent_kit.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_policy.zig`, `src/robot_ppo_track.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_st_bench.zig`, `src/robot_tests.zig`, `src/robot_track_env.zig`, `src/robot_track_resident.zig`, `src/robot_track_resident_tests.zig`, `src/robot_world.zig`, `src/zimr.zig`
 
 ### `src/ui.zig`
 
 The immediate-mode UI — the Dear ImGui port, and the largest file in the tree. UiContext + Ui frame handles, the full widget set (windows, docking, tables, plots, drag-drop, text editing, multiselect, style editor), the DrawList replay over a generic `gl: anytype` renderer trait, layout, persistence (typed state storage + disk), and the raster-based screenshot/snapshot pipeline (renderToBytes/renderToPng/snapshotPng). The Gl selector picks WgpuGl in wasm builds and the inert TestGlStub (alias of shapes2d.TestGl) in host-test builds.
 
-*L10 · 43,018 lines · 678 fns · 664 tests*  
-**Deps:** `src/Sprite.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/draw2d.zig`, `src/easings.zig`, `src/frame_arena.zig`, `src/raster.zig`, `src/runtime.zig`, `src/shapes2d.zig`, `src/text2d.zig`, `src/types.zig`, `src/utils.zig`, `src/web.zig`, `build_options` (module), `zimr` (module), `zm` (module)  
+*L10 · 45,088 lines · 747 fns · 683 tests*  
+**Deps:** `src/Sprite.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/draw2d.zig`, `src/easings.zig`, `src/frame_arena.zig`, `src/host.zig`, `src/platform.zig`, `src/raster.zig`, `src/runtime.zig`, `src/shapes2d.zig`, `src/text2d.zig`, `src/types.zig`, `src/utils.zig`, `src/web.zig`, `build_options` (module), `zimr` (module), `zm` (module)  
 **Dependents:** `src/plot3d.zig`, `src/plot_ui.zig`, `src/profiler_ui.zig`, `src/tests.zig`, `src/tests/snapshot_regression_test.zig`, `src/tests/ui_dock_builder_test.zig`, `src/tests/ui_dock_screenshot_test.zig`, `src/tests/ui_screenshot_test.zig`, `src/wgpu_app.zig`, `src/zimr.zig`
 
 ### `src/plot3d.zig`
 
-lint:alias plot3d lint:off scope-balance: ImPlot3D provider/wrapper - begin*/end* here are forwarders, not paired usage. implot3d.zig — a single-file, pure-Zig port of ImPlot3D v0.5 WIP (https://github.com/brenocq/implot3d, MIT, (c) 2024-2025 Breno Cunha Queiroz; Zig port 2026).
+lint:alias plot3d lint:off scope-balance: ImPlot3D provider/wrapper - begin*/end* here are forwarders, not paired usage. implot3d.zig - a single-file, pure-Zig port of ImPlot3D v0.5 WIP (https://github.com/brenocq/implot3d, MIT, (c) 2024-2025 Breno Cunha Queiroz; Zig port 2026).
 
-*L11 · 4,991 lines · 374 fns · 4 tests*  
+*L11 · 5,009 lines · 374 fns · 4 tests*  
 **Deps:** `src/plot_core.zig`, `src/ui.zig`, `zm` (module)  
 **Dependents:** `src/zimr.zig`
 
 ### `src/plot_ui.zig`
 
-lint:alias plot_ui plot_ui.zig — the `ui.zig` adapter for `plot.zig`.
+lint:alias plot_ui plot_ui.zig - the `ui.zig` adapter for `plot.zig`.
 
-*L11 · 1,455 lines · 38 fns*  
+*L11 · 1,460 lines · 38 fns · 1 tests*  
 **Deps:** `src/draw2d.zig`, `src/plot.zig`, `src/ui.zig`, `zm` (module)  
 **Dependents:** `src/zimr.zig`
 
 ### `src/profiler_ui.zig`
 
-lint:alias profiler_ui profiler_ui.zig — app-callable views for the integrated profiler.
+lint:alias profiler_ui profiler_ui.zig - app-callable views for the integrated profiler.
 
-*L11 · 379 lines · 7 fns*  
+*L11 · 380 lines · 7 fns*  
 **Deps:** `src/profiler.zig`, `src/ui.zig`, `zm` (module)  
 **Dependents:** `src/zimr.zig`
 
+### `src/robot_clip_bake.zig`
+
+robot_clip_bake - the tracking clips, prepared once, offline, for pages to embed.
+
+*L11 · 166 lines · 3 fns*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_mjcf.zig`, `src/robot_track.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `src/robot_latent.zig`
+
+robot_latent - SuperTrack's world model and policy on the CPU: the reference the resident (GPU) version is measured against, and where the algorithm is easiest to read.
+
+*L11 · 2,785 lines · 63 fns · 14 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_gym.zig`, `src/robot_mjcf.zig`, `src/robot_track.zig`, `src/test_report.zig`, `build_options` (module), `zm` (module), `zn` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_geno.zig`, `src/robot_latent_kit.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_st_bench.zig`, `src/robot_tests.zig`, `src/robot_track_resident.zig`, `src/robot_world.zig`, `src/zimr.zig`
+
+### `src/robot_policy.zig`
+
+robot_policy - what a residual feedback policy sees, and what it is allowed to do.
+
+*L11 · 703 lines · 23 fns · 2 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_mjcf.zig`, `src/robot_track.zig`, `src/test_report.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_geno.zig`, `src/robot_ppo_track.zig`, `src/robot_tests.zig`, `src/robot_track_env.zig`, `src/zimr.zig`
+
+### `src/robot_supertrack.zig`
+
+robot_supertrack - SuperTrack (Fussell, Bergamin & Holden 2021) and NOTHING else.
+
+*L11 · 1,267 lines · 50 fns · 2 tests*  
+**Deps:** `src/compute_host.zig`, `src/robot_gym.zig`, `src/test_report.zig`, `build_options` (module), `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`, `src/gpu_learn_tests.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_tests.zig`, `src/zimr.zig`
+
 ### `src/wgpu_app.zig`
 
-lint:alias wgpu_app src/wgpu_app.zig — the WebGPU `App` + `Frame` run-loop.
+lint:alias wgpu_app src/wgpu_app.zig - the WebGPU `App` + `Frame` run-loop.
 
-*L11 · 4,702 lines · 187 fns · 1 tests*  
-**Deps:** `src/BindGroupCache.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/draw3d.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/image.zig`, `src/memwatch.zig`, `src/profiler.zig`, `src/raster.zig`, `src/renderer_2d.zig`, `src/runtime.zig`, `src/shader2d.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
+*L11 · 5,492 lines · 255 fns · 1 tests*  
+**Deps:** `src/BindGroupCache.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/dom_input.zig`, `src/draw3d.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/host.zig`, `src/image.zig`, `src/leakwatch.zig`, `src/memwatch.zig`, `src/native_loop.zig`, `src/platform.zig`, `src/platform/console.zig`, `src/profiler.zig`, `src/raster.zig`, `src/renderer_2d.zig`, `src/runtime.zig`, `src/shader2d.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/effects2d.zig`, `src/tests.zig`, `src/zimr.zig`
 
 ### `src/effects2d.zig`
 
-lint:alias effects2d src/effects2d.zig — the 2D fullscreen fragment-effect runner.
+lint:alias effects2d src/effects2d.zig - the 2D fullscreen fragment-effect runner.
 
-*L12 · 379 lines · 10 fns*  
+*L12 · 381 lines · 10 fns*  
 **Deps:** `src/WgpuGl.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`  
 **Dependents:** `src/zimr.zig`
+
+### `src/gpu_learn_tests.zig`
+
+gpu_learn_tests - the GPU learning kit's proofs, on its CPU twin.
+
+*L12 · 709 lines · 2 fns · 8 tests*  
+**Deps:** `src/compute_host.zig`, `src/gpu/zn_mlp.zig`, `src/gpu/zn_train.zig`, `src/robot_gym.zig`, `src/robot_supertrack.zig`, `src/test_report.zig`, `build_options` (module), `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`
+
+### `src/robot_geno.zig`
+
+robot_geno - Geno's own measurements, as the robot's.
+
+*L12 · 9,215 lines · 127 fns · 57 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_geno_shapes.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_track.zig`, `src/test_report.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_ppo_track_tests.zig`, `src/robot_st_bench.zig`, `src/robot_tests.zig`, `src/zimr.zig`
+
+### `src/robot_latent_kit.zig`
+
+robot_latent_kit - the latent world model on the kit: the GPU, or its CPU twin.
+
+*L12 · 1,035 lines · 41 fns*  
+**Deps:** `src/compute_host.zig`, `src/robot.zig`, `src/robot_latent.zig`, `src/robot_track.zig`, `zm` (module), `zn` (module)  
+**Dependents:** `src/robot_latent_kit_tests.zig`, `src/robot_track_resident.zig`, `src/robot_track_resident_tests.zig`, `src/zimr.zig`
+
+### `src/robot_mocap_tutorial.zig`
+
+robot_mocap_tutorial - every example in robot-mocap-tutorial.html, as real code that runs.
+
+*L12 · 824 lines · 9 fns · 12 tests*  
+**Deps:** `src/codecs.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_gym.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_supertrack.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module), `zn` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`
+
+### `src/robot_track_env.zig`
+
+robot_track_env - the tracking task as a DECISION-LEVEL environment: the one thing every learner of a residual tracking policy steps through. PPO does (`robot_ppo_track`), SAC does (`robot_sac_track`), and the mixes of plan Stage I will. Having ONE definition is the whole point: a learner that stepped the task its own way - held a decision a step longer, credited a reward to the wrong decision, treated running…
+
+*L12 · 522 lines · 12 fns · 2 tests*  
+**Deps:** `src/robot.zig`, `src/robot_dance.zig`, `src/robot_policy.zig`, `src/robot_track.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_ppo_track.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_sac_track.zig`, `src/robot_tests.zig`
+
+### `src/robot_world.zig`
+
+robot_world - the tracker's world model: a network that answers "what happens next?".
+
+*L12 · 799 lines · 16 fns · 2 tests*  
+**Deps:** `src/codecs.zig`, `src/compute_host.zig`, `src/gpu/zn_mlp.zig`, `src/kit_mlp.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_latent.zig`, `src/robot_mjcf.zig`, `src/robot_physics.zig`, `src/robot_track.zig`, `src/test_report.zig`, `src/zimrphysics.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`
+
+### `src/robot_latent_kit_tests.zig`
+
+robot_latent_kit_tests - the kit's and the resident data's tests, in a file of their own.
+
+*L13 · 1,403 lines · 9 fns · 17 tests*  
+**Deps:** `src/codecs.zig`, `src/compute_host.zig`, `src/gpu/zn_mlp.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_latent.zig`, `src/robot_latent_kit.zig`, `src/robot_mjcf.zig`, `src/robot_track.zig`, `src/test_report.zig`, `build_options` (module), `zm` (module), `zn` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`, `src/robot_track_resident_tests.zig`
+
+### `src/robot_ppo_track.zig`
+
+robot_ppo_track - PPO on a residual tracking policy: DReCon's reinforcement-learning half, on one clip.
+
+*L13 · 898 lines · 20 fns*  
+**Deps:** `src/compute_host.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_gym.zig`, `src/robot_policy.zig`, `src/robot_track.zig`, `src/robot_track_env.zig`, `zm` (module)  
+**Dependents:** `src/robot_ppo_track_tests.zig`, `src/robot_tests.zig`, `src/zimr.zig`
+
+### `src/robot_sac_track.zig`
+
+robot_sac_track - SAC on the tracking task: `robot_gym.SacAgent` learning a residual tracking policy from `TrackEnv`'s decisions. The off-policy half of plan Stage I's mixes - Simon's idea: SAC's sample efficiency to get going fast, alongside PPO and SuperTrack.
+
+*L13 · 188 lines · 3 fns*  
+**Deps:** `src/robot.zig`, `src/robot_dance.zig`, `src/robot_gym.zig`, `src/robot_track_env.zig`  
+**Dependents:** `src/robot_ppo_track_tests.zig`, `src/robot_tests.zig`
+
+### `src/robot_st_bench.zig`
+
+robot_st_bench - SuperTrack's learning curve on Geno, deterministic, on the CPU (plan B1).
+
+*L13 · 514 lines · 14 fns*  
+**Deps:** `src/robot.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_latent.zig`, `src/robot_track.zig`, `cli` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `src/robot_track_resident.zig`
+
+robot_track_resident - SuperTrack's training loop with everything but the simulation on the GPU.
+
+*L13 · 552 lines · 15 fns*  
+**Deps:** `src/compute_host.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_latent.zig`, `src/robot_latent_kit.zig`, `src/robot_track.zig`, `zm` (module)  
+**Dependents:** `src/robot_track_resident_tests.zig`, `src/zimr.zig`
+
+### `src/robot_ppo_track_tests.zig`
+
+robot_ppo_track's tests, kept OUT of the zimr module.
+
+*L14 · 1,077 lines · 6 fns · 12 tests*  
+**Deps:** `src/codecs.zig`, `src/compute_host.zig`, `src/gpu/zn_mlp.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_mjcf.zig`, `src/robot_ppo_track.zig`, `src/robot_sac_track.zig`, `src/robot_track.zig`, `src/robot_track_env.zig`, `src/test_report.zig`, `build_options` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`
+
+### `src/robot_track_resident_tests.zig`
+
+robot_track_resident_tests - the resident learner's tests, in a file of their own.
+
+*L14 · 231 lines · 0 fns · 3 tests*  
+**Deps:** `src/compute_host.zig`, `src/gpu/zn_mlp.zig`, `src/robot_dance.zig`, `src/robot_latent_kit.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_track.zig`, `src/robot_track_resident.zig`, `src/test_report.zig`, `build_options` (module)  
+**Dependents:** `build.zig (wired)`, `src/robot_tests.zig`
+
+### `src/zimr.zig`
+
+lint:alias z ============================================================================ zimr WebGPU architecture - THE reference doc for the wgpu stack ============================================================================
+
+*L14 · 1,025 lines · 5 fns · 1 tests*  
+**Deps:** `src/BindGroupCache.zig`, `src/Canvas.zig`, `src/Sprite.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/compute_host.zig`, `src/draw3d.zig`, `src/easings.zig`, `src/effects2d.zig`, `src/entities.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/host.zig`, `src/image.zig`, `src/jobs.zig`, `src/material.zig`, `src/mjcf.zig`, `src/net.zig`, `src/physics_common.zig`, `src/platform.zig`, `src/plot.zig`, `src/plot3d.zig`, `src/plot_core.zig`, `src/plot_ui.zig`, `src/profiler.zig`, `src/profiler_ui.zig`, `src/raster.zig`, `src/raster_shader.zig`, `src/renderer_2d.zig`, `src/renderer_trait.zig`, `src/robot.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_geno_shapes.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_ppo_track.zig`, `src/robot_scene.zig`, `src/robot_supertrack.zig`, `src/robot_track.zig`, `src/robot_track_resident.zig`, `src/runtime.zig`, `src/serialize.zig`, `src/shader2d.zig`, `src/shader_connect.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/cel_fs.zig`, `src/shaders/decal_fs.zig`, `src/shaders/decal_vs.zig`, `src/shaders/default_shapes_fs.zig`, `src/shaders/default_shapes_vs.zig`, `src/shaders/deferred_shading_fs.zig`, `src/shaders/deferred_shading_vs.zig`, `src/shaders/depth_fs.zig`, `src/shaders/depth_vs.zig`, `src/shaders/depth_write_fs.zig`, `src/shaders/effect_ascii_fs.zig`, `src/shaders/effect_cubes_fs.zig`, `src/shaders/effect_grade_fs.zig`, `src/shaders/effect_mask_fs.zig`, `src/shaders/effect_outline_fs.zig`, `src/shaders/effect_palette_fs.zig`, `src/shaders/effect_sieve_fs.zig`, `src/shaders/effect_spotlight_fs.zig`, `src/shaders/effect_tiling_fs.zig`, `src/shaders/effect_wave_fs.zig`, `src/shaders/fog_fs.zig`, `src/shaders/gbuffer_fs.zig`, `src/shaders/gbuffer_vs.zig`, `src/shaders/hybrid_raymarch_fs.zig`, `src/shaders/lit_shadow_fs.zig`, `src/shaders/lit_shadow_vs.zig`, `src/shaders/maze_fs.zig`, `src/shaders/outline_hull_vs.zig`, `src/shaders/pbr_fs.zig`, `src/shaders/pbr_vs.zig`, `src/shaders/points3d_vs.zig`, `src/shaders/terrain_fs.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/spv2wgsl.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/utils.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`, `src/wgpu_texture.zig`, `src/zimrphysics.zig`, `src/zimrphysics2d.zig`, `zimr` (module)  
+**Dependents:** `build.zig (wired)`, `src/tests.zig`, `src/tests/ext_storage_test.zig`, `src/tests/features_test.zig`
+
+### `src/robot_tests.zig`
+
+robot_tests.zig - the robot family's tests, compiled once and run once.
+
+*L15 · 54 lines · 0 fns · 1 tests*  
+**Deps:** `src/gpu_learn_tests.zig`, `src/kit_mlp.zig`, `src/mjcf.zig`, `src/robot.zig`, `src/robot_bmpc.zig`, `src/robot_control.zig`, `src/robot_dance.zig`, `src/robot_geno.zig`, `src/robot_gym.zig`, `src/robot_latent.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_maximal.zig`, `src/robot_mjcf.zig`, `src/robot_mocap_tutorial.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_policy.zig`, `src/robot_ppo_track.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_sac_track.zig`, `src/robot_scene.zig`, `src/robot_supertrack.zig`, `src/robot_track.zig`, `src/robot_track_env.zig`, `src/robot_track_resident_tests.zig`, `src/robot_urdf.zig`, `src/robot_world.zig`, `src/urdf.zig`  
+**Dependents:** `build.zig (wired)`
 
 ### `src/tests.zig`
 
 Host test aggregator and the refAllDecls policy artifact: every live source file is force-analyzed here so no declaration can rot unanalyzed. Also imports the cross-cutting test suites under src/tests/ and the spv2wgsl internals. zm and shader_interface are referenced as MODULES (file-importing them would double-own their graphs).
 
-*L12 · 140 lines · 0 fns · 1 tests*  
-**Deps:** `X.zig`, `src/BindGroupCache.zig`, `src/Canvas.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/compute_host.zig`, `src/draw3d.zig`, `src/easings.zig`, `src/entities.zig`, `src/errors.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/image.zig`, `src/kompute.zig`, `src/leakwatch.zig`, `src/mjcf.zig`, `src/plot.zig`, `src/raster.zig`, `src/raster_pixel.zig`, `src/raster_shader.zig`, `src/renderer_2d.zig`, `src/renderer_trait.zig`, `src/robot.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_scene.zig`, `src/robot_urdf.zig`, `src/runtime.zig`, `src/shader_codegen.zig`, `src/shader_connect.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/spv2wgsl.zig`, `src/sw_runtime.zig`, `src/tests/character_walk_test.zig`, `src/tests/cpu_shadowmap_test.zig`, `src/tests/errors_test.zig`, `src/tests/ext_storage_test.zig`, `src/tests/features_test.zig`, `src/tests/leak_test.zig`, `src/tests/multiapp_test.zig`, `src/tests/shader_enum_test.zig`, `src/tests/snapshot_regression_test.zig`, `src/tests/ui_dock_builder_test.zig`, `src/tests/ui_dock_screenshot_test.zig`, `src/tests/ui_screenshot_test.zig`, `src/tests/zimrphysics_stack_test.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/urdf.zig`, `src/utils.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`, `src/zimrphysics.zig`, `shader_interface` (module), `zm` (module)  
+*L15 · 175 lines · 0 fns · 1 tests*  
+**Deps:** `X.zig`, `src/BindGroupCache.zig`, `src/Canvas.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/compute_host.zig`, `src/dom_input.zig`, `src/draw3d.zig`, `src/easings.zig`, `src/entities.zig`, `src/errors.zig`, `src/glyph_atlas.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/image.zig`, `src/kompute.zig`, `src/leakwatch.zig`, `src/native_input.zig`, `src/net_core.zig`, `src/plot.zig`, `src/raster.zig`, `src/raster_pixel.zig`, `src/raster_shader.zig`, `src/renderer_2d.zig`, `src/renderer_trait.zig`, `src/runtime.zig`, `src/shader_codegen.zig`, `src/shader_connect.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/spv2wgsl.zig`, `src/sw_runtime.zig`, `src/tests/character_walk_test.zig`, `src/tests/cpu_shadowmap_test.zig`, `src/tests/errors_test.zig`, `src/tests/ext_storage_test.zig`, `src/tests/features_test.zig`, `src/tests/leak_test.zig`, `src/tests/multiapp_test.zig`, `src/tests/shader_enum_test.zig`, `src/tests/snapshot_regression_test.zig`, `src/tests/ui_dock_builder_test.zig`, `src/tests/ui_dock_screenshot_test.zig`, `src/tests/ui_screenshot_test.zig`, `src/tests/zimrphysics_stack_test.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/utils.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`, `src/zimrphysics.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
-
-### `src/zimr.zig`
-
-lint:alias z ============================================================================ zimr WebGPU architecture — THE reference doc for the wgpu stack ============================================================================
-
-*L13 · 953 lines · 5 fns · 1 tests*  
-**Deps:** `src/BindGroupCache.zig`, `src/Canvas.zig`, `src/Sprite.zig`, `src/SwAdapter.zig`, `src/WgpuGl.zig`, `src/codecs.zig`, `src/compute_host.zig`, `src/draw3d.zig`, `src/easings.zig`, `src/effects2d.zig`, `src/entities.zig`, `src/gpu.zig`, `src/gpu_iface.zig`, `src/image.zig`, `src/jobs.zig`, `src/material.zig`, `src/mjcf.zig`, `src/net.zig`, `src/physics_common.zig`, `src/plot.zig`, `src/plot3d.zig`, `src/plot_core.zig`, `src/plot_ui.zig`, `src/profiler.zig`, `src/profiler_ui.zig`, `src/raster.zig`, `src/raster_shader.zig`, `src/renderer_2d.zig`, `src/robot.zig`, `src/robot_control.zig`, `src/robot_mjcf.zig`, `src/robot_mpc.zig`, `src/robot_physics.zig`, `src/robot_scene.zig`, `src/runtime.zig`, `src/serialize.zig`, `src/shader2d.zig`, `src/shader_connect.zig`, `src/shader_introspect.zig`, `src/shader_runtime_wgpu.zig`, `src/shaders/cel_fs.zig`, `src/shaders/decal_fs.zig`, `src/shaders/decal_vs.zig`, `src/shaders/default_shapes_fs.zig`, `src/shaders/default_shapes_vs.zig`, `src/shaders/deferred_shading_fs.zig`, `src/shaders/deferred_shading_vs.zig`, `src/shaders/depth_fs.zig`, `src/shaders/depth_vs.zig`, `src/shaders/depth_write_fs.zig`, `src/shaders/effect_ascii_fs.zig`, `src/shaders/effect_cubes_fs.zig`, `src/shaders/effect_grade_fs.zig`, `src/shaders/effect_mask_fs.zig`, `src/shaders/effect_outline_fs.zig`, `src/shaders/effect_palette_fs.zig`, `src/shaders/effect_sieve_fs.zig`, `src/shaders/effect_spotlight_fs.zig`, `src/shaders/effect_tiling_fs.zig`, `src/shaders/effect_wave_fs.zig`, `src/shaders/fog_fs.zig`, `src/shaders/gbuffer_fs.zig`, `src/shaders/gbuffer_vs.zig`, `src/shaders/hybrid_raymarch_fs.zig`, `src/shaders/lit_shadow_fs.zig`, `src/shaders/lit_shadow_vs.zig`, `src/shaders/maze_fs.zig`, `src/shaders/outline_hull_vs.zig`, `src/shaders/pbr_fs.zig`, `src/shaders/pbr_vs.zig`, `src/shaders/points3d_vs.zig`, `src/shaders/terrain_fs.zig`, `src/shapes2d.zig`, `src/sound.zig`, `src/spv2wgsl.zig`, `src/text2d.zig`, `src/types.zig`, `src/ui.zig`, `src/utils.zig`, `src/web.zig`, `src/wgpu.zig`, `src/wgpu_app.zig`, `src/wgpu_texture.zig`, `src/zimrphysics.zig`, `src/zimrphysics2d.zig`, `zimr` (module)  
-**Dependents:** `build.zig (wired)`, `src/tests.zig`, `src/tests/ext_storage_test.zig`, `src/tests/features_test.zig`
 
 ### `src/assets/sample.ogg`
 
@@ -949,11 +1373,27 @@ WAV fixture embedded by src/codecs.zig and src/tests/features_test.zig. See src/
 **Deps:** —  
 **Dependents:** —
 
+### `src/cli/init_args.zig`
+
+PR 36930's `std.process.Init.args`, vendored beside `cli.zig`. In the PR it is a METHOD of `std.process.Init`; a copy outside std cannot add one, so it is a free function taking the `Init`. The body is the PR's but for three names that live in `std.process` there: `std.cli` -> the sibling `cli.zig`, `fatal` -> `std.process.fatal`, `exit` -> `std.process.exit`. Reach it through `src/command_line.zig`.
+
+*38 lines · 1 fns*  
+**Deps:** `src/cli.zig`  
+**Dependents:** `src/command_line.zig`
+
+### `src/cli/test.zig`
+
+(no description yet — add a //! header or a dict entry)
+
+*347 lines · 0 fns · 8 tests*  
+**Deps:** `src/cli.zig`  
+**Dependents:** `src/cli.zig`
+
 ### `src/gpu/zn_binary.zig`
 
-zn_binary.zig — zimrnum's elementwise kernels on the GPU: dense f32, two inputs, one output.
+zn_binary.zig - zimrnum's elementwise kernels on the GPU: dense f32, two inputs, one output.
 
-*765 lines · 40 fns*  
+*633 lines · 36 fns*  
 **Deps:** `kompute` (module), `zm` (module), `zn` (module)  
 **Dependents:** `build.zig (wired)`
 
@@ -961,39 +1401,87 @@ zn_binary.zig — zimrnum's elementwise kernels on the GPU: dense f32, two input
 
 zn-conformance - the CPU reference the GPU sweep is judged against.
 
-*1,835 lines · 114 fns · 4 tests*  
-**Deps:** `zm` (module), `zn` (module)  
+*2,063 lines · 126 fns · 5 tests*  
+**Deps:** `zm` (module), `zn` (module), `zrl` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `src/gpu/zn_matmul.zig`
 
-zn_matmul.zig — the matrix product on the GPU, naive and tiled, over the same ABI.
+zn_matmul.zig - the matrix product on the GPU, naive and tiled, over the same ABI.
 
-*219 lines · 4 fns*  
+*220 lines · 4 fns*  
 **Deps:** `kompute` (module)  
 **Dependents:** `build.zig (wired)`
 
+### `src/gpu/zn_mlp.zig`
+
+zn_mlp - dense layers on the GPU, and on the CPU twin from the same source.
+
+*1,275 lines · 56 fns*  
+**Deps:** `kompute` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/gpu_learn_tests.zig`, `src/kit_mlp.zig`, `src/robot_latent_kit_tests.zig`, `src/robot_ppo_track_tests.zig`, `src/robot_track_resident_tests.zig`, `src/robot_world.zig`
+
 ### `src/gpu/zn_train.zig`
 
-zn_train — every kernel a two-layer network needs to train, sharing ONE buffer set.
+zn_train - every kernel a two-layer network needs to train, sharing ONE buffer set.
 
 *256 lines · 15 fns*  
 **Deps:** `kompute` (module), `zm` (module)  
-**Dependents:** `build.zig (wired)`
+**Dependents:** `build.zig (wired)`, `src/gpu_learn_tests.zig`
 
 ### `src/gpu/zn_unary.zig`
 
-zn_unary.zig — the floating-point unary activations, ported from znum's `k_unary.zig`.
+zn_unary.zig - the floating-point unary activations.
 
-*1,170 lines · 65 fns*  
+*1,167 lines · 65 fns*  
 **Deps:** `kompute` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
-### `src/notes/CHEATSHEET.md`
+### `src/gpu/zrl_binary.zig`
 
-Note: zimr cheatsheet
+zrl_binary.zig - zimrrl's elementwise kernels on the GPU: the reinforcement-learning rows of the CPU/GPU sweep.
 
-*18,832 lines*  
+*222 lines · 4 fns*  
+**Deps:** `kompute` (module), `zrl` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `src/notes/0.17.0 Release Notes ⚡ The Zig Programming Language.html`
+
+(no description yet — add a //! header or a dict entry)
+
+*3,825 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/0.17.0 Release Notes ⚡ The Zig Programming Language_files/Carmen_7.svg`
+
+(no description yet — add a //! header or a dict entry)
+
+*292 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/0.17.0 Release Notes ⚡ The Zig Programming Language_files/Zero_13.svg`
+
+(no description yet — add a //! header or a dict entry)
+
+*127 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/0.17.0 Release Notes ⚡ The Zig Programming Language_files/Ziggy_6.svg`
+
+(no description yet — add a //! header or a dict entry)
+
+*1 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/0.17.0 Release Notes ⚡ The Zig Programming Language_files/Ziggy_7.svg`
+
+(no description yet — add a //! header or a dict entry)
+
+*1 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1033,7 +1521,7 @@ Note: Architecture deep-dive: imgui vs zimr
 
 Note: Architecture
 
-*160 lines*  
+*163 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1066,6 +1554,86 @@ Note: Using the arm to keep the robot up
 (no description yet — add a //! header or a dict entry)
 
 *161 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/b1_10min_seed1.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*24 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1_world_noise_0.2_seed1_4min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*14 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_seed2_w0_3min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*14 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_seed2_w10_3min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*11 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_seed2_w1_3min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*11 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_seed2_w3_3min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*11 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_twin_w10_seed1_4min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*11 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_twin_w1_seed1_4min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*12 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/i1b_twin_w3_seed1_4min.csv`
+
+(no description yet — add a //! header or a dict entry)
+
+*11 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/bench/r3_kl_robust_check.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*114 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1161,7 +1729,7 @@ Note: spv2wgsl-rewrite-changelog.md
 
 Note: ★ NAME THINGS SO THE CODE READS WITHOUT THE COMMENT
 
-*3,973 lines*  
+*4,388 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -1218,6 +1786,14 @@ Note: Anti-sway crane — plan
 Note: decal_shader_plan.md — shader-projected decals (real-engine technique)
 
 *141 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/decl_order_plan.md`
+
+Note: decl-order plan - get the rule passing on zimr, then gate it
+
+*117 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1289,7 +1865,7 @@ Note: engine_findings.md — the standing register of problems + opportunities
 
 (no description yet — add a //! header or a dict entry)
 
-*5,328 lines*  
+*6,079 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -1297,7 +1873,7 @@ Note: engine_findings.md — the standing register of problems + opportunities
 
 Note: zimr file atlas
 
-*8,460 lines*  
+*9,603 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -1345,15 +1921,15 @@ Note: four_ways — adversarial review
 
 Note: Gallery — bring back the streamed-wasm examples site
 
-*86 lines*  
+*87 lines*  
 **Deps:** —  
 **Dependents:** —
 
-### `src/notes/getting-started.md`
+### `src/notes/gallery_code_pane_plan.md`
 
-Note: Getting started with zimr
+Note: Gallery code pane — the example's source, highlighted, under the running example
 
-*182 lines*  
+*559 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1421,6 +1997,14 @@ Note: PROPOSED KEYWORD ADDITIONS — for approval (nothing applied yet)
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/l6_census.patch`
+
+(no description yet — add a //! header or a dict entry)
+
+*113 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/leak_detection.md`
 
 Note: leak_detection.md — CURRENT PLAN
@@ -1437,11 +2021,19 @@ Note: zimrlint autofix — design & plan
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/lint_l4b.patch`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,606 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/lint_opinionated_plan.md`
 
 Note: Opinionated linter plan — "an extension of the compiler"
 
-*380 lines*  
+*947 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1458,6 +2050,14 @@ Note: Adding the `scope-balance` lint rule (begin*/end* pairing check)
 Note: `zm` — zimr's unified math library
 
 *395 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/memory_ownership_plan.md`
+
+Note: memory_ownership_plan.md - examples own what they cause, and the gate says who leaked
+
+*137 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1517,6 +2117,22 @@ Note: physics_demo.md — represent every Jolt sample in the zimrphysics demo
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/platform_api.md`
+
+Note: The platform API
+
+*276 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/platforms_plan.md`
+
+Note: zimr on every platform - the plan
+
+*1,517 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/plot.md`
 
 Note: zimr plotting — plan & status (`plot.zig` + `plot_ui.zig`)
@@ -1548,6 +2164,14 @@ Note: Quadruped gait — a plan
 *803 lines*  
 **Deps:** —  
 **Dependents:** —
+
+### `src/notes/ragdoll_compare_plan.md`
+
+Note: ragdoll_compare — one humanoid, two engines
+
+*431 lines*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`
 
 ### `src/notes/raylib_port.md`
 
@@ -1621,6 +2245,22 @@ Note: ★★★ RETARGETING A MOCAP TAKE ONTO A ROBOT — where we are, and wher
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/rl_track_journal.md`
+
+Note: rl_track_journal.md - the history of the RL / tracking track, Sep 19-20 2026
+
+*4,379 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/rl_track_plan.md`
+
+Note: rl_track_plan.md - v4 (Sep 27, 2026, evening): SuperTrack on the 10-second dance - fundamentals, the bench, the night
+
+*2,809 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/robot_port_plan.md`
 
 Note: robot.zig — port plan
@@ -1669,6 +2309,14 @@ Note: Rocket landing — plan
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/scripts/render_figures.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*22 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/scripts/timed-build.sh`
 
 (no description yet — add a //! header or a dict entry)
@@ -1685,19 +2333,83 @@ Note: Rocket landing — plan
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/scripts/tutorial_measure.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*31 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/scripts/tutorial_replace_section.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*27 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/scripts/ui_screenshot_repro.zig`
 
 (no description yet — add a //! header or a dict entry)
 
-*76 lines · 1 fns*  
+*77 lines · 1 fns*  
 **Deps:** `zimr` (module)  
+**Dependents:** —
+
+### `src/notes/scripts/zimrrl_split.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*378 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/scripts/zimrrl_split_analysis.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*91 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/scripts/zimrrl_split_baseline.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*26 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/scripts/zimrrl_tutorial_merge.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*266 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/scripts/zimrrl_tutorial_reorganise.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*219 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/scripts/zimrrl_tutorial_split.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*230 lines*  
+**Deps:** —  
 **Dependents:** —
 
 ### `src/notes/servo_ladder.md`
 
 Note: servo_ladder.md - getting a ragdoll into a pose, one rung at a time
 
-*180 lines*  
+*608 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1789,22 +2501,6 @@ Note: @SpirvType image-op spikes — P0 SOLVED
 **Deps:** `zm` (module)  
 **Dependents:** —
 
-### `src/notes/spikes/spike_sampler_oldpath.wgsl`
-
-(no description yet — add a //! header or a dict entry)
-
-*32 lines*  
-**Deps:** —  
-**Dependents:** —
-
-### `src/notes/spikes/spike_sampler_oldpath.zig`
-
-(no description yet — add a //! header or a dict entry)
-
-*9 lines · 0 fns*  
-**Deps:** `src/zimrmath.zig`  
-**Dependents:** —
-
 ### `src/notes/spikes/spike_ssbo_shader.zig`
 
 (no description yet — add a //! header or a dict entry)
@@ -1833,8 +2529,16 @@ Note: @SpirvType image-op spikes — P0 SOLVED
 
 (no description yet — add a //! header or a dict entry)
 
-*13 lines · 0 fns*  
+*14 lines · 0 fns*  
 **Deps:** `zm` (module)  
+**Dependents:** —
+
+### `src/notes/spirv_2307_decorations_plan.md`
+
+Note: 2307: shader decorations dropped — findings and plan
+
+*222 lines*  
+**Deps:** —  
 **Dependents:** —
 
 ### `src/notes/spv2wgsl_dropped_block.md`
@@ -1874,6 +2578,22 @@ Note: spv2wgsl audit & improvement plan (working doc)
 (no description yet — add a //! header or a dict entry)
 
 *154 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/supertrack_comparison.md`
+
+Note: supertrack_comparison.md - SuperTrack: the paper, an unofficial implementation, and ours (Sep 27)
+
+*59 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/surface_view_leak_plan.md`
+
+Note: Surface-view leak in the bridge - plan
+
+*320 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1925,6 +2645,14 @@ Note: Tint vs spv2wgsl: architectural comparison
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/tools_audit.md`
+
+Note: tools_audit.md - are the tools working, used, and easy to call? (Simon, Sep 28)
+
+*92 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/torso_mpc_plan.md`
 
 Note: Making the quadruped's torso orientation precise
@@ -1973,11 +2701,19 @@ Note: architecture-tutorial.md — zimr's UI engine, end-to-end
 **Deps:** —  
 **Dependents:** —
 
+### `src/notes/tutorials/backends-tutorial.html`
+
+(no description yet — add a //! header or a dict entry)
+
+*7,111 lines*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`
+
 ### `src/notes/tutorials/debug-reload-tutorial.md`
 
 Note: Debug + reload system
 
-*252 lines*  
+*230 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -1985,7 +2721,7 @@ Note: Debug + reload system
 
 (no description yet — add a //! header or a dict entry)
 
-*444 lines*  
+*1,162 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -2025,7 +2761,7 @@ Note: Tutorial — Mandelbrot, end-to-end
 
 Note: Building P2P Multiplayer in zimr — Part 1: The Signaling Server
 
-*632 lines*  
+*643 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -2044,6 +2780,14 @@ Note: zimr resources & game entities — a tutorial
 *541 lines*  
 **Deps:** —  
 **Dependents:** —
+
+### `src/notes/tutorials/robot-mocap-tutorial.html`
+
+(no description yet — add a //! header or a dict entry)
+
+*12,804 lines*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`
 
 ### `src/notes/tutorials/robots.html`
 
@@ -2089,7 +2833,7 @@ Tutorial on porting GL examples to the wgpu backend (generated HTML).
 
 Note: zig-shader-tutorial.md — writing shaders in Zig, end-to-end
 
-*1,020 lines*  
+*1,021 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -2097,7 +2841,15 @@ Note: zig-shader-tutorial.md — writing shaders in Zig, end-to-end
 
 (no description yet — add a //! header or a dict entry)
 
-*26,643 lines*  
+*21,729 lines*  
+**Deps:** —  
+**Dependents:** `build.zig (wired)`
+
+### `src/notes/tutorials/zimrrl-tutorial.html`
+
+(no description yet — add a //! header or a dict entry)
+
+*11,506 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -2113,7 +2865,7 @@ Note: ★★★ THE TWIST-OFFSET RECIPE — worked out, and the plan to port it
 
 Note: Debugging zimr examples in VS Code
 
-*177 lines*  
+*192 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -2122,6 +2874,14 @@ Note: Debugging zimr examples in VS Code
 Note: vulkan_backend.md — native platforms via a Vulkan backend (plan, not started)
 
 *711 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/notes/vulkan_port_plan_v2.md`
+
+Note: vulkan port plan v2 - zimr on Windows through Vulkan, running the Zig compiler's own SPIR-V
+
+*3,972 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -2185,7 +2945,7 @@ Note: Zephyr inspiration → zimr — BRAINSTORM + PLAN
 
 Note: Zig SPIR-V compiler interface — the contract zimr depends on, and how to recover when it changes
 
-*375 lines*  
+*396 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -2221,6 +2981,14 @@ Note: zimrnum plan v3
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
+### `src/notes/zimrrl_split_baseline.txt`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,562 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `src/notes/zmath-LICENSE.txt`
 
 License of the zmath library zimrmath absorbed.
@@ -2245,6 +3013,54 @@ Note: znum -> zimrnum: the mapping
 **Deps:** —  
 **Dependents:** —
 
+### `src/platform/console.zig`
+
+src/platform/console.zig - the log of the platforms without a browser console: one line per message on standard error, prefixed with its level. It depends on nothing but the standard library, so the Windows and headless platforms and the native loop can all use it - the headless one needing no C library.
+
+*37 lines · 2 fns*  
+**Deps:** —  
+**Dependents:** `src/native_loop.zig`, `src/platform/headless.zig`, `src/platform/windows.zig`, `src/wgpu_app.zig`
+
+### `src/platform/contract.zig`
+
+src/platform/contract.zig - the contract between the engine and a platform.
+
+*928 lines · 20 fns · 4 tests*  
+**Deps:** `src/types.zig`, `zm` (module)  
+**Dependents:** `build.zig (wired)`, `src/native_input.zig`, `src/native_loop.zig`, `src/platform.zig`, `src/platform/headless.zig`, `src/platform/template.zig`, `src/platform/web.zig`, `src/platform/windows.zig`, `src/runtime.zig`
+
+### `src/platform/headless.zig`
+
+src/platform/headless.zig - the platform of a build with no window: a headless run, whose person is a script, and the host's tests and tools, which have none.
+
+*868 lines · 71 fns · 4 tests*  
+**Deps:** `src/host.zig`, `src/platform/console.zig`, `src/platform/contract.zig`, `zm` (module)  
+**Dependents:** `src/native_loop.zig`, `src/platform.zig`
+
+### `src/platform/template.zig`
+
+src/platform/template.zig - where a new platform starts: every request of the contract (`contract.zig`), each declaring itself not yet written.
+
+*284 lines · 51 fns · 2 tests*  
+**Deps:** `src/platform/contract.zig`  
+**Dependents:** `src/platform.zig`
+
+### `src/platform/web.zig`
+
+src/platform/web.zig - the browser's platform: the contract's requests (`contract.zig`), carried out through the bridge's DOM functions (`web.zig`'s `dom`).
+
+*369 lines · 50 fns*  
+**Deps:** `src/platform/contract.zig`, `src/types.zig`, `src/web.zig`  
+**Dependents:** `src/platform.zig`
+
+### `src/platform/windows.zig`
+
+src/platform/windows.zig - the Windows platform: the contract's requests (`contract.zig`), carried out with the window `native_loop.zig` owns and the system's own calls.
+
+*1,213 lines · 79 fns*  
+**Deps:** `src/native_input.zig`, `src/native_loop.zig`, `src/native_os.zig`, `src/net_core.zig`, `src/platform/console.zig`, `src/platform/contract.zig`, `src/win32.zig`, `zm` (module)  
+**Dependents:** `src/platform.zig`
+
 
 ## src/shaders
 
@@ -2258,7 +3074,7 @@ The GLSL gravestone: live shader entries still carry a `<name>.glsl` placeholder
 
 ### `src/shaders/billboard_common_io.zig`
 
-src/shaders/billboard_common_io.zig — the `Interp` varyings shared by `billboard_vs` and `billboard_fs`. The interpolated uv + vertex colour flow from the vertex stage to the fragment stage; aliasing one struct keeps them matched by construction.
+src/shaders/billboard_common_io.zig - the `Interp` varyings shared by `billboard_vs` and `billboard_fs`. The interpolated uv + vertex colour flow from the vertex stage to the fragment stage; aliasing one struct keeps them matched by construction.
 
 *[shader-safe] · 19 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2266,15 +3082,15 @@ src/shaders/billboard_common_io.zig — the `Interp` varyings shared by `billboa
 
 ### `src/shaders/billboard_fs.zig`
 
-src/shaders/billboard_fs.zig — textured-3D / billboard FS body (IoT).
+src/shaders/billboard_fs.zig - textured-3D / billboard FS body (IoT).
 
-*25 lines · 1 fns*  
+*26 lines · 1 fns*  
 **Deps:** `billboard_fs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/billboard_fs_io.zig`
 
-src/shaders/billboard_fs_io.zig — typed interface for the billboard FS. Samples one texture at group 1 and tints by the interpolated vertex colour. Body in `billboard_fs.zig`.
+src/shaders/billboard_fs_io.zig - typed interface for the billboard FS. Samples one texture at group 1 and tints by the interpolated vertex colour. Body in `billboard_fs.zig`.
 
 *[shader-safe] · 22 lines · 0 fns*  
 **Deps:** `src/shaders/billboard_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2282,15 +3098,15 @@ src/shaders/billboard_fs_io.zig — typed interface for the billboard FS. Sample
 
 ### `src/shaders/billboard_vs.zig`
 
-src/shaders/billboard_vs.zig — textured-3D / billboard VS body (IoT).
+src/shaders/billboard_vs.zig - textured-3D / billboard VS body (IoT).
 
-*30 lines · 1 fns*  
+*31 lines · 1 fns*  
 **Deps:** `src/shaders/billboard_vs_io.zig`, `billboard_vs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/billboard_vs_io.zig`
 
-src/shaders/billboard_vs_io.zig — typed interface for the textured-3D / billboard vertex shader. Reads the shared Cube3D camera UBO (only the view-projection), passes the three vertex attributes through to the fragment stage. Body in `billboard_vs.zig`.
+src/shaders/billboard_vs_io.zig - typed interface for the textured-3D / billboard vertex shader. Reads the shared Cube3D camera UBO (only the view-projection), passes the three vertex attributes through to the fragment stage. Body in `billboard_vs.zig`.
 
 *[shader-safe] · 27 lines · 0 fns*  
 **Deps:** `src/shaders/billboard_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2298,7 +3114,7 @@ src/shaders/billboard_vs_io.zig — typed interface for the textured-3D / billbo
 
 ### `src/shaders/cel_fs.zig`
 
-src/shaders/cel_fs.zig — cel (toon) shading fragment material.
+src/shaders/cel_fs.zig - cel (toon) shading fragment material.
 
 *61 lines · 1 fns*  
 **Deps:** `src/shaders/cel_fs_io.zig`, `cel_fs_externs` (module), `zm` (module)  
@@ -2306,7 +3122,7 @@ src/shaders/cel_fs.zig — cel (toon) shading fragment material.
 
 ### `src/shaders/cel_fs_io.zig`
 
-src/shaders/cel_fs_io.zig — typed interface for the cel-shading fragment material.  Companion to `cel_fs.zig`.
+src/shaders/cel_fs_io.zig - typed interface for the cel-shading fragment material.  Companion to `cel_fs.zig`.
 
 *[shader-safe] · 32 lines · 0 fns*  
 **Deps:** `src/shaders/gbuffer_common_io.zig`, `zm` (module)  
@@ -2314,7 +3130,7 @@ src/shaders/cel_fs_io.zig — typed interface for the cel-shading fragment mater
 
 ### `src/shaders/cube3d_common_io.zig`
 
-src/shaders/cube3d_common_io.zig — Interp varyings shared by `cube3d_vs` and `cube3d_fs`.
+src/shaders/cube3d_common_io.zig - Interp varyings shared by `cube3d_vs` and `cube3d_fs`.
 
 *[shader-safe] · 20 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2322,7 +3138,7 @@ src/shaders/cube3d_common_io.zig — Interp varyings shared by `cube3d_vs` and `
 
 ### `src/shaders/cube3d_fs.zig`
 
-src/shaders/cube3d_fs.zig — cube3d immediate-mode fragment shader body.
+src/shaders/cube3d_fs.zig - cube3d immediate-mode fragment shader body.
 
 *29 lines · 1 fns*  
 **Deps:** `src/shaders/cube3d_fs_io.zig`, `cube3d_fs_externs` (module)  
@@ -2330,7 +3146,7 @@ src/shaders/cube3d_fs.zig — cube3d immediate-mode fragment shader body.
 
 ### `src/shaders/cube3d_fs_io.zig`
 
-src/shaders/cube3d_fs_io.zig — typed interface for the cube3d immediate-mode fragment shader. Companion to `cube3d_fs.zig`.
+src/shaders/cube3d_fs_io.zig - typed interface for the cube3d immediate-mode fragment shader. Companion to `cube3d_fs.zig`.
 
 *[shader-safe] · 20 lines · 0 fns*  
 **Deps:** `src/shaders/cube3d_common_io.zig`, `zm` (module)  
@@ -2338,7 +3154,7 @@ src/shaders/cube3d_fs_io.zig — typed interface for the cube3d immediate-mode f
 
 ### `src/shaders/cube3d_instanced_vs.zig`
 
-src/shaders/cube3d_instanced_vs.zig — instanced 3D vertex shader body.
+src/shaders/cube3d_instanced_vs.zig - instanced 3D vertex shader body.
 
 *60 lines · 1 fns*  
 **Deps:** `src/shaders/cube3d_instanced_vs_io.zig`, `cube3d_instanced_vs_externs` (module), `zm` (module)  
@@ -2346,15 +3162,15 @@ src/shaders/cube3d_instanced_vs.zig — instanced 3D vertex shader body.
 
 ### `src/shaders/cube3d_instanced_vs_io.zig`
 
-src/shaders/cube3d_instanced_vs_io.zig — typed interface for the INSTANCED 3D vertex shader. Companion to `cube3d_instanced_vs.zig`.
+src/shaders/cube3d_instanced_vs_io.zig - typed interface for the INSTANCED 3D vertex shader. Companion to `cube3d_instanced_vs.zig`.
 
-*[shader-safe] · 38 lines · 0 fns*  
-**Deps:** `src/shaders/cube3d_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 40 lines · 0 fns*  
+**Deps:** `src/shaders/cube3d_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/cube3d_instanced_vs.zig`
 
 ### `src/shaders/cube3d_vs.zig`
 
-src/shaders/cube3d_vs.zig — immediate-mode 3D batch vertex shader body.
+src/shaders/cube3d_vs.zig - immediate-mode 3D batch vertex shader body.
 
 *46 lines · 1 fns*  
 **Deps:** `src/shaders/cube3d_vs_io.zig`, `cube3d_vs_externs` (module), `zm` (module)  
@@ -2362,15 +3178,15 @@ src/shaders/cube3d_vs.zig — immediate-mode 3D batch vertex shader body.
 
 ### `src/shaders/cube3d_vs_io.zig`
 
-src/shaders/cube3d_vs_io.zig — typed interface for the immediate-mode 3D batch vertex shader. Companion to `cube3d_vs.zig`.
+src/shaders/cube3d_vs_io.zig - typed interface for the immediate-mode 3D batch vertex shader. Companion to `cube3d_vs.zig`.
 
-*[shader-safe] · 34 lines · 0 fns*  
-**Deps:** `src/shaders/cube3d_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 36 lines · 0 fns*  
+**Deps:** `src/shaders/cube3d_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/cube3d_vs.zig`
 
 ### `src/shaders/decal_common_io.zig`
 
-src/shaders/decal_common_io.zig — the varyings shared by `decal_vs` and `decal_fs`. The VS forwards the receiver fragment's WORLD position and WORLD normal; the FS needs the world position to project into decal-box space and the normal for the facing test. Aliasing one struct keeps the two stages matched by construction.
+src/shaders/decal_common_io.zig - the varyings shared by `decal_vs` and `decal_fs`. The VS forwards the receiver fragment's WORLD position and WORLD normal; the FS needs the world position to project into decal-box space and the normal for the facing test. Aliasing one struct keeps the two stages matched by construction.
 
 *[shader-safe] · 16 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2378,7 +3194,7 @@ src/shaders/decal_common_io.zig — the varyings shared by `decal_vs` and `decal
 
 ### `src/shaders/decal_fs.zig`
 
-src/shaders/decal_fs.zig — shader-projected decal receiver FS body (IoT).
+src/shaders/decal_fs.zig - shader-projected decal receiver FS body (IoT).
 
 *91 lines · 3 fns*  
 **Deps:** `src/shaders/decal_fs_io.zig`, `decal_fs_externs` (module), `zm` (module)  
@@ -2386,7 +3202,7 @@ src/shaders/decal_fs.zig — shader-projected decal receiver FS body (IoT).
 
 ### `src/shaders/decal_fs_io.zig`
 
-src/shaders/decal_fs_io.zig — typed interface for the shader-projected decal receiver fragment stage. Non-standard bind layout, expressed with two pins: - the projector UBO sits at group 1 (not the default FS group 2), via `pub const ubo_group = 1`; - the decal texture sits at group 2 (not the default sampler group 1), via the `Sampler2D` `.pinned` config. The host serves the group-1 projector UBO from a 64-slot…
+src/shaders/decal_fs_io.zig - typed interface for the shader-projected decal receiver fragment stage. Non-standard bind layout, expressed with two pins: - the projector UBO sits at group 1 (not the default FS group 2), via `pub const ubo_group = 1`; - the decal texture sits at group 2 (not the default sampler group 1), via the `Sampler2D` `.pinned` config. The host serves the group-1 projector UBO from a 64-slot…
 
 *[shader-safe] · 39 lines · 0 fns*  
 **Deps:** `src/shaders/decal_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2394,23 +3210,23 @@ src/shaders/decal_fs_io.zig — typed interface for the shader-projected decal r
 
 ### `src/shaders/decal_vs.zig`
 
-src/shaders/decal_vs.zig — shader-projected decal receiver VS body (IoT).
+src/shaders/decal_vs.zig - shader-projected decal receiver VS body (IoT).
 
-*35 lines · 1 fns*  
+*36 lines · 1 fns*  
 **Deps:** `src/shaders/decal_vs_io.zig`, `decal_vs_externs` (module), `zm` (module)  
 **Dependents:** `src/zimr.zig`
 
 ### `src/shaders/decal_vs_io.zig`
 
-src/shaders/decal_vs_io.zig — typed interface for the shader-projected decal receiver vertex stage. Standard VS: the shared Cube3D camera UBO at group 0 (only the view-projection is read), two world-space attributes, two world varyings. Body in `decal_vs.zig`.
+src/shaders/decal_vs_io.zig - typed interface for the shader-projected decal receiver vertex stage. Standard VS: the shared Cube3D camera UBO at group 0 (only the view-projection is read), two world-space attributes, two world varyings. Body in `decal_vs.zig`.
 
-*[shader-safe] · 25 lines · 0 fns*  
-**Deps:** `src/shaders/decal_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 27 lines · 0 fns*  
+**Deps:** `src/shaders/decal_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/decal_vs.zig`
 
 ### `src/shaders/default_shapes_common_io.zig`
 
-src/shaders/default_shapes_common_io.zig — interpolated
+src/shaders/default_shapes_common_io.zig - interpolated
 
 *[shader-safe] · 50 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2418,7 +3234,7 @@ src/shaders/default_shapes_common_io.zig — interpolated
 
 ### `src/shaders/default_shapes_fs.zig`
 
-src/shaders/default_shapes_fs.zig — Zig source for the wgpu engine's default 2D fragment shader.  Replaces the hand-written the engine-emitted `default_shapes_fs.wgsl` — same effect (sample texture × per-vertex color), now compiled through the typed shader pipeline → SPIR-V → spv2wgsl → embedded `.wgsl`.  See `src/notes/webgpu-migration-plan.md` §3 Phase C for context.
+src/shaders/default_shapes_fs.zig - Zig source for the wgpu engine's default 2D fragment shader.  Replaces the hand-written the engine-emitted `default_shapes_fs.wgsl` - same effect (sample texture x per-vertex color), now compiled through the typed shader pipeline -> SPIR-V -> spv2wgsl -> embedded `.wgsl`.  See `src/notes/webgpu-migration-plan.md` section 3 Phase C for context.
 
 *55 lines · 1 fns*  
 **Deps:** `default_shapes_fs_externs` (module), `zm` (module)  
@@ -2426,7 +3242,7 @@ src/shaders/default_shapes_fs.zig — Zig source for the wgpu engine's default 2
 
 ### `src/shaders/default_shapes_fs_io.zig`
 
-src/shaders/default_shapes_fs_io.zig — typed interface for the
+src/shaders/default_shapes_fs_io.zig - typed interface for the
 
 *[shader-safe] · 47 lines · 0 fns*  
 **Deps:** `src/shaders/default_shapes_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2434,7 +3250,7 @@ src/shaders/default_shapes_fs_io.zig — typed interface for the
 
 ### `src/shaders/default_shapes_vs.zig`
 
-src/shaders/default_shapes_vs.zig — Zig source for the wgpu engine's default 2D vertex shader.  Replaces the hand-written the engine-emitted `default_shapes_vs.wgsl` — same effect (transform vertex through `view_projection`, pass UV + color through), now compiled through the typed shader pipeline → SPIR-V → spv2wgsl → embedded `.wgsl`.  See `src/notes/webgpu-migration-plan.md` §3 Phase C for context.
+src/shaders/default_shapes_vs.zig - Zig source for the wgpu engine's default 2D vertex shader.  Replaces the hand-written the engine-emitted `default_shapes_vs.wgsl` - same effect (transform vertex through `view_projection`, pass UV + color through), now compiled through the typed shader pipeline -> SPIR-V -> spv2wgsl -> embedded `.wgsl`.  See `src/notes/webgpu-migration-plan.md` section 3 Phase C for context.
 
 *69 lines · 1 fns*  
 **Deps:** `src/shaders/default_shapes_vs_io.zig`, `default_shapes_vs_externs` (module), `zm` (module)  
@@ -2442,15 +3258,15 @@ src/shaders/default_shapes_vs.zig — Zig source for the wgpu engine's default 2
 
 ### `src/shaders/default_shapes_vs_io.zig`
 
-src/shaders/default_shapes_vs_io.zig — typed interface for the
+src/shaders/default_shapes_vs_io.zig - typed interface for the
 
-*[shader-safe] · 57 lines · 0 fns*  
-**Deps:** `src/shaders/default_shapes_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 59 lines · 0 fns*  
+**Deps:** `src/shaders/default_shapes_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/renderer_2d.zig`, `src/shaders/default_shapes_vs.zig`
 
 ### `src/shaders/deferred_shading_common_io.zig`
 
-src/shaders/deferred_shading_common_io.zig — the one varying shared by `deferred_shading_vs` and `deferred_shading_fs`.
+src/shaders/deferred_shading_common_io.zig - the one varying shared by `deferred_shading_vs` and `deferred_shading_fs`.
 
 *[shader-safe] · 19 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2458,7 +3274,7 @@ src/shaders/deferred_shading_common_io.zig — the one varying shared by `deferr
 
 ### `src/shaders/deferred_shading_fs.zig`
 
-src/shaders/deferred_shading_fs.zig — deferred lighting fragment shader.
+src/shaders/deferred_shading_fs.zig - deferred lighting fragment shader.
 
 *117 lines · 2 fns*  
 **Deps:** `src/shaders/deferred_shading_fs_io.zig`, `deferred_shading_fs_externs` (module), `zm` (module)  
@@ -2466,7 +3282,7 @@ src/shaders/deferred_shading_fs.zig — deferred lighting fragment shader.
 
 ### `src/shaders/deferred_shading_fs_io.zig`
 
-src/shaders/deferred_shading_fs_io.zig — typed interface for the deferred lighting fragment shader.  Companion to `deferred_shading_fs.zig`.
+src/shaders/deferred_shading_fs_io.zig - typed interface for the deferred lighting fragment shader.  Companion to `deferred_shading_fs.zig`.
 
 *[shader-safe] · 51 lines · 0 fns*  
 **Deps:** `src/shaders/deferred_shading_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2474,7 +3290,7 @@ src/shaders/deferred_shading_fs_io.zig — typed interface for the deferred ligh
 
 ### `src/shaders/deferred_shading_vs.zig`
 
-src/shaders/deferred_shading_vs.zig — deferred lighting vertex shader.
+src/shaders/deferred_shading_vs.zig - deferred lighting vertex shader.
 
 *39 lines · 1 fns*  
 **Deps:** `src/shaders/deferred_shading_vs_io.zig`, `deferred_shading_vs_externs` (module)  
@@ -2482,7 +3298,7 @@ src/shaders/deferred_shading_vs.zig — deferred lighting vertex shader.
 
 ### `src/shaders/deferred_shading_vs_io.zig`
 
-src/shaders/deferred_shading_vs_io.zig — typed interface for the deferred lighting pass's vertex shader.  Companion to `deferred_shading_vs.zig`.
+src/shaders/deferred_shading_vs_io.zig - typed interface for the deferred lighting pass's vertex shader.  Companion to `deferred_shading_vs.zig`.
 
 *[shader-safe] · 21 lines · 0 fns*  
 **Deps:** `src/shaders/deferred_shading_common_io.zig`, `shader_interface` (module)  
@@ -2490,7 +3306,7 @@ src/shaders/deferred_shading_vs_io.zig — typed interface for the deferred ligh
 
 ### `src/shaders/depth_common_io.zig`
 
-src/shaders/depth_common_io.zig — Interp varyings shared by `depth_vs` and `depth_fs`.
+src/shaders/depth_common_io.zig - Interp varyings shared by `depth_vs` and `depth_fs`.
 
 *[shader-safe] · 26 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2498,7 +3314,7 @@ src/shaders/depth_common_io.zig — Interp varyings shared by `depth_vs` and `de
 
 ### `src/shaders/depth_fs.zig`
 
-src/shaders/depth_fs.zig — depth-in-red fragment shader body.
+src/shaders/depth_fs.zig - depth-in-red fragment shader body.
 
 *29 lines · 1 fns*  
 **Deps:** `src/shaders/depth_fs_io.zig`, `depth_fs_externs` (module)  
@@ -2506,7 +3322,7 @@ src/shaders/depth_fs.zig — depth-in-red fragment shader body.
 
 ### `src/shaders/depth_fs_io.zig`
 
-src/shaders/depth_fs_io.zig — typed interface for the depth-in-red fragment shader. Companion to `depth_fs.zig`.
+src/shaders/depth_fs_io.zig - typed interface for the depth-in-red fragment shader. Companion to `depth_fs.zig`.
 
 *[shader-safe] · 20 lines · 0 fns*  
 **Deps:** `src/shaders/depth_common_io.zig`, `zm` (module)  
@@ -2514,7 +3330,7 @@ src/shaders/depth_fs_io.zig — typed interface for the depth-in-red fragment sh
 
 ### `src/shaders/depth_vs.zig`
 
-src/shaders/depth_vs.zig — depth-in-red vertex shader body.
+src/shaders/depth_vs.zig - depth-in-red vertex shader body.
 
 *55 lines · 1 fns*  
 **Deps:** `src/shaders/depth_vs_io.zig`, `depth_vs_externs` (module), `zm` (module)  
@@ -2522,7 +3338,7 @@ src/shaders/depth_vs.zig — depth-in-red vertex shader body.
 
 ### `src/shaders/depth_vs_io.zig`
 
-src/shaders/depth_vs_io.zig — typed interface for the depth-in-red vertex shader. Companion to `depth_vs.zig`.
+src/shaders/depth_vs_io.zig - typed interface for the depth-in-red vertex shader. Companion to `depth_vs.zig`.
 
 *[shader-safe] · 42 lines · 0 fns*  
 **Deps:** `src/shaders/depth_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2530,7 +3346,7 @@ src/shaders/depth_vs_io.zig — typed interface for the depth-in-red vertex shad
 
 ### `src/shaders/depth_write_fs.zig`
 
-src/shaders/depth_write_fs.zig — fragment-shader depth writing, raylib's `depth_write.fs` ported (their `shaders_depth_writing`).
+src/shaders/depth_write_fs.zig - fragment-shader depth writing, raylib's `depth_write.fs` ported (their `shaders_depth_writing`).
 
 *65 lines · 1 fns*  
 **Deps:** `src/shaders/depth_write_fs_io.zig`, `depth_write_fs_externs` (module), `zm` (module)  
@@ -2538,7 +3354,7 @@ src/shaders/depth_write_fs.zig — fragment-shader depth writing, raylib's `dept
 
 ### `src/shaders/depth_write_fs_io.zig`
 
-src/shaders/depth_write_fs_io.zig — manual-depth material schema. Companion to `depth_write_fs.zig`; rides `gbuffer_vs` like every forward material (shared varyings from `gbuffer_common_io.zig`).
+src/shaders/depth_write_fs_io.zig - manual-depth material schema. Companion to `depth_write_fs.zig`; rides `gbuffer_vs` like every forward material (shared varyings from `gbuffer_common_io.zig`).
 
 *[shader-safe] · 29 lines · 0 fns*  
 **Deps:** `src/shaders/gbuffer_common_io.zig`, `zm` (module)  
@@ -2546,7 +3362,7 @@ src/shaders/depth_write_fs_io.zig — manual-depth material schema. Companion to
 
 ### `src/shaders/effect_ascii_fs.zig`
 
-src/shaders/effect_ascii_fs.zig — ASCII-art post effect (raylib's `shaders_ascii_rendering` ported into the engine's 2D effect family).
+src/shaders/effect_ascii_fs.zig - ASCII-art post effect (raylib's `shaders_ascii_rendering` ported into the engine's 2D effect family).
 
 *144 lines · 4 fns*  
 **Deps:** `src/shaders/effect_ascii_fs_io.zig`, `effect_ascii_fs_externs` (module), `zm` (module)  
@@ -2554,7 +3370,7 @@ src/shaders/effect_ascii_fs.zig — ASCII-art post effect (raylib's `shaders_asc
 
 ### `src/shaders/effect_ascii_fs_io.zig`
 
-src/shaders/effect_ascii_fs_io.zig — ASCII-art effect schema. Companion to `effect_ascii_fs.zig`; shares the effect family's shape (`effect_common_io.zig`) and only adds its own Ubo.
+src/shaders/effect_ascii_fs_io.zig - ASCII-art effect schema. Companion to `effect_ascii_fs.zig`; shares the effect family's shape (`effect_common_io.zig`) and only adds its own Ubo.
 
 *[shader-safe] · 27 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2562,7 +3378,7 @@ src/shaders/effect_ascii_fs_io.zig — ASCII-art effect schema. Companion to `ef
 
 ### `src/shaders/effect_common_io.zig`
 
-src/shaders/effect_common_io.zig — the shared shape of every 2D fragment EFFECT in the engine.
+src/shaders/effect_common_io.zig - the shared shape of every 2D fragment EFFECT in the engine.
 
 *[shader-safe] · 28 lines · 0 fns*  
 **Deps:** `src/shaders/deferred_shading_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2570,7 +3386,7 @@ src/shaders/effect_common_io.zig — the shared shape of every 2D fragment EFFEC
 
 ### `src/shaders/effect_cubes_fs.zig`
 
-src/shaders/effect_cubes_fs.zig — panning, snap-rotating cubes. Ports raylib's `shaders_texture_rendering` (its `cubes_panning.fs`).
+src/shaders/effect_cubes_fs.zig - panning, snap-rotating cubes. Ports raylib's `shaders_texture_rendering` (its `cubes_panning.fs`).
 
 *119 lines · 4 fns*  
 **Deps:** `src/shaders/effect_cubes_fs_io.zig`, `effect_cubes_fs_externs` (module), `zm` (module)  
@@ -2578,7 +3394,7 @@ src/shaders/effect_cubes_fs.zig — panning, snap-rotating cubes. Ports raylib's
 
 ### `src/shaders/effect_cubes_fs_io.zig`
 
-src/shaders/effect_cubes_fs_io.zig — the panning-cubes procedural pattern. Companion to `effect_cubes_fs.zig`; shares the effect family's shape and adds only its own Ubo.
+src/shaders/effect_cubes_fs_io.zig - the panning-cubes procedural pattern. Companion to `effect_cubes_fs.zig`; shares the effect family's shape and adds only its own Ubo.
 
 *[shader-safe] · 27 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2586,7 +3402,7 @@ src/shaders/effect_cubes_fs_io.zig — the panning-cubes procedural pattern. Com
 
 ### `src/shaders/effect_grade_fs.zig`
 
-src/shaders/effect_grade_fs.zig — color correction (contrast / brightness / saturation), raylib's `color_correction.fs` ported.
+src/shaders/effect_grade_fs.zig - color correction (contrast / brightness / saturation), raylib's `color_correction.fs` ported.
 
 *53 lines · 1 fns*  
 **Deps:** `src/shaders/effect_grade_fs_io.zig`, `effect_grade_fs_externs` (module), `zm` (module)  
@@ -2594,7 +3410,7 @@ src/shaders/effect_grade_fs.zig — color correction (contrast / brightness / sa
 
 ### `src/shaders/effect_grade_fs_io.zig`
 
-src/shaders/effect_grade_fs_io.zig — color-correction effect schema. Companion to `effect_grade_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
+src/shaders/effect_grade_fs_io.zig - color-correction effect schema. Companion to `effect_grade_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
 
 *[shader-safe] · 20 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2602,7 +3418,7 @@ src/shaders/effect_grade_fs_io.zig — color-correction effect schema. Companion
 
 ### `src/shaders/effect_mask_fs.zig`
 
-src/shaders/effect_mask_fs.zig — blend two sources, by a mask or by a divider.
+src/shaders/effect_mask_fs.zig - blend two sources, by a mask or by a divider.
 
 *68 lines · 1 fns*  
 **Deps:** `src/shaders/effect_mask_fs_io.zig`, `effect_mask_fs_externs` (module), `zm` (module)  
@@ -2610,7 +3426,7 @@ src/shaders/effect_mask_fs.zig — blend two sources, by a mask or by a divider.
 
 ### `src/shaders/effect_mask_fs_io.zig`
 
-src/shaders/effect_mask_fs_io.zig — two-source blend, with a mask.
+src/shaders/effect_mask_fs_io.zig - two-source blend, with a mask.
 
 *[shader-safe] · 43 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2618,7 +3434,7 @@ src/shaders/effect_mask_fs_io.zig — two-source blend, with a mask.
 
 ### `src/shaders/effect_outline_fs.zig`
 
-src/shaders/effect_outline_fs.zig — alpha-silhouette outline, raylib's `outline.fs` ported (their `shaders_texture_outline`).
+src/shaders/effect_outline_fs.zig - alpha-silhouette outline, raylib's `outline.fs` ported (their `shaders_texture_outline`).
 
 *60 lines · 1 fns*  
 **Deps:** `src/shaders/effect_outline_fs_io.zig`, `effect_outline_fs_externs` (module), `zm` (module)  
@@ -2626,7 +3442,7 @@ src/shaders/effect_outline_fs.zig — alpha-silhouette outline, raylib's `outlin
 
 ### `src/shaders/effect_outline_fs_io.zig`
 
-src/shaders/effect_outline_fs_io.zig — alpha-edge outline effect schema.  Companion to `effect_outline_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
+src/shaders/effect_outline_fs_io.zig - alpha-edge outline effect schema.  Companion to `effect_outline_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
 
 *[shader-safe] · 20 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2634,7 +3450,7 @@ src/shaders/effect_outline_fs_io.zig — alpha-edge outline effect schema.  Comp
 
 ### `src/shaders/effect_palette_fs.zig`
 
-src/shaders/effect_palette_fs.zig — indexed-palette recolor, raylib's `palette_switch.fs` ported (their `shaders_palette_switch`).
+src/shaders/effect_palette_fs.zig - indexed-palette recolor, raylib's `palette_switch.fs` ported (their `shaders_palette_switch`).
 
 *50 lines · 1 fns*  
 **Deps:** `src/shaders/effect_palette_fs_io.zig`, `effect_palette_fs_externs` (module), `zm` (module)  
@@ -2642,7 +3458,7 @@ src/shaders/effect_palette_fs.zig — indexed-palette recolor, raylib's `palette
 
 ### `src/shaders/effect_palette_fs_io.zig`
 
-src/shaders/effect_palette_fs_io.zig — indexed-palette effect schema. Companion to `effect_palette_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
+src/shaders/effect_palette_fs_io.zig - indexed-palette effect schema. Companion to `effect_palette_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
 
 *[shader-safe] · 24 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2650,7 +3466,7 @@ src/shaders/effect_palette_fs_io.zig — indexed-palette effect schema. Companio
 
 ### `src/shaders/effect_sieve_fs.zig`
 
-src/shaders/effect_sieve_fs.zig — the Sieve of Eratosthenes, raylib's `eratosthenes.fs` ported (their `shaders_eratosthenes_sieve`, by ProfJski).
+src/shaders/effect_sieve_fs.zig - the Sieve of Eratosthenes, raylib's `eratosthenes.fs` ported (their `shaders_eratosthenes_sieve`, by ProfJski).
 
 *60 lines · 2 fns*  
 **Deps:** `src/shaders/effect_sieve_fs_io.zig`, `effect_sieve_fs_externs` (module), `zm` (module)  
@@ -2658,7 +3474,7 @@ src/shaders/effect_sieve_fs.zig — the Sieve of Eratosthenes, raylib's `eratost
 
 ### `src/shaders/effect_sieve_fs_io.zig`
 
-src/shaders/effect_sieve_fs_io.zig — Sieve of Eratosthenes effect schema. Companion to `effect_sieve_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo). Procedural — `texture0` is declared by the shared Samplers but unused by this effect.
+src/shaders/effect_sieve_fs_io.zig - Sieve of Eratosthenes effect schema. Companion to `effect_sieve_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo). Procedural - `texture0` is declared by the shared Samplers but unused by this effect.
 
 *[shader-safe] · 19 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2666,7 +3482,7 @@ src/shaders/effect_sieve_fs_io.zig — Sieve of Eratosthenes effect schema. Comp
 
 ### `src/shaders/effect_spotlight_fs.zig`
 
-src/shaders/effect_spotlight_fs.zig — spotlight darkness mask, raylib's `spotlight.fs` ported (their `shaders_spotlight_rendering`).
+src/shaders/effect_spotlight_fs.zig - spotlight darkness mask, raylib's `spotlight.fs` ported (their `shaders_spotlight_rendering`).
 
 *79 lines · 1 fns*  
 **Deps:** `src/shaders/effect_spotlight_fs_io.zig`, `effect_spotlight_fs_externs` (module), `zm` (module)  
@@ -2674,7 +3490,7 @@ src/shaders/effect_spotlight_fs.zig — spotlight darkness mask, raylib's `spotl
 
 ### `src/shaders/effect_spotlight_fs_io.zig`
 
-src/shaders/effect_spotlight_fs_io.zig — spotlight-mask effect schema.  Companion to `effect_spotlight_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
+src/shaders/effect_spotlight_fs_io.zig - spotlight-mask effect schema.  Companion to `effect_spotlight_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
 
 *[shader-safe] · 25 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2682,7 +3498,7 @@ src/shaders/effect_spotlight_fs_io.zig — spotlight-mask effect schema.  Compan
 
 ### `src/shaders/effect_tiling_fs.zig`
 
-src/shaders/effect_tiling_fs.zig — texture tiling, raylib's `tiling.fs` ported (their `shaders_texture_tiling`).
+src/shaders/effect_tiling_fs.zig - texture tiling, raylib's `tiling.fs` ported (their `shaders_texture_tiling`).
 
 *35 lines · 1 fns*  
 **Deps:** `src/shaders/effect_tiling_fs_io.zig`, `effect_tiling_fs_externs` (module), `zm` (module)  
@@ -2690,7 +3506,7 @@ src/shaders/effect_tiling_fs.zig — texture tiling, raylib's `tiling.fs` ported
 
 ### `src/shaders/effect_tiling_fs_io.zig`
 
-src/shaders/effect_tiling_fs_io.zig — texture-tiling effect schema. Companion to `effect_tiling_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
+src/shaders/effect_tiling_fs_io.zig - texture-tiling effect schema. Companion to `effect_tiling_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
 
 *[shader-safe] · 18 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2698,7 +3514,7 @@ src/shaders/effect_tiling_fs_io.zig — texture-tiling effect schema. Companion 
 
 ### `src/shaders/effect_wave_fs.zig`
 
-src/shaders/effect_wave_fs.zig — animated sinusoidal UV distortion, raylib's `wave.fs` ported (their `shaders_texture_waves`).
+src/shaders/effect_wave_fs.zig - animated sinusoidal UV distortion, raylib's `wave.fs` ported (their `shaders_texture_waves`).
 
 *49 lines · 1 fns*  
 **Deps:** `src/shaders/effect_wave_fs_io.zig`, `effect_wave_fs_externs` (module), `zm` (module)  
@@ -2706,7 +3522,7 @@ src/shaders/effect_wave_fs.zig — animated sinusoidal UV distortion, raylib's `
 
 ### `src/shaders/effect_wave_fs_io.zig`
 
-src/shaders/effect_wave_fs_io.zig — sinusoidal UV-warp effect schema. Companion to `effect_wave_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
+src/shaders/effect_wave_fs_io.zig - sinusoidal UV-warp effect schema. Companion to `effect_wave_fs.zig`; shared shape in `effect_common_io.zig` (this file only adds the Ubo).
 
 *[shader-safe] · 22 lines · 0 fns*  
 **Deps:** `src/shaders/effect_common_io.zig`, `zm` (module)  
@@ -2714,7 +3530,7 @@ src/shaders/effect_wave_fs_io.zig — sinusoidal UV-warp effect schema. Companio
 
 ### `src/shaders/fluid_discs_common_io.zig`
 
-src/shaders/fluid_discs_common_io.zig — the `Interp` varyings shared by `fluid_discs_vs` and `fluid_discs_fs`. Single source of truth: the VS Outputs and FS Inputs both alias this, so the per-instance colour and the quad-corner offset can never drift between the two stages.
+src/shaders/fluid_discs_common_io.zig - the `Interp` varyings shared by `fluid_discs_vs` and `fluid_discs_fs`. Single source of truth: the VS Outputs and FS Inputs both alias this, so the per-instance colour and the quad-corner offset can never drift between the two stages.
 
 *[shader-safe] · 16 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2722,15 +3538,15 @@ src/shaders/fluid_discs_common_io.zig — the `Interp` varyings shared by `fluid
 
 ### `src/shaders/fluid_discs_fs.zig`
 
-src/shaders/fluid_discs_fs.zig — instanced SDF-disc FS body (IoT).
+src/shaders/fluid_discs_fs.zig - instanced SDF-disc FS body (IoT).
 
-*37 lines · 1 fns*  
+*39 lines · 1 fns*  
 **Deps:** `fluid_discs_fs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/fluid_discs_fs_io.zig`
 
-src/shaders/fluid_discs_fs_io.zig — typed interface for the SDF-disc FS. Reads the interpolated colour + corner, draws a soft-edged disc. Body in `fluid_discs_fs.zig`.
+src/shaders/fluid_discs_fs_io.zig - typed interface for the SDF-disc FS. Reads the interpolated colour + corner, draws a soft-edged disc. Body in `fluid_discs_fs.zig`.
 
 *[shader-safe] · 16 lines · 0 fns*  
 **Deps:** `src/shaders/fluid_discs_common_io.zig`, `zm` (module)  
@@ -2738,15 +3554,15 @@ src/shaders/fluid_discs_fs_io.zig — typed interface for the SDF-disc FS. Reads
 
 ### `src/shaders/fluid_discs_vs.zig`
 
-src/shaders/fluid_discs_vs.zig — instanced SDF-disc VS body (IoT).
+src/shaders/fluid_discs_vs.zig - instanced SDF-disc VS body (IoT).
 
-*56 lines · 1 fns*  
+*57 lines · 1 fns*  
 **Deps:** `src/shaders/fluid_discs_vs_io.zig`, `fluid_discs_vs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/fluid_discs_vs_io.zig`
 
-src/shaders/fluid_discs_vs_io.zig — typed interface for the instanced SDF-disc vertex shader. The HARDEST shader in the engine: two read-only storage buffers (`positions`, `density`) indexed by `instance_index`, plus `vertex_index` for the 6-vertex quad expansion. Body in `fluid_discs_vs.zig`.
+src/shaders/fluid_discs_vs_io.zig - typed interface for the instanced SDF-disc vertex shader. The HARDEST shader in the engine: two read-only storage buffers (`positions`, `density`) indexed by `instance_index`, plus `vertex_index` for the 6-vertex quad expansion. Body in `fluid_discs_vs.zig`.
 
 *[shader-safe] · 46 lines · 0 fns*  
 **Deps:** `src/shaders/fluid_discs_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2754,7 +3570,7 @@ src/shaders/fluid_discs_vs_io.zig — typed interface for the instanced SDF-disc
 
 ### `src/shaders/fog_fs.zig`
 
-src/shaders/fog_fs.zig — distance-fog fragment shader.
+src/shaders/fog_fs.zig - distance-fog fragment shader.
 
 *83 lines · 2 fns*  
 **Deps:** `src/shaders/fog_fs_io.zig`, `fog_fs_externs` (module), `zm` (module)  
@@ -2762,7 +3578,7 @@ src/shaders/fog_fs.zig — distance-fog fragment shader.
 
 ### `src/shaders/fog_fs_io.zig`
 
-src/shaders/fog_fs_io.zig — typed interface for the fog fragment shader.  Companion to `fog_fs.zig`.
+src/shaders/fog_fs_io.zig - typed interface for the fog fragment shader.  Companion to `fog_fs.zig`.
 
 *[shader-safe] · 40 lines · 0 fns*  
 **Deps:** `src/shaders/gbuffer_common_io.zig`, `zm` (module)  
@@ -2770,7 +3586,7 @@ src/shaders/fog_fs_io.zig — typed interface for the fog fragment shader.  Comp
 
 ### `src/shaders/gbuffer_common_io.zig`
 
-src/shaders/gbuffer_common_io.zig — varyings shared by `gbuffer_vs` and `gbuffer_fs`.
+src/shaders/gbuffer_common_io.zig - varyings shared by `gbuffer_vs` and `gbuffer_fs`.
 
 *[shader-safe] · 27 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2778,7 +3594,7 @@ src/shaders/gbuffer_common_io.zig — varyings shared by `gbuffer_vs` and `gbuff
 
 ### `src/shaders/gbuffer_fs.zig`
 
-src/shaders/gbuffer_fs.zig — G-buffer fragment shader body.
+src/shaders/gbuffer_fs.zig - G-buffer fragment shader body.
 
 *52 lines · 1 fns*  
 **Deps:** `src/shaders/gbuffer_fs_io.zig`, `gbuffer_fs_externs` (module), `zm` (module)  
@@ -2786,7 +3602,7 @@ src/shaders/gbuffer_fs.zig — G-buffer fragment shader body.
 
 ### `src/shaders/gbuffer_fs_io.zig`
 
-src/shaders/gbuffer_fs_io.zig — typed interface for the G-buffer fragment shader.  Companion to `gbuffer_fs.zig`.
+src/shaders/gbuffer_fs_io.zig - typed interface for the G-buffer fragment shader.  Companion to `gbuffer_fs.zig`.
 
 *[shader-safe] · 39 lines · 0 fns*  
 **Deps:** `src/shaders/gbuffer_common_io.zig`, `zm` (module)  
@@ -2794,7 +3610,7 @@ src/shaders/gbuffer_fs_io.zig — typed interface for the G-buffer fragment shad
 
 ### `src/shaders/gbuffer_vs.zig`
 
-src/shaders/gbuffer_vs.zig — G-buffer vertex shader body.
+src/shaders/gbuffer_vs.zig - G-buffer vertex shader body.
 
 *48 lines · 1 fns*  
 **Deps:** `src/shaders/gbuffer_vs_io.zig`, `gbuffer_vs_externs` (module), `zm` (module)  
@@ -2802,15 +3618,15 @@ src/shaders/gbuffer_vs.zig — G-buffer vertex shader body.
 
 ### `src/shaders/gbuffer_vs_io.zig`
 
-src/shaders/gbuffer_vs_io.zig — typed interface for the G-buffer vertex shader.  Companion to `gbuffer_vs.zig`.
+src/shaders/gbuffer_vs_io.zig - typed interface for the G-buffer vertex shader.  Companion to `gbuffer_vs.zig`.
 
-*[shader-safe] · 35 lines · 0 fns*  
-**Deps:** `src/shaders/gbuffer_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 37 lines · 0 fns*  
+**Deps:** `src/shaders/gbuffer_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/gbuffer_vs.zig`
 
 ### `src/shaders/hybrid_raymarch_fs.zig`
 
-src/shaders/hybrid_raymarch_fs.zig — sphere-traced SDF scene with true depth output, the marcher behind `shaders_hybrid_rendering` (and, alone on screen, `shaders_raymarching_rendering`).
+src/shaders/hybrid_raymarch_fs.zig - sphere-traced SDF scene with true depth output, the marcher behind `shaders_hybrid_rendering` (and, alone on screen, `shaders_raymarching_rendering`).
 
 *187 lines · 7 fns*  
 **Deps:** `src/shaders/hybrid_raymarch_fs_io.zig`, `hybrid_raymarch_fs_externs` (module), `zm` (module)  
@@ -2818,7 +3634,7 @@ src/shaders/hybrid_raymarch_fs.zig — sphere-traced SDF scene with true depth o
 
 ### `src/shaders/hybrid_raymarch_fs_io.zig`
 
-src/shaders/hybrid_raymarch_fs_io.zig — raymarched-scene fragment shader schema.  Companion to `hybrid_raymarch_fs.zig`.
+src/shaders/hybrid_raymarch_fs_io.zig - raymarched-scene fragment shader schema.  Companion to `hybrid_raymarch_fs.zig`.
 
 *[shader-safe] · 43 lines · 0 fns*  
 **Deps:** `src/shaders/deferred_shading_common_io.zig`, `zm` (module)  
@@ -2826,7 +3642,7 @@ src/shaders/hybrid_raymarch_fs_io.zig — raymarched-scene fragment shader schem
 
 ### `src/shaders/lambert_common_io.zig`
 
-src/shaders/lambert_common_io.zig — Interp varyings shared by
+src/shaders/lambert_common_io.zig - Interp varyings shared by
 
 *[shader-safe] · 23 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2834,7 +3650,7 @@ src/shaders/lambert_common_io.zig — Interp varyings shared by
 
 ### `src/shaders/lambert_fs.zig`
 
-src/shaders/lambert_fs.zig — Lambert fragment shader body.
+src/shaders/lambert_fs.zig - Lambert fragment shader body.
 
 *50 lines · 1 fns*  
 **Deps:** `src/shaders/lambert_fs_io.zig`, `lambert_fs_externs` (module), `zm` (module)  
@@ -2842,7 +3658,7 @@ src/shaders/lambert_fs.zig — Lambert fragment shader body.
 
 ### `src/shaders/lambert_fs_io.zig`
 
-src/shaders/lambert_fs_io.zig — typed interface for the Lambert
+src/shaders/lambert_fs_io.zig - typed interface for the Lambert
 
 *[shader-safe] · 43 lines · 0 fns*  
 **Deps:** `src/shaders/lambert_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2850,7 +3666,7 @@ src/shaders/lambert_fs_io.zig — typed interface for the Lambert
 
 ### `src/shaders/lambert_vs.zig`
 
-src/shaders/lambert_vs.zig — Lambert vertex shader body.
+src/shaders/lambert_vs.zig - Lambert vertex shader body.
 
 *50 lines · 1 fns*  
 **Deps:** `src/shaders/lambert_vs_io.zig`, `lambert_vs_externs` (module), `zm` (module)  
@@ -2858,7 +3674,7 @@ src/shaders/lambert_vs.zig — Lambert vertex shader body.
 
 ### `src/shaders/lambert_vs_io.zig`
 
-src/shaders/lambert_vs_io.zig — typed interface for the Lambert
+src/shaders/lambert_vs_io.zig - typed interface for the Lambert
 
 *[shader-safe] · 42 lines · 0 fns*  
 **Deps:** `src/shaders/lambert_common_io.zig`, `shader_interface` (module)  
@@ -2866,7 +3682,7 @@ src/shaders/lambert_vs_io.zig — typed interface for the Lambert
 
 ### `src/shaders/lit_shadow_common_io.zig`
 
-src/shaders/lit_shadow_common_io.zig — Interp varyings shared by `lit_shadow_vs` and `lit_shadow_fs`.
+src/shaders/lit_shadow_common_io.zig - Interp varyings shared by `lit_shadow_vs` and `lit_shadow_fs`.
 
 *[shader-safe] · 24 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2874,7 +3690,7 @@ src/shaders/lit_shadow_common_io.zig — Interp varyings shared by `lit_shadow_v
 
 ### `src/shaders/lit_shadow_fs.zig`
 
-src/shaders/lit_shadow_fs.zig — shadow-mapped Lambert fragment shader.
+src/shaders/lit_shadow_fs.zig - shadow-mapped Lambert fragment shader.
 
 *94 lines · 2 fns*  
 **Deps:** `src/shaders/lit_shadow_fs_io.zig`, `lit_shadow_fs_externs` (module), `zm` (module)  
@@ -2882,7 +3698,7 @@ src/shaders/lit_shadow_fs.zig — shadow-mapped Lambert fragment shader.
 
 ### `src/shaders/lit_shadow_fs_io.zig`
 
-src/shaders/lit_shadow_fs_io.zig — typed interface for the shadow-mapped Lambert fragment shader. Companion to `lit_shadow_fs.zig`.
+src/shaders/lit_shadow_fs_io.zig - typed interface for the shadow-mapped Lambert fragment shader. Companion to `lit_shadow_fs.zig`.
 
 *[shader-safe] · 40 lines · 0 fns*  
 **Deps:** `src/shaders/lit_shadow_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2890,7 +3706,7 @@ src/shaders/lit_shadow_fs_io.zig — typed interface for the shadow-mapped Lambe
 
 ### `src/shaders/lit_shadow_vs.zig`
 
-src/shaders/lit_shadow_vs.zig — shadow-mapped Lambert vertex shader.
+src/shaders/lit_shadow_vs.zig - shadow-mapped Lambert vertex shader.
 
 *42 lines · 1 fns*  
 **Deps:** `src/shaders/lit_shadow_vs_io.zig`, `lit_shadow_vs_externs` (module), `zm` (module)  
@@ -2898,15 +3714,15 @@ src/shaders/lit_shadow_vs.zig — shadow-mapped Lambert vertex shader.
 
 ### `src/shaders/lit_shadow_vs_io.zig`
 
-src/shaders/lit_shadow_vs_io.zig — typed interface for the shadow-mapped Lambert vertex shader. Companion to `lit_shadow_vs.zig`.
+src/shaders/lit_shadow_vs_io.zig - typed interface for the shadow-mapped Lambert vertex shader. Companion to `lit_shadow_vs.zig`.
 
-*[shader-safe] · 37 lines · 0 fns*  
-**Deps:** `src/shaders/lit_shadow_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 39 lines · 0 fns*  
+**Deps:** `src/shaders/lit_shadow_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/lit_shadow_vs.zig`
 
 ### `src/shaders/maze_fs.zig`
 
-src/shaders/maze_fs.zig — face-shaded maze material.
+src/shaders/maze_fs.zig - face-shaded maze material.
 
 *62 lines · 2 fns*  
 **Deps:** `src/shaders/maze_fs_io.zig`, `maze_fs_externs` (module), `zm` (module)  
@@ -2914,7 +3730,7 @@ src/shaders/maze_fs.zig — face-shaded maze material.
 
 ### `src/shaders/maze_fs_io.zig`
 
-src/shaders/maze_fs_io.zig — face-shaded maze material schema. Companion to `maze_fs.zig`.
+src/shaders/maze_fs_io.zig - face-shaded maze material schema. Companion to `maze_fs.zig`.
 
 *[shader-safe] · 32 lines · 0 fns*  
 **Deps:** `src/shaders/gbuffer_common_io.zig`, `zm` (module)  
@@ -2922,7 +3738,7 @@ src/shaders/maze_fs_io.zig — face-shaded maze material schema. Companion to `m
 
 ### `src/shaders/normalmap_fs.zig`
 
-src/shaders/normalmap_fs.zig — the "what is a normal map" fragment shader.
+src/shaders/normalmap_fs.zig - the "what is a normal map" fragment shader.
 
 *100 lines · 2 fns*  
 **Deps:** `src/shaders/normalmap_fs_io.zig`, `normalmap_fs_externs` (module), `zm` (module)  
@@ -2930,7 +3746,7 @@ src/shaders/normalmap_fs.zig — the "what is a normal map" fragment shader.
 
 ### `src/shaders/normalmap_fs_io.zig`
 
-src/shaders/normalmap_fs_io.zig — IO schema for the simple normal-map shader (`shaders_normalmap_rendering`). It deliberately REUSES the PBR fragment IO — the same samplers (base color + normal + ...), the same UBO (view_pos, ambient, directional lights, col_diffuse), and the same interpolated varyings (world pos / normal / tangent / uv). Sharing the layout means this shader drops straight into the `pbr3d`…
+src/shaders/normalmap_fs_io.zig - IO schema for the simple normal-map shader (`shaders_normalmap_rendering`). It deliberately REUSES the PBR fragment IO - the same samplers (base color + normal + ...), the same UBO (view_pos, ambient, directional lights, col_diffuse), and the same interpolated varyings (world pos / normal / tangent / uv). Sharing the layout means this shader drops straight into the `pbr3d`…
 
 *[shader-safe] · 17 lines · 0 fns*  
 **Deps:** `src/shaders/pbr_fs_io.zig`  
@@ -2938,7 +3754,7 @@ src/shaders/normalmap_fs_io.zig — IO schema for the simple normal-map shader (
 
 ### `src/shaders/outline_hull_vs.zig`
 
-src/shaders/outline_hull_vs.zig — inverted-hull outline vertex shader.
+src/shaders/outline_hull_vs.zig - inverted-hull outline vertex shader.
 
 *43 lines · 1 fns*  
 **Deps:** `src/shaders/outline_hull_vs_io.zig`, `outline_hull_vs_externs` (module), `zm` (module)  
@@ -2946,7 +3762,7 @@ src/shaders/outline_hull_vs.zig — inverted-hull outline vertex shader.
 
 ### `src/shaders/outline_hull_vs_io.zig`
 
-src/shaders/outline_hull_vs_io.zig — typed interface for the inverted-hull outline vertex shader.  Companion to `outline_hull_vs.zig`.
+src/shaders/outline_hull_vs_io.zig - typed interface for the inverted-hull outline vertex shader.  Companion to `outline_hull_vs.zig`.
 
 *[shader-safe] · 39 lines · 0 fns*  
 **Deps:** `src/shaders/depth_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2954,7 +3770,7 @@ src/shaders/outline_hull_vs_io.zig — typed interface for the inverted-hull out
 
 ### `src/shaders/pbr_common_io.zig`
 
-src/shaders/pbr_common_io.zig — constants + Interp varyings
+src/shaders/pbr_common_io.zig - constants + Interp varyings
 
 *[shader-safe] · 55 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -2962,7 +3778,7 @@ src/shaders/pbr_common_io.zig — constants + Interp varyings
 
 ### `src/shaders/pbr_fs.zig`
 
-src/shaders/pbr_fs.zig — PBR fragment shader body.
+src/shaders/pbr_fs.zig - PBR fragment shader body.
 
 *314 lines · 9 fns*  
 **Deps:** `src/shaders/pbr_fs_io.zig`, `pbr_fs_externs` (module), `zm` (module)  
@@ -2970,7 +3786,7 @@ src/shaders/pbr_fs.zig — PBR fragment shader body.
 
 ### `src/shaders/pbr_fs_io.zig`
 
-src/shaders/pbr_fs_io.zig — typed interface for the PBR
+src/shaders/pbr_fs_io.zig - typed interface for the PBR
 
 *[shader-safe] · 126 lines · 0 fns*  
 **Deps:** `src/shaders/pbr_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -2978,7 +3794,7 @@ src/shaders/pbr_fs_io.zig — typed interface for the PBR
 
 ### `src/shaders/pbr_vs.zig`
 
-src/shaders/pbr_vs.zig — PBR vertex shader body.
+src/shaders/pbr_vs.zig - PBR vertex shader body.
 
 *70 lines · 1 fns*  
 **Deps:** `src/shaders/pbr_vs_io.zig`, `pbr_vs_externs` (module), `zm` (module)  
@@ -2986,7 +3802,7 @@ src/shaders/pbr_vs.zig — PBR vertex shader body.
 
 ### `src/shaders/pbr_vs_io.zig`
 
-src/shaders/pbr_vs_io.zig — typed interface for the PBR vertex
+src/shaders/pbr_vs_io.zig - typed interface for the PBR vertex
 
 *[shader-safe] · 54 lines · 0 fns*  
 **Deps:** `src/shaders/pbr_common_io.zig`, `shader_interface` (module)  
@@ -2994,7 +3810,7 @@ src/shaders/pbr_vs_io.zig — typed interface for the PBR vertex
 
 ### `src/shaders/points3d_vs.zig`
 
-src/shaders/points3d_vs.zig — unlit 3D point-cloud vertex shader.
+src/shaders/points3d_vs.zig - unlit 3D point-cloud vertex shader.
 
 *31 lines · 1 fns*  
 **Deps:** `src/shaders/points3d_vs_io.zig`, `points3d_vs_externs` (module), `zm` (module)  
@@ -3002,15 +3818,15 @@ src/shaders/points3d_vs.zig — unlit 3D point-cloud vertex shader.
 
 ### `src/shaders/points3d_vs_io.zig`
 
-src/shaders/points3d_vs_io.zig — typed interface for the unlit 3D point-cloud vertex shader.  Companion to `points3d_vs.zig`.
+src/shaders/points3d_vs_io.zig - typed interface for the unlit 3D point-cloud vertex shader.  Companion to `points3d_vs.zig`.
 
-*[shader-safe] · 33 lines · 0 fns*  
-**Deps:** `src/shaders/cube3d_common_io.zig`, `shader_interface` (module)  
+*[shader-safe] · 35 lines · 0 fns*  
+**Deps:** `src/shaders/cube3d_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/points3d_vs.zig`
 
 ### `src/shaders/points_common_io.zig`
 
-src/shaders/points_common_io.zig — the `Interp` varyings shared by `points_vs` and `points_fs`. Single source of truth: VS Outputs and FS Inputs both alias this, so they can't drift.
+src/shaders/points_common_io.zig - the `Interp` varyings shared by `points_vs` and `points_fs`. Single source of truth: VS Outputs and FS Inputs both alias this, so they can't drift.
 
 *[shader-safe] · 12 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -3018,7 +3834,7 @@ src/shaders/points_common_io.zig — the `Interp` varyings shared by `points_vs`
 
 ### `src/shaders/points_fs.zig`
 
-src/shaders/points_fs.zig — instanced points FS body (IoT). Pass-through: emits the interpolated colour. Schema in `points_fs_io.zig`.
+src/shaders/points_fs.zig - instanced points FS body (IoT). Pass-through: emits the interpolated colour. Schema in `points_fs_io.zig`.
 
 *18 lines · 1 fns*  
 **Deps:** `points_fs_externs` (module)  
@@ -3026,7 +3842,7 @@ src/shaders/points_fs.zig — instanced points FS body (IoT). Pass-through: emit
 
 ### `src/shaders/points_fs_io.zig`
 
-src/shaders/points_fs_io.zig — typed interface for the points FS. Pass-through: emits the interpolated colour. Body in `points_fs.zig`.
+src/shaders/points_fs_io.zig - typed interface for the points FS. Pass-through: emits the interpolated colour. Body in `points_fs.zig`.
 
 *[shader-safe] · 15 lines · 0 fns*  
 **Deps:** `src/shaders/points_common_io.zig`, `zm` (module)  
@@ -3034,31 +3850,23 @@ src/shaders/points_fs_io.zig — typed interface for the points FS. Pass-through
 
 ### `src/shaders/points_vs.zig`
 
-src/shaders/points_vs.zig — instanced gradient points VS body (IoT).
+src/shaders/points_vs.zig - instanced gradient points VS body (IoT).
 
-*55 lines · 1 fns*  
+*56 lines · 1 fns*  
 **Deps:** `src/shaders/points_vs_io.zig`, `points_vs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/points_vs_io.zig`
 
-src/shaders/points_vs_io.zig — typed interface for the instanced points VS.
+src/shaders/points_vs_io.zig - typed interface for the instanced points VS.
 
 *[shader-safe] · 41 lines · 0 fns*  
 **Deps:** `src/shaders/points_common_io.zig`, `shader_interface` (module), `zm` (module)  
 **Dependents:** `src/shaders/points_vs.zig`
 
-### `src/shaders/probes/sampler_test_fs.zig`
-
-src/shaders/probes/sampler_test_fs.zig — S1.4.5b end-to-end probe.
-
-*63 lines · 0 fns*  
-**Deps:** `shader_builtins` (module), `zm` (module)  
-**Dependents:** `build.zig (wired)`
-
 ### `src/shaders/shapes_filter_fs.zig`
 
-src/shaders/shapes_filter_fs.zig — a user 2D shader, run over the ordinary 2D batch.
+src/shaders/shapes_filter_fs.zig - a user 2D shader, run over the ordinary 2D batch.
 
 *55 lines · 1 fns*  
 **Deps:** `src/shaders/shapes_filter_fs_io.zig`, `shapes_filter_fs_externs` (module), `zm` (module)  
@@ -3066,7 +3874,7 @@ src/shaders/shapes_filter_fs.zig — a user 2D shader, run over the ordinary 2D 
 
 ### `src/shaders/shapes_filter_fs_io.zig`
 
-src/shaders/shapes_filter_fs_io.zig — the schema for a USER 2D shader.
+src/shaders/shapes_filter_fs_io.zig - the schema for a USER 2D shader.
 
 *[shader-safe] · 47 lines · 0 fns*  
 **Deps:** `src/shaders/default_shapes_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -3074,7 +3882,7 @@ src/shaders/shapes_filter_fs_io.zig — the schema for a USER 2D shader.
 
 ### `src/shaders/skybox_common_io.zig`
 
-src/shaders/skybox_common_io.zig — the varyings shared by `skybox_vs` and `skybox_fs`. The VS forwards the world-space view ray plus the two sky gradient colours; the FS reads only these varyings, so it needs no UBO of its own. That keeps the whole skybox pipeline on a single group-0 uniform (read by the VS), matching the host's one-bind-group layout.
+src/shaders/skybox_common_io.zig - the varyings shared by `skybox_vs` and `skybox_fs`. The VS forwards the world-space view ray plus the two sky gradient colours; the FS reads only these varyings, so it needs no UBO of its own. That keeps the whole skybox pipeline on a single group-0 uniform (read by the VS), matching the host's one-bind-group layout.
 
 *[shader-safe] · 18 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -3082,15 +3890,15 @@ src/shaders/skybox_common_io.zig — the varyings shared by `skybox_vs` and `sky
 
 ### `src/shaders/skybox_fs.zig`
 
-src/shaders/skybox_fs.zig — gradient-skybox FS body (IoT).
+src/shaders/skybox_fs.zig - gradient-skybox FS body (IoT).
 
-*35 lines · 1 fns*  
+*37 lines · 1 fns*  
 **Deps:** `skybox_fs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/skybox_fs_io.zig`
 
-src/shaders/skybox_fs_io.zig — typed interface for the gradient-skybox FS. Reads only the interpolated varyings (view ray + sky colours forwarded by the VS), so it needs no UBO — the whole pipeline stays on one group-0 uniform. Mixes the two sky colours by the ray's vertical component. Body in `skybox_fs.zig`.
+src/shaders/skybox_fs_io.zig - typed interface for the gradient-skybox FS. Reads only the interpolated varyings (view ray + sky colours forwarded by the VS), so it needs no UBO - the whole pipeline stays on one group-0 uniform. Mixes the two sky colours by the ray's vertical component. Body in `skybox_fs.zig`.
 
 *[shader-safe] · 18 lines · 0 fns*  
 **Deps:** `src/shaders/skybox_common_io.zig`, `zm` (module)  
@@ -3098,15 +3906,15 @@ src/shaders/skybox_fs_io.zig — typed interface for the gradient-skybox FS. Rea
 
 ### `src/shaders/skybox_vs.zig`
 
-src/shaders/skybox_vs.zig — gradient-skybox VS body (IoT).
+src/shaders/skybox_vs.zig - gradient-skybox VS body (IoT).
 
-*45 lines · 1 fns*  
+*46 lines · 1 fns*  
 **Deps:** `src/shaders/skybox_vs_io.zig`, `skybox_vs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `src/shaders/skybox_vs_io.zig`
 
-src/shaders/skybox_vs_io.zig — typed interface for the gradient-skybox VS. Emits a fullscreen triangle from `vertex_index`, unprojects each corner to a world-space view ray, and forwards the ray + sky colours to the FS. Body in `skybox_vs.zig`. UBO layout mirrors `draw3d.SkyboxSchema.Ubo`.
+src/shaders/skybox_vs_io.zig - typed interface for the gradient-skybox VS. Emits a fullscreen triangle from `vertex_index`, unprojects each corner to a world-space view ray, and forwards the ray + sky colours to the FS. Body in `skybox_vs.zig`. UBO layout mirrors `draw3d.SkyboxSchema.Ubo`.
 
 *[shader-safe] · 30 lines · 0 fns*  
 **Deps:** `src/shaders/skybox_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -3114,7 +3922,7 @@ src/shaders/skybox_vs_io.zig — typed interface for the gradient-skybox VS. Emi
 
 ### `src/shaders/ssao_blur_common_io.zig`
 
-src/shaders/ssao_blur_common_io.zig — the varying shared by the SSAO blur's stages.
+src/shaders/ssao_blur_common_io.zig - the varying shared by the SSAO blur's stages.
 
 *[shader-safe] · 14 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -3122,7 +3930,7 @@ src/shaders/ssao_blur_common_io.zig — the varying shared by the SSAO blur's st
 
 ### `src/shaders/ssao_blur_fs.zig`
 
-ssao_blur_fs — separable BILATERAL blur for the SSAO buffer.
+ssao_blur_fs - separable BILATERAL blur for the SSAO buffer.
 
 *108 lines · 1 fns*  
 **Deps:** `src/shaders/ssao_blur_fs_io.zig`, `ssao_blur_fs_externs` (module), `zm` (module)  
@@ -3130,7 +3938,7 @@ ssao_blur_fs — separable BILATERAL blur for the SSAO buffer.
 
 ### `src/shaders/ssao_blur_fs_io.zig`
 
-ssao_blur_fs_io — typed schema for the SSAO bilateral blur.
+ssao_blur_fs_io - typed schema for the SSAO bilateral blur.
 
 *[shader-safe] · 47 lines · 0 fns*  
 **Deps:** `src/shaders/ssao_blur_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -3138,7 +3946,7 @@ ssao_blur_fs_io — typed schema for the SSAO bilateral blur.
 
 ### `src/shaders/ssao_common_io.zig`
 
-src/shaders/ssao_common_io.zig — the one varying shared by the SSAO pass's stages.
+src/shaders/ssao_common_io.zig - the one varying shared by the SSAO pass's stages.
 
 *[shader-safe] · 18 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -3146,7 +3954,7 @@ src/shaders/ssao_common_io.zig — the one varying shared by the SSAO pass's sta
 
 ### `src/shaders/ssao_fs.zig`
 
-ssao_fs — screen-space ambient occlusion from the G-buffer's world position and normal.
+ssao_fs - screen-space ambient occlusion from the G-buffer's world position and normal.
 
 *165 lines · 4 fns*  
 **Deps:** `src/shaders/ssao_fs_io.zig`, `ssao_fs_externs` (module), `zm` (module)  
@@ -3154,7 +3962,7 @@ ssao_fs — screen-space ambient occlusion from the G-buffer's world position an
 
 ### `src/shaders/ssao_fs_io.zig`
 
-ssao_fs_io — typed schema for the screen-space ambient occlusion pass.
+ssao_fs_io - typed schema for the screen-space ambient occlusion pass.
 
 *[shader-safe] · 54 lines · 0 fns*  
 **Deps:** `src/shaders/ssao_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -3162,7 +3970,7 @@ ssao_fs_io — typed schema for the screen-space ambient occlusion pass.
 
 ### `src/shaders/terrain_fs.zig`
 
-src/shaders/terrain_fs.zig — height-banded terrain material.
+src/shaders/terrain_fs.zig - height-banded terrain material.
 
 *71 lines · 3 fns*  
 **Deps:** `src/shaders/terrain_fs_io.zig`, `terrain_fs_externs` (module), `zm` (module)  
@@ -3170,7 +3978,7 @@ src/shaders/terrain_fs.zig — height-banded terrain material.
 
 ### `src/shaders/terrain_fs_io.zig`
 
-src/shaders/terrain_fs_io.zig — height-banded terrain material schema.  Companion to `terrain_fs.zig`.
+src/shaders/terrain_fs_io.zig - height-banded terrain material schema.  Companion to `terrain_fs.zig`.
 
 *[shader-safe] · 30 lines · 0 fns*  
 **Deps:** `src/shaders/gbuffer_common_io.zig`, `zm` (module)  
@@ -3178,7 +3986,7 @@ src/shaders/terrain_fs_io.zig — height-banded terrain material schema.  Compan
 
 ### `src/shaders/text_sdf_fs.zig`
 
-src/shaders/text_sdf_fs.zig — the SDF text fragment shader (raylib's sdf.fs).
+src/shaders/text_sdf_fs.zig - the SDF text fragment shader (raylib's sdf.fs).
 
 *42 lines · 1 fns*  
 **Deps:** `src/shaders/text_sdf_fs_io.zig`, `text_sdf_fs_externs` (module), `zm` (module)  
@@ -3186,7 +3994,7 @@ src/shaders/text_sdf_fs.zig — the SDF text fragment shader (raylib's sdf.fs).
 
 ### `src/shaders/text_sdf_fs_io.zig`
 
-src/shaders/text_sdf_fs_io.zig — schema for the SDF text fragment shader.
+src/shaders/text_sdf_fs_io.zig - schema for the SDF text fragment shader.
 
 *[shader-safe] · 30 lines · 0 fns*  
 **Deps:** `src/shaders/default_shapes_common_io.zig`, `shader_interface` (module), `zm` (module)  
@@ -3202,10 +4010,10 @@ A shader whose only job is to fail the build if `zm` stops working on the GPU.
 
 ### `src/shaders/zn_rl_gpu_probe.zig`
 
-A shader whose only job is to fail the build if zimrnum's RL arithmetic stops working on the GPU.
+A shader whose only job is to fail the build if zimrrl's RL arithmetic stops working on the GPU.
 
 *99 lines · 0 fns*  
-**Deps:** `zn` (module)  
+**Deps:** `zrl` (module)  
 **Dependents:** `build.zig (wired)`
 
 
@@ -3215,13 +4023,13 @@ A shader whose only job is to fail the build if zimrnum's RL arithmetic stops wo
 
 Cross-cutting host test suite (see file for scope).
 
-*149 lines · 2 fns · 3 tests*  
+*152 lines · 2 fns · 3 tests*  
 **Deps:** `src/zimrphysics.zig`, `zm` (module)  
 **Dependents:** `src/tests.zig`
 
 ### `src/tests/cpu_shadowmap_test.zig`
 
-src/tests/cpu_shadowmap_test.zig — proves the software rasteriser can run a real TWO-PASS shadow-map pipeline end to end, entirely on the CPU:
+src/tests/cpu_shadowmap_test.zig - proves the software rasteriser can run a real TWO-PASS shadow-map pipeline end to end, entirely on the CPU:
 
 *325 lines · 9 fns · 1 tests*  
 **Deps:** `src/raster_shader.zig`, `src/shader_connect.zig`, `zm` (module)  
@@ -3231,7 +4039,7 @@ src/tests/cpu_shadowmap_test.zig — proves the software rasteriser can run a re
 
 Cross-cutting host test suite (see file for scope).
 
-*115 lines · 2 fns · 7 tests*  
+*116 lines · 2 fns · 7 tests*  
 **Deps:** `src/codecs.zig`, `src/errors.zig`, `src/types.zig`  
 **Dependents:** `src/tests.zig`
 
@@ -3239,15 +4047,15 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*60 lines · 0 fns · 2 tests*  
-**Deps:** `src/zimr.zig`  
+*63 lines · 0 fns · 2 tests*  
+**Deps:** `src/zimr.zig`, `zm` (module)  
 **Dependents:** `src/tests.zig`
 
 ### `src/tests/features_test.zig`
 
 Cross-cutting host test suite (see file for scope).
 
-*290 lines · 2 fns · 7 tests*  
+*294 lines · 2 fns · 7 tests*  
 **Deps:** `src/sound.zig`, `src/types.zig`, `src/wgpu.zig`, `src/wgpu_texture.zig`, `src/zimr.zig`, `zm` (module)  
 **Dependents:** `src/tests.zig`
 
@@ -3272,6 +4080,30 @@ Cross-cutting host test suite (see file for scope).
 (no description yet — add a //! header or a dict entry)
 
 *19 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/tests/fixtures/robot/geno.xml`
+
+(no description yet — add a //! header or a dict entry)
+
+*336 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/tests/fixtures/robot/geno_bind.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*466 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `src/tests/fixtures/robot/geno_stance.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*466 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -3319,7 +4151,7 @@ Cross-cutting host test suite (see file for scope).
 
 (no description yet — add a //! header or a dict entry)
 
-*420 lines*  
+*450 lines*  
 **Deps:** —  
 **Dependents:** —
 
@@ -3345,7 +4177,7 @@ GENERATED from kuka_iiwa.urdf by tools/urdf_import.zig. Do not edit by hand.
 
 *1,005 lines · 0 fns*  
 **Deps:** `src/robot.zig`, `zm` (module)  
-**Dependents:** `build.zig (wired)`, `src/robot.zig`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_urdf.zig`
+**Dependents:** `build.zig (wired)`, `src/robot_bench.zig`, `src/robot_control.zig`, `src/robot_urdf.zig`
 
 ### `src/tests/fixtures/robot/meshes/link_0.stl`
 
@@ -3447,7 +4279,7 @@ GENERATED from kuka_iiwa.urdf by tools/urdf_import.zig. Do not edit by hand.
 
 Cross-cutting host test suite (see file for scope).
 
-*223 lines · 0 fns · 10 tests*  
+*225 lines · 0 fns · 10 tests*  
 **Deps:** `src/draw3d.zig`, `src/image.zig`, `src/runtime.zig`, `src/types.zig`, `zm` (module)  
 **Dependents:** `src/tests.zig`
 
@@ -3455,15 +4287,15 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*356 lines · 13 fns · 9 tests*  
+*359 lines · 13 fns · 9 tests*  
 **Deps:** `src/runtime.zig`  
 **Dependents:** `src/tests.zig`
 
 ### `src/tests/ragdoll_bvh_test.zig`
 
-src/tests/ragdoll_bvh_test.zig — the real-data half of retarget_plan.md §13x.
+src/tests/ragdoll_bvh_test.zig - the real-data half of retarget_plan.md section 13x.
 
-*666 lines · 3 fns · 6 tests*  
+*669 lines · 3 fns · 6 tests*  
 **Deps:** `codecs` (module), `robot` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
@@ -3479,7 +4311,7 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*215 lines · 4 fns · 6 tests*  
+*217 lines · 4 fns · 6 tests*  
 **Deps:** `src/shapes2d.zig`, `src/text2d.zig`, `src/ui.zig`  
 **Dependents:** `src/tests.zig`
 
@@ -3487,7 +4319,7 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*265 lines · 3 fns · 10 tests*  
+*266 lines · 3 fns · 10 tests*  
 **Deps:** `src/ui.zig`  
 **Dependents:** `src/tests.zig`
 
@@ -3495,7 +4327,7 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*162 lines · 0 fns · 2 tests*  
+*164 lines · 0 fns · 2 tests*  
 **Deps:** `src/shapes2d.zig`, `src/text2d.zig`, `src/ui.zig`  
 **Dependents:** `src/tests.zig`
 
@@ -3503,7 +4335,7 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*86 lines · 0 fns · 1 tests*  
+*88 lines · 0 fns · 1 tests*  
 **Deps:** `src/shapes2d.zig`, `src/text2d.zig`, `src/ui.zig`  
 **Dependents:** `src/tests.zig`
 
@@ -3511,7 +4343,7 @@ Cross-cutting host test suite (see file for scope).
 
 Cross-cutting host test suite (see file for scope).
 
-*199 lines · 0 fns · 2 tests*  
+*202 lines · 0 fns · 2 tests*  
 **Deps:** `src/zimrphysics.zig`, `zm` (module)  
 **Dependents:** `src/tests.zig`
 
@@ -3522,7 +4354,7 @@ Cross-cutting host test suite (see file for scope).
 
 (no description yet — add a //! header or a dict entry)
 
-*179 lines*  
+*414 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -3538,7 +4370,7 @@ Gallery metadata (names, descriptions, stars, filters) consumed by the wgpu gall
 
 The dark-brutalist project landing page; README.md links here. Installed into zig-out/web and carried by dist.
 
-*2,041 lines*  
+*2,088 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -3555,7 +4387,7 @@ The dark-brutalist project landing page; README.md links here. Installed into zi
 
 ### `examples/3d_probe/3d_probe.zig`
 
-3d_probe — the immediate-mode 3D pipeline, end to end. A drag-orbit camera (z.updateCamera, .orbital) around a lit scene: a ground plane + grid, two cubes tumbling via drawCubeEx / drawCubeWiresEx, a smooth sphere, and a capped cylinder — all depth-tested in the dedicated 3D pass, batched into one draw per topology. The caption is drawn in 2D before entering 3D so it stays screen-anchored. Drag to orbit; wheel to…
+3d_probe - the immediate-mode 3D pipeline, end to end. A drag-orbit camera (z.updateCamera, .orbital) around a lit scene: a ground plane + grid, two cubes tumbling via drawCubeEx / drawCubeWiresEx, a smooth sphere, and a capped cylinder - all depth-tested in the dedicated 3D pass, batched into one draw per topology. The caption is drawn in 2D before entering 3D so it stays screen-anchored. Drag to orbit; wheel to…
 
 *98 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3587,10 +4419,18 @@ License for the bundled Atkinson Hyperlegible Mono font.
 
 ### `examples/audio_basic/audio_basic.zig`
 
-audio_basic — port of the GL `audio_basic`: the first sound on the wgpu backend. Synthesizes three short tones on the CPU with `composer.tone` (square/sine/triangle, with an attack/release envelope), uploads each to a GPU-side... no — to a Web Audio buffer via `sounds.loadFromWave`, and plays them when you tap a pad or press 1/2/3. The audio path is backend-agnostic (Web Audio); the wgpu runner now hands the app…
+audio_basic - port of the GL `audio_basic`: the first sound on the wgpu backend. Synthesizes three short tones on the CPU with `composer.tone` (square/sine/triangle, with an attack/release envelope), uploads each to a GPU-side... no - to a Web Audio buffer via `sounds.loadFromWave`, and plays them when you tap a pad or press 1/2/3. The audio path is backend-agnostic (Web Audio); the wgpu runner now hands the app…
 
-*160 lines · 4 fns*  
+*161 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/audio_mixer/audio_mixer.zig`
+
+examples/audio_mixer - the engine's mixer, heard. T starts and stops a 440 Hz tone; Space, or a click, plays a short blip at a random pan and pitch; Up and Down raise and lower the master volume. The screen shows what the mixer is doing: the voices playing, the margin it keeps queued, and how often the output ran dry. In a page, the browser keeps the sound silent until the first click or key press, which starts it.
+
+*176 lines · 8 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/audio_sound_lab/audio_sound_lab.zig`
@@ -3611,17 +4451,17 @@ audio_basic — port of the GL `audio_basic`: the first sound on the wgpu backen
 
 ### `examples/audio_stream_synth/audio_stream_synth.zig`
 
-audio_stream_synth — port of the GL `audio_stream_synth`: a theremin on the wgpu audio bridge. Mouse Y maps (logarithmically) to a pitch in 110–1760 Hz; each frame it synthesizes sine samples and feeds them to an `AudioStream` — a 3-buffer rotation scheduled gaplessly via the bridge's `play_buffer_at` (implemented this turn). Click toggles the sound. The synth phase_turns persists across chunks so the wave…
+audio_stream_synth - port of the GL `audio_stream_synth`: a theremin on the wgpu audio bridge. Mouse Y maps (logarithmically) to a pitch in 110-1760 Hz; each frame it synthesizes sine samples and feeds them to an `AudioStream` - a 3-buffer rotation scheduled gaplessly via the bridge's `play_buffer_at` (implemented this turn). Click toggles the sound. The synth phase_turns persists across chunks so the wave…
 
-*147 lines · 4 fns*  
+*148 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/balance_flywheel/balance_flywheel.zig`
 
-balance_flywheel — why a balancing robot windmills its arms.
+balance_flywheel - why a balancing robot windmills its arms.
 
-*352 lines · 11 fns*  
+*353 lines · 11 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -3629,13 +4469,13 @@ balance_flywheel — why a balancing robot windmills its arms.
 
 (no description yet — add a //! header or a dict entry)
 
-*313 lines · 8 fns*  
+*315 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/basic/basic.zig`
 
-basic — the smallest end-to-end zimr WebGPU demo, the flagship the GL `basic` is for the GL backend. On init it builds a 16×16 checker with `genImageChecked` and uploads it (`loadTextureFromImage`). Each frame it clears to a slowly-pulsing slate and pushes ONE textured triangle through the rl-immediate path (`rlSetTexture` + `rlBegin(.triangles)` + `rlColor4ub`/`rlTexCoord2f`/`rlVertex2f`): the default fragment…
+basic - the smallest end-to-end zimr WebGPU demo, the flagship the GL `basic` is for the GL backend. On init it builds a 16x16 checker with `genImageChecked` and uploads it (`loadTextureFromImage`). Each frame it clears to a slowly-pulsing slate and pushes ONE textured triangle through the rl-immediate path (`rlSetTexture` + `rlBegin(.triangles)` + `rlColor4ub`/`rlTexCoord2f`/`rlVertex2f`): the default fragment…
 
 *103 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3643,7 +4483,7 @@ basic — the smallest end-to-end zimr WebGPU demo, the flagship the GL `basic` 
 
 ### `examples/billboards/billboards.zig`
 
-billboards — port of the GL `billboards`, on the new textured-3D path. A ring of soft glowing sprites (a procedurally-generated radial-alpha texture) drawn as camera-facing billboards via `drawBillboard`, plus a few solid cubes and a grid. As the camera orbits, the billboards always face it (flat to the view) while the cubes show their 3D faces — the billboard effect. The sprite has an alpha falloff, so this also…
+billboards - port of the GL `billboards`, on the new textured-3D path. A ring of soft glowing sprites (a procedurally-generated radial-alpha texture) drawn as camera-facing billboards via `drawBillboard`, plus a few solid cubes and a grid. As the camera orbits, the billboards always face it (flat to the view) while the cubes show their 3D faces - the billboard effect. The sprite has an alpha falloff, so this also…
 
 *166 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3651,7 +4491,7 @@ billboards — port of the GL `billboards`, on the new textured-3D path. A ring 
 
 ### `examples/bloom_blur_fs.zig`
 
-examples/bloom_blur_fs.zig — bloom separable-Gaussian blur FS body.
+examples/bloom_blur_fs.zig - bloom separable-Gaussian blur FS body.
 
 *58 lines · 1 fns*  
 **Deps:** `bloom_blur_fs_externs` (module), `zm` (module)  
@@ -3659,7 +4499,7 @@ examples/bloom_blur_fs.zig — bloom separable-Gaussian blur FS body.
 
 ### `examples/bloom_blur_fs_io.zig`
 
-examples/bloom_blur_fs_io.zig — typed interface for the bloom separable- Gaussian blur pass. ONE shader serves both the horizontal and vertical passes: the blur direction (and texel size) is a per-pass UBO value rather than an override constant, so the same compiled shader is reused for both directions by writing a different `dir` — no spec-constant authoring needed. Body in `bloom_blur_fs.zig`.
+examples/bloom_blur_fs_io.zig - typed interface for the bloom separable- Gaussian blur pass. ONE shader serves both the horizontal and vertical passes: the blur direction (and texel size) is a per-pass UBO value rather than an override constant, so the same compiled shader is reused for both directions by writing a different `dir` - no spec-constant authoring needed. Body in `bloom_blur_fs.zig`.
 
 *[shader-safe] · 44 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -3667,7 +4507,7 @@ examples/bloom_blur_fs_io.zig — typed interface for the bloom separable- Gauss
 
 ### `examples/bloom_bright_fs.zig`
 
-examples/bloom_bright_fs.zig — bloom bright-pass FS body.
+examples/bloom_bright_fs.zig - bloom bright-pass FS body.
 
 *31 lines · 1 fns*  
 **Deps:** `bloom_bright_fs_externs` (module), `zm` (module)  
@@ -3675,7 +4515,7 @@ examples/bloom_bright_fs.zig — bloom bright-pass FS body.
 
 ### `examples/bloom_bright_fs_io.zig`
 
-examples/bloom_bright_fs_io.zig — typed interface for the bloom bright-pass fragment shader. Reads the scene render texture and keeps only the luminance above `thresh`, remapped so the threshold maps to black. Body in `bloom_bright_fs.zig`.
+examples/bloom_bright_fs_io.zig - typed interface for the bloom bright-pass fragment shader. Reads the scene render texture and keeps only the luminance above `thresh`, remapped so the threshold maps to black. Body in `bloom_bright_fs.zig`.
 
 *[shader-safe] · 42 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -3683,7 +4523,7 @@ examples/bloom_bright_fs_io.zig — typed interface for the bloom bright-pass fr
 
 ### `examples/bloom_composite_fs.zig`
 
-examples/bloom_composite_fs.zig — bloom composite FS body.
+examples/bloom_composite_fs.zig - bloom composite FS body.
 
 *34 lines · 1 fns*  
 **Deps:** `bloom_composite_fs_externs` (module), `zm` (module)  
@@ -3691,7 +4531,7 @@ examples/bloom_composite_fs.zig — bloom composite FS body.
 
 ### `examples/bloom_composite_fs_io.zig`
 
-examples/bloom_composite_fs_io.zig — typed interface for the bloom composite pass: adds the blurred highlights back onto the original scene, scaled by `intensity`. Body in `bloom_composite_fs.zig`.
+examples/bloom_composite_fs_io.zig - typed interface for the bloom composite pass: adds the blurred highlights back onto the original scene, scaled by `intensity`. Body in `bloom_composite_fs.zig`.
 
 *[shader-safe] · 48 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -3699,7 +4539,7 @@ examples/bloom_composite_fs_io.zig — typed interface for the bloom composite p
 
 ### `examples/bloom_fullscreen_vs.zig`
 
-examples/bloom_fullscreen_vs.zig — shared fullscreen-triangle VS body.
+examples/bloom_fullscreen_vs.zig - shared fullscreen-triangle VS body.
 
 *30 lines · 1 fns*  
 **Deps:** `bloom_fullscreen_vs_externs` (module)  
@@ -3707,7 +4547,7 @@ examples/bloom_fullscreen_vs.zig — shared fullscreen-triangle VS body.
 
 ### `examples/bloom_fullscreen_vs_io.zig`
 
-examples/bloom_fullscreen_vs_io.zig — typed interface for the shared fullscreen-triangle vertex shader used by every bloom effect pass. Emits a single oversized triangle covering the viewport from `vertex_index`, with no vertex buffer and no uniforms. Body in `bloom_fullscreen_vs.zig`.
+examples/bloom_fullscreen_vs_io.zig - typed interface for the shared fullscreen-triangle vertex shader used by every bloom effect pass. Emits a single oversized triangle covering the viewport from `vertex_index`, with no vertex buffer and no uniforms. Body in `bloom_fullscreen_vs.zig`.
 
 *[shader-safe] · 24 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -3715,9 +4555,9 @@ examples/bloom_fullscreen_vs_io.zig — typed interface for the shared fullscree
 
 ### `examples/bone_socket/bone_socket.zig`
 
-bone_socket — port of raylib's `models_bone_socket` with the real rigged character. Loads the CC0 `greenman.glb` (a 12-joint HIERARCHICAL skeleton with 4 animations) and `greenman_sword.glb`, plays an animation, and rigidly sockets the sword to the `socket_hand_R` bone so it swings with the hand.
+bone_socket - port of raylib's `models_bone_socket` with the real rigged character. Loads the CC0 `greenman.glb` (a 12-joint HIERARCHICAL skeleton with 4 animations) and `greenman_sword.glb`, plays an animation, and rigidly sockets the sword to the `socket_hand_R` bone so it swings with the hand.
 
-*430 lines · 6 fns*  
+*433 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -3731,15 +4571,15 @@ bone_socket — port of raylib's `models_bone_socket` with the real rigged chara
 
 ### `examples/box_collisions/box_collisions.zig`
 
-box_collisions — raylib's `models_box_collisions`, the zimr way.
+box_collisions - raylib's `models_box_collisions`, the zimr way.
 
-*603 lines · 9 fns*  
+*608 lines · 9 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/bridge_classic_probe/bridge_classic_probe.zig`
 
-bridge_classic_probe — ZIG_BRIDGE Phase 3a validator. A wasm32-wasi REACTOR speaking the CLASSIC zimr contract (`_initialize` + `update(dt)`) against the new Zig bridge: device/queue/surface singletons, buffer create + queue write, WGSL shader module, sampler, and a per-frame encoder/finish/submit round. The jsdom gate asserts each verb landed by counting mock-device calls.
+bridge_classic_probe - ZIG_BRIDGE Phase 3a validator. A wasm32-wasi REACTOR speaking the CLASSIC zimr contract (`_initialize` + `update(dt)`) against the new Zig bridge: device/queue/surface singletons, buffer create + queue write, WGSL shader module, sampler, and a per-frame encoder/finish/submit round. The jsdom gate asserts each verb landed by counting mock-device calls.
 
 *275 lines · 3 fns*  
 **Deps:** —  
@@ -3747,7 +4587,7 @@ bridge_classic_probe — ZIG_BRIDGE Phase 3a validator. A wasm32-wasi REACTOR sp
 
 ### `examples/bridge_slice/bridge_slice.zig`
 
-bridge_slice — ZIG_BRIDGE_PLAN Phase-2 slice (doctrine D9–D11). THE APP OWNS THE PAGE: this wasm module builds the entire document — css, heading, prose, a link, an embedded YouTube iframe, and TWO dynamically created WebGPU canvases on the shared device — through the bridge's generic "dom" verbs, then animates per-canvas clears and reacts to clicks on canvas 1. No HTML or JS was written for this page.
+bridge_slice - ZIG_BRIDGE_PLAN Phase-2 slice (doctrine D9-D11). THE APP OWNS THE PAGE: this wasm module builds the entire document - css, heading, prose, a link, an embedded YouTube iframe, and TWO dynamically created WebGPU canvases on the shared device - through the bridge's generic "dom" verbs, then animates per-canvas clears and reacts to clicks on canvas 1. No HTML or JS was written for this page.
 
 *133 lines · 5 fns*  
 **Deps:** —  
@@ -3755,7 +4595,7 @@ bridge_slice — ZIG_BRIDGE_PLAN Phase-2 slice (doctrine D9–D11). THE APP OWNS
 
 ### `examples/bullet_hell/bullet_hell.zig`
 
-bullet_hell — a radial bullet spawner. Every few frames a ring of bullets fires outward from the centre; the spawn angle creeps each volley so the rings braid into a spiral. A rotating "magic circle" (two spinning squares + three rings) anchors the middle. Self-running; tap to cycle the spiral pattern (row count / creep / speed). From raylib shapes_bullet_hell.
+bullet_hell - a radial bullet spawner. Every few frames a ring of bullets fires outward from the centre; the spawn angle creeps each volley so the rings braid into a spiral. A rotating "magic circle" (two spinning squares + three rings) anchors the middle. Self-running; tap to cycle the spiral pattern (row count / creep / speed). From raylib shapes_bullet_hell.
 
 *186 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3763,7 +4603,7 @@ bullet_hell — a radial bullet spawner. Every few frames a ring of bullets fire
 
 ### `examples/camera2d/camera2d.zig`
 
-camera2d — the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world scene (grid + landmark shapes + origin marker) is viewed through a Camera2D whose target pans on a Lissajous path, zoom breathes, and rotation slowly turns — exercising the full 2D camera (offset / target / zoom / rotation) via `beginMode2D`. The GL original was mouse-driven; this animates itself. Viewport-relative under `.responsive`.
+camera2d - the Camera2D pan / zoom / rotate transform, ported to WebGPU. A world scene (grid + landmark shapes + origin marker) is viewed through a Camera2D whose target pans on a Lissajous path, zoom breathes, and rotation slowly turns - exercising the full 2D camera (offset / target / zoom / rotation) via `beginMode2D`. The GL original was mouse-driven; this animates itself. Viewport-relative under `.responsive`.
 
 *94 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -3771,7 +4611,7 @@ camera2d — the Camera2D pan / zoom / rotate transform, ported to WebGPU. A wor
 
 ### `examples/camera_controls/camera_controls.zig`
 
-camera_controls — a demo of the shared `z.OrbitCamera` controller.
+camera_controls - a demo of the shared `z.OrbitCamera` controller.
 
 *113 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3779,15 +4619,23 @@ camera_controls — a demo of the shared `z.OrbitCamera` controller.
 
 ### `examples/cartpole/cartpole.zig`
 
-cartpole — a policy learning to balance, live, in a browser tab.
+cartpole - a policy learning to balance, live, in a browser tab.
 
-*523 lines · 14 fns*  
+*526 lines · 14 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/cartpole_duel/cartpole_duel.zig`
+
+cartpole_duel - one cartpole, a planner and three learners: MPC planning on the CPU in front, and behind it PPO, SAC or SuperTrack LEARNING to hold the same cartpole - their cartpoles stepped on the CPU, their networks trained on the GPU.
+
+*1,276 lines · 26 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module), `zn` (module), `zn_mlp` (module), `zrl` (module)  
 **Dependents:** —
 
 ### `examples/catch/catch.zig`
 
-catch — an arm that reaches ahead into empty space, and one that chases.
+catch - an arm that reaches ahead into empty space, and one that chases.
 
 *697 lines · 16 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3803,23 +4651,23 @@ catch — an arm that reaches ahead into empty space, and one that chases.
 
 ### `examples/cel_shading/cel_shading.zig`
 
-cel_shading — raylib's `shaders_cel_shading`, the zimr way.
+cel_shading - raylib's `shaders_cel_shading`, the zimr way.
 
-*520 lines · 7 fns*  
+*522 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/cel_shading/native_verify.zig`
 
-native_verify — render the cel_shading example's ACTUAL look on the CPU, no GPU required.
+native_verify - render the cel_shading example's ACTUAL look on the CPU, no GPU required.
 
-*165 lines · 1 fns*  
+*166 lines · 1 fns*  
 **Deps:** `bunny_proxy` (module), `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/cellular_automata/cellular_automata.zig`
 
-cellular_automata — Wolfram's 1-D elementary cellular automata (Rule 30, 90, 110, …). Each row is computed from the three cells above it: the 3-bit neighbourhood (0..7) indexes the 8-bit rule to decide the new cell. The grid is a CPU pixel buffer streamed to the GPU every frame via a CpuFramebuffer (update -> present), so it exercises the dynamic-texture-upload path. Tap a preset chip to pick a rule, or tap the…
+cellular_automata - Wolfram's 1-D elementary cellular automata (Rule 30, 90, 110, ...). Each row is computed from the three cells above it: the 3-bit neighbourhood (0..7) indexes the 8-bit rule to decide the new cell. The grid is a CPU pixel buffer streamed to the GPU every frame via a CpuFramebuffer (update -> present), so it exercises the dynamic-texture-upload path. Tap a preset chip to pick a rule, or tap the…
 
 *219 lines · 11 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3835,7 +4683,7 @@ cellular_automata — Wolfram's 1-D elementary cellular automata (Rule 30, 90, 1
 
 ### `examples/chain_ik/chain_ik.zig`
 
-chain_ik — ten joints for a two-joint job.
+chain_ik - ten joints for a two-joint job.
 
 *307 lines · 7 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3843,7 +4691,7 @@ chain_ik — ten joints for a two-joint job.
 
 ### `examples/circle_sector_drawing/circle_sector_drawing.zig`
 
-circle_sector_drawing — a filled circular sector (pie slice) with its outline. The swept angle rotates and breathes, the radius pulses, and — the point of the sample — the segment count oscillates from chunky (you can see the polygonal facets) to smooth. Tap to reveal the segment vertices as dots so the tessellation is literal. A panel echoes the live parameters and the MANUAL/AUTO segment mode. Ported from…
+circle_sector_drawing - a filled circular sector (pie slice) with its outline. The swept angle rotates and breathes, the radius pulses, and - the point of the sample - the segment count oscillates from chunky (you can see the polygonal facets) to smooth. Tap to reveal the segment vertices as dots so the tessellation is literal. A panel echoes the live parameters and the MANUAL/AUTO segment mode. Ported from…
 
 *134 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3851,7 +4699,7 @@ circle_sector_drawing — a filled circular sector (pie slice) with its outline.
 
 ### `examples/clock_of_clocks/clock_of_clocks.zig`
 
-clock_of_clocks — the time as HHMMSS, where every digit is a 4x6 grid of 24 tiny analog clocks. Each little clock has two hands; neighbouring hands line up to trace the strokes of the digit. When a digit changes the hands sweep to their new pose with a smoothstep. Driven by the real wall clock via z.localTime(). Tap to toggle 12/24-hour mode (raylib uses SPACE). From raylib shapes_clock_of_clocks.
+clock_of_clocks - the time as HHMMSS, where every digit is a 4x6 grid of 24 tiny analog clocks. Each little clock has two hands; neighbouring hands line up to trace the strokes of the digit. When a digit changes the hands sweep to their new pose with a smoothstep. Driven by the real wall clock via z.localTime(). Tap to toggle 12/24-hour mode (raylib uses SPACE). From raylib shapes_clock_of_clocks.
 
 *200 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3867,9 +4715,9 @@ clock_of_clocks — the time as HHMMSS, where every digit is a 4x6 grid of 24 ti
 
 ### `examples/color_wheel/color_wheel.zig`
 
-color_wheel — an HSV colour wheel drawn as a fan of triangles (rim = full-saturation hue, hub = the value/grey), with a draggable picker and a value slider. Drag inside the wheel to pick a hue+saturation; drag the bar to set value. The selected colour shows as a swatch with its hex. A port of raylib's rlgl colour wheel (its rlBegin/rlColor/rlVertex fan -> drawTriangleGradient). From raylib shapes_rlgl_color_wheel.
+color_wheel - an HSV colour wheel drawn as a fan of triangles (rim = full-saturation hue, hub = the value/grey), with a draggable picker and a value slider. Drag inside the wheel to pick a hue+saturation; drag the bar to set value. The selected colour shows as a swatch with its hex. A port of raylib's rlgl colour wheel (its rlBegin/rlColor/rlVertex fan -> drawTriangleGradient). From raylib shapes_rlgl_color_wheel.
 
-*178 lines · 8 fns*  
+*179 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -3883,15 +4731,15 @@ color_wheel — an HSV colour wheel drawn as a fan of triangles (rim = full-satu
 
 ### `examples/composer_drum/composer_drum.zig`
 
-composer_drum — port of the GL `composer_drum`: a tiny drum machine on the wgpu audio bridge. Synthesizes a kick (60Hz sine), snare (250Hz saw), and hat (4kHz triangle) with `composer.tone`, then bakes an 8-step pattern into ONE looping Wave via `composer.Sequence` (each drum added at its step's frame offset). Tap PLAY (or press SPACE) to play the loop; a step grid shows the pattern and a playhead sweeps it. All…
+composer_drum - port of the GL `composer_drum`: a tiny drum machine on the wgpu audio bridge. Synthesizes a kick (60Hz sine), snare (250Hz saw), and hat (4kHz triangle) with `composer.tone`, then bakes an 8-step pattern into ONE looping Wave via `composer.Sequence` (each drum added at its step's frame offset). Tap PLAY (or press SPACE) to play the loop; a step grid shows the pattern and a playhead sweeps it. All…
 
-*213 lines · 3 fns*  
+*208 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/comptime_julia.zig`
 
-examples/comptime_julia.zig — the Julia set, computed at COMPILE TIME and baked into the binary as a const.  Companion to examples/comptime_mandelbrot.zig.
+examples/comptime_julia.zig - the Julia set, computed at COMPILE TIME and baked into the binary as a const.  Companion to examples/comptime_mandelbrot.zig.
 
 *159 lines · 4 fns*  
 **Deps:** `zm` (module)  
@@ -3899,7 +4747,7 @@ examples/comptime_julia.zig — the Julia set, computed at COMPILE TIME and bake
 
 ### `examples/comptime_julia/comptime_julia.zig`
 
-comptime_julia — the Julia set computed ENTIRELY at COMPILE TIME and baked into the binary as a `const` escape-value grid, then drawn on the GPU. The graphical sibling of the CLI `comptime_julia` (which printed ASCII): same comptime kernel, but the image is painted as colored cells.
+comptime_julia - the Julia set computed ENTIRELY at COMPILE TIME and baked into the binary as a `const` escape-value grid, then drawn on the GPU. The graphical sibling of the CLI `comptime_julia` (which printed ASCII): same comptime kernel, but the image is painted as colored cells.
 
 *149 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -3907,7 +4755,7 @@ comptime_julia — the Julia set computed ENTIRELY at COMPILE TIME and baked int
 
 ### `examples/comptime_mandelbrot.zig`
 
-examples/comptime_mandelbrot.zig — the Mandelbrot set, computed at COMPILE TIME, baked into the binary as a const, printed at runtime.
+examples/comptime_mandelbrot.zig - the Mandelbrot set, computed at COMPILE TIME, baked into the binary as a const, printed at runtime.
 
 *195 lines · 4 fns*  
 **Deps:** `zm` (module)  
@@ -3915,7 +4763,7 @@ examples/comptime_mandelbrot.zig — the Mandelbrot set, computed at COMPILE TIM
 
 ### `examples/comptime_mandelbrot/comptime_mandelbrot.zig`
 
-comptime_mandelbrot — the Mandelbrot set computed ENTIRELY at COMPILE TIME and baked into the binary as a `const` escape-value grid, then drawn on the GPU. The graphical sibling of the CLI `comptime_mandelbrot` (which printed ASCII): same comptime kernel, but the image is painted as colored cells.
+comptime_mandelbrot - the Mandelbrot set computed ENTIRELY at COMPILE TIME and baked into the binary as a `const` escape-value grid, then drawn on the GPU. The graphical sibling of the CLI `comptime_mandelbrot` (which printed ASCII): same comptime kernel, but the image is painted as colored cells.
 
 *138 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -3923,15 +4771,15 @@ comptime_mandelbrot — the Mandelbrot set computed ENTIRELY at COMPILE TIME and
 
 ### `examples/compute_particles/compute_particles.zig`
 
-compute_particles — 65536 particles driven by `z.Compute`, demonstrating the CPU/GPU compute toggle on the zero-copy render path. The SAME kernel auto-flips between a GPU dispatch and a CPU loop every few seconds, with the live state carried across the flip so the sim never resets. Both backends render through `z.DrawPoints`: the GPU path is zero-copy (the kernel writes the very buffer the vertex shader reads)…
+compute_particles - 65536 particles driven by `z.Compute`, demonstrating the CPU/GPU compute toggle on the zero-copy render path. The SAME kernel auto-flips between a GPU dispatch and a CPU loop every few seconds, with the live state carried across the flip so the sim never resets. Both backends render through `z.DrawPoints`: the GPU path is zero-copy (the kernel writes the very buffer the vertex shader reads)…
 
-*175 lines · 4 fns*  
+*177 lines · 4 fns*  
 **Deps:** `examples/compute_particles/particle_step.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/compute_particles/particle_step.zig`
 
-particle_step.zig — one compute kernel: advance a particle under gravity and bounce it off the unit-box walls. Pure GATHER (each id writes only its own pos/vel), so it's identical on CPU and GPU and trivially parallel. Positions live in [0,1]^2; the host maps them to the screen. Written once in the kompute DSL; `z.Compute(@This())` runs it on either backend.
+particle_step.zig - one compute kernel: advance a particle under gravity and bounce it off the unit-box walls. Pure GATHER (each id writes only its own pos/vel), so it's identical on CPU and GPU and trivially parallel. Positions live in [0,1]^2; the host maps them to the screen. Written once in the kompute DSL; `z.Compute(@This())` runs it on either backend.
 
 *69 lines · 1 fns*  
 **Deps:** `kompute` (module), `zm` (module)  
@@ -3939,7 +4787,7 @@ particle_step.zig — one compute kernel: advance a particle under gravity and b
 
 ### `examples/compute_smoke/compute_smoke.zig`
 
-compute_smoke — the GPU compute round-trip, now driven by `z.Compute(M)` instead of hand-wired wgpu calls. Uploads [0,1,2,...,particle_count-1], runs the `double_it` kernel (out[i] = in[i]*2) on the GPU, reads it back, draws it as bars (a correct run = a doubled ascending staircase). Also runs a CPU-backend self-check at startup over the SAME kernel, demonstrating the runtime CPU/GPU toggle.
+compute_smoke - the GPU compute round-trip, now driven by `z.Compute(M)` instead of hand-wired wgpu calls. Uploads [0,1,2,...,particle_count-1], runs the `double_it` kernel (out[i] = in[i]*2) on the GPU, reads it back, draws it as bars (a correct run = a doubled ascending staircase). Also runs a CPU-backend self-check at startup over the SAME kernel, demonstrating the runtime CPU/GPU toggle.
 
 *128 lines · 3 fns*  
 **Deps:** `examples/compute_smoke/double_it.zig`, `zimr` (module), `zm` (module)  
@@ -3947,15 +4795,15 @@ compute_smoke — the GPU compute round-trip, now driven by `z.Compute(M)` inste
 
 ### `examples/compute_smoke/double_it.zig`
 
-double_it.zig — the simplest compute kernel: out[i] = in[i] * 2, written in the kompute DSL form. The author writes only config + Buffers + Params + the kernel fn; `kompute` generates the g-namespace (extern storage/uniform on GPU, plain var on CPU), the Ctx type, and the spirv_kernel entry.
+double_it.zig - the simplest compute kernel: out[i] = in[i] * 2, written in the kompute DSL form. The author writes only config + Buffers + Params + the kernel fn; `kompute` generates the g-namespace (extern storage/uniform on GPU, plain var on CPU), the Ctx type, and the spirv_kernel entry.
 
 *35 lines · 1 fns*  
 **Deps:** `kompute` (module)  
-**Dependents:** `examples/compute_smoke/compute_smoke.zig`
+**Dependents:** `build.zig (wired)`, `examples/compute_smoke/compute_smoke.zig`
 
 ### `examples/crane/crane.zig`
 
-crane — moving a swinging load and arriving with it still.
+crane - moving a swinging load and arriving with it still.
 
 *335 lines · 11 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -3963,7 +4811,7 @@ crane — moving a swinging load and arriving with it still.
 
 ### `examples/cube3d/cube3d.zig`
 
-cube3d — port of the GL `cube3d`: a fixed-camera 3D scene with a spinning green cube (solid + wireframe) above a ground grid, plus a static reference sphere. The GL version spun the cube through the rlgl matrix stack (rlPushMatrix / rlRotatef); the wgpu immediate API expresses the same thing as a `.rotation` matrix on the cube descriptor — no matrix stack. The HUD is drawn in 2D after endMode3D so it stays…
+cube3d - port of the GL `cube3d`: a fixed-camera 3D scene with a spinning green cube (solid + wireframe) above a ground grid, plus a static reference sphere. The GL version spun the cube through the rlgl matrix stack (rlPushMatrix / rlRotatef); the wgpu immediate API expresses the same thing as a `.rotation` matrix on the cube descriptor - no matrix stack. The HUD is drawn in 2D after endMode3D so it stays…
 
 *79 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -3973,21 +4821,21 @@ cube3d — port of the GL `cube3d`: a fixed-camera 3D scene with a spinning gree
 
 (no description yet — add a //! header or a dict entry)
 
-*346 lines · 3 fns*  
+*350 lines · 3 fns*  
 **Deps:** `shader_interface` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/cube_sidebyside/cube_sidebyside.zig`
 
-cube_sidebyside — the raycube_fs ray-traced cube on THREE execution targets, side by side from ONE Zig shader: - LEFT  : `raycube_fs.shaderMain` dispatched per pixel on the CPU (raster). - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen GPU pass. - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and baked into the binary as a const image — read-only, can't move. A…
+cube_sidebyside - the raycube_fs ray-traced cube on THREE execution targets, side by side from ONE Zig shader: - LEFT  : `raycube_fs.shaderMain` dispatched per pixel on the CPU (raster). - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen GPU pass. - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and baked into the binary as a const image - read-only, can't move. A…
 
-*346 lines · 7 fns*  
+*347 lines · 7 fns*  
 **Deps:** `examples/cube_sidebyside/raycube_fs.zig`, `examples/cube_sidebyside/raycube_fs_io.zig`, `examples/cube_sidebyside/trivial_vs_io.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/cube_split_fs.zig`
 
-examples/cube_split_fs.zig — fragment shader for the cube_split demo.
+examples/cube_split_fs.zig - fragment shader for the cube_split demo.
 
 *34 lines · 1 fns*  
 **Deps:** `examples/cube_split_fs_io.zig`, `cube_split_fs_externs` (module)  
@@ -3995,7 +4843,7 @@ examples/cube_split_fs.zig — fragment shader for the cube_split demo.
 
 ### `examples/cube_split_fs_io.zig`
 
-examples/cube_split_fs_io.zig — schema for the cube_split demo's fragment shader.  Declares Inputs / Samplers / Outputs.
+examples/cube_split_fs_io.zig - schema for the cube_split demo's fragment shader.  Declares Inputs / Samplers / Outputs.
 
 *[shader-safe] · 33 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -4003,7 +4851,7 @@ examples/cube_split_fs_io.zig — schema for the cube_split demo's fragment shad
 
 ### `examples/cube_split_vs.zig`
 
-examples/cube_split_vs.zig — vertex shader for the cube_split demo.
+examples/cube_split_vs.zig - vertex shader for the cube_split demo.
 
 *34 lines · 1 fns*  
 **Deps:** `examples/cube_split_vs_io.zig`, `cube_split_vs_externs` (module), `zm` (module)  
@@ -4011,17 +4859,17 @@ examples/cube_split_vs.zig — vertex shader for the cube_split demo.
 
 ### `examples/cube_split_vs_io.zig`
 
-examples/cube_split_vs_io.zig — schema for the cube_split demo's vertex shader.  Declares Attributes / Ubo / Outputs consumed by `cube_split_vs.zig` (shader body) and shared with the CPU host `cube_split.zig`.
+examples/cube_split_vs_io.zig - schema for the cube_split demo's vertex shader.  Declares Attributes / Ubo / Outputs consumed by `cube_split_vs.zig` (shader body) and shared with the CPU host `cube_split.zig`.
 
-*[shader-safe] · 39 lines · 0 fns*  
+*[shader-safe] · 40 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
 **Dependents:** `examples/cube_split_vs.zig`
 
 ### `examples/cubicmap/cubicmap.zig`
 
-cubicmap — raylib's `models_cubicmap_rendering`, the zimr way.
+cubicmap - raylib's `models_cubicmap_rendering`, the zimr way.
 
-*505 lines · 10 fns*  
+*509 lines · 10 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4053,7 +4901,7 @@ cubicmap — raylib's `models_cubicmap_rendering`, the zimr way.
 
 examples/dance_track - a physically simulated humanoid trying to follow a dance clip.
 
-*1,472 lines · 16 fns*  
+*1,473 lines · 16 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4075,7 +4923,7 @@ examples/dance_track - a physically simulated humanoid trying to follow a dance 
 
 ### `examples/dashed_line/dashed_line.zig`
 
-dashed_line — a dashed line whose endpoint follows the pointer (drag to aim; when idle the endpoint orbits so the demo stays alive). The dash and gap lengths breathe on sines so the dashing is visibly parametric, and a tap cycles the line colour (it also auto-advances). A translucent panel reads back the live dash/space values. Ported from raylib examples/shapes/shapes_dashed_line.c (the desktop original aimed at…
+dashed_line - a dashed line whose endpoint follows the pointer (drag to aim; when idle the endpoint orbits so the demo stays alive). The dash and gap lengths breathe on sines so the dashing is visibly parametric, and a tap cycles the line colour (it also auto-advances). A translucent panel reads back the live dash/space values. Ported from raylib examples/shapes/shapes_dashed_line.c (the desktop original aimed at…
 
 *151 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4083,7 +4931,7 @@ dashed_line — a dashed line whose endpoint follows the pointer (drag to aim; w
 
 ### `examples/decal_sw/decal_sw.zig`
 
-decal_sw — ONE Zig decal shader, TWO renderers, side by side.
+decal_sw - ONE Zig decal shader, TWO renderers, side by side.
 
 *587 lines · 18 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4099,17 +4947,17 @@ decal_sw — ONE Zig decal shader, TWO renderers, side by side.
 
 ### `examples/decals/decals.zig`
 
-decals — raylib's `models_decals`, done the real-engine way.
+decals - raylib's `models_decals`, done the real-engine way.
 
-*415 lines · 9 fns*  
+*416 lines · 9 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/deferred_render/deferred_render.zig`
 
-deferred_render — raylib's `shaders_deferred_rendering`, the zimr way.
+deferred_render - raylib's `shaders_deferred_rendering`, the zimr way.
 
-*897 lines · 15 fns*  
+*899 lines · 15 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4123,7 +4971,7 @@ deferred_render — raylib's `shaders_deferred_rendering`, the zimr way.
 
 ### `examples/depth_cue/depth_cue.zig`
 
-depth_cue — a quick depth-visualisation preview on the way to `shaders_depth_rendering`. A field of cubes over a ground grid, each shaded grayscale by its distance from the camera (near = bright, far = dark), with a slowly orbiting camera so the gradient sweeps across the field.
+depth_cue - a quick depth-visualisation preview on the way to `shaders_depth_rendering`. A field of cubes over a ground grid, each shaded grayscale by its distance from the camera (near = bright, far = dark), with a slowly orbiting camera so the gradient sweeps across the field.
 
 *122 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4133,29 +4981,29 @@ depth_cue — a quick depth-visualisation preview on the way to `shaders_depth_r
 
 (no description yet — add a //! header or a dict entry)
 
-*315 lines · 3 fns*  
+*316 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/depth_writing/depth_writing.zig`
 
-depth_writing — raylib's `shaders_depth_writing`, the zimr way.
+depth_writing - raylib's `shaders_depth_writing`, the zimr way.
 
-*496 lines · 8 fns*  
+*498 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/digital_clock/digital_clock.zig`
 
-digital_clock — a clock with two faces: a custom seven-segment digital readout and an analog dial with sweeping hands. Both are ported faithfully from the raylib original (the seven-segment glyphs are hand-built from hexagonal bar segments; the hands are rotated bars). There is no wall-clock-of-day in the raylib original's sense, but zimr exposes z.localTime() (real local time, DST-correct), so this shows the…
+digital_clock - a clock with two faces: a custom seven-segment digital readout and an analog dial with sweeping hands. Both are ported faithfully from the raylib original (the seven-segment glyphs are hand-built from hexagonal bar segments; the hands are rotated bars). There is no wall-clock-of-day in the raylib original's sense, but zimr exposes z.localTime() (real local time, DST-correct), so this shows the…
 
-*220 lines · 8 fns*  
+*221 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/directional_billboard/directional_billboard.zig`
 
-directional_billboard — raylib's `models_directional_billboard`.
+directional_billboard - raylib's `models_directional_billboard`.
 
 *252 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4163,7 +5011,7 @@ directional_billboard — raylib's `models_directional_billboard`.
 
 ### `examples/double_pendulum/double_pendulum.zig`
 
-double_pendulum — the classic chaotic double pendulum, ported to WebGPU. Two pendulums start 1e-3 rad apart in θ₂; identical at first, they diverge into completely different trajectories — the canonical demo of sensitive dependence on initial conditions. Each leaves a fading trail: a CPU ring buffer of recent rod-2 tip positions drawn as alpha-graded segments. (The GL original used a render texture; the wgpu…
+double_pendulum - the classic chaotic double pendulum, ported to WebGPU. Two pendulums start 1e-3 rad apart in theta_2; identical at first, they diverge into completely different trajectories - the canonical demo of sensitive dependence on initial conditions. Each leaves a fading trail: a CPU ring buffer of recent rod-2 tip positions drawn as alpha-graded segments. (The GL original used a render texture; the wgpu…
 
 *221 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4171,7 +5019,7 @@ double_pendulum — the classic chaotic double pendulum, ported to WebGPU. Two p
 
 ### `examples/draw2d_demo/draw2d_demo.zig`
 
-draw2d_demo — exercises the unified draw2d IMMEDIATE surface on the GPU backend: `sink.rect` (fill + outline), `sink.circle`, and `sink.image` with a Sprite (which uploads + caches its GPU residency on first draw). See notes/drawing_api.md.
+draw2d_demo - exercises the unified draw2d IMMEDIATE surface on the GPU backend: `sink.rect` (fill + outline), `sink.circle`, and `sink.image` with a Sprite (which uploads + caches its GPU residency on first draw). See notes/drawing_api.md.
 
 *93 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4179,9 +5027,9 @@ draw2d_demo — exercises the unified draw2d IMMEDIATE surface on the GPU backen
 
 ### `examples/dynamic_mesh/dynamic_mesh.zig`
 
-dynamic_mesh — port of the GL `dynamic_mesh`: a quad whose four corners breathe in and out radially each frame via `updateMeshBuffer`, proving the dynamic-vertex path. Built as a 4-vertex indexed mesh; the per-frame corner positions are written into the mesh's position array, which the retained draw path re-reads each frame (Step 3a). Drawn as a Model in a fixed camera.
+dynamic_mesh - port of the GL `dynamic_mesh`: a quad whose four corners breathe in and out radially each frame via `updateMeshBuffer`, proving the dynamic-vertex path. Built as a 4-vertex indexed mesh; the per-frame corner positions are written into the mesh's position array, which the retained draw path re-reads each frame (Step 3a). Drawn as a Model in a fixed camera.
 
-*120 lines · 3 fns*  
+*122 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4219,17 +5067,17 @@ dynamic_mesh — port of the GL `dynamic_mesh`: a quad whose four corners breath
 
 ### `examples/ecs_boids/ecs_boids.zig`
 
-ecs_boids — Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live in an archetype of Pos + Vel components. Each frame: a snapshot via `iterator` feeds a steering `forEach` (separation/alignment/cohesion), then integrate-and-wrap, then a render `iterator`. Proves the ECS subsystem (Registry, archetypes, iterator, forEach) on the wgpu backend. Self-running, viewport-relative under `.responsive`.
+ecs_boids - Reynolds flocking on the zimr ECS, ported to WebGPU. ~160 boids live in an archetype of Pos + Vel components. Each frame: a snapshot via `iterator` feeds a steering `forEach` (separation/alignment/cohesion), then integrate-and-wrap, then a render `iterator`. Proves the ECS subsystem (Registry, archetypes, iterator, forEach) on the wgpu backend. Self-running, viewport-relative under `.responsive`.
 
-*244 lines · 6 fns*  
+*245 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/ecs_solar_system/ecs_solar_system.zig`
 
-ecs_solar_system — port of the GL `ecs_solar_system` onto WebGPU. Same ECS exercise, drawn with the wgpu draw API (drawCircle).
+ecs_solar_system - port of the GL `ecs_solar_system` onto WebGPU. Same ECS exercise, drawn with the wgpu draw API (drawCircle).
 
-*446 lines · 9 fns*  
+*450 lines · 9 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4243,7 +5091,7 @@ ecs_solar_system — port of the GL `ecs_solar_system` onto WebGPU. Same ECS exe
 
 ### `examples/example_common/example_common.zig`
 
-lint:alias common example_common — shared scaffold for the wgpu example set. A cohesive palette, one caption style, a subtle backdrop, and viewport-relative layout helpers, so every example reads as part of the same family instead of ad-hoc per file. Import as `@import("example_common")`.
+lint:alias common example_common - shared scaffold for the wgpu example set. A cohesive palette, one caption style, a subtle backdrop, and viewport-relative layout helpers, so every example reads as part of the same family instead of ad-hoc per file. Import as `@import("example_common")`.
 
 *95 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4251,7 +5099,7 @@ lint:alias common example_common — shared scaffold for the wgpu example set. A
 
 ### `examples/first_person_camera/first_person_camera.zig`
 
-first_person_camera — port of the GL `first_person_camera`: WASD + drag-look across procedurally generated terrain.
+first_person_camera - port of the GL `first_person_camera`: WASD + drag-look across procedurally generated terrain.
 
 *121 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4259,71 +5107,47 @@ first_person_camera — port of the GL `first_person_camera`: WASD + drag-look a
 
 ### `examples/first_person_maze/first_person_maze.zig`
 
-first_person_maze — raylib's `models_first_person_maze`, the zimr way.
+first_person_maze - raylib's `models_first_person_maze`, the zimr way.
 
-*604 lines · 19 fns*  
+*608 lines · 19 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
-### `examples/fluid_gpu/fluid_gpu.zig`
-
-fluid_gpu — 20,000-particle Clavet fluid, ENTIRELY on the GPU.
-
-*884 lines · 7 fns*  
-**Deps:** `examples/fluid_gpu/fluid_kernels.zig`, `zimr` (module), `zm` (module)  
-**Dependents:** —
-
-### `examples/fluid_gpu/fluid_kernels.zig`
-
-fluid_kernels.zig — the GPU fluid: Clavet/Beaudoin/Poulin (2005) double-density relaxation as a SEVEN-kernel kompute module. The same algorithm as examples/sph_fluid_2d (the CPU port), now running where it was born: 20k particles in compute shaders. Every kernel is the pure kompute DSL — the SAME Zig compiles to a CPU loop and to SPIR-V→WGSL.
-
-*825 lines · 14 fns · 3 tests*  
-**Deps:** `kompute` (module), `zm` (module)  
-**Dependents:** `examples/fluid_gpu/fluid_gpu.zig`
-
 ### `examples/fluid_sort/fluid_sort.zig`
 
-fluid_sort — 20,000-particle Clavet fluid on the GPU, neighbour grid
+fluid_sort - 20,000-particle Clavet fluid on the GPU, neighbour grid
 
-*946 lines · 4 fns*  
+*942 lines · 4 fns*  
 **Deps:** `examples/fluid_sort/sort_kernels.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/fluid_sort/sort_kernels.zig`
 
-sort_kernels.zig — the GPU fluid with a SPATIAL COUNTING SORT (t1178). Same Clavet double-density-relaxation SPH as fluid_gpu, but the neighbour grid is a counting sort instead of per-cell slot arrays: clearGrid → countGrid → prefixSum → scatter → copyback reorders pos/vel/prev into CELL ORDER each frame, so the density / force / viscosity neighbour loops read CONTIGUOUS memory (b_pos[cell_start[c]..[c+1]]) and…
+sort_kernels.zig - the GPU fluid with a SPATIAL COUNTING SORT (t1178). Same Clavet double-density-relaxation SPH as fluid_gpu, but the neighbour grid is a counting sort instead of per-cell slot arrays: clearGrid -> countGrid -> prefixSum -> scatter -> copyback reorders pos/vel/prev into CELL ORDER each frame, so the density / force / viscosity neighbour loops read CONTIGUOUS memory (b_pos[cell_start[c]..[c+1]])…
 
-*721 lines · 13 fns · 1 tests*  
+*722 lines · 13 fns · 1 tests*  
 **Deps:** `kompute` (module), `zm` (module)  
 **Dependents:** `examples/fluid_sort/fluid_sort.zig`
 
 ### `examples/fog_rendering/fog_rendering.zig`
 
-fog_rendering — raylib's `shaders_fog_rendering`, the zimr way.
+fog_rendering - raylib's `shaders_fog_rendering`, the zimr way.
 
-*531 lines · 10 fns*  
+*533 lines · 10 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/following_eyes/following_eyes.zig`
 
-following_eyes — two googly eyes whose irises track the pointer, each clamped to stay inside its sclera (atan2 + a radius clamp, straight from the raylib original). On a phone there is no hover, so when nothing is touching the screen the eyes wander on their own along a slow Lissajous path; touch and they snap to your finger. From raylib shapes_following_eyes.
+following_eyes - two googly eyes whose irises track the pointer, each clamped to stay inside its sclera (atan2 + a radius clamp, straight from the raylib original). On a phone there is no hover, so when nothing is touching the screen the eyes wander on their own along a slow Lissajous path; touch and they snap to your finger. From raylib shapes_following_eyes.
 
 *108 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
-### `examples/forward_kinematics/forward_kinematics.zig`
-
-(no description yet — add a //! header or a dict entry)
-
-*309 lines · 6 fns*  
-**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
-**Dependents:** —
-
 ### `examples/four_ways/escape.zig`
 
-examples/four_ways/escape.zig — THE function.
+examples/four_ways/escape.zig - THE function.
 
 *42 lines · 1 fns · 1 tests*  
 **Deps:** —  
@@ -4331,7 +5155,7 @@ examples/four_ways/escape.zig — THE function.
 
 ### `examples/four_ways/escape_kernel.zig`
 
-examples/four_ways/escape_kernel.zig — the kernel.
+examples/four_ways/escape_kernel.zig - the kernel.
 
 *93 lines · 1 fns*  
 **Deps:** `examples/four_ways/escape.zig`, `kompute` (module)  
@@ -4339,15 +5163,15 @@ examples/four_ways/escape_kernel.zig — the kernel.
 
 ### `examples/four_ways/four_ways.zig`
 
-examples/four_ways/four_ways.zig — ONE Zig function, FOUR machines.
+examples/four_ways/four_ways.zig - ONE Zig function, FOUR machines.
 
-*511 lines · 8 fns*  
+*513 lines · 8 fns*  
 **Deps:** `examples/four_ways/escape.zig`, `examples/four_ways/escape_kernel.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/four_ways/kernels.zig`
 
-examples/four_ways/kernels.zig — the worker's half, and it is FOUR LINES of substance.
+examples/four_ways/kernels.zig - the worker's half, and it is FOUR LINES of substance.
 
 *41 lines · 0 fns*  
 **Deps:** `examples/four_ways/escape_kernel.zig`, `zimr` (module)  
@@ -4355,23 +5179,23 @@ examples/four_ways/kernels.zig — the worker's half, and it is FOUR LINES of su
 
 ### `examples/fps_playground/fps_playground.zig`
 
-fps_playground — a first-person character walking a world of physics cubes. The player is a `CharacterVirtual` (the engine's ported Jolt capsule character controller): a capsule that sweeps through the world, slides along walls, walks up small steps, sticks to the floor on slopes, and reports whether it is on the ground. Scattered around are random-sized dynamic cubes that fall into a pile you can walk into,…
+fps_playground - a first-person character walking a world of physics cubes. The player is a `CharacterVirtual` (the engine's ported Jolt capsule character controller): a capsule that sweeps through the world, slides along walls, walks up small steps, sticks to the floor on slopes, and reports whether it is on the ground. Scattered around are random-sized dynamic cubes that fall into a pile you can walk into,…
 
-*553 lines · 12 fns*  
+*555 lines · 12 fns*  
 **Deps:** `examples/fps_playground/render.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/fps_playground/render.zig`
 
-render.zig — draw a `zimrphysics` World with zimr's 3D immediate-mode API.
+render.zig - draw a `zimrphysics` World with zimr's 3D immediate-mode API.
 
-*230 lines · 6 fns*  
+*231 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** `examples/fps_playground/fps_playground.zig`
 
 ### `examples/fractal_tree/fractal_tree.zig`
 
-fractal_tree — a recursive L-system tree swaying in the wind. Each branch splits into two thinner, shorter children; recursion to a fixed depth grows the canopy, with blossoms at the tips. A per-depth, per-position sinusoidal sway makes a ripple travel up the tree so the whole thing bends and shimmers. Pure recursion + drawLine.
+fractal_tree - a recursive L-system tree swaying in the wind. Each branch splits into two thinner, shorter children; recursion to a fixed depth grows the canopy, with blossoms at the tips. A per-depth, per-position sinusoidal sway makes a ripple travel up the tree so the whole thing bends and shimmers. Pure recursion + drawLine.
 
 *92 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4379,9 +5203,9 @@ fractal_tree — a recursive L-system tree swaying in the wind. Each branch spli
 
 ### `examples/friction_slope/friction_slope.zig`
 
-friction_slope — does the engine's friction match Coulomb's law?
+friction_slope - does the engine's friction match Coulomb's law?
 
-*405 lines · 6 fns*  
+*407 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4395,15 +5219,15 @@ friction_slope — does the engine's friction match Coulomb's law?
 
 ### `examples/gallery/gallery.zig`
 
-gallery — multi-app demo on WebGPU, now via the pushViewport primitive (P1 of the multi-app refactor). One App hosts four independent sub-apps in a 2x2 grid: pulse (gradient), spinner (rotating triangle), sparkles (per-app-RNG particles), counter (big frame count). The host opens ONE draw frame, then for each cell calls z.pushViewport(f, cell) -> sub-app -> z.popViewport(f). Inside a viewport the sub-app draws in…
+gallery - multi-app demo on WebGPU, now via the pushViewport primitive (P1 of the multi-app refactor). One App hosts four independent sub-apps in a 2x2 grid: pulse (gradient), spinner (rotating triangle), sparkles (per-app-RNG particles), counter (big frame count). The host opens ONE draw frame, then for each cell calls z.pushViewport(f, cell) -> sub-app -> z.popViewport(f). Inside a viewport the sub-app draws in…
 
-*265 lines · 9 fns*  
+*266 lines · 9 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/gallery_all/gallery_all.zig`
 
-gallery_all — the multi-app LAUNCHER (P3). A descriptor-only app whose State holds a z.Launcher hosting four independent child apps in a 2x2 grid, each with its OWN leak-checking allocator. Tap a cell to reset that child (deinit -> leak-check -> re-init). Three cells use reflow placement (the child sees the cell size); the fourth (orbit) uses scale_to_fit (a 300x300 design letterboxed into its cell) to exercise…
+gallery_all - the multi-app LAUNCHER (P3). A descriptor-only app whose State holds a z.Launcher hosting four independent child apps in a 2x2 grid, each with its OWN leak-checking allocator. Tap a cell to reset that child (deinit -> leak-check -> re-init). Three cells use reflow placement (the child sees the cell size); the fourth (orbit) uses scale_to_fit (a 300x300 design letterboxed into its cell) to exercise…
 
 *256 lines · 16 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4443,9 +5267,9 @@ gallery_all — the multi-app LAUNCHER (P3). A descriptor-only app whose State h
 
 ### `examples/geno_dance/geno_dance.zig`
 
-examples/geno_dance — two skinned characters from FBX, side by side.
+examples/geno_dance - two skinned characters from FBX, side by side.
 
-*4,275 lines · 60 fns*  
+*4,286 lines · 60 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4473,20 +5297,196 @@ examples/geno_dance — two skinned characters from FBX, side by side.
 **Deps:** —  
 **Dependents:** —
 
+### `examples/geno_fit/Geno.fbx`
+
+(no description yet — add a //! header or a dict entry)
+
+*5,816 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_fit/dance.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*824 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_fit/geno_bind.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*466 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_fit/geno_fit.zig`
+
+examples/geno_fit - the new robot's body, riding the captures it will have to track.
+
+*582 lines · 16 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/geno_fit/getup.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,304 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_ppo/dance.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,412 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_ppo/geno_ppo.zig`
+
+examples/geno_ppo - PPO on GENO, learned on the device in your hand.
+
+*609 lines · 19 fns*  
+**Deps:** `zimr` (module), `zm` (module), `zn_mlp` (module)  
+**Dependents:** —
+
+### `examples/geno_track/geno_bind.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*466 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_track/geno_stance.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*466 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_track/geno_track.zig`
+
+Geno, servoing a copied clip: the robot built from the character its captures were recorded on (rl_track_plan.md, Phase R), standing on a real floor and pulled through a capture by the tracking task's own servo.
+
+*618 lines · 14 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/geno_track/getup.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,304 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_track/walk.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,424 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_train/dance.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,412 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/geno_train/geno_train.zig`
+
+examples/geno_train - SuperTrack on GENO, learned on the device you are holding.
+
+*517 lines · 9 fns*  
+**Deps:** `zimr` (module), `zm` (module), `zn_mlp` (module)  
+**Dependents:** —
+
 ### `examples/gestures_demo/gestures_demo.zig`
 
-gestures_demo — port of the GL `gestures_demo`: shows the most recent gesture name + its data (drag vector, pinch vector/angle, hold duration), a scrolling history, and a touch-point debug strip. Touch-driven — a graceful no-op on desktop. The recognizers are backend-agnostic input math (`updateGestures` ticks them on the wgpu input snapshot each frame); no GL. Mirrors raylib's core_input_gestures.
+gestures_demo - port of the GL `gestures_demo`: shows the most recent gesture name + its data (drag vector, pinch vector/angle, hold duration), a scrolling history, and a touch-point debug strip. Touch-driven - a graceful no-op on desktop. The recognizers are backend-agnostic input math (`updateGestures` ticks them on the wgpu input snapshot each frame); no GL. Mirrors raylib's core_input_gestures.
 
-*161 lines · 5 fns*  
+*162 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/gestures_testbed/gestures_testbed.zig`
 
-gestures_testbed — port of the GL `gestures_testbed`: a comprehensive gesture-state visualizer. Three columns — per-finger touch state, gesture- detector state, and a state-transition log — plus numbered touch circles tracking each finger. Touch-driven (no-op on desktop). Same backend-agnostic recognizers as gestures_demo, ticked on the wgpu input snapshot.
+gestures_testbed - port of the GL `gestures_testbed`: a comprehensive gesture-state visualizer. Three columns - per-finger touch state, gesture- detector state, and a state-transition log - plus numbered touch circles tracking each finger. Touch-driven (no-op on desktop). Same backend-agnostic recognizers as gestures_demo, ticked on the wgpu input snapshot.
 
-*199 lines · 5 fns*  
+*200 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/getup_frames/fallAndGetUp2_subject2.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,304 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/getup_frames/getup.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*325 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/getup_frames/getup_frames.zig`
+
+examples/getup_frames - the get-up REFERENCE on the robot, one frame at a time.
+
+*445 lines · 15 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/getup_frames/humanoid_flex2.xml`
+
+(no description yet — add a //! header or a dict entry)
+
+*450 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/getup_train/dance.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,175 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/getup_train/getup.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*325 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/getup_train/getup_train.zig`
+
+examples/getup_train - learning to track a motion, from scratch, on the device in your hand.
+
+*593 lines · 19 fns*  
+**Deps:** `zimr` (module), `zm` (module), `zn_mlp` (module)  
+**Dependents:** —
+
+### `examples/getup_train/humanoid_flex2.xml`
+
+(no description yet — add a //! header or a dict entry)
+
+*450 lines*  
+**Deps:** —  
 **Dependents:** —
 
 ### `examples/gltf_simple/cube_glb.zig`
@@ -4523,17 +5523,17 @@ Embedded-GLB byte array for the simple glTF cube demo.
 
 ### `examples/gripper/gripper.zig`
 
-gripper — a 4-DOF arm with a geared two-finger gripper, driven by inverse kinematics.
+gripper - a 4-DOF arm with a geared two-finger gripper, driven by inverse kinematics.
 
-*480 lines · 7 fns*  
+*481 lines · 7 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/heightmap/heightmap.zig`
 
-heightmap — raylib's `models_heightmap`, the zimr way.
+heightmap - raylib's `models_heightmap`, the zimr way.
 
-*436 lines · 7 fns*  
+*438 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4555,7 +5555,7 @@ heightmap — raylib's `models_heightmap`, the zimr way.
 
 ### `examples/helmet_sw/helmet_sw.zig`
 
-helmet_sw — ONE Zig PBR shader, THREE targets, side by side.
+helmet_sw - ONE Zig PBR shader, THREE targets, side by side.
 
 *703 lines · 12 fns*  
 **Deps:** `helmet_proxy` (module), `zimr` (module), `zm` (module)  
@@ -4565,7 +5565,7 @@ helmet_sw — ONE Zig PBR shader, THREE targets, side by side.
 
 (no description yet — add a //! header or a dict entry)
 
-*233 lines · 6 fns*  
+*234 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4579,41 +5579,41 @@ helmet_sw — ONE Zig PBR shader, THREE targets, side by side.
 
 ### `examples/humanoid/humanoid.zig`
 
-humanoid — MuJoCo's own humanoid, standing on its own two feet.
+humanoid - MuJoCo's own humanoid, standing on its own two feet.
 
-*1,703 lines · 20 fns*  
+*1,708 lines · 20 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/hybrid_render/hybrid_render.zig`
 
-hybrid_render — raylib's `shaders_hybrid_rendering`, the zimr way (and, with the cubes toggled off, `shaders_raymarching_rendering`).
+hybrid_render - raylib's `shaders_hybrid_rendering`, the zimr way (and, with the cubes toggled off, `shaders_raymarching_rendering`).
 
-*584 lines · 8 fns*  
+*586 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/hybrid_render/native_verify.zig`
 
-native_verify — render the hybrid example's raymarched scene on the CPU through the same `shaderMain` the wasm compiles to WGSL, dump `hybrid_verify.png`, and assert the three visual populations exist: sky, checkerboard floor (two distinct grays), and hot metaball pixels.  `zig build hybrid-render-verify`.
+native_verify - render the hybrid example's raymarched scene on the CPU through the same `shaderMain` the wasm compiles to WGSL, dump `hybrid_verify.png`, and assert the three visual populations exist: sky, checkerboard floor (two distinct grays), and hot metaball pixels.  `zig build hybrid-render-verify`.
 
-*122 lines · 1 fns*  
+*125 lines · 1 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/icosphere_demo/icosphere_demo.zig`
 
-icosphere_demo — shows the icosphere refining from its icosahedron seed into a smooth ball. Four copies sit in a row at subdivision levels 0, 1, 2, 3: the leftmost is just the 20-face icosahedron; each step to the right splits every triangle into four and pushes the new points onto the sphere, so the silhouette rounds out and the surface smooths. This is the geodesic sphere — uniform triangles, no pinched poles —…
+icosphere_demo - shows the icosphere refining from its icosahedron seed into a smooth ball. Four copies sit in a row at subdivision levels 0, 1, 2, 3: the leftmost is just the 20-face icosahedron; each step to the right splits every triangle into four and pushes the new points onto the sphere, so the silhouette rounds out and the surface smooths. This is the geodesic sphere - uniform triangles, no pinched poles -…
 
-*89 lines · 3 fns*  
+*90 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/image_editor/image_editor.zig`
 
-image_editor — port of the GL `image_editor`: a tour of the CPU image API now living in src/image.zig. A 32×32 PNG is decoded once (`loadImageFromMemory`), then `imageCopy`'d four ways and edited — `imageBlurGaussian`, `imageColorInvert`, `imageRotateCW` — each uploaded to its own GPU texture (`loadTextureFromImage`). A fifth "live" panel keeps a CPU buffer around, rewrites its pixels every frame (a brightness…
+image_editor - port of the GL `image_editor`: a tour of the CPU image API now living in src/image.zig. A 32x32 PNG is decoded once (`loadImageFromMemory`), then `imageCopy`'d four ways and edited - `imageBlurGaussian`, `imageColorInvert`, `imageRotateCW` - each uploaded to its own GPU texture (`loadTextureFromImage`). A fifth "live" panel keeps a CPU buffer around, rewrites its pixels every frame (a brightness…
 
-*185 lines · 9 fns*  
+*186 lines · 9 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4627,17 +5627,33 @@ image_editor — port of the GL `image_editor`: a tour of the CPU image API now 
 
 ### `examples/input_actions/input_actions.zig`
 
-input_actions — port of raylib [core] example - input actions. raylib source: examples/core/core_input_actions.c.
+input_actions - port of raylib [core] example - input actions. raylib source: examples/core/core_input_actions.c.
 
 *470 lines · 16 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/input_cursor_shapes/input_cursor_shapes.zig`
+
+input_cursor_shapes - the cursor's shape over the window, and the window's title, changed while the app runs.
+
+*133 lines · 5 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/input_gamepad/input_gamepad.zig`
+
+input_gamepad - the gamepads the platform reads, one panel per slot: each button lit while held, both sticks as a dot inside their circle, and the triggers as bars filling with their travel. Pressing the south button - A on an Xbox pad, cross on a PlayStation one - rumbles that gamepad for a quarter of a second. A browser shows a page its gamepads only once a button is pressed while the page has the focus.
+
+*141 lines · 6 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/input_keys/input_keys.zig`
 
 (no description yet — add a //! header or a dict entry)
 
-*108 lines · 3 fns*  
+*127 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4665,6 +5681,14 @@ input_actions — port of raylib [core] example - input actions. raylib source: 
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
+### `examples/input_pointer_lock/input_pointer_lock.zig`
+
+input_pointer_lock - turning a view with the mouse, as a first-person camera does, and what the engine reports about the pointer while it does.
+
+*165 lines · 6 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
 ### `examples/input_virtual_controls/input_virtual_controls.zig`
 
 (no description yet — add a //! header or a dict entry)
@@ -4675,7 +5699,7 @@ input_actions — port of raylib [core] example - input actions. raylib source: 
 
 ### `examples/instancing/instancing.zig`
 
-instancing — port of the GL `instancing`: 1000 cubes (a 10×10×10 grid) drawn in ONE instanced GPU draw. The GL version split a per-instance mat4 into four vec4 vertex attributes through a custom GLSL shader; on wgpu the engine owns that — `drawMeshInstanced` keeps the cube mesh GPU-resident and streams a per-instance buffer (model matrix + colour, instance step-mode), and the instanced cube3d shader reconstructs…
+instancing - port of the GL `instancing`: 1000 cubes (a 10x10x10 grid) drawn in ONE instanced GPU draw. The GL version split a per-instance mat4 into four vec4 vertex attributes through a custom GLSL shader; on wgpu the engine owns that - `drawMeshInstanced` keeps the cube mesh GPU-resident and streams a per-instance buffer (model matrix + colour, instance step-mode), and the instanced cube3d shader reconstructs…
 
 *139 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4683,7 +5707,7 @@ instancing — port of the GL `instancing`: 1000 cubes (a 10×10×10 grid) drawn
 
 ### `examples/instancing_vs.zig`
 
-examples/instancing_vs.zig — instancing vertex shader body.
+examples/instancing_vs.zig - instancing vertex shader body.
 
 *37 lines · 1 fns*  
 **Deps:** `examples/instancing_vs_io.zig`, `instancing_vs_externs` (module), `zm` (module)  
@@ -4691,7 +5715,7 @@ examples/instancing_vs.zig — instancing vertex shader body.
 
 ### `examples/instancing_vs_io.zig`
 
-examples/instancing_vs_io.zig — typed interface for the instancing vertex shader. Companion to `instancing_vs.zig`.
+examples/instancing_vs_io.zig - typed interface for the instancing vertex shader. Companion to `instancing_vs.zig`.
 
 *[shader-safe] · 41 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -4707,7 +5731,7 @@ examples/instancing_vs_io.zig — typed interface for the instancing vertex shad
 
 ### `examples/julia_fs.zig`
 
-examples/julia_inline_fs.zig — Julia-set fragment shader with iface co-located in the same file (Inputs / Outputs / Ubo at the top, body below).  See `mandel_inline_fs.zig` for the mechanism; this is its companion.
+examples/julia_inline_fs.zig - Julia-set fragment shader with iface co-located in the same file (Inputs / Outputs / Ubo at the top, body below).  See `mandel_inline_fs.zig` for the mechanism; this is its companion.
 
 *105 lines · 2 fns*  
 **Deps:** `examples/julia_fs_io.zig`, `julia_fs_externs` (module), `zm` (module)  
@@ -4715,7 +5739,7 @@ examples/julia_inline_fs.zig — Julia-set fragment shader with iface co-located
 
 ### `examples/julia_fs_bundle.zig`
 
-examples/julia_fs_bundle.zig — single-module entry point for native consumers of `julia_fs.zig`.  Bundles the shader source and its io schema so they share one module (one-file-per-module rule).  Same pattern as `mandelbrot_fs_bundle`.
+examples/julia_fs_bundle.zig - single-module entry point for native consumers of `julia_fs.zig`.  Bundles the shader source and its io schema so they share one module (one-file-per-module rule).  Same pattern as `mandelbrot_fs_bundle`.
 
 *8 lines · 0 fns*  
 **Deps:** `examples/julia_fs.zig`, `examples/julia_fs_io.zig`  
@@ -4723,7 +5747,7 @@ examples/julia_fs_bundle.zig — single-module entry point for native consumers 
 
 ### `examples/julia_fs_io.zig`
 
-examples/julia_fs_io.zig — schema for the julia_fs shader. Declares Inputs / Outputs / Ubo consumed by `julia_fs.zig` (shader body) and shared with the CPU host.
+examples/julia_fs_io.zig - schema for the julia_fs shader. Declares Inputs / Outputs / Ubo consumed by `julia_fs.zig` (shader body) and shared with the CPU host.
 
 *[shader-safe] · 36 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -4731,15 +5755,15 @@ examples/julia_fs_io.zig — schema for the julia_fs shader. Declares Inputs / O
 
 ### `examples/julia_gallery.zig`
 
-examples/julia_gallery.zig — four Julia sets in a 2×2 grid, each with a different `c` constant, composited into a single 1280×720 PNG.
+examples/julia_gallery.zig - four Julia sets in a 2x2 grid, each with a different `c` constant, composited into a single 1280x720 PNG.
 
-*218 lines · 4 fns*  
+*221 lines · 4 fns*  
 **Deps:** `sw_runtime` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/julia_gallery/julia_gallery.zig`
 
-julia_gallery — four classic Julia sets in a 2×2 grid, each computed ENTIRELY at COMPILE TIME and baked into the binary, then drawn on the GPU. The graphical sibling of the CLI `julia_gallery` (which wrote a PNG).
+julia_gallery - four classic Julia sets in a 2x2 grid, each computed ENTIRELY at COMPILE TIME and baked into the binary, then drawn on the GPU. The graphical sibling of the CLI `julia_gallery` (which wrote a PNG).
 
 *160 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4747,7 +5771,7 @@ julia_gallery — four classic Julia sets in a 2×2 grid, each computed ENTIRELY
 
 ### `examples/kaleidoscope/kaleidoscope.zig`
 
-kaleidoscope — symmetric trail art ported to WebGPU. A brush follows an auto-driven Lissajous path; every frame the new segment is mirrored across N rotational axes (plus an X-axis reflection) about the screen centre, so the stroke wraps a full 360° into a kaleidoscope. A short ring buffer of recent brush points gives a flowing, fading rainbow trail. The GL original was mouse-painted; this runs itself so it's…
+kaleidoscope - symmetric trail art ported to WebGPU. A brush follows an auto-driven Lissajous path; every frame the new segment is mirrored across N rotational axes (plus an X-axis reflection) about the screen centre, so the stroke wraps a full 360 deg into a kaleidoscope. A short ring buffer of recent brush points gives a flowing, fading rainbow trail. The GL original was mouse-painted; this runs itself so it's…
 
 *117 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4757,7 +5781,7 @@ kaleidoscope — symmetric trail art ported to WebGPU. A brush follows an auto-d
 
 keys - input demo (ported). WASD/arrows move a square, shift = faster, space toggles bg, mouse crosshair + click splats. Exercises the input state machine + core 2D draws on the wgpu backend.
 
-*193 lines · 3 fns*  
+*194 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4765,21 +5789,21 @@ keys - input demo (ported). WASD/arrows move a square, shift = faster, space tog
 
 (no description yet — add a //! header or a dict entry)
 
-*430 lines · 3 fns*  
+*437 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/langton_ant/langton_ant.zig`
 
-langton_ant — Langton's Ant, the two-rule cellular automaton whose ant paints chaos for ~10,000 steps and then, astonishingly, builds a repeating diagonal "highway" forever. The whole rule is four lines: on a white cell turn right, on a black cell turn left; flip the cell you leave; step forward one square.
+langton_ant - Langton's Ant, the two-rule cellular automaton whose ant paints chaos for ~10,000 steps and then, astonishingly, builds a repeating diagonal "highway" forever. The whole rule is four lines: on a white cell turn right, on a black cell turn left; flip the cell you leave; step forward one square.
 
-*605 lines · 22 fns*  
+*607 lines · 22 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/launcher/kernels.zig`
 
-examples/launcher/kernels.zig — ONE kernel wasm for a page that bundles many examples.
+examples/launcher/kernels.zig - ONE kernel wasm for a page that bundles many examples.
 
 *55 lines · 0 fns*  
 **Deps:** `k_four_ways` (module), `k_worker_png` (module), `zimr` (module)  
@@ -4787,23 +5811,23 @@ examples/launcher/kernels.zig — ONE kernel wasm for a page that bundles many e
 
 ### `examples/launcher/launcher.zig`
 
-launcher — the flagship multi-app switcher. Hosts many full example apps (each self-contained: its own shaders/fonts/State, isolated leak-checking allocator) and shows ONE at a time full-screen via z.Launcher. A switch pill (◂ prev, a dot per app, ▸ next) cycles between apps on tap.
+launcher - the flagship multi-app switcher. Hosts many full example apps (each self-contained: its own shaders/fonts/State, isolated leak-checking allocator) and shows ONE at a time full-screen via z.Launcher. A switch pill (< prev, a dot per app, > next) cycles between apps on tap.
 
-*182 lines · 4 fns*  
-**Deps:** `ex_bone_socket` (module), `ex_cel_shading` (module), `ex_decals` (module), `ex_deferred_render` (module), `ex_fluid_sort` (module), `ex_fog_rendering` (module), `ex_four_ways` (module), `ex_fps_playground` (module), `ex_gallery_all` (module), `ex_helmet_sw` (module), `ex_hybrid_render` (module), `ex_langton_ant` (module), `ex_mandel_julia` (module), `ex_mandel_sidebyside` (module), `ex_mpc_cartpole` (module), `ex_plot3d_demo` (module), `ex_plot_demo` (module), `ex_quadruped` (module), `ex_rt_sidebyside` (module), `ex_shader_effects` (module), `ex_shadowmap_sw` (module), `ex_snake` (module), `ex_sph_fluid_2d` (module), `ex_starfield` (module), `ex_textures_background_scrolling` (module), `ex_tic_tac_toe` (module), `ex_ui_full_showcase` (module), `ex_waving_cubes` (module), `ex_worker_png` (module), `ex_zimrphysics2d_demo` (module), `ex_zimrphysics_demo` (module), `zimr` (module), `zm` (module)  
-**Dependents:** —
+*195 lines · 4 fns*  
+**Deps:** `ex_bone_socket` (module), `ex_cel_shading` (module), `ex_decals` (module), `ex_deferred_render` (module), `ex_fluid_sort` (module), `ex_fog_rendering` (module), `ex_four_ways` (module), `ex_fps_playground` (module), `ex_gallery_all` (module), `ex_helmet_sw` (module), `ex_hybrid_render` (module), `ex_langton_ant` (module), `ex_mandel_julia` (module), `ex_mandel_sidebyside` (module), `ex_mpc_cartpole` (module), `ex_plot3d_demo` (module), `ex_plot_demo` (module), `ex_quadruped` (module), `ex_rt_sidebyside` (module), `ex_shader_effects` (module), `ex_shadowmap_sw` (module), `ex_snake` (module), `ex_sph_fluid_2d` (module), `ex_starfield` (module), `ex_textures_background_scrolling` (module), `ex_tic_tac_toe` (module), `ex_ui_full_showcase` (module), `ex_waving_cubes` (module), `ex_worker_png` (module), `ex_zimrnum_field` (module), `ex_zimrphysics2d_demo` (module), `ex_zimrphysics_demo` (module), `zimr` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`
 
 ### `examples/life/life.zig`
 
 (no description yet — add a //! header or a dict entry)
 
-*246 lines · 6 fns*  
+*247 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/lightmap_fs.zig`
 
-lightmap_fs.zig — the whole point: base(uv) × lightmap(uv2). The base is sampled with the (possibly tiled) primary uv; the lightmap with the second uv set, so precomputed lighting modulates the surface independently of how the base texture repeats.
+lightmap_fs.zig - the whole point: base(uv) x lightmap(uv2). The base is sampled with the (possibly tiled) primary uv; the lightmap with the second uv set, so precomputed lighting modulates the surface independently of how the base texture repeats.
 
 *32 lines · 1 fns*  
 **Deps:** `lightmap_fs_externs` (module), `zm` (module)  
@@ -4811,7 +5835,7 @@ lightmap_fs.zig — the whole point: base(uv) × lightmap(uv2). The base is samp
 
 ### `examples/lightmap_fs_io.zig`
 
-lightmap_fs_io.zig — IO schema for the lightmap fragment shader: two samplers (the base texture, sampled with uv, and the baked lightmap, sampled with uv2) whose product is the lit surface colour.
+lightmap_fs_io.zig - IO schema for the lightmap fragment shader: two samplers (the base texture, sampled with uv, and the baked lightmap, sampled with uv2) whose product is the lit surface colour.
 
 *[shader-safe] · 21 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -4819,7 +5843,7 @@ lightmap_fs_io.zig — IO schema for the lightmap fragment shader: two samplers 
 
 ### `examples/lightmap_vs.zig`
 
-lightmap_vs.zig — transform the plane by MVP and pass BOTH uv sets through to the fragment stage (base uv + lightmap uv2).
+lightmap_vs.zig - transform the plane by MVP and pass BOTH uv sets through to the fragment stage (base uv + lightmap uv2).
 
 *25 lines · 1 fns*  
 **Deps:** `examples/lightmap_vs_io.zig`, `lightmap_vs_externs` (module), `zm` (module)  
@@ -4827,7 +5851,7 @@ lightmap_vs.zig — transform the plane by MVP and pass BOTH uv sets through to 
 
 ### `examples/lightmap_vs_io.zig`
 
-lightmap_vs_io.zig — IO schema for the lightmap vertex shader. Two UV sets: `vertex_uv` (base texture, may tile) and `vertex_uv2` at the reserved texcoord2 location 5 (the lightmap, one 0..1 span over the whole surface).
+lightmap_vs_io.zig - IO schema for the lightmap vertex shader. Two UV sets: `vertex_uv` (base texture, may tile) and `vertex_uv2` at the reserved texcoord2 location 5 (the lightmap, one 0..1 span over the whole surface).
 
 *[shader-safe] · 22 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -4835,7 +5859,7 @@ lightmap_vs_io.zig — IO schema for the lightmap vertex shader. Two UV sets: `v
 
 ### `examples/lines_bezier/lines_bezier.zig`
 
-lines_bezier — a cubic Bézier curve ported to WebGPU. Four control points drift along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn via `drawSplineLinear`, with the control polygon as a dashed line and the control points as dots. The GL original let you drag the endpoints; this animates itself. Viewport-relative under `.responsive`.
+lines_bezier - a cubic Bezier curve ported to WebGPU. Four control points drift along slow Lissajous paths; each frame the cubic is sampled into a polyline and drawn via `drawSplineLinear`, with the control polygon as a dashed line and the control points as dots. The GL original let you drag the endpoints; this animates itself. Viewport-relative under `.responsive`.
 
 *118 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4843,7 +5867,7 @@ lines_bezier — a cubic Bézier curve ported to WebGPU. Four control points dri
 
 ### `examples/lines_drawing/lines_drawing.zig`
 
-lines_drawing — a persistent paint canvas. Drag to paint with a hue that cycles by stroke speed; strokes accumulate into an offscreen render texture that is composited to the screen each frame. Exercises the RTT accumulate path (beginTextureMode with no clear = load) and pointer input. Desktop extras: right-drag erases, middle-click clears, wheel sets thickness. From raylib shapes_lines_drawing; touch-paints on…
+lines_drawing - a persistent paint canvas. Drag to paint with a hue that cycles by stroke speed; strokes accumulate into an offscreen render texture that is composited to the screen each frame. Exercises the RTT accumulate path (beginTextureMode with no clear = load) and pointer input. Desktop extras: right-drag erases, middle-click clears, wheel sets thickness. From raylib shapes_lines_drawing; touch-paints on…
 
 *106 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4851,7 +5875,7 @@ lines_drawing — a persistent paint canvas. Drag to paint with a hue that cycle
 
 ### `examples/logo_raylib/logo_raylib.zig`
 
-logo_raylib — the classic "framed square" logo, drawn entirely from primitives: a filled square, a smaller filled square punched out of its middle to leave a thick border, and a word centred inside. Rebadged for this engine ("zimr"), and on the dark theme it's a light frame on the page colour. A gentle breathe keeps it alive. The point of the original survives: it is NOT a texture, every pixel is a shape. From…
+logo_raylib - the classic "framed square" logo, drawn entirely from primitives: a filled square, a smaller filled square punched out of its middle to leave a thick border, and a word centred inside. Rebadged for this engine ("zimr"), and on the dark theme it's a light frame on the page colour. A gentle breathe keeps it alive. The point of the original survives: it is NOT a texture, every pixel is a shape. From…
 
 *82 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4859,7 +5883,7 @@ logo_raylib — the classic "framed square" logo, drawn entirely from primitives
 
 ### `examples/logo_raylib_anim/logo_raylib_anim.zig`
 
-logo_raylib_anim — the framed-square logo, assembled live by a little state machine: a box blinks, the top+left bars grow, then the bottom+right bars close the frame, the letters type in one by one, and the whole thing fades out before looping. Rebadged "zimr" and inverted for the dark theme. Auto-loops; tap to replay immediately (raylib uses the R key). From raylib shapes_logo_raylib_anim.
+logo_raylib_anim - the framed-square logo, assembled live by a little state machine: a box blinks, the top+left bars grow, then the bottom+right bars close the frame, the letters type in one by one, and the whole thing fades out before looping. Rebadged "zimr" and inverted for the dark theme. Auto-loops; tap to replay immediately (raylib uses the R key). From raylib shapes_logo_raylib_anim.
 
 *192 lines · 7 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4875,7 +5899,7 @@ logo_raylib_anim — the framed-square logo, assembled live by a little state ma
 
 ### `examples/mandel_julia_fs.zig`
 
-examples/mandel_julia_inline_fs.zig — mandelbrot ↔ julia morph shader with iface co-located at the top of this file. See `mandel_inline_fs.zig` for the inline-iface mechanism.
+examples/mandel_julia_inline_fs.zig - mandelbrot <-> julia morph shader with iface co-located at the top of this file. See `mandel_inline_fs.zig` for the inline-iface mechanism.
 
 *107 lines · 2 fns*  
 **Deps:** `examples/mandel_julia_fs_io.zig`, `mandel_julia_fs_externs` (module), `zm` (module)  
@@ -4883,7 +5907,7 @@ examples/mandel_julia_inline_fs.zig — mandelbrot ↔ julia morph shader with i
 
 ### `examples/mandel_julia_fs_bundle.zig`
 
-examples/mandel_julia_fs_bundle.zig — single-module entry point for native consumers of `mandel_julia_fs.zig`.  Bundles the shader source and its io schema so they share one module.
+examples/mandel_julia_fs_bundle.zig - single-module entry point for native consumers of `mandel_julia_fs.zig`.  Bundles the shader source and its io schema so they share one module.
 
 *7 lines · 0 fns*  
 **Deps:** `examples/mandel_julia_fs.zig`, `examples/mandel_julia_fs_io.zig`  
@@ -4891,7 +5915,7 @@ examples/mandel_julia_fs_bundle.zig — single-module entry point for native con
 
 ### `examples/mandel_julia_fs_io.zig`
 
-examples/mandel_julia_fs_io.zig — schema for the mandel_julia_fs shader. Declares Inputs / Outputs / Ubo consumed by `mandel_julia_fs.zig` (shader body) and shared with the CPU host.
+examples/mandel_julia_fs_io.zig - schema for the mandel_julia_fs shader. Declares Inputs / Outputs / Ubo consumed by `mandel_julia_fs.zig` (shader body) and shared with the CPU host.
 
 *[shader-safe] · 31 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -4907,7 +5931,7 @@ examples/mandel_julia_fs_io.zig — schema for the mandel_julia_fs shader. Decla
 
 ### `examples/mandelbrot_fs.zig`
 
-examples/mandelbrot_fs.zig — Mandelbrot fragment shader in Zig.
+examples/mandelbrot_fs.zig - Mandelbrot fragment shader in Zig.
 
 *163 lines · 2 fns*  
 **Deps:** `examples/mandelbrot_fs_io.zig`, `mandelbrot_fs_externs` (module), `zm` (module)  
@@ -4915,7 +5939,7 @@ examples/mandelbrot_fs.zig — Mandelbrot fragment shader in Zig.
 
 ### `examples/mandelbrot_fs_bundle.zig`
 
-examples/mandelbrot_fs_bundle.zig — single-module entry point for native consumers of `mandelbrot_fs.zig`.  Bundles the shader source and its io schema together so they share one module (avoiding Zig 0.16's one-file-per-module rule when both are reached by an example).
+examples/mandelbrot_fs_bundle.zig - single-module entry point for native consumers of `mandelbrot_fs.zig`.  Bundles the shader source and its io schema together so they share one module (avoiding Zig 0.16's one-file-per-module rule when both are reached by an example).
 
 *12 lines · 0 fns*  
 **Deps:** `examples/mandelbrot_fs.zig`, `examples/mandelbrot_fs_io.zig`  
@@ -4923,7 +5947,7 @@ examples/mandelbrot_fs_bundle.zig — single-module entry point for native consu
 
 ### `examples/mandelbrot_fs_io.zig`
 
-examples/mandelbrot_fs_io.zig — schema for the Mandelbrot fragment shader.  Declares the data interface (Inputs, Outputs, Ubo) consumed by `mandelbrot_fs.zig` and shared with the CPU host `mandelbrot.zig` / `mandelbrot_split.zig`.
+examples/mandelbrot_fs_io.zig - schema for the Mandelbrot fragment shader.  Declares the data interface (Inputs, Outputs, Ubo) consumed by `mandelbrot_fs.zig` and shared with the CPU host `mandelbrot.zig` / `mandelbrot_split.zig`.
 
 *[shader-safe] · 52 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -4931,7 +5955,7 @@ examples/mandelbrot_fs_io.zig — schema for the Mandelbrot fragment shader.  De
 
 ### `examples/math_angle_rotation/math_angle_rotation.zig`
 
-math_angle_rotation — four fixed reference lines (0/30/60/90 degrees) from the centre with radial labels, plus one line that sweeps a full turn every six seconds with its colour cycling by angle. Demonstrates the parametric (cos, sin) circle-point pattern. Ported from raylib shapes_math_angle_rotation, themed with the shared scaffold.
+math_angle_rotation - four fixed reference lines (0/30/60/90 degrees) from the centre with radial labels, plus one line that sweeps a full turn every six seconds with its colour cycling by angle. Demonstrates the parametric (cos, sin) circle-point pattern. Ported from raylib shapes_math_angle_rotation, themed with the shared scaffold.
 
 *83 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4939,7 +5963,7 @@ math_angle_rotation — four fixed reference lines (0/30/60/90 degrees) from the
 
 ### `examples/math_sine_cosine/math_sine_cosine.zig`
 
-math_sine_cosine — unit-circle visualisation of sine & cosine, ported to WebGPU. A point sweeps the unit circle (auto-advancing angle); the right triangle's legs ARE cos (horizontal, blue) and sin (vertical, red). A sector arc marks the swept angle, dashed lines mark the axes, and two wave traces below plot sin/cos over 0–360° with a moving marker. Exercises the new drawSplineLinear / drawLineDashed /…
+math_sine_cosine - unit-circle visualisation of sine & cosine, ported to WebGPU. A point sweeps the unit circle (auto-advancing angle); the right triangle's legs ARE cos (horizontal, blue) and sin (vertical, red). A sector arc marks the swept angle, dashed lines mark the axes, and two wave traces below plot sin/cos over 0-360 deg with a moving marker. Exercises the new drawSplineLinear / drawLineDashed /…
 
 *122 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4947,7 +5971,7 @@ math_sine_cosine — unit-circle visualisation of sine & cosine, ported to WebGP
 
 ### `examples/mesh_builder/mesh_builder.zig`
 
-mesh_builder — a little workshop for the mesh-ops toolkit. It doesn't draw any bare primitive; instead it BUILDS things out of them, the way you're meant to: generate parts, orient/place them with meshTranslate/meshRotate, flip caps with meshInvert, and weld everything into one mesh with meshMerge.
+mesh_builder - a little workshop for the mesh-ops toolkit. It doesn't draw any bare primitive; instead it BUILDS things out of them, the way you're meant to: generate parts, orient/place them with meshTranslate/meshRotate, flip caps with meshInvert, and weld everything into one mesh with meshMerge.
 
 *146 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -4955,9 +5979,9 @@ mesh_builder — a little workshop for the mesh-ops toolkit. It doesn't draw any
 
 ### `examples/mesh_picking/mesh_picking.zig`
 
-mesh_picking — raylib's `models_mesh_picking`, the zimr way.
+mesh_picking - raylib's `models_mesh_picking`, the zimr way.
 
-*691 lines · 11 fns*  
+*696 lines · 11 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -4971,15 +5995,15 @@ mesh_picking — raylib's `models_mesh_picking`, the zimr way.
 
 ### `examples/mocap_viewer/mocap_viewer.zig`
 
-examples/mocap_viewer — a BVH scrubber you can drop files onto.
+examples/mocap_viewer - a BVH scrubber you can drop files onto.
 
-*508 lines · 11 fns*  
+*512 lines · 11 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/models3d/models3d.zig`
 
-models3d — port of the GL `models3d`: every immediate-3D primitive in one slowly-orbiting scene — sphere, cube, tapered cylinder, capsule, cone — above a ground grid, each wrapped in its wireframe AABB so the `getXxxBoundingBox` helpers are visually verified. The GL version drew these through the rlgl matrix stack; the wgpu immediate API batches them (one draw per topology) and the camera orbits via a hand-set…
+models3d - port of the GL `models3d`: every immediate-3D primitive in one slowly-orbiting scene - sphere, cube, tapered cylinder, capsule, cone - above a ground grid, each wrapped in its wireframe AABB so the `getXxxBoundingBox` helpers are visually verified. The GL version drew these through the rlgl matrix stack; the wgpu immediate API batches them (one draw per topology) and the camera orbits via a hand-set…
 
 *98 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -4987,41 +6011,49 @@ models3d — port of the GL `models3d`: every immediate-3D primitive in one slow
 
 ### `examples/models_animation_blend_custom/models_animation_blend_custom.zig`
 
-models_animation_blend_custom — port of raylib's per-bone animation blending. The CC0 `greenman.glb` plays TWO clips at once — `2_move` (walk) and `3_attack` — and blends them PER BONE: the upper body (torso, arms, hands) follows the attack while the lower body (hips, legs) keeps walking, so the character strides forward mid-swing. A checkbox flips to a uniform 50/50 blend of the whole skeleton for comparison.
+models_animation_blend_custom - port of raylib's per-bone animation blending. The CC0 `greenman.glb` plays TWO clips at once - `2_move` (walk) and `3_attack` - and blends them PER BONE: the upper body (torso, arms, hands) follows the attack while the lower body (hips, legs) keeps walking, so the character strides forward mid-swing. A checkbox flips to a uniform 50/50 blend of the whole skeleton for comparison.
 
-*451 lines · 11 fns*  
+*455 lines · 11 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/models_geometric_shapes/models_geometric_shapes.zig`
 
-models_geometric_shapes — raylib's [models] geometric-shapes sample, as a 3D gallery you spin with your finger.
+models_geometric_shapes - raylib's [models] geometric-shapes sample, as a 3D gallery you spin with your finger.
 
 *183 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
+### `examples/monitors/monitors.zig`
+
+monitors - the monitors the platform reports (`z.monitorCount`, `z.monitor`, `z.currentMonitor`): each one's name, where it sits on the desktop and its size in its own logical pixels, its scale and its refresh rate; the primary marked, and the one holding the window highlighted. Move the window to another monitor and the highlight follows. A page sees a single monitor, its screen, and cannot tell its refresh rate.
+
+*135 lines · 4 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
 ### `examples/mpc_cartpole/mpc_cartpole.zig`
 
-mpc_cartpole — model predictive control, planning in front of you, at 60 fps.
+mpc_cartpole - model predictive control, planning in front of you, at 60 fps.
 
-*536 lines · 9 fns*  
+*538 lines · 9 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/mpc_quadruped/mpc_quadruped.zig`
 
-mpc_quadruped — watching a quadruped's trunk planner think.
+mpc_quadruped - watching a quadruped's trunk planner think.
 
-*480 lines · 11 fns*  
+*481 lines · 11 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/music_streaming/music_streaming.zig`
 
-music_streaming — port of the GL `music_streaming`: stream an embedded OGG (~2.3 MB, 96 s stereo Vorbis) on the wgpu audio bridge. `music.loadFromMemory` kicks off the browser's async `decodeAudioData` (the `js_audio_decode_ogg_bytes` path implemented this turn); `isReady` flips true a few frames later. Tap PLAY to play/stop the looping track; tap the bar to seek. A progress bar tracks the playhead. No per-frame…
+music_streaming - port of the GL `music_streaming`: stream an embedded OGG (~2.3 MB, 96 s stereo Vorbis) on the wgpu audio bridge. `music.loadFromMemory` kicks off the browser's async `decodeAudioData` (the `js_audio_decode_ogg_bytes` path implemented this turn); `isReady` flips true a few frames later. Tap PLAY to play/stop the looping track; tap the bar to seek. A progress bar tracks the playhead. No per-frame…
 
-*156 lines · 3 fns*  
+*157 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5035,15 +6067,15 @@ music_streaming — port of the GL `music_streaming`: stream an embedded OGG (~2
 
 ### `examples/native_plot_png/main.zig`
 
-native_plot_png — a small, native, pure-Zig program that renders a publication-quality plot straight to a PNG file. No GPU, no browser, no third-party code: zimr rasterizes into a supersampled buffer (4x AA) with its own `imageDraw*` + truetype text, then encodes with its own PNG codec.
+native_plot_png - a small, native, pure-Zig program that renders a publication-quality plot straight to a PNG file. No GPU, no browser, no third-party code: zimr rasterizes into a supersampled buffer (4x AA) with its own `imageDraw*` + truetype text, then encodes with its own PNG codec.
 
-*83 lines · 1 fns*  
+*84 lines · 1 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/net_cursors/net_cursors.zig`
 
-net_cursors — the payoff demo: a shared 2D canvas where everyone in the room sees everyone else's mouse cursor moving in real time, and clicks send a ripple that all peers see. This is the "invite friends to a local game" goal in its simplest form.
+net_cursors - the payoff demo: a shared 2D canvas where everyone in the room sees everyone else's mouse cursor moving in real time, and clicks send a ripple that all peers see. This is the "invite friends to a local game" goal in its simplest form.
 
 *383 lines · 16 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5051,17 +6083,17 @@ net_cursors — the payoff demo: a shared 2D canvas where everyone in the room s
 
 ### `examples/net_rtc_smoke/net_rtc_smoke.zig`
 
-net_rtc_smoke — the WebRTC half of zimr P2P: two browser tabs open a DIRECT peer-to-peer data-channel connection, using the signaling server only for discovery and the SDP/ICE handshake. Once connected, the game data would flow browser-to-browser with no server in the middle.
+net_rtc_smoke - the WebRTC half of zimr P2P: two browser tabs open a DIRECT peer-to-peer data-channel connection, using the signaling server only for discovery and the SDP/ICE handshake. Once connected, the game data would flow browser-to-browser with no server in the middle.
 
-*357 lines · 13 fns*  
+*361 lines · 13 fns*  
 **Deps:** `zimr` (module)  
 **Dependents:** —
 
 ### `examples/net_ws_smoke/net_ws_smoke.zig`
 
-net_ws_smoke — the WebSocket half of zimr's P2P signaling, running in a browser. It connects to the L0 signaling server (tools/signal_server.zig or its Render-deployable twin tools/render_server.zig), joins a room, and shows the live protocol: WELCOME / JOINED / LEFT / FROM messages as they arrive.
+net_ws_smoke - the WebSocket half of zimr's P2P signaling, running in a browser. It connects to the L0 signaling server (tools/signal_server.zig or its Render-deployable twin tools/render_server.zig), joins a room, and shows the live protocol: WELCOME / JOINED / LEFT / FROM messages as they arrive.
 
-*194 lines · 4 fns*  
+*196 lines · 4 fns*  
 **Deps:** `zimr` (module)  
 **Dependents:** —
 
@@ -5091,7 +6123,7 @@ net_ws_smoke — the WebSocket half of zimr's P2P signaling, running in a browse
 
 ### `examples/orthographic_projection/orthographic_projection.zig`
 
-orthographic_projection — raylib's `models_orthographic_projection`.
+orthographic_projection - raylib's `models_orthographic_projection`.
 
 *150 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5101,7 +6133,7 @@ orthographic_projection — raylib's `models_orthographic_projection`.
 
 (no description yet — add a //! header or a dict entry)
 
-*172 lines · 4 fns*  
+*173 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5115,15 +6147,15 @@ orthographic_projection — raylib's `models_orthographic_projection`.
 
 ### `examples/penrose_tile/penrose_tile.zig`
 
-penrose_tile — a Penrose tiling grown from an L-system (Lindenmayer system) and drawn with a turtle: the production string is expanded generation by generation from W/X/Y/Z rules, then interpreted as turtle commands (F draws, +/- turn by 36 degrees, [ ] push/pop state). The tiling reveals itself progressively, then tap to step to the next generation (raylib uses UP/DOWN). From raylib shapes_penrose_tile.
+penrose_tile - a Penrose tiling grown from an L-system (Lindenmayer system) and drawn with a turtle: the production string is expanded generation by generation from W/X/Y/Z rules, then interpreted as turtle commands (F draws, +/- turn by 36 degrees, [ ] push/pop state). The tiling reveals itself progressively, then tap to step to the next generation (raylib uses UP/DOWN). From raylib shapes_penrose_tile.
 
-*202 lines · 7 fns*  
+*203 lines · 7 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/physics_sidebyside/physics_sidebyside.zig`
 
-physics_sidebyside — two physics worlds, side by side, drawn the way each kind of game would actually draw it.
+physics_sidebyside - two physics worlds, side by side, drawn the way each kind of game would actually draw it.
 
 *300 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5131,31 +6163,23 @@ physics_sidebyside — two physics worlds, side by side, drawn the way each kind
 
 ### `examples/pie_chart/pie_chart.zig`
 
-pie_chart — a live pie chart of N slices whose values breathe, so the wedges continuously re-proportion. Each slice is an HSV-spread colour; the slice under the pointer pops outward and is read out by name; a percentage label rides each wedge at its mid-angle. Tap toggles a donut hole. Ported from raylib examples/shapes/shapes_pie_chart.c (raygui spinner/checkboxes/ value editors, here animated and pointer-driven…
+pie_chart - a live pie chart of N slices whose values breathe, so the wedges continuously re-proportion. Each slice is an HSV-spread colour; the slice under the pointer pops outward and is read out by name; a percentage label rides each wedge at its mid-angle. Tap toggles a donut hole. Ported from raylib examples/shapes/shapes_pie_chart.c (raygui spinner/checkboxes/ value editors, here animated and pointer-driven…
 
 *163 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
-### `examples/pipeline_array/pipeline_array.zig`
-
-pipeline_array — Phase 3 (`src/notes/webgpu_control.md`): 2D texture arrays. One texture holds four layers, each painted a distinct pattern by a COMPUTE shader (a `texture_storage_2d_array`, one dispatch with z = layers). A single render pipeline then samples a `texture_2d_array`: the layer index is a per-vertex attribute, so ONE draw renders a 2x2 grid where each quad reads a different layer.
-
-*273 lines · 5 fns*  
-**Deps:** `example_common` (module), `zimr` (module)  
-**Dependents:** —
-
 ### `examples/pipeline_basic/pipeline_basic.zig`
 
-pipeline_basic — the first example on zimr's public custom-pipeline API. Ported from raygpu's `pipeline_basic.c`: a custom render pipeline + a vertex buffer + a single draw, drawing one gradient triangle.
+pipeline_basic - the first example on zimr's public custom-pipeline API. Ported from raygpu's `pipeline_basic.c`: a custom render pipeline + a vertex buffer + a single draw, drawing one gradient triangle.
 
-*123 lines · 3 fns*  
+*124 lines · 3 fns*  
 **Deps:** `examples/pipeline_basic/pipeline_basic_fs_io.zig`, `examples/pipeline_basic/pipeline_basic_vs_io.zig`, `example_common` (module), `zimr` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_basic_fs.zig`
 
-examples/pipeline_basic_fs.zig — pipeline_basic fragment shader body, in Zig.
+examples/pipeline_basic_fs.zig - pipeline_basic fragment shader body, in Zig.
 
 *24 lines · 1 fns*  
 **Deps:** `examples/pipeline_basic_fs_io.zig`, `pipeline_basic_fs_externs` (module)  
@@ -5163,7 +6187,7 @@ examples/pipeline_basic_fs.zig — pipeline_basic fragment shader body, in Zig.
 
 ### `examples/pipeline_basic_fs_io.zig`
 
-examples/pipeline_basic_fs_io.zig — typed interface for the pipeline_basic fragment shader. Companion to `pipeline_basic_fs.zig`. No Ubo, no Samplers. `Inputs` must match `pipeline_basic_vs_io.Outputs` field-for-field.
+examples/pipeline_basic_fs_io.zig - typed interface for the pipeline_basic fragment shader. Companion to `pipeline_basic_fs.zig`. No Ubo, no Samplers. `Inputs` must match `pipeline_basic_vs_io.Outputs` field-for-field.
 
 *[shader-safe] · 17 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5171,7 +6195,7 @@ examples/pipeline_basic_fs_io.zig — typed interface for the pipeline_basic fra
 
 ### `examples/pipeline_basic_vs.zig`
 
-examples/pipeline_basic_vs.zig — pipeline_basic vertex shader body, in Zig.
+examples/pipeline_basic_vs.zig - pipeline_basic vertex shader body, in Zig.
 
 *31 lines · 1 fns*  
 **Deps:** `examples/pipeline_basic_vs_io.zig`, `pipeline_basic_vs_externs` (module), `zm` (module)  
@@ -5179,7 +6203,7 @@ examples/pipeline_basic_vs.zig — pipeline_basic vertex shader body, in Zig.
 
 ### `examples/pipeline_basic_vs_io.zig`
 
-examples/pipeline_basic_vs_io.zig — typed interface for the pipeline_basic vertex shader. Companion to `pipeline_basic_vs.zig`.
+examples/pipeline_basic_vs_io.zig - typed interface for the pipeline_basic vertex shader. Companion to `pipeline_basic_vs.zig`.
 
 *[shader-safe] · 22 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -5187,47 +6211,31 @@ examples/pipeline_basic_vs_io.zig — typed interface for the pipeline_basic ver
 
 ### `examples/pipeline_bloom/pipeline_bloom.zig`
 
-pipeline_bloom — a full multi-pass BLOOM effect, now entirely on the typed shader interface (no inline WGSL, no override constants). Five effect passes across three render textures:
+pipeline_bloom - a full multi-pass BLOOM effect, now entirely on the typed shader interface (no inline WGSL, no override constants). Five effect passes across three render textures:
 
-*319 lines · 9 fns*  
+*320 lines · 9 fns*  
 **Deps:** `examples/pipeline_bloom/bloom_blur_fs_io.zig`, `examples/pipeline_bloom/bloom_bright_fs_io.zig`, `examples/pipeline_bloom/bloom_composite_fs_io.zig`, `examples/pipeline_bloom/bloom_fullscreen_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
-**Dependents:** —
-
-### `examples/pipeline_constants/pipeline_constants.zig`
-
-pipeline_constants — increment 5 of the custom-pipeline API (`src/notes/webgpu_control.md`). Ported from raygpu's `pipeline_constants.cpp`: WGSL pipeline-overridable constants (`override`). ONE shader source becomes THREE specialised pipelines, each baked with different constant values at creation — different tint, position and scale — with no separate shaders and no per-draw uniforms.
-
-*174 lines · 4 fns*  
-**Deps:** `example_common` (module), `zimr` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_instancing/pipeline_instancing.zig`
 
-pipeline_instancing — increment 4 of the custom-pipeline API (`src/notes/webgpu_control.md`). Ported from raygpu's `pipeline_instancing.cpp`: ONE draw call paints a whole grid of triangles, each fed its own offset and colour from INSTANCE-rate vertex buffers.
+pipeline_instancing - increment 4 of the custom-pipeline API (`src/notes/webgpu_control.md`). Ported from raygpu's `pipeline_instancing.cpp`: ONE draw call paints a whole grid of triangles, each fed its own offset and colour from INSTANCE-rate vertex buffers.
 
-*205 lines · 6 fns*  
+*207 lines · 6 fns*  
 **Deps:** `examples/pipeline_instancing/instancing_vs_io.zig`, `examples/pipeline_instancing/pipeline_uniforms_fs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
-**Dependents:** —
-
-### `examples/pipeline_mipmap/pipeline_mipmap.zig`
-
-pipeline_mipmap — Phase 3 (`src/notes/webgpu_control.md`): mipmaps and LOD selection. A texture is built with a full mip chain, and a COMPUTE shader paints each level a DISTINCT hue (level 0 red, climbing the spectrum to the 1x1 top). The texture is then drawn on a perspective ground plane: the GPU picks a mip level per pixel from the UV derivatives, so distance selects the level and the road shows the chain as…
-
-*313 lines · 10 fns*  
-**Deps:** `example_common` (module), `zimr` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_msaa/pipeline_msaa.zig`
 
-pipeline_msaa — MSAA (multisample anti-aliasing). The same rotating high-contrast triangle is rendered twice into small targets, magnified side by side so the edge quality is obvious: - LEFT  : 1 sample  -> jagged, stair-stepped diagonal edges - RIGHT : 4 samples -> resolved to a 1-sample texture -> smooth edges
+pipeline_msaa - MSAA (multisample anti-aliasing). The same rotating high-contrast triangle is rendered twice into small targets, magnified side by side so the edge quality is obvious: - LEFT  : 1 sample  -> jagged, stair-stepped diagonal edges - RIGHT : 4 samples -> resolved to a 1-sample texture -> smooth edges
 
-*204 lines · 4 fns*  
+*207 lines · 4 fns*  
 **Deps:** `examples/pipeline_msaa/pipeline_msaa_fs_io.zig`, `examples/pipeline_msaa/pipeline_msaa_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_msaa_fs.zig`
 
-examples/pipeline_msaa_fs.zig — pipeline_msaa fragment shader body. Emits one flat high-contrast colour so the MSAA edge quality is obvious.
+examples/pipeline_msaa_fs.zig - pipeline_msaa fragment shader body. Emits one flat high-contrast colour so the MSAA edge quality is obvious.
 
 *21 lines · 1 fns*  
 **Deps:** `examples/pipeline_msaa_fs_io.zig`, `pipeline_msaa_fs_externs` (module)  
@@ -5235,7 +6243,7 @@ examples/pipeline_msaa_fs.zig — pipeline_msaa fragment shader body. Emits one 
 
 ### `examples/pipeline_msaa_fs_io.zig`
 
-examples/pipeline_msaa_fs_io.zig — typed interface for the pipeline_msaa fragment shader. No inputs (constant colour); the empty `Inputs` matches the empty VS `Outputs`.
+examples/pipeline_msaa_fs_io.zig - typed interface for the pipeline_msaa fragment shader. No inputs (constant colour); the empty `Inputs` matches the empty VS `Outputs`.
 
 *[shader-safe] · 13 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5243,7 +6251,7 @@ examples/pipeline_msaa_fs_io.zig — typed interface for the pipeline_msaa fragm
 
 ### `examples/pipeline_msaa_vs.zig`
 
-examples/pipeline_msaa_vs.zig — pipeline_msaa vertex shader body. Transforms the 2D triangle by the UBO matrix; no varyings out.
+examples/pipeline_msaa_vs.zig - pipeline_msaa vertex shader body. Transforms the 2D triangle by the UBO matrix; no varyings out.
 
 *24 lines · 1 fns*  
 **Deps:** `examples/pipeline_msaa_vs_io.zig`, `pipeline_msaa_vs_externs` (module), `zm` (module)  
@@ -5251,47 +6259,47 @@ examples/pipeline_msaa_vs.zig — pipeline_msaa vertex shader body. Transforms t
 
 ### `examples/pipeline_msaa_vs_io.zig`
 
-examples/pipeline_msaa_vs_io.zig — typed interface for the pipeline_msaa vertex shader. A position-only triangle transformed by a vertex-stage UBO; there are NO varyings (the fragment stage emits a constant colour), so `Outputs` is empty and matches the empty FS `Inputs`.
+examples/pipeline_msaa_vs_io.zig - typed interface for the pipeline_msaa vertex shader. A position-only triangle transformed by a vertex-stage UBO; there are NO varyings (the fragment stage emits a constant colour), so `Outputs` is empty and matches the empty FS `Inputs`.
 
-*[shader-safe] · 19 lines · 0 fns*  
-**Deps:** `shader_interface` (module)  
+*[shader-safe] · 21 lines · 0 fns*  
+**Deps:** `shader_interface` (module), `zm` (module)  
 **Dependents:** `examples/pipeline_msaa_vs.zig`
 
 ### `examples/pipeline_postprocess/pipeline_postprocess.zig`
 
-pipeline_postprocess — a pass whose INPUT is a previous pass's output. Render a spinning gradient triangle into a RenderTexture, then a FULLSCREEN shader SAMPLES that texture and applies a screen-space effect (chromatic aberration + vignette). The post-processing / bloom foundation.
+pipeline_postprocess - a pass whose INPUT is a previous pass's output. Render a spinning gradient triangle into a RenderTexture, then a FULLSCREEN shader SAMPLES that texture and applies a screen-space effect (chromatic aberration + vignette). The post-processing / bloom foundation.
 
-*184 lines · 4 fns*  
+*187 lines · 4 fns*  
 **Deps:** `examples/pipeline_postprocess/pipeline_uniforms_fs_io.zig`, `examples/pipeline_postprocess/pipeline_uniforms_vs_io.zig`, `examples/pipeline_postprocess/postprocess_post_fs_io.zig`, `examples/pipeline_postprocess/trivial_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_rendertarget/pipeline_rendertarget.zig`
 
-pipeline_rendertarget — render a CUSTOM PIPELINE into an offscreen RenderTexture, then composite that texture to the screen many times — "render once, reuse many". The foundation for post-processing and MSAA.
+pipeline_rendertarget - render a CUSTOM PIPELINE into an offscreen RenderTexture, then composite that texture to the screen many times - "render once, reuse many". The foundation for post-processing and MSAA.
 
-*159 lines · 3 fns*  
+*162 lines · 3 fns*  
 **Deps:** `examples/pipeline_rendertarget/pipeline_uniforms_fs_io.zig`, `examples/pipeline_rendertarget/pipeline_uniforms_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_sampler/pipeline_sampler.zig`
 
-pipeline_sampler — Phase 3 opener (`src/notes/webgpu_control.md`): texture sampling control. One pattern (a checker tinted by a gradient, painted by a COMPUTE shader into a storage texture) is drawn four ways with UVs running 0..2.5 so both the filter and the address mode are obvious:
+pipeline_sampler - Phase 3 opener (`src/notes/webgpu_control.md`): texture sampling control. One pattern (a checker tinted by a gradient, painted by a COMPUTE shader into a storage texture) is drawn four ways with UVs running 0..2.5 so both the filter and the address mode are obvious:
 
-*260 lines · 4 fns*  
+*261 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_settings/pipeline_settings.zig`
 
-pipeline_settings — pipeline STATE: the same translucent geometry drawn twice, left with `.blend = .alpha`, right with `.blend = .additive`, so the difference is unmistakable (alpha occludes back-to-front; additive sums to white where the three triangles overlap).
+pipeline_settings - pipeline STATE: the same translucent geometry drawn twice, left with `.blend = .alpha`, right with `.blend = .additive`, so the difference is unmistakable (alpha occludes back-to-front; additive sums to white where the three triangles overlap).
 
-*152 lines · 6 fns*  
+*153 lines · 6 fns*  
 **Deps:** `examples/pipeline_settings/pipeline_settings_vs_io.zig`, `examples/pipeline_settings/pipeline_uniforms_fs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_settings_vs.zig`
 
-examples/pipeline_settings_vs.zig — pipeline_settings vertex shader body.
+examples/pipeline_settings_vs.zig - pipeline_settings vertex shader body.
 
 *31 lines · 1 fns*  
 **Deps:** `examples/pipeline_settings_vs_io.zig`, `pipeline_settings_vs_externs` (module), `zm` (module)  
@@ -5299,31 +6307,23 @@ examples/pipeline_settings_vs.zig — pipeline_settings vertex shader body.
 
 ### `examples/pipeline_settings_vs_io.zig`
 
-examples/pipeline_settings_vs_io.zig — typed interface for the pipeline_settings vertex shader. Companion to `pipeline_settings_vs.zig`.
+examples/pipeline_settings_vs_io.zig - typed interface for the pipeline_settings vertex shader. Companion to `pipeline_settings_vs.zig`.
 
 *[shader-safe] · 30 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
 **Dependents:** `examples/pipeline_settings_vs.zig`
 
-### `examples/pipeline_storage/pipeline_storage.zig`
-
-pipeline_storage — Phase 2 (`src/notes/webgpu_control.md`): a COMPUTE shader writes an image into a STORAGE TEXTURE, which a render pass then samples. This is the compute<->render bridge: GPU-generated texture content, no CPU upload.
-
-*176 lines · 3 fns*  
-**Deps:** `example_common` (module), `zimr` (module)  
-**Dependents:** —
-
 ### `examples/pipeline_uniforms/pipeline_uniforms.zig`
 
-pipeline_uniforms — a custom render pipeline driven by a VERTEX-STAGE uniform buffer. The UBO holds a 4x4 transform the app rewrites every frame, so the triangle spins and stays aspect-correct (the matrix replaces the hand vertex-rewrite the basic example used).
+pipeline_uniforms - a custom render pipeline driven by a VERTEX-STAGE uniform buffer. The UBO holds a 4x4 transform the app rewrites every frame, so the triangle spins and stays aspect-correct (the matrix replaces the hand vertex-rewrite the basic example used).
 
-*131 lines · 4 fns*  
+*133 lines · 4 fns*  
 **Deps:** `examples/pipeline_uniforms/pipeline_uniforms_fs_io.zig`, `examples/pipeline_uniforms/pipeline_uniforms_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/pipeline_uniforms_fs.zig`
 
-examples/pipeline_uniforms_fs.zig — pipeline_uniforms fragment shader body. Emits the interpolated colour straight through.
+examples/pipeline_uniforms_fs.zig - pipeline_uniforms fragment shader body. Emits the interpolated colour straight through.
 
 *20 lines · 1 fns*  
 **Deps:** `examples/pipeline_uniforms_fs_io.zig`, `pipeline_uniforms_fs_externs` (module)  
@@ -5331,7 +6331,7 @@ examples/pipeline_uniforms_fs.zig — pipeline_uniforms fragment shader body. Em
 
 ### `examples/pipeline_uniforms_fs_io.zig`
 
-examples/pipeline_uniforms_fs_io.zig — typed interface for the pipeline_uniforms fragment shader. Companion to `pipeline_uniforms_fs.zig`.
+examples/pipeline_uniforms_fs_io.zig - typed interface for the pipeline_uniforms fragment shader. Companion to `pipeline_uniforms_fs.zig`.
 
 *[shader-safe] · 20 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5339,7 +6339,7 @@ examples/pipeline_uniforms_fs_io.zig — typed interface for the pipeline_unifor
 
 ### `examples/pipeline_uniforms_vs.zig`
 
-examples/pipeline_uniforms_vs.zig — pipeline_uniforms vertex shader body.
+examples/pipeline_uniforms_vs.zig - pipeline_uniforms vertex shader body.
 
 *33 lines · 1 fns*  
 **Deps:** `examples/pipeline_uniforms_vs_io.zig`, `pipeline_uniforms_vs_externs` (module), `zm` (module)  
@@ -5347,7 +6347,7 @@ examples/pipeline_uniforms_vs.zig — pipeline_uniforms vertex shader body.
 
 ### `examples/pipeline_uniforms_vs_io.zig`
 
-examples/pipeline_uniforms_vs_io.zig — typed interface for the pipeline_uniforms vertex shader. Companion to `pipeline_uniforms_vs.zig`.
+examples/pipeline_uniforms_vs_io.zig - typed interface for the pipeline_uniforms vertex shader. Companion to `pipeline_uniforms_vs.zig`.
 
 *[shader-safe] · 34 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -5355,9 +6355,9 @@ examples/pipeline_uniforms_vs_io.zig — typed interface for the pipeline_unifor
 
 ### `examples/platonic_solids/platonic_solids.zig`
 
-platonic_solids — the four platonic solids the shape library gained, shown in a row: tetrahedron, octahedron, dodecahedron, icosahedron. They're built FLAT-shaded (each face carries its own normal), so you should see crisp, faceted faces with sharp edges — not the rounded look you'd get from smooth normals. They slowly spin so you can appreciate the geometry.
+platonic_solids - the four platonic solids the shape library gained, shown in a row: tetrahedron, octahedron, dodecahedron, icosahedron. They're built FLAT-shaded (each face carries its own normal), so you should see crisp, faceted faces with sharp edges - not the rounded look you'd get from smooth normals. They slowly spin so you can appreciate the geometry.
 
-*93 lines · 3 fns*  
+*94 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5373,7 +6373,7 @@ platonic_solids — the four platonic solids the shape library gained, shown in 
 
 (no description yet — add a //! header or a dict entry)
 
-*416 lines · 10 fns*  
+*417 lines · 10 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5387,23 +6387,23 @@ platonic_solids — the four platonic solids the shape library gained, shown in 
 
 ### `examples/png_demo/png_demo.zig`
 
-png_demo — port of the GL `png_demo`: decode an embedded PNG at runtime, upload it to a GPU texture, and draw it four times (2×2 grid, 4× zoom) with different tints. The GL version routed through the retained `gpu.GpuTexture` system; on wgpu the path is the engine's `loadImageFromMemory` → `loadTextureFromImage` → `drawTexture` (tinted quad). The decoded CPU pixels are freed right after upload (the texture lives…
+png_demo - port of the GL `png_demo`: decode an embedded PNG at runtime, upload it to a GPU texture, and draw it four times (2x2 grid, 4x zoom) with different tints. The GL version routed through the retained `gpu.GpuTexture` system; on wgpu the path is the engine's `loadImageFromMemory` -> `loadTextureFromImage` -> `drawTexture` (tinted quad). The decoded CPU pixels are freed right after upload (the texture…
 
-*93 lines · 3 fns*  
+*94 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/point_rendering/point_rendering.zig`
 
-point_rendering — raylib's `models_point_rendering`, the zimr way.
+point_rendering - raylib's `models_point_rendering`, the zimr way.
 
-*380 lines · 6 fns*  
+*383 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/postprocess_post_fs.zig`
 
-examples/postprocess_post_fs.zig — fullscreen post-processing fragment shader for the postprocess demo. Samples the `scene` texture three times at UV offsets along the radial direction (a chromatic-aberration RGB split), then darkens toward the edges (vignette).
+examples/postprocess_post_fs.zig - fullscreen post-processing fragment shader for the postprocess demo. Samples the `scene` texture three times at UV offsets along the radial direction (a chromatic-aberration RGB split), then darkens toward the edges (vignette).
 
 *53 lines · 1 fns*  
 **Deps:** `examples/postprocess_post_fs_io.zig`, `postprocess_post_fs_externs` (module), `zm` (module)  
@@ -5411,7 +6411,7 @@ examples/postprocess_post_fs.zig — fullscreen post-processing fragment shader 
 
 ### `examples/postprocess_post_fs_io.zig`
 
-examples/postprocess_post_fs_io.zig — schema for the postprocess demo's FULLSCREEN post-processing fragment shader. Declares Inputs / Samplers / Outputs; no Ubo (the effect is parameter-free).
+examples/postprocess_post_fs_io.zig - schema for the postprocess demo's FULLSCREEN post-processing fragment shader. Declares Inputs / Samplers / Outputs; no Ubo (the effect is parameter-free).
 
 *[shader-safe] · 30 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -5419,9 +6419,9 @@ examples/postprocess_post_fs_io.zig — schema for the postprocess demo's FULLSC
 
 ### `examples/procgen_noise/procgen_noise.zig`
 
-procgen_noise — port of the GL `procgen_noise`: three procedurally- generated noise textures (white / Perlin / cellular), each made on the CPU with the engine's `genImage*` (now in src/image.zig, GL-free), uploaded to GPU textures, and drawn as panels via the rl-immediate textured-quad path (`rlSetTexture` + `rlBegin(.triangles)` + `rlVertex2f`/`rlTexCoord2f`). A fourth panel scrolls an animated Perlin field:…
+procgen_noise - port of the GL `procgen_noise`: three procedurally- generated noise textures (white / Perlin / cellular), each made on the CPU with the engine's `genImage*` (now in src/image.zig, GL-free), uploaded to GPU textures, and drawn as panels via the rl-immediate textured-quad path (`rlSetTexture` + `rlBegin(.triangles)` + `rlVertex2f`/`rlTexCoord2f`). A fourth panel scrolls an animated Perlin field:…
 
-*158 lines · 6 fns*  
+*159 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5443,9 +6443,25 @@ Embedded-GLB byte array (a textured quad asset) imported by gltf_textured as ano
 
 ### `examples/quadruped/quadruped.zig`
 
-quadruped — a real Unitree Go1, imported from MuJoCo Menagerie, standing on its own legs.
+quadruped - a real Unitree Go1, imported from MuJoCo Menagerie, standing on its own legs.
 
-*1,957 lines · 22 fns*  
+*1,983 lines · 22 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/ragdoll_compare/humanoid.xml`
+
+(no description yet — add a //! header or a dict entry)
+
+*268 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/ragdoll_compare/ragdoll_compare.zig`
+
+ragdoll_compare - one humanoid, two engines.
+
+*534 lines · 15 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5453,7 +6469,7 @@ quadruped — a real Unitree Go1, imported from MuJoCo Menagerie, standing on it
 
 (no description yet — add a //! header or a dict entry)
 
-*115 lines · 4 fns*  
+*116 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5461,13 +6477,13 @@ quadruped — a real Unitree Go1, imported from MuJoCo Menagerie, standing on it
 
 (no description yet — add a //! header or a dict entry)
 
-*88 lines · 3 fns*  
+*89 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/raycube_fs.zig`
 
-examples/raycube_fs.zig — a ray-traced-cube FRAGMENT SHADER.
+examples/raycube_fs.zig - a ray-traced-cube FRAGMENT SHADER.
 
 *137 lines · 1 fns*  
 **Deps:** `examples/raycube_fs_io.zig`, `raycube_fs_externs` (module), `zm` (module)  
@@ -5475,7 +6491,7 @@ examples/raycube_fs.zig — a ray-traced-cube FRAGMENT SHADER.
 
 ### `examples/raycube_fs_io.zig`
 
-examples/raycube_fs_io.zig — schema for the ray-traced-cube fragment shader.
+examples/raycube_fs_io.zig - schema for the ray-traced-cube fragment shader.
 
 *[shader-safe] · 31 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5483,7 +6499,7 @@ examples/raycube_fs_io.zig — schema for the ray-traced-cube fragment shader.
 
 ### `examples/rayshadow_fs.zig`
 
-examples/rayshadow_fs.zig — a ray-traced HARD-SHADOW fragment shader.
+examples/rayshadow_fs.zig - a ray-traced HARD-SHADOW fragment shader.
 
 *170 lines · 4 fns*  
 **Deps:** `examples/rayshadow_fs_io.zig`, `rayshadow_fs_externs` (module), `zm` (module)  
@@ -5491,7 +6507,7 @@ examples/rayshadow_fs.zig — a ray-traced HARD-SHADOW fragment shader.
 
 ### `examples/rayshadow_fs_io.zig`
 
-examples/rayshadow_fs_io.zig — schema for the ray-traced hard-shadow shader.
+examples/rayshadow_fs_io.zig - schema for the ray-traced hard-shadow shader.
 
 *[shader-safe] · 33 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5501,13 +6517,13 @@ examples/rayshadow_fs_io.zig — schema for the ray-traced hard-shadow shader.
 
 (no description yet — add a //! header or a dict entry)
 
-*841 lines · 24 fns*  
+*847 lines · 24 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/rectangle_advanced/rectangle_advanced.zig`
 
-rectangle_advanced — rounded rectangles with independent left/right corner roundness and a horizontal colour gradient (solid corners, body interpolated). A faithful port of the raylib DrawRectangleRoundedGradientH helper. A stack of bars breathes: each bar oscillates its two corner radii on offset sine waves while the gradient hues drift around the wheel. Phone-first: drag left/right scales the overall roundness…
+rectangle_advanced - rounded rectangles with independent left/right corner roundness and a horizontal colour gradient (solid corners, body interpolated). A faithful port of the raylib DrawRectangleRoundedGradientH helper. A stack of bars breathes: each bar oscillates its two corner radii on offset sine waves while the gradient hues drift around the wheel. Phone-first: drag left/right scales the overall roundness…
 
 *195 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5515,7 +6531,7 @@ rectangle_advanced — rounded rectangles with independent left/right corner rou
 
 ### `examples/rectangle_scaling/rectangle_scaling.zig`
 
-rectangle_scaling — drag the bottom-right handle to live-resize a rectangle. Three states: idle, ready (pointer over the handle → outline + corner marker appear), and dragging (the corner tracks the pointer until release). Ported from raylib shapes_rectangle_scaling; touch-draggable on mobile. Themed with the shared scaffold.
+rectangle_scaling - drag the bottom-right handle to live-resize a rectangle. Three states: idle, ready (pointer over the handle -> outline + corner marker appear), and dragging (the corner tracks the pointer until release). Ported from raylib shapes_rectangle_scaling; touch-draggable on mobile. Themed with the shared scaffold.
 
 *104 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5523,7 +6539,7 @@ rectangle_scaling — drag the bottom-right handle to live-resize a rectangle. T
 
 ### `examples/recursive_hud/recursive_hud.zig`
 
-recursive_hud — render once, composite as a nested tunnel. An animated scene (a framed HUD: border, rotating sweep, orbiting dots) is rendered ONCE into a render texture, then that single texture is drawn back to the screen as a stack of concentric, progressively smaller + dimmer copies — a screen-inside-screen recursion. Pure render-once-reuse: the scene is rasterized one time and composited N times.
+recursive_hud - render once, composite as a nested tunnel. An animated scene (a framed HUD: border, rotating sweep, orbiting dots) is rendered ONCE into a render texture, then that single texture is drawn back to the screen as a stack of concentric, progressively smaller + dimmer copies - a screen-inside-screen recursion. Pure render-once-reuse: the scene is rasterized one time and composited N times.
 
 *133 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5531,7 +6547,7 @@ recursive_hud — render once, composite as a nested tunnel. An animated scene (
 
 ### `examples/render_texture/render_texture.zig`
 
-render_texture — render-to-texture demo for the new offscreen API. An animated scene (spinning rectangles + a pulsing circle) is drawn INTO an offscreen render texture via `beginTextureMode`/`endTextureMode`, then that ONE texture is composited to the screen as a tinted grid with `drawTextureRec` — "render once, reuse many." Exercises loadRenderTexture / texture-mode / asTexture. Viewport-relative.
+render_texture - render-to-texture demo for the new offscreen API. An animated scene (spinning rectangles + a pulsing circle) is drawn INTO an offscreen render texture via `beginTextureMode`/`endTextureMode`, then that ONE texture is composited to the screen as a tinted grid with `drawTextureRec` - "render once, reuse many." Exercises loadRenderTexture / texture-mode / asTexture. Viewport-relative.
 
 *122 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5539,9 +6555,25 @@ render_texture — render-to-texture demo for the new offscreen API. An animated
 
 ### `examples/ring_drawing/ring_drawing.zig`
 
-ring_drawing — a parametric ring (annulus). The swept angle sweeps open and closed like a loading dial, the inner/outer radii breathe, and the demo cycles three render modes: filled ring, ring outline, and circle-sector outline. Tap to advance the mode (it also auto-advances). A panel reads back the live angle span and radii. Ported from raylib examples/shapes/shapes_ring_drawing.c, whose raygui sliders drove the…
+ring_drawing - a parametric ring (annulus). The swept angle sweeps open and closed like a loading dial, the inner/outer radii breathe, and the demo cycles three render modes: filled ring, ring outline, and circle-sector outline. Tap to advance the mode (it also auto-advances). A panel reads back the live angle span and radii. Ported from raylib examples/shapes/shapes_ring_drawing.c, whose raygui sliders drove the…
 
 *124 lines · 3 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/rl_humanoid/humanoid.xml`
+
+(no description yet — add a //! header or a dict entry)
+
+*268 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/rl_humanoid/rl_humanoid.zig`
+
+rl_humanoid - PPO learning humanoid locomotion, live in the browser.
+
+*358 lines · 7 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5619,15 +6651,15 @@ GENERATED from kuka_iiwa.urdf by tools/urdf_import.zig. Do not edit by hand.
 
 ### `examples/robot_3d/robot_3d.zig`
 
-robot_3d — a real robot, from a real URDF, moving in three dimensions.
+robot_3d - a real robot, from a real URDF, moving in three dimensions.
 
-*1,102 lines · 13 fns*  
+*1,104 lines · 13 fns*  
 **Deps:** `examples/robot_3d/kuka_iiwa.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/robot_contact/robot_contact.zig`
 
-robot_contact — a robot arm that touches the world.
+robot_contact - a robot arm that touches the world.
 
 *475 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5635,7 +6667,7 @@ robot_contact — a robot arm that touches the world.
 
 ### `examples/robot_demo/robot_demo.zig`
 
-robot_demo — a scene table for `src/robot.zig`, in the shape of the 2D physics demo.
+robot_demo - a scene table for `src/robot.zig`, in the shape of the 2D physics demo.
 
 *289 lines · 8 fns*  
 **Deps:** `examples/robot_demo/scenes.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5643,7 +6675,7 @@ robot_demo — a scene table for `src/robot.zig`, in the shape of the 2D physics
 
 ### `examples/robot_demo/scenes.zig`
 
-scenes.zig — the robot demo's scene table.
+scenes.zig - the robot demo's scene table.
 
 *560 lines · 17 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5651,15 +6683,15 @@ scenes.zig — the robot demo's scene table.
 
 ### `examples/robot_pendulum/robot_pendulum.zig`
 
-robot_pendulum — the first thing `src/robot.zig` can draw.
+robot_pendulum - the first thing `src/robot.zig` can draw.
 
-*294 lines · 5 fns*  
+*295 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/robot_sidebyside/robot_sidebyside.zig`
 
-robot_sidebyside — the same double pendulum, simulated two ways.
+robot_sidebyside - the same double pendulum, simulated two ways.
 
 *484 lines · 10 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5667,15 +6699,15 @@ robot_sidebyside — the same double pendulum, simulated two ways.
 
 ### `examples/rock_demo/rock_demo.zig`
 
-rock_demo — a little scatter of procedural rocks, each a noise-displaced icosphere. They all share the same generator; only the seed (and size) differ, so every rock is unique but they're all made the same way. This is the payoff for the icosphere's even triangles — displacing a UV sphere here would tear at the poles. Rocks are recomputed-smooth, so they read as rounded boulders rather than faceted crystals.
+rock_demo - a little scatter of procedural rocks, each a noise-displaced icosphere. They all share the same generator; only the seed (and size) differ, so every rock is unique but they're all made the same way. This is the payoff for the icosphere's even triangles - displacing a UV sphere here would tear at the poles. Rocks are recomputed-smooth, so they read as rounded boulders rather than faceted crystals.
 
-*93 lines · 3 fns*  
+*94 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/rocket/rocket.zig`
 
-rocket — landing on an engine you are not allowed to switch off.
+rocket - landing on an engine you are not allowed to switch off.
 
 *420 lines · 10 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5683,7 +6715,7 @@ rocket — landing on an engine you are not allowed to switch off.
 
 ### `examples/rounded_rectangle/rounded_rectangle.zig`
 
-rounded_rectangle — a rounded rectangle whose roundness, size, outline thickness and corner-segment count all animate, cycling three render modes: filled rounded rect, rounded outline, and a plain rectangle for contrast. Tap advances the mode (auto-advances too); a panel reads back roundness / segments / MANUAL-AUTO. Ported from raylib examples/shapes/shapes_rounded_rectangle_drawing.c, whose raygui sliders drove…
+rounded_rectangle - a rounded rectangle whose roundness, size, outline thickness and corner-segment count all animate, cycling three render modes: filled rounded rect, rounded outline, and a plain rectangle for contrast. Tap advances the mode (auto-advances too); a panel reads back roundness / segments / MANUAL-AUTO. Ported from raylib examples/shapes/shapes_rounded_rectangle_drawing.c, whose raygui sliders drove…
 
 *118 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5691,7 +6723,7 @@ rounded_rectangle — a rounded rectangle whose roundness, size, outline thickne
 
 ### `examples/rt_fs.zig`
 
-examples/rt_fs.zig — a ray-tracing FRAGMENT SHADER.
+examples/rt_fs.zig - a ray-tracing FRAGMENT SHADER.
 
 *250 lines · 7 fns*  
 **Deps:** `examples/rt_fs_io.zig`, `rt_fs_externs` (module), `zm` (module)  
@@ -5699,7 +6731,7 @@ examples/rt_fs.zig — a ray-tracing FRAGMENT SHADER.
 
 ### `examples/rt_fs_io.zig`
 
-examples/rt_fs_io.zig — schema for the ray-tracing fragment shader.
+examples/rt_fs_io.zig - schema for the ray-tracing fragment shader.
 
 *[shader-safe] · 49 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5715,7 +6747,7 @@ examples/rt_fs_io.zig — schema for the ray-tracing fragment shader.
 
 ### `examples/rt_sidebyside/rt_sidebyside.zig`
 
-rt_sidebyside — the rt_fs path tracer on THREE execution targets, side by side from ONE Zig shader: - LEFT  : `rt_fs.shaderMain` dispatched per pixel on the CPU (raster), 1/5 res. - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen GPU pass. - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime), accumulated over a few samples and baked into the binary as a const. It cannot…
+rt_sidebyside - the rt_fs path tracer on THREE execution targets, side by side from ONE Zig shader: - LEFT  : `rt_fs.shaderMain` dispatched per pixel on the CPU (raster), 1/5 res. - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen GPU pass. - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime), accumulated over a few samples and baked into the binary as a const. It cannot…
 
 *400 lines · 5 fns*  
 **Deps:** `examples/rt_sidebyside/rt_fs.zig`, `examples/rt_sidebyside/rt_fs_io.zig`, `examples/rt_sidebyside/trivial_vs_io.zig`, `zimr` (module), `zm` (module)  
@@ -5723,7 +6755,7 @@ rt_sidebyside — the rt_fs path tracer on THREE execution targets, side by side
 
 ### `examples/rt_workers/kernels.zig`
 
-examples/rt_workers/kernels.zig — the registry.
+examples/rt_workers/kernels.zig - the registry.
 
 *33 lines · 0 fns*  
 **Deps:** `examples/rt_workers/tracer.zig`, `zimr` (module)  
@@ -5731,17 +6763,17 @@ examples/rt_workers/kernels.zig — the registry.
 
 ### `examples/rt_workers/rt_workers.zig`
 
-examples/rt_workers/rt_workers.zig — a path tracer, rendered across the worker pool.
+examples/rt_workers/rt_workers.zig - a path tracer, rendered across the worker pool.
 
-*519 lines · 8 fns*  
+*525 lines · 8 fns*  
 **Deps:** `examples/rt_workers/kernels.zig`, `examples/rt_workers/tracer.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/rt_workers/tracer.zig`
 
-examples/rt_workers/tracer.zig — the PURE half. A path tracer that is a job kernel.
+examples/rt_workers/tracer.zig - the PURE half. A path tracer that is a job kernel.
 
-*379 lines · 9 fns · 3 tests*  
+*382 lines · 9 fns · 3 tests*  
 **Deps:** `zm` (module)  
 **Dependents:** `examples/rt_workers/kernels.zig`, `examples/rt_workers/rt_workers.zig`
 
@@ -5749,13 +6781,13 @@ examples/rt_workers/tracer.zig — the PURE half. A path tracer that is a job ke
 
 (no description yet — add a //! header or a dict entry)
 
-*162 lines · 4 fns*  
+*163 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/shader_chroma_fs.zig`
 
-examples/shader_chroma_fs.zig — chroma-shift fragment shader.
+examples/shader_chroma_fs.zig - chroma-shift fragment shader.
 
 *59 lines · 1 fns*  
 **Deps:** `examples/shader_chroma_fs_io.zig`, `shader_chroma_fs_externs` (module), `zm` (module)  
@@ -5763,7 +6795,7 @@ examples/shader_chroma_fs.zig — chroma-shift fragment shader.
 
 ### `examples/shader_chroma_fs_io.zig`
 
-examples/shader_chroma_fs_io.zig — schema for the chroma-shift fragment shader.  Declares Inputs / Samplers / Uniforms / Outputs.
+examples/shader_chroma_fs_io.zig - schema for the chroma-shift fragment shader.  Declares Inputs / Samplers / Uniforms / Outputs.
 
 *[shader-safe] · 47 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -5771,31 +6803,23 @@ examples/shader_chroma_fs_io.zig — schema for the chroma-shift fragment shader
 
 ### `examples/shader_effects/native_verify.zig`
 
-native_verify — render every 2D effect NATIVELY through the same `shaderMain`s the gallery compiles to WGSL, over a synthetic test pattern, into one contact sheet (`effects_verify.png`): source, grade, waves, outline, palette, left to right.
+native_verify - render every 2D effect NATIVELY through the same `shaderMain`s the gallery compiles to WGSL, over a synthetic test pattern, into one contact sheet (`effects_verify.png`): source, grade, waves, outline, palette, left to right.
 
-*232 lines · 4 fns*  
+*234 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/shader_effects/shader_effects.zig`
 
-shader_effects — raylib's 2D texture-shader examples, gathered into one live gallery.
+shader_effects - raylib's 2D texture-shader examples, gathered into one live gallery.
 
-*497 lines · 7 fns*  
+*498 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
-**Dependents:** —
-
-### `examples/shader_inspection/shader_inspection.zig`
-
-(no description yet — add a //! header or a dict entry)
-
-*115 lines · 4 fns*  
-**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/shader_uniforms_fs.zig`
 
-examples/shader_uniforms_fs.zig — mouse-driven spiral fragment shader with iface co-located in this file (Inputs / Outputs / Ubo at the top, body below).
+examples/shader_uniforms_fs.zig - mouse-driven spiral fragment shader with iface co-located in this file (Inputs / Outputs / Ubo at the top, body below).
 
 *89 lines · 2 fns*  
 **Deps:** `examples/shader_uniforms_fs_io.zig`, `shader_uniforms_fs_externs` (module), `zm` (module)  
@@ -5803,7 +6827,7 @@ examples/shader_uniforms_fs.zig — mouse-driven spiral fragment shader with ifa
 
 ### `examples/shader_uniforms_fs_io.zig`
 
-examples/shader_uniforms_fs_io.zig — schema for the shader_uniforms_fs shader. Declares Inputs / Outputs / Ubo consumed by `shader_uniforms_fs.zig` (shader body) and shared with the CPU host.
+examples/shader_uniforms_fs_io.zig - schema for the shader_uniforms_fs shader. Declares Inputs / Outputs / Ubo consumed by `shader_uniforms_fs.zig` (shader body) and shared with the CPU host.
 
 *[shader-safe] · 33 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5811,9 +6835,9 @@ examples/shader_uniforms_fs_io.zig — schema for the shader_uniforms_fs shader.
 
 ### `examples/shaders_lightmap_rendering/shaders_lightmap_rendering.zig`
 
-shaders_lightmap_rendering — port of raylib's lightmap demo, expanded into a proper "why lightmaps exist" showcase: a STATIC scene lit by ~30 coloured point lights whose lighting — including the SHADOWS the static cubes cast on the floor — is BAKED into a texture once at load, then sampled for free at runtime. Runtime lighting cost: one texture fetch. Zero lights are evaluated per frame.
+shaders_lightmap_rendering - port of raylib's lightmap demo, expanded into a proper "why lightmaps exist" showcase: a STATIC scene lit by ~30 coloured point lights whose lighting - including the SHADOWS the static cubes cast on the floor - is BAKED into a texture once at load, then sampled for free at runtime. Runtime lighting cost: one texture fetch. Zero lights are evaluated per frame.
 
-*530 lines · 14 fns*  
+*531 lines · 14 fns*  
 **Deps:** `examples/shaders_lightmap_rendering/lightmap_vs_io.zig`, `example_common` (module), `shader_interface` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5821,21 +6845,21 @@ shaders_lightmap_rendering — port of raylib's lightmap demo, expanded into a p
 
 (no description yet — add a //! header or a dict entry)
 
-*359 lines · 7 fns*  
+*360 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/shaders_normalmap_rendering/shaders_normalmap_rendering.zig`
 
-shaders_normalmap_rendering — port of raylib [shaders] example - normalmap. raylib source: examples/shaders/shaders_normalmap_rendering.c (assets: tiles_diffuse.png, tiles_normal.png — copied under examples/assets/normalmap, zlib-licensed, porting encouraged).
+shaders_normalmap_rendering - port of raylib [shaders] example - normalmap. raylib source: examples/shaders/shaders_normalmap_rendering.c (assets: tiles_diffuse.png, tiles_normal.png - copied under examples/assets/normalmap, zlib-licensed, porting encouraged).
 
-*199 lines · 4 fns*  
+*200 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/shaders_shapes_textures/shaders_shapes_textures.zig`
 
-examples/shaders_shapes_textures — a port of raylib's `shaders_shapes_textures`.
+examples/shaders_shapes_textures - a port of raylib's `shaders_shapes_textures`.
 
 *237 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5843,15 +6867,15 @@ examples/shaders_shapes_textures — a port of raylib's `shaders_shapes_textures
 
 ### `examples/shaders_vertex_displacement/shaders_vertex_displacement.zig`
 
-shaders_vertex_displacement — the GPU displacement-mapping showcase for vertex texture fetch. A flat grid is pushed into a living, lit 3D surface by sampling a Perlin heightfield IN THE VERTEX SHADER: three samples per vertex (the height plus two neighbours), from which the surface normal is computed in the vertex stage too. The heightfield is one static texture; scrolling the vertex-stage lookup by time animates…
+shaders_vertex_displacement - the GPU displacement-mapping showcase for vertex texture fetch. A flat grid is pushed into a living, lit 3D surface by sampling a Perlin heightfield IN THE VERTEX SHADER: three samples per vertex (the height plus two neighbours), from which the surface normal is computed in the vertex stage too. The heightfield is one static texture; scrolling the vertex-stage lookup by time animates…
 
-*209 lines · 4 fns*  
+*210 lines · 4 fns*  
 **Deps:** `examples/shaders_vertex_displacement/shaders_vertex_displacement_fs_io.zig`, `examples/shaders_vertex_displacement/shaders_vertex_displacement_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/shaders_vertex_displacement_fs.zig`
 
-examples/shaders_vertex_displacement_fs.zig — lights the displaced surface: Lambert diffuse over a height-graded colour (deep trough -> mid water -> bright crest), plus a Blinn specular glint. The normal it shades with was computed in the vertex shader from the heightfield samples.
+examples/shaders_vertex_displacement_fs.zig - lights the displaced surface: Lambert diffuse over a height-graded colour (deep trough -> mid water -> bright crest), plus a Blinn specular glint. The normal it shades with was computed in the vertex shader from the heightfield samples.
 
 *61 lines · 2 fns*  
 **Deps:** `examples/shaders_vertex_displacement_fs_io.zig`, `shaders_vertex_displacement_fs_externs` (module), `zm` (module)  
@@ -5859,7 +6883,7 @@ examples/shaders_vertex_displacement_fs.zig — lights the displaced surface: La
 
 ### `examples/shaders_vertex_displacement_fs_io.zig`
 
-examples/shaders_vertex_displacement_fs_io.zig — fragment schema: consume the VS varyings (surface normal, world position + height, view direction) and light the surface.
+examples/shaders_vertex_displacement_fs_io.zig - fragment schema: consume the VS varyings (surface normal, world position + height, view direction) and light the surface.
 
 *[shader-safe] · 16 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -5867,7 +6891,7 @@ examples/shaders_vertex_displacement_fs_io.zig — fragment schema: consume the 
 
 ### `examples/shaders_vertex_displacement_vs.zig`
 
-examples/shaders_vertex_displacement_vs.zig — the vertex shader that turns a flat grid into a living surface by sampling a Perlin heightfield IN THE VERTEX STAGE. `heightLevel` is the explicit-LOD accessor (→ textureSampleLevel), which needs no derivatives and is legal in the vertex stage. Three heights per vertex (the vertex plus two neighbours) give the world-space surface normal, so the surface is lit, not…
+examples/shaders_vertex_displacement_vs.zig - the vertex shader that turns a flat grid into a living surface by sampling a Perlin heightfield IN THE VERTEX STAGE. `heightLevel` is the explicit-LOD accessor (-> textureSampleLevel), which needs no derivatives and is legal in the vertex stage. Three heights per vertex (the vertex plus two neighbours) give the world-space surface normal, so the surface is lit, not…
 
 *76 lines · 2 fns*  
 **Deps:** `examples/shaders_vertex_displacement_vs_io.zig`, `shaders_vertex_displacement_vs_externs` (module), `zm` (module)  
@@ -5875,7 +6899,7 @@ examples/shaders_vertex_displacement_vs.zig — the vertex shader that turns a f
 
 ### `examples/shaders_vertex_displacement_vs_io.zig`
 
-examples/shaders_vertex_displacement_vs_io.zig — schema for the GPU vertex- displacement showcase. A Perlin heightfield is sampled IN THE VERTEX STAGE (a vertex-visible sampler) to push a flat grid into a lit, animated 3D surface; the surface normal is computed from three vertex-stage samples per vertex. This is what vertex texture fetch is FOR.
+examples/shaders_vertex_displacement_vs_io.zig - schema for the GPU vertex- displacement showcase. A Perlin heightfield is sampled IN THE VERTEX STAGE (a vertex-visible sampler) to push a flat grid into a lit, animated 3D surface; the surface normal is computed from three vertex-stage samples per vertex. This is what vertex texture fetch is FOR.
 
 *[shader-safe] · 33 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -5883,9 +6907,9 @@ examples/shaders_vertex_displacement_vs_io.zig — schema for the GPU vertex- di
 
 ### `examples/shadow_sidebyside/shadow_sidebyside.zig`
 
-shadow_sidebyside — the rayshadow_fs hard-shadow scene on THREE execution targets, side by side from ONE Zig shader: - LEFT  : `rayshadow_fs.shaderMain` dispatched per pixel on the CPU (raster). - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen GPU pass. - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and baked into the binary as a const image — read-only, can't…
+shadow_sidebyside - the rayshadow_fs hard-shadow scene on THREE execution targets, side by side from ONE Zig shader: - LEFT  : `rayshadow_fs.shaderMain` dispatched per pixel on the CPU (raster). - RIGHT : the EXACT SAME shaderMain compiled to WGSL, run as a fullscreen GPU pass. - CORNER: the SAME shaderMain evaluated by the Zig COMPILER (comptime) and baked into the binary as a const image - read-only, can't…
 
-*339 lines · 7 fns*  
+*340 lines · 7 fns*  
 **Deps:** `examples/shadow_sidebyside/rayshadow_fs.zig`, `examples/shadow_sidebyside/rayshadow_fs_io.zig`, `examples/shadow_sidebyside/trivial_vs_io.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5901,21 +6925,21 @@ shadow_sidebyside — the rayshadow_fs hard-shadow scene on THREE execution targ
 
 (no description yet — add a //! header or a dict entry)
 
-*779 lines · 8 fns*  
+*780 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/shadowmap_sw/native_verify.zig`
 
-native_verify — the shadow-map side-by-side's NATIVE gate.
+native_verify - the shadow-map side-by-side's NATIVE gate.
 
-*115 lines · 2 fns*  
+*116 lines · 2 fns*  
 **Deps:** `examples/shadowmap_sw/scene.zig`, `bunny_proxy` (module), `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/shadowmap_sw/scene.zig`
 
-scene.zig — THE shared scene of the shadow-map side-by-side.
+scene.zig - THE shared scene of the shadow-map side-by-side.
 
 *482 lines · 16 fns*  
 **Deps:** `bunny_proxy` (module), `zimr` (module), `zm` (module)  
@@ -5923,9 +6947,9 @@ scene.zig — THE shared scene of the shadow-map side-by-side.
 
 ### `examples/shadowmap_sw/shadowmap_sw.zig`
 
-shadowmap_sw — ONE shadow-map shader source, THREE renderers, live.
+shadowmap_sw - ONE shadow-map shader source, THREE renderers, live.
 
-*801 lines · 12 fns*  
+*802 lines · 12 fns*  
 **Deps:** `examples/shadowmap_sw/scene.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -5939,7 +6963,7 @@ shadowmap_sw — ONE shadow-map shader source, THREE renderers, live.
 
 ### `examples/shapes_gallery/shapes_gallery.zig`
 
-shapes_gallery — visual check + showcase for the new parametric shape spine and the mesh-ops toolkit. Renders the eight parametric primitives (sphere, hemisphere, cylinder, cone, torus, trefoil knot, plane, klein bottle) plus a COMPOSED shape — a dumbbell built from a cylinder + two spheres with `meshMerge` and `meshTranslate` — in a grid under an orbit camera. Lit by the immediate renderer's directional shade,…
+shapes_gallery - visual check + showcase for the new parametric shape spine and the mesh-ops toolkit. Renders the eight parametric primitives (sphere, hemisphere, cylinder, cone, torus, trefoil knot, plane, klein bottle) plus a COMPOSED shape - a dumbbell built from a cylinder + two spheres with `meshMerge` and `meshTranslate` - in a grid under an orbit camera. Lit by the immediate renderer's directional shade,…
 
 *121 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -5955,7 +6979,7 @@ shapes_gallery — visual check + showcase for the new parametric shape spine an
 
 ### `examples/shapes_showcase/shapes_showcase.zig`
 
-shapes_showcase — a grid of animated 2D shape primitives. Exercises the new gradient / polygon / fan / outline primitives (drawCircleGradient, drawCircleLines, drawPoly, drawPolyLines, drawRectangleGradientVertical/Ex, drawTriangleFan, drawTriangleLines) alongside existing ones (sectors, ellipses, splines, dashed lines), on the shared scaffold. Adapted from raylib's shapes showcase; self-running.
+shapes_showcase - a grid of animated 2D shape primitives. Exercises the new gradient / polygon / fan / outline primitives (drawCircleGradient, drawCircleLines, drawPoly, drawPolyLines, drawRectangleGradientVertical/Ex, drawTriangleFan, drawTriangleLines) alongside existing ones (sectors, ellipses, splines, dashed lines), on the shared scaffold. Adapted from raylib's shapes showcase; self-running.
 
 *173 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -5973,23 +6997,23 @@ shapes_showcase — a grid of animated 2D shape primitives. Exercises the new gr
 
 (no description yet — add a //! header or a dict entry)
 
-*296 lines · 7 fns*  
+*298 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/simple_particles/simple_particles.zig`
 
-simple_particles — a three-type particle emitter ported to WebGPU. A ring buffer of particles is emitted from a centre emitter; the active type cycles every few seconds: water (blue, falls under gravity), smoke (grey, rises, grows, fades), and fire (yellow→red, rises with a flicker wobble, shrinks). The GL original let you drag the emitter with the mouse; this runs itself. Viewport-relative under `.responsive`.
+simple_particles - a three-type particle emitter ported to WebGPU. A ring buffer of particles is emitted from a centre emitter; the active type cycles every few seconds: water (blue, falls under gravity), smoke (grey, rises, grows, fades), and fire (yellow->red, rises with a flicker wobble, shrinks). The GL original let you drag the emitter with the mouse; this runs itself. Viewport-relative under `.responsive`.
 
-*187 lines · 5 fns*  
+*188 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/skinned_mesh/skinned_mesh.zig`
 
-skinned_mesh — port of the GL `skinned_mesh`: a skinned glTF rig, animated and deformed every frame. (The bone-socket technique — parenting an object to a bone — now lives in its own `bone_socket` example on a real rigged character, so this stays a focused pure-skinning demo.)
+skinned_mesh - port of the GL `skinned_mesh`: a skinned glTF rig, animated and deformed every frame. (The bone-socket technique - parenting an object to a bone - now lives in its own `bone_socket` example on a real rigged character, so this stays a focused pure-skinning demo.)
 
-*336 lines · 5 fns*  
+*337 lines · 5 fns*  
 **Deps:** `examples/skinned_mesh/skinned_mesh_data.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6003,7 +7027,7 @@ Embedded 2KB rigged GLB (two-bone strip) the CPU-skinning demo animates.
 
 ### `examples/skybox/skybox.zig`
 
-skybox — a gradient skybox via the new `drawSkybox`, with a few solid 3D objects in front. The skybox is a fullscreen far-plane pass: it unprojects each pixel to a world ray and lerps a vertical gradient (warm horizon → deep blue zenith), parked just inside the far plane so the 3D objects + grid draw over it. The camera orbits, so the gradient stays anchored to the world (you see the horizon line stay level as…
+skybox - a gradient skybox via the new `drawSkybox`, with a few solid 3D objects in front. The skybox is a fullscreen far-plane pass: it unprojects each pixel to a world ray and lerps a vertical gradient (warm horizon -> deep blue zenith), parked just inside the far plane so the 3D objects + grid draw over it. The camera orbits, so the gradient stays anchored to the world (you see the horizon line stay level as…
 
 *82 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6019,39 +7043,39 @@ skybox — a gradient skybox via the new `drawSkybox`, with a few solid 3D objec
 
 ### `examples/snake/snake.zig`
 
-snake — the classic. Steer the snake around a grid, eat the dots to grow, and don't run into a wall or your own tail. Every dot eaten adds a segment and a little speed, so the game tightens as your score climbs.
+snake - the classic. Steer the snake around a grid, eat the dots to grow, and don't run into a wall or your own tail. Every dot eaten adds a segment and a little speed, so the game tightens as your score climbs.
 
-*448 lines · 20 fns*  
+*450 lines · 20 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/sort_smoke/sort_min.zig`
 
-The counting sort, stripped to nothing but the sort — no physics.
+The counting sort, stripped to nothing but the sort - no physics.
 
 *387 lines · 11 fns*  
 **Deps:** `kompute` (module), `zm` (module)  
-**Dependents:** `examples/sort_smoke/sort_smoke.zig`
+**Dependents:** `build.zig (wired)`, `examples/sort_smoke/sort_smoke.zig`
 
 ### `examples/sort_smoke/sort_smoke.zig`
 
-sort_smoke — does the counting sort actually sort?
+sort_smoke - does the counting sort actually sort?
 
-*491 lines · 9 fns*  
+*493 lines · 9 fns*  
 **Deps:** `examples/sort_smoke/sort_min.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/sph_fluid_2d/sph_fluid_2d.zig`
 
-examples/sph_fluid_2d.zig — Particle-based viscoelastic fluid (2D port).
+examples/sph_fluid_2d.zig - Particle-based viscoelastic fluid (2D port).
 
-*923 lines · 7 fns*  
+*934 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/splines_drawing/splines_drawing.zig`
 
-splines_drawing — four spline families over a shared set of draggable points: Linear, B-Spline (Basis), Catmull-Rom, and Cubic Bezier. Drag any point to reshape the curve; tap empty space to cycle the spline type. In Bezier mode the two control points per segment are derived automatically and shown with handle dots + tangent lines. The stroke breathes its thickness and drifts hue so the canvas stays alive between…
+splines_drawing - four spline families over a shared set of draggable points: Linear, B-Spline (Basis), Catmull-Rom, and Cubic Bezier. Drag any point to reshape the curve; tap empty space to cycle the spline type. In Bezier mode the two control points per segment are derived automatically and shown with handle dots + tangent lines. The stroke breathes its thickness and drifts hue so the canvas stays alive between…
 
 *176 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6059,7 +7083,7 @@ splines_drawing — four spline families over a shared set of draggable points: 
 
 ### `examples/split_screen/split_screen.zig`
 
-split_screen — port of the GL `split_screen`: two players, one world, two perspectives.
+split_screen - port of the GL `split_screen`: two players, one world, two perspectives.
 
 *228 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6067,7 +7091,7 @@ split_screen — port of the GL `split_screen`: two players, one world, two pers
 
 ### `examples/srcrec_dstrec/srcrec_dstrec.zig`
 
-srcrec_dstrec — the source-rectangle / destination-rectangle mapping. A 6-frame sprite sheet is generated procedurally into an Image and uploaded once; drawTextureRec then maps ONE frame's source sub-rect (normalised UVs frame/6 .. (frame+1)/6) onto a destination rectangle on screen, scaling it to fit. The sheet is shown small up top with the active frame boxed. Tap to cycle the source frame; drag the big sprite…
+srcrec_dstrec - the source-rectangle / destination-rectangle mapping. A 6-frame sprite sheet is generated procedurally into an Image and uploaded once; drawTextureRec then maps ONE frame's source sub-rect (normalised UVs frame/6 .. (frame+1)/6) onto a destination rectangle on screen, scaling it to fit. The sheet is shown small up top with the active frame boxed. Tap to cycle the source frame; drag the big sprite…
 
 *242 lines · 8 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6075,47 +7099,47 @@ srcrec_dstrec — the source-rectangle / destination-rectangle mapping. A 6-fram
 
 ### `examples/starfield/starfield.zig`
 
-starfield — a fly-through-space starfield ported to WebGPU. Stars stream outward from the screen centre as motion streaks (the "warp speed" look): each is a point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a short line from where it was a moment ago to where it is now. Closer stars are brighter and thicker. Self-running (no input), viewport-relative under `.responsive` so it fills…
+starfield - a fly-through-space starfield ported to WebGPU. Stars stream outward from the screen centre as motion streaks (the "warp speed" look): each is a point seeded in a 3D box, projected with a 1/z perspective divide, and drawn as a short line from where it was a moment ago to where it is now. Closer stars are brighter and thicker. Self-running (no input), viewport-relative under `.responsive` so it fills…
 
-*121 lines · 5 fns*  
+*122 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/starfield_effect/starfield_effect.zig`
 
-starfield_effect — the "warp speed" starfield with a live control panel. DESCRIPTOR-ONLY (P2): the file exposes `pub const app = z.AppSpec(State){...}` and nothing else — no `main`, no `zimr_app`, no `std_options` (those live in the runner, which owns the wasm entry + the frame). `update` draws into the Frame's viewport in LOCAL coords (reads f.window for its size, paints its own background) and never…
+starfield_effect - the "warp speed" starfield with a live control panel. DESCRIPTOR-ONLY (P2): the file exposes `pub const app = z.AppSpec(State){...}` and nothing else - no `main`, no `zimr_app`, no `std_options` (those live in the runner, which owns the wasm entry + the frame). `update` draws into the Frame's viewport in LOCAL coords (reads f.window for its size, paints its own background) and never…
 
-*177 lines · 6 fns*  
+*178 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/state_persistence/state_persistence.zig`
 
-state_persistence — save an example's state to the browser and get it back after a page reload. It serializes a plain struct with `z.serialize` (the versioned protobuf-style serializer) and stashes the bytes in localStorage through zimr's persistence API. Tweak the colour and sliders, hit "Save to browser", then refresh the page — your tweaks (and how many times you've saved) come right back. That whole…
+state_persistence - save an example's state and get it back in the next run: after a page reload in the browser, or a restart natively. It serializes a plain struct with `z.serialize` (the versioned protobuf-style serializer) and keeps the bytes as a saved value (`z.saveValue`): in the browser's storage on the web, in a file under the user's application data natively. Tweak the colour and sliders, press Save,…
 
-*182 lines · 6 fns*  
+*177 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/sw_engine_shader.zig`
 
-examples/sw_engine_shader.zig — render through zimr's ENGINE shader pair (default_shapes_vs + default_shapes_fs) on the CPU, producing a colored PNG.
+examples/sw_engine_shader.zig - render through zimr's ENGINE shader pair (default_shapes_vs + default_shapes_fs) on the CPU, producing a colored PNG.
 
-*461 lines · 7 fns*  
+*462 lines · 7 fns*  
 **Deps:** `sw_runtime` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/sw_julia.zig`
 
-examples/sw_julia.zig — native CPU Julia set, writes a colored PNG.
+examples/sw_julia.zig - native CPU Julia set, writes a colored PNG.
 
-*165 lines · 3 fns*  
+*168 lines · 3 fns*  
 **Deps:** `sw_runtime` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/sw_mandelbrot.zig`
 
-examples/sw_mandelbrot.zig — Software-rendered Mandelbrot through zimr's turn-3 typed-pipeline architecture.
+examples/sw_mandelbrot.zig - Software-rendered Mandelbrot through zimr's turn-3 typed-pipeline architecture.
 
 *334 lines · 6 fns*  
 **Deps:** `sw_runtime` (module), `zm` (module)  
@@ -6123,7 +7147,7 @@ examples/sw_mandelbrot.zig — Software-rendered Mandelbrot through zimr's turn-
 
 ### `examples/tesseract_view/tesseract_view.zig`
 
-tesseract_view — raylib's `models_tesseract_view`.
+tesseract_view - raylib's `models_tesseract_view`.
 
 *136 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6149,7 +7173,7 @@ text_field - single-line text input demo.
 
 (no description yet — add a //! header or a dict entry)
 
-*156 lines · 4 fns*  
+*158 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6163,7 +7187,7 @@ text_field - single-line text input demo.
 
 ### `examples/text_font_sdf/text_font_sdf.zig`
 
-text_font_sdf — port of raylib [text] example - font SDF loading. raylib source: examples/text/text_font_sdf.c.
+text_font_sdf - port of raylib [text] example - font SDF loading. raylib source: examples/text/text_font_sdf.c.
 
 *193 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6173,21 +7197,21 @@ text_font_sdf — port of raylib [text] example - font SDF loading. raylib sourc
 
 (no description yet — add a //! header or a dict entry)
 
-*325 lines · 10 fns*  
+*328 lines · 10 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/text_layout/text_layout.zig`
 
-text_layout — text rendering + measurement showcase on the wgpu backend. A baked TTF atlas (Atkinson Mono) drives: a per-letter rainbow heading (each glyph advanced by its measured width), a word-wrapped paragraph (wrap point chosen with `measureText` per trial line), the same sample drawn at several sizes from the one atlas, and a `measureText` demo that boxes a string with its reported extent. Laid out against…
+text_layout - text rendering + measurement showcase on the wgpu backend. A baked TTF atlas (Atkinson Mono) drives: a per-letter rainbow heading (each glyph advanced by its measured width), a word-wrapped paragraph (wrap point chosen with `measureText` per trial line), the same sample drawn at several sizes from the one atlas, and a `measureText` demo that boxes a string with its reported extent. Laid out against…
 
-*173 lines · 5 fns*  
+*174 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/text_on_texture/text_on_texture.zig`
 
-text_on_texture — port of the GL `text_on_texture`, on the new textured-3D path. Each frame it renders a 2D "sign" (a coloured panel + text) into an offscreen render texture via beginTextureMode/endTextureMode, then maps that render texture onto a rotating 3D cube with drawCubeTexture — so the cube's faces display live-rendered text. A grid + a couple of solid markers give the scene depth. Combines two…
+text_on_texture - port of the GL `text_on_texture`, on the new textured-3D path. Each frame it renders a 2D "sign" (a coloured panel + text) into an offscreen render texture via beginTextureMode/endTextureMode, then maps that render texture onto a rotating 3D cube with drawCubeTexture - so the cube's faces display live-rendered text. A grid + a couple of solid markers give the scene depth. Combines two…
 
 *98 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6195,15 +7219,15 @@ text_on_texture — port of the GL `text_on_texture`, on the new textured-3D pat
 
 ### `examples/text_sprite_fonts/text_sprite_fonts.zig`
 
-text_sprite_fonts — port of raylib [text] examples "font spritefont" and "sprite fonts" (merged). raylib sources: examples/text/text_font_spritefont.c and examples/text/text_sprite_fonts.c.
+text_sprite_fonts - port of raylib [text] examples "font spritefont" and "sprite fonts" (merged). raylib sources: examples/text/text_font_spritefont.c and examples/text/text_sprite_fonts.c.
 
-*193 lines · 4 fns*  
+*194 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/text_strings_management/text_strings_management.zig`
 
-text_strings_management — raylib's [text] strings-management sample, reimagined as a hands-on playground for the string ops themselves.
+text_strings_management - raylib's [text] strings-management sample, reimagined as a hands-on playground for the string ops themselves.
 
 *382 lines · 20 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6219,15 +7243,23 @@ text_strings_management — raylib's [text] strings-management sample, reimagine
 
 ### `examples/texture_readback/texture_readback.zig`
 
-texture_readback — port of the GL `texture_readback`: prove the GPU→CPU pixel path end-to-end.
+texture_readback - port of the GL `texture_readback`: prove the GPU->CPU pixel path end-to-end.
 
 *195 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
+### `examples/texture_views/texture_views.zig`
+
+texture_views - one texture, seen through different views: each level of a mip chain, the chain as a whole, and each layer of a texture array.
+
+*328 lines · 12 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
 ### `examples/textured_cube/textured_cube.zig`
 
-textured_cube — validates the new textured-3D pipeline (`drawCubeTexture`): an axis-aligned cube with a generated checker texture mapped 0..1 on each of its six faces, depth-tested in the immediate 3D pass alongside a ground grid (so the cube occludes the grid lines behind it). The camera auto-orbits to show every face. This is the first immediate-mode TEXTURED 3D draw — the 3D batch was solid-colour-only before;…
+textured_cube - validates the new textured-3D pipeline (`drawCubeTexture`): an axis-aligned cube with a generated checker texture mapped 0..1 on each of its six faces, depth-tested in the immediate 3D pass alongside a ground grid (so the cube occludes the grid lines behind it). The camera auto-orbits to show every face. This is the first immediate-mode TEXTURED 3D draw - the 3D batch was solid-colour-only before;…
 
 *77 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6235,15 +7267,15 @@ textured_cube — validates the new textured-3D pipeline (`drawCubeTexture`): an
 
 ### `examples/textured_curve/textured_curve.zig`
 
-textured_curve — a "road" texture swept along a cubic Bézier as a UV-mapped ribbon. Each of `segments` steps becomes a quad extended along the curve normal by `width`; U runs 0..1 across the width and V accumulates along the length so the road texture tiles down the curve. Drag the four control points (endpoints + tangents) to reshape it; sliders set width and segment count; a toggle overlays the base Bézier.
+textured_curve - a "road" texture swept along a cubic Bezier as a UV-mapped ribbon. Each of `segments` steps becomes a quad extended along the curve normal by `width`; U runs 0..1 across the width and V accumulates along the length so the road texture tiles down the curve. Drag the four control points (endpoints + tangents) to reshape it; sliders set width and segment count; a toggle overlays the base Bezier.
 
-*395 lines · 15 fns*  
+*396 lines · 15 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/textures_background_scrolling/textures_background_scrolling.zig`
 
-textures_background_scrolling — port of raylib [textures] example. Three parallax cyberpunk layers scroll at different speeds, each drawn twice for a seamless loop and scaled 2x (raylib's DrawTextureEx). PNGs are decoded at runtime -> GPU textures; the CPU pixels are freed right after upload.
+textures_background_scrolling - port of raylib [textures] example. Three parallax cyberpunk layers scroll at different speeds, each drawn twice for a seamless loop and scaled 2x (raylib's DrawTextureEx). PNGs are decoded at runtime -> GPU textures; the CPU pixels are freed right after upload.
 
 *103 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6251,7 +7283,7 @@ textures_background_scrolling — port of raylib [textures] example. Three paral
 
 ### `examples/textures_blend_modes/textures_blend_modes.zig`
 
-textures_blend_modes — port of raylib [textures] example. Draws a cyberpunk-street background, then composites the foreground over it with a cycling blend mode (alpha / additive / multiply / premultiplied). SPACE or tap cycles the mode — exercises the engine's beginBlendMode.
+textures_blend_modes - port of raylib [textures] example. Draws a cyberpunk-street background, then composites the foreground over it with a cycling blend mode (alpha / additive / multiply / premultiplied). SPACE or tap cycles the mode - exercises the engine's beginBlendMode.
 
 *95 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6259,23 +7291,23 @@ textures_blend_modes — port of raylib [textures] example. Draws a cyberpunk-st
 
 ### `examples/textures_bunnymark/textures_bunnymark.zig`
 
-textures_bunnymark — port of raylib [textures] example. Hold the mouse to spawn bunnies; each drifts and bounces off the edges. A stress test: thousands of drawTexture calls per frame.
+textures_bunnymark - port of raylib [textures] example. Hold the mouse to spawn bunnies; each drifts and bounces off the edges. A stress test: thousands of drawTexture calls per frame.
 
-*128 lines · 4 fns*  
+*130 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/textures_fog_of_war/textures_fog_of_war.zig`
 
-textures_fog_of_war — port of raylib [textures] example. A 25x15 tile map with fog of war. Fog state lives in a tiny 25x15 texture (one texel per tile: opaque black = unseen, 80% black = explored, clear = visible) uploaded each frame and drawn stretched over the map. Bilinear filtering turns the blocky per-tile fog into smooth soft edges. Arrow keys or touch move the player, revealing nearby tiles.
+textures_fog_of_war - port of raylib [textures] example. A 25x15 tile map with fog of war. Fog state lives in a tiny 25x15 texture (one texel per tile: opaque black = unseen, 80% black = explored, clear = visible) uploaded each frame and drawn stretched over the map. Bilinear filtering turns the blocky per-tile fog into smooth soft edges. Arrow keys or touch move the player, revealing nearby tiles.
 
-*178 lines · 4 fns*  
+*179 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/textures_framebuffer_rendering/textures_framebuffer_rendering.zig`
 
-textures_framebuffer_rendering — port of raylib's `examples/textures/textures_framebuffer_rendering.c` (Jack Boakes, 2/4).
+textures_framebuffer_rendering - port of raylib's `examples/textures/textures_framebuffer_rendering.c` (Jack Boakes, 2/4).
 
 *325 lines · 7 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6291,7 +7323,7 @@ textures_framebuffer_rendering — port of raylib's `examples/textures/textures_
 
 ### `examples/textures_gif_player/textures_gif_player.zig`
 
-textures_gif_player — port of raylib [textures] example - gif player. raylib source: examples/textures/textures_gif_player.c (complexity 3/4).
+textures_gif_player - port of raylib [textures] example - gif player. raylib source: examples/textures/textures_gif_player.c (complexity 3/4).
 
 *252 lines · 5 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6299,7 +7331,7 @@ textures_gif_player — port of raylib [textures] example - gif player. raylib s
 
 ### `examples/textures_image_channel/textures_image_channel.zig`
 
-textures_image_channel — port of raylib [textures] example. Split a PNG into its R, G, B, and A channels on the CPU (imageFromChannel returns a grayscale image per channel), promote each colour channel to RGBA and punch it through the alpha silhouette (imageAlphaMask needs an RGBA target + grayscale mask), then lay them out over a checkerboard: the full image on the left, the four channels tinted in a 2x2 grid.
+textures_image_channel - port of raylib [textures] example. Split a PNG into its R, G, B, and A channels on the CPU (imageFromChannel returns a grayscale image per channel), promote each colour channel to RGBA and punch it through the alpha silhouette (imageAlphaMask needs an RGBA target + grayscale mask), then lay them out over a checkerboard: the full image on the left, the four channels tinted in a 2x2 grid.
 
 *117 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6307,7 +7339,7 @@ textures_image_channel — port of raylib [textures] example. Split a PNG into i
 
 ### `examples/textures_image_rotate/textures_image_rotate.zig`
 
-textures_image_rotate — port of raylib [textures] example. Load the raylib logo three times, rotate each on the CPU (imageRotate, arbitrary angle) by 45°, 90°, and -90°, upload to GPU textures, and cycle between them on left-click / RIGHT. Rotation happens once at init in RAM; the frame loop only draws the currently selected texture.
+textures_image_rotate - port of raylib [textures] example. Load the raylib logo three times, rotate each on the CPU (imageRotate, arbitrary angle) by 45 deg, 90 deg, and -90 deg, upload to GPU textures, and cycle between them on left-click / RIGHT. Rotation happens once at init in RAM; the frame loop only draws the currently selected texture.
 
 *95 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6315,7 +7347,7 @@ textures_image_rotate — port of raylib [textures] example. Load the raylib log
 
 ### `examples/textures_image_text/textures_image_text.zig`
 
-textures_image_text — draw text INTO a CPU image, then upload the result as a texture and display it. Ports raylib's `textures_image_text` (a generated checker image instead of the resources/parrots.png asset): text is rasterized onto the image pixels with `imageDrawTextWithFont` BEFORE the image becomes a GPU texture, so the caption is baked into the texels themselves.
+textures_image_text - draw text INTO a CPU image, then upload the result as a texture and display it. Ports raylib's `textures_image_text` (a generated checker image instead of the resources/parrots.png asset): text is rasterized onto the image pixels with `imageDrawTextWithFont` BEFORE the image becomes a GPU texture, so the caption is baked into the texels themselves.
 
 *90 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6323,7 +7355,7 @@ textures_image_text — draw text INTO a CPU image, then upload the result as a 
 
 ### `examples/textures_magnifying_glass/textures_magnifying_glass.zig`
 
-textures_magnifying_glass — port of raylib [textures] example. A 2x magnifier follows the pointer. The magnified world is rendered into a 256x256 render texture through a zoomed Camera2D, where hidden bunnies are drawn with MULTIPLY blend so they blend into the parrots below (invisible in the normal view). The square RTT is masked to a circle by drawing a white circle over it with MULTIPLY blend — whose alpha…
+textures_magnifying_glass - port of raylib [textures] example. A 2x magnifier follows the pointer. The magnified world is rendered into a 256x256 render texture through a zoomed Camera2D, where hidden bunnies are drawn with MULTIPLY blend so they blend into the parrots below (invisible in the normal view). The square RTT is masked to a circle by drawing a white circle over it with MULTIPLY blend - whose alpha…
 
 *163 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6331,7 +7363,7 @@ textures_magnifying_glass — port of raylib [textures] example. A 2x magnifier 
 
 ### `examples/textures_mouse_painting/textures_mouse_painting.zig`
 
-textures_mouse_painting — port of raylib [textures] example. Paint onto a persistent render-texture canvas with the mouse and pick from a color palette. The canvas ACCUMULATES: the paint pass reopens it with a null clear (LOAD), so strokes build up frame to frame. Offscreen-first: the paint pass runs before the screen opens (tile-based-GPU safe).
+textures_mouse_painting - port of raylib [textures] example. Paint onto a persistent render-texture canvas with the mouse and pick from a color palette. The canvas ACCUMULATES: the paint pass reopens it with a null clear (LOAD), so strokes build up frame to frame. Offscreen-first: the paint pass runs before the screen opens (tile-based-GPU safe).
 
 *119 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6339,15 +7371,15 @@ textures_mouse_painting — port of raylib [textures] example. Paint onto a pers
 
 ### `examples/textures_npatch_drawing/textures_npatch_drawing.zig`
 
-textures_npatch_drawing — nine-slice (9-patch) panel drawing. A procedurally generated UI panel is sliced into 9 regions (4 fixed 16 px corners, 4 edges, 1 center) sized by the mouse; corners stay fixed while edges + center stretch. Ports raylib's `textures_npatch_drawing` (procedural panel instead of the resources/ninepatch_button.png asset). The 9-patch goes through the unified `sink.image` path with `.npatch`…
+textures_npatch_drawing - nine-slice (9-patch) panel drawing. A procedurally generated UI panel is sliced into 9 regions (4 fixed 16 px corners, 4 edges, 1 center) sized by the mouse; corners stay fixed while edges + center stretch. Ports raylib's `textures_npatch_drawing` (procedural panel instead of the resources/ninepatch_button.png asset). The 9-patch goes through the unified `sink.image` path with `.npatch`…
 
-*141 lines · 4 fns*  
+*142 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/textures_polygon_drawing/textures_polygon_drawing.zig`
 
-textures_polygon_drawing — port of raylib [textures] example. Maps cat.png onto an irregular 10-sided polygon and spins it. zimr's textured triangle path (drawTexturedTriangles) lives in the 3D pipeline, so we view a flat z=0 triangle-fan through an ORTHOGRAPHIC camera looking straight down -Z, which reproduces the original's 2D look with no perspective distortion.
+textures_polygon_drawing - port of raylib [textures] example. Maps cat.png onto an irregular 10-sided polygon and spins it. zimr's textured triangle path (drawTexturedTriangles) lives in the 3D pipeline, so we view a flat z=0 triangle-fan through an ORTHOGRAPHIC camera looking straight down -Z, which reproduces the original's 2D look with no perspective distortion.
 
 *109 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6355,7 +7387,7 @@ textures_polygon_drawing — port of raylib [textures] example. Maps cat.png ont
 
 ### `examples/textures_raw_data/textures_raw_data.zig`
 
-textures_raw_data — port of raylib [textures] example. Demonstrates building a GPU texture from a raw, hand-filled RGBA pixel buffer: we allocate width*height*4 bytes, write an orange/gold checkerboard into it, wrap it in an Image (pointer + dims + format), and upload. A second texture is decoded from fudesumi.png for comparison. (raylib loads a head- less .raw file here; we load the PNG since the pixels are…
+textures_raw_data - port of raylib [textures] example. Demonstrates building a GPU texture from a raw, hand-filled RGBA pixel buffer: we allocate width*height*4 bytes, write an orange/gold checkerboard into it, wrap it in an Image (pointer + dims + format), and upload. A second texture is decoded from fudesumi.png for comparison. (raylib loads a head- less .raw file here; we load the PNG since the pixels are…
 
 *126 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6363,15 +7395,15 @@ textures_raw_data — port of raylib [textures] example. Demonstrates building a
 
 ### `examples/textures_screen_buffer/textures_screen_buffer.zig`
 
-textures_screen_buffer — port of raylib [textures] example. A classic palette-cycling fire effect rendered entirely on the CPU: an 8-bit index buffer is seeded along the bottom row and propagated upward with random horizontal drift and decay each frame, mapped through a 256-entry HSV palette into an RGBA buffer, then uploaded to a texture and drawn 2x scaled.
+textures_screen_buffer - port of raylib [textures] example. A classic palette-cycling fire effect rendered entirely on the CPU: an 8-bit index buffer is seeded along the bottom row and propagated upward with random horizontal drift and decay each frame, mapped through a 256-entry HSV palette into an RGBA buffer, then uploaded to a texture and drawn 2x scaled.
 
-*147 lines · 3 fns*  
+*148 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/textures_sprite_animation/textures_sprite_animation.zig`
 
-textures_sprite_animation — port of raylib [textures] example. Cycle a 6-frame sprite sheet (scarfy) at a fixed speed via drawTextureRec over normalized-UV sub-rects. PNG decoded at runtime -> GPU texture.
+textures_sprite_animation - port of raylib [textures] example. Cycle a 6-frame sprite sheet (scarfy) at a fixed speed via drawTextureRec over normalized-UV sub-rects. PNG decoded at runtime -> GPU texture.
 
 *83 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6379,7 +7411,7 @@ textures_sprite_animation — port of raylib [textures] example. Cycle a 6-frame
 
 ### `examples/textures_sprite_button/textures_sprite_button.zig`
 
-textures_sprite_button — port of raylib [textures] example. A 3-frame button sheet (normal / hover / pressed) selected by mouse state.
+textures_sprite_button - port of raylib [textures] example. A 3-frame button sheet (normal / hover / pressed) selected by mouse state.
 
 *79 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6387,7 +7419,7 @@ textures_sprite_button — port of raylib [textures] example. A 3-frame button s
 
 ### `examples/textures_sprite_explosion/textures_sprite_explosion.zig`
 
-textures_sprite_explosion — port of raylib [textures] example. A 5x5 explosion sprite sheet, auto-looping. drawTextureRec over normalized-UV sub-rects.
+textures_sprite_explosion - port of raylib [textures] example. A 5x5 explosion sprite sheet, auto-looping. drawTextureRec over normalized-UV sub-rects.
 
 *92 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6395,7 +7427,7 @@ textures_sprite_explosion — port of raylib [textures] example. A 5x5 explosion
 
 ### `examples/textures_sprite_stacking/textures_sprite_stacking.zig`
 
-textures_sprite_stacking — port of raylib [textures] example, zimr-ified. booth.png is a vertical sheet of 122 horizontal cross-sections of a 3D model. We render each slice as a fixed horizontal textured quad stacked in world Y (via drawBillboardRec with explicit right/up so the quads DON'T face the camera), then view the whole stack with the shared orbit camera — drag to orbit, wheel/pinch to zoom, exactly like…
+textures_sprite_stacking - port of raylib [textures] example, zimr-ified. booth.png is a vertical sheet of 122 horizontal cross-sections of a 3D model. We render each slice as a fixed horizontal textured quad stacked in world Y (via drawBillboardRec with explicit right/up so the quads DON'T face the camera), then view the whole stack with the shared orbit camera - drag to orbit, wheel/pinch to zoom, exactly like…
 
 *145 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6403,9 +7435,9 @@ textures_sprite_stacking — port of raylib [textures] example, zimr-ified. boot
 
 ### `examples/textures_tiled_drawing/textures_tiled_drawing.zig`
 
-textures_tiled_drawing — port of raylib [textures] example. Tiles a chosen sub-rectangle of patterns.png across a destination area with adjustable scale, rotation, and tint. drawTextureTiled is a faithful port of raylib's helper (single-tile / one-column / one-row / full-grid cases, with the edge tiles clipped by shrinking the source rect). Pattern, colour, scale, and rotation are driven by UI sliders.
+textures_tiled_drawing - port of raylib [textures] example. Tiles a chosen sub-rectangle of patterns.png across a destination area with adjustable scale, rotation, and tint. drawTextureTiled is a faithful port of raylib's helper (single-tile / one-column / one-row / full-grid cases, with the edge tiles clipped by shrinking the source rect). Pattern, colour, scale, and rotation are driven by UI sliders.
 
-*206 lines · 7 fns*  
+*215 lines · 7 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6419,33 +7451,33 @@ textures_tiled_drawing — port of raylib [textures] example. Tiles a chosen sub
 
 ### `examples/three_leg/three_leg.zig`
 
-three_leg — a Go1 standing on three legs, reaching with the fourth.
+three_leg - a Go1 standing on three legs, reaching with the fourth.
 
-*737 lines · 11 fns*  
+*738 lines · 11 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/tic_tac_toe/tic_tac_toe.zig`
 
-tic_tac_toe — two players share the screen and tap a cell to claim it. X is drawn as two crossing bars, O as a ring (a filled disc with a background-coloured disc punched out of it), the board as four bars. Nothing here but 2D shapes: no textures, no font work beyond the caption, no AI. Tap anywhere once somebody has won (or the board fills) to start a new game.
+tic_tac_toe - two players share the screen and tap a cell to claim it. X is drawn as two crossing bars, O as a ring (a filled disc with a background-coloured disc punched out of it), the board as four bars. Nothing here but 2D shapes: no textures, no font work beyond the caption, no AI. Tap anywhere once somebody has won (or the board fills) to start a new game.
 
-*271 lines · 14 fns*  
+*274 lines · 14 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/tile_smoke/tile_gather.zig`
 
-tile_gather.zig — workgroup shared-memory NEIGHBOUR-TILING de-risk (Stage 2a).
+tile_gather.zig - workgroup shared-memory NEIGHBOUR-TILING de-risk (Stage 2a).
 
-*283 lines · 4 fns · 1 tests*  
+*284 lines · 4 fns · 1 tests*  
 **Deps:** `kompute` (module), `zm` (module)  
 **Dependents:** `examples/tile_smoke/tile_smoke.zig`
 
 ### `examples/tile_smoke/tile_smoke.zig`
 
-tile_smoke — shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a). Places particles, builds the uniform grid, then runs the per-cell tiled gather and checks every particle's neighbour count against a brute-force O(n_part^2) ground truth. Exact integer pass/fail. The CPU backend runs the same at startup as an independent oracle. Once green, the fluid's density/force passes can adopt the identical…
+tile_smoke - shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a). Places particles, builds the uniform grid, then runs the per-cell tiled gather and checks every particle's neighbour count against a brute-force O(n_part^2) ground truth. Exact integer pass/fail. The CPU backend runs the same at startup as an independent oracle. Once green, the fluid's density/force passes can adopt the identical…
 
-*231 lines · 8 fns*  
+*232 lines · 8 fns*  
 **Deps:** `examples/tile_smoke/tile_gather.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6453,8 +7485,32 @@ tile_smoke — shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a). Plac
 
 (no description yet — add a //! header or a dict entry)
 
-*184 lines · 6 fns*  
+*185 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `examples/track_train/getup.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*325 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/track_train/humanoid_flex2.xml`
+
+(no description yet — add a //! header or a dict entry)
+
+*450 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `examples/track_train/track_train.zig`
+
+examples/track_train - SuperTrack, learned on the device you are holding.
+
+*482 lines · 9 fns*  
+**Deps:** `zimr` (module), `zm` (module), `zn_mlp` (module)  
 **Dependents:** —
 
 ### `examples/tracking/tracker.xml`
@@ -6467,7 +7523,7 @@ tile_smoke — shared-memory NEIGHBOUR-TILING de-risk on device (Stage 2a). Plac
 
 ### `examples/tracking/tracking.zig`
 
-tracking — why a planner beats a servo, on the one claim that survives measurement.
+tracking - why a planner beats a servo, on the one claim that survives measurement.
 
 *614 lines · 13 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6475,7 +7531,7 @@ tracking — why a planner beats a servo, on the one claim that survives measure
 
 ### `examples/trails/trails.zig`
 
-trails — render-texture ACCUMULATION. Several emitters trace Lissajous paths; their glowing dots are drawn into a persistent render texture that is NOT cleared each frame (beginTextureMode with clear = null → load). A faint black rectangle is drawn over the texture each frame to fade old trails, so the result is flowing ribbons of light. Exercises the accumulate/load path of the render-texture API. Viewport-relative.
+trails - render-texture ACCUMULATION. Several emitters trace Lissajous paths; their glowing dots are drawn into a persistent render texture that is NOT cleared each frame (beginTextureMode with clear = null -> load). A faint black rectangle is drawn over the texture each frame to fade old trails, so the result is flowing ribbons of light. Exercises the accumulate/load path of the render-texture API.…
 
 *111 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6483,7 +7539,7 @@ trails — render-texture ACCUMULATION. Several emitters trace Lissajous paths; 
 
 ### `examples/triangle_gradient/triangle_gradient.zig`
 
-triangle_gradient — three gradient-filled triangles whose corners pulse on out-of-phase sine waves. Each vertex carries its own colour and the GPU interpolates across the face, so the blend direction breathes. Exercises the new drawTriangleGradient primitive. Ported from raylib's gradient-triangle demo, themed with the shared scaffold.
+triangle_gradient - three gradient-filled triangles whose corners pulse on out-of-phase sine waves. Each vertex carries its own colour and the GPU interpolates across the face, so the blend direction breathes. Exercises the new drawTriangleGradient primitive. Ported from raylib's gradient-triangle demo, themed with the shared scaffold.
 
 *88 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6491,7 +7547,7 @@ triangle_gradient — three gradient-filled triangles whose corners pulse on out
 
 ### `examples/triangle_strip/triangle_strip.zig`
 
-triangle_strip — a gear/star built from a triangle strip: alternating inside- and outside-radius points around a circle form a ring of triangles, each filled with an HSV hue that cycles around the wheel. The strip slowly rotates and the hue drifts so it is alive without input. Phone-first: drag left/right to set the segment count (3..60), tap to toggle the black outline. From raylib shapes_triangle_strip (the…
+triangle_strip - a gear/star built from a triangle strip: alternating inside- and outside-radius points around a circle form a ring of triangles, each filled with an HSV hue that cycles around the wheel. The strip slowly rotates and the hue drifts so it is alive without input. Phone-first: drag left/right to set the segment count (3..60), tap to toggle the black outline. From raylib shapes_triangle_strip (the…
 
 *131 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6499,7 +7555,7 @@ triangle_strip — a gear/star built from a triangle strip: alternating inside- 
 
 ### `examples/trivial_fs.zig`
 
-examples/trivial_fs.zig — minimal fragment shader for the wgpu_bringup's Phase D1 validation.  Reads the interpolated UV from the VS; emits a UV-gradient color (R = U, G = V, B = 0.5).  No Ubo, no Samplers.
+examples/trivial_fs.zig - minimal fragment shader for the wgpu_bringup's Phase D1 validation.  Reads the interpolated UV from the VS; emits a UV-gradient color (R = U, G = V, B = 0.5).  No Ubo, no Samplers.
 
 *34 lines · 1 fns*  
 **Deps:** `examples/trivial_fs_io.zig`, `trivial_fs_externs` (module), `zm` (module)  
@@ -6507,7 +7563,7 @@ examples/trivial_fs.zig — minimal fragment shader for the wgpu_bringup's Phase
 
 ### `examples/trivial_fs_io.zig`
 
-examples/trivial_fs_io.zig — schema for the trivial FS used by the wgpu_bringup to validate Phase D1.
+examples/trivial_fs_io.zig - schema for the trivial FS used by the wgpu_bringup to validate Phase D1.
 
 *[shader-safe] · 37 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -6515,7 +7571,7 @@ examples/trivial_fs_io.zig — schema for the trivial FS used by the wgpu_bringu
 
 ### `examples/trivial_vs.zig`
 
-examples/trivial_vs.zig — minimal vertex shader for the wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes clip-space positions; VS forwards them with w=1.  UV varies to the FS unchanged.
+examples/trivial_vs.zig - minimal vertex shader for the wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes clip-space positions; VS forwards them with w=1.  UV varies to the FS unchanged.
 
 *35 lines · 1 fns*  
 **Deps:** `examples/trivial_vs_io.zig`, `trivial_vs_externs` (module), `zm` (module)  
@@ -6523,7 +7579,7 @@ examples/trivial_vs.zig — minimal vertex shader for the wgpu_bringup's Phase D
 
 ### `examples/trivial_vs_io.zig`
 
-examples/trivial_vs_io.zig — schema for the trivial VS used by the wgpu_bringup to validate Phase D1 (loadShader) end-to-end.
+examples/trivial_vs_io.zig - schema for the trivial VS used by the wgpu_bringup to validate Phase D1 (loadShader) end-to-end.
 
 *[shader-safe] · 24 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -6563,7 +7619,7 @@ examples/trivial_vs_io.zig — schema for the trivial VS used by the wgpu_bringu
 
 ### `examples/ui_color_picker/ui_color_picker.zig`
 
-ui_color_picker — port of the GL `ui_color_picker` onto the WebGPU UI host. Side-by-side bar + wheel `colorPicker` layouts, alpha toggles, a size slider, and an inline `colorEdit` comparison. The port swaps the GL `UiContext` (+ shapes_texture + font_cache) for `z.UiHost`; the widget body is unchanged — it's the same real `ui.zig` (Dear ImGui) Ui method set.
+ui_color_picker - port of the GL `ui_color_picker` onto the WebGPU UI host. Side-by-side bar + wheel `colorPicker` layouts, alpha toggles, a size slider, and an inline `colorEdit` comparison. The port swaps the GL `UiContext` (+ shapes_texture + font_cache) for `z.UiHost`; the widget body is unchanged - it's the same real `ui.zig` (Dear ImGui) Ui method set.
 
 *122 lines · 3 fns*  
 **Deps:** `zimr` (module)  
@@ -6597,7 +7653,7 @@ ui_color_picker — port of the GL `ui_color_picker` onto the WebGPU UI host. Si
 
 (no description yet — add a //! header or a dict entry)
 
-*190 lines · 5 fns*  
+*191 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6635,7 +7691,7 @@ ui_color_picker — port of the GL `ui_color_picker` onto the WebGPU UI host. Si
 
 ### `examples/ui_dock_simple/ui_dock_simple.zig`
 
-ui_dock_simple — the simplest docking demo.
+ui_dock_simple - the simplest docking demo.
 
 *116 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6667,7 +7723,7 @@ ui_dock_simple — the simplest docking demo.
 
 ### `examples/ui_drawlists/ui_drawlists.zig`
 
-ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Background + foreground draw lists (imgui's GetBackground/GetForegroundDrawList): the background grid renders UNDER every window, the corner watermark renders ABOVE them. Drag the control window — the grid stays under it, the watermark over it.
+ui_drawlists - port of the GL `ui_drawlists` onto the WebGPU UI host. Background + foreground draw lists (imgui's GetBackground/GetForegroundDrawList): the background grid renders UNDER every window, the corner watermark renders ABOVE them. Drag the control window - the grid stays under it, the watermark over it.
 
 *127 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6677,7 +7733,7 @@ ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Backgrou
 
 (no description yet — add a //! header or a dict entry)
 
-*930 lines · 18 fns*  
+*943 lines · 18 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6685,7 +7741,7 @@ ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Backgrou
 
 (no description yet — add a //! header or a dict entry)
 
-*133 lines · 3 fns*  
+*134 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6693,7 +7749,7 @@ ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Backgrou
 
 (no description yet — add a //! header or a dict entry)
 
-*245 lines · 7 fns*  
+*246 lines · 7 fns*  
 **Deps:** `zimr` (module)  
 **Dependents:** —
 
@@ -6717,7 +7773,7 @@ ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Backgrou
 
 (no description yet — add a //! header or a dict entry)
 
-*225 lines · 6 fns*  
+*226 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6733,7 +7789,7 @@ ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Backgrou
 
 (no description yet — add a //! header or a dict entry)
 
-*455 lines · 8 fns*  
+*457 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6747,7 +7803,7 @@ ui_drawlists — port of the GL `ui_drawlists` onto the WebGPU UI host. Backgrou
 
 ### `examples/ui_minimal_button/ui_minimal_button.zig`
 
-ui_minimal_button — port of the GL `ui_minimal_button` diagnostic. The GL version used three separate UiContexts to probe font binding (no font / TTF size 10 / TTF size 16); on wgpu the font path is settled (z.Font + UiHost), so this becomes the same shape with a single UiHost driving three windows, each a self-contained button + tap counter. If all three render text and the buttons increment, multi-window UI +…
+ui_minimal_button - port of the GL `ui_minimal_button` diagnostic. The GL version used three separate UiContexts to probe font binding (no font / TTF size 10 / TTF size 16); on wgpu the font path is settled (z.Font + UiHost), so this becomes the same shape with a single UiHost driving three windows, each a self-contained button + tap counter. If all three render text and the buttons increment, multi-window UI +…
 
 *105 lines · 3 fns*  
 **Deps:** `zimr` (module)  
@@ -6755,7 +7811,7 @@ ui_minimal_button — port of the GL `ui_minimal_button` diagnostic. The GL vers
 
 ### `examples/ui_minimal_one_context/ui_minimal_one_context.zig`
 
-ui_minimal_one_context — port of the GL `ui_minimal_one_context` onto the WebGPU UI host. Three windows submitted through ONE UiHost (text + button + tap counter each). Harness swap only; the widget body is unchanged.
+ui_minimal_one_context - port of the GL `ui_minimal_one_context` onto the WebGPU UI host. Three windows submitted through ONE UiHost (text + button + tap counter each). Harness swap only; the widget body is unchanged.
 
 *91 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6787,7 +7843,7 @@ ui_minimal_one_context — port of the GL `ui_minimal_one_context` onto the WebG
 
 ### `examples/ui_panes/ui_panes.zig`
 
-ui_panes — port of the GL `ui_panes`: a three-pane workspace built from the imgui-parity primitives. A horizontal splitter divides a file-tree pane (collapsible `treeNode` folders + leaf files) from a right column, which a vertical splitter divides into an editor pane and an output pane. Drag either splitter bar to resize. Exercises `splitter`, `beginChild`, `treeNode`/`treePop`, `setNextWindowSizeConstraints`,…
+ui_panes - port of the GL `ui_panes`: a three-pane workspace built from the imgui-parity primitives. A horizontal splitter divides a file-tree pane (collapsible `treeNode` folders + leaf files) from a right column, which a vertical splitter divides into an editor pane and an output pane. Drag either splitter bar to resize. Exercises `splitter`, `beginChild`, `treeNode`/`treePop`, `setNextWindowSizeConstraints`,…
 
 *189 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6803,9 +7859,9 @@ ui_panes — port of the GL `ui_panes`: a three-pane workspace built from the im
 
 ### `examples/ui_phone_gestures/ui_phone_gestures.zig`
 
-ui_phone_gestures — port of the GL `ui_phone_gestures`: a touch playground exercising the three core phone gestures against the wgpu input state. TAP (four targets, rising-edge press tested against the landing point so a finger that drifts after touchstart still counts), DRAG (a handle that pins to the finger while held), and SWIPE (a scissor-clipped list that scrolls with the drag delta). Pure manual drawing +…
+ui_phone_gestures - port of the GL `ui_phone_gestures`: a touch playground exercising the three core phone gestures against the wgpu input state. TAP (four targets, rising-edge press tested against the landing point so a finger that drifts after touchstart still counts), DRAG (a handle that pins to the finger while held), and SWIPE (a scissor-clipped list that scrolls with the drag delta). Pure manual drawing +…
 
-*213 lines · 4 fns*  
+*214 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -6835,7 +7891,7 @@ ui_phone_gestures — port of the GL `ui_phone_gestures`: a touch playground exe
 
 ### `examples/ui_pomodoro_phone/ui_pomodoro_phone.zig`
 
-ui_pomodoro_phone — a 25-minute pomodoro timer with an animated progress ring, ported to WebGPU. Phone-shaped (420x760), big touch targets. Shows off the shared `ui.zig` on the wgpu UiHost: a `beginCanvas` ring drawn with the draw-list (addCircle track + addArc sweep + centred addText), `u.animated` tweening the ring colour from calm green to warning red over the final minute, and full-window no-chrome layout.
+ui_pomodoro_phone - a 25-minute pomodoro timer with an animated progress ring, ported to WebGPU. Phone-shaped (420x760), big touch targets. Shows off the shared `ui.zig` on the wgpu UiHost: a `beginCanvas` ring drawn with the draw-list (addCircle track + addArc sweep + centred addText), `u.animated` tweening the ring colour from calm green to warning red over the final minute, and full-window no-chrome layout.
 
 *227 lines · 5 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6859,7 +7915,7 @@ ui_pomodoro_phone — a 25-minute pomodoro timer with an animated progress ring,
 
 ### `examples/ui_smoke_button/ui_smoke_button.zig`
 
-ui_smoke_button — port of the GL `ui_smoke_button` onto the WebGPU UI host. One window, one text line, one button: the minimal UI text+button path. Harness swap only (UiContext+shapes_texture+font_cache → z.UiHost); the widget body is the same real ui.zig.
+ui_smoke_button - port of the GL `ui_smoke_button` onto the WebGPU UI host. One window, one text line, one button: the minimal UI text+button path. Harness swap only (UiContext+shapes_texture+font_cache -> z.UiHost); the widget body is the same real ui.zig.
 
 *62 lines · 3 fns*  
 **Deps:** `zimr` (module)  
@@ -6867,7 +7923,7 @@ ui_smoke_button — port of the GL `ui_smoke_button` onto the WebGPU UI host. On
 
 ### `examples/ui_tabbar_tour/ui_tabbar_tour.zig`
 
-ui_tabbar_tour — port of the GL `ui_tabbar_tour` onto the WebGPU UI host. A tour of the TabBar widget across three stacked bars: (1) closeable tabs with close-X + middle-click + per-tab id-isolated buttons, (2) leading/trailing pins + unsaved-document asterisk + bar-level middle-click suppression, (3) force- select + selected-overline. Harness swap only (UiContext+shapes_texture+ font_cache -> z.UiHost); the…
+ui_tabbar_tour - port of the GL `ui_tabbar_tour` onto the WebGPU UI host. A tour of the TabBar widget across three stacked bars: (1) closeable tabs with close-X + middle-click + per-tab id-isolated buttons, (2) leading/trailing pins + unsaved-document asterisk + bar-level middle-click suppression, (3) force- select + selected-overline. Harness swap only (UiContext+shapes_texture+ font_cache -> z.UiHost); the…
 
 *161 lines · 3 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6875,9 +7931,9 @@ ui_tabbar_tour — port of the GL `ui_tabbar_tour` onto the WebGPU UI host. A to
 
 ### `examples/ui_tables_basic/ui_tables_basic.zig`
 
-ui_tables_basic — port of the GL `ui_tables_basic` onto the WebGPU UI host. A 4-column sortable scoreboard (click a header to sort, shift-click to add a tie-breaker). Harness swap only; the table widget body is unchanged (same real ui.zig table API: beginTable/tableSetupColumn/tableGetSortSpecs/…).
+ui_tables_basic - port of the GL `ui_tables_basic` onto the WebGPU UI host. A 4-column sortable scoreboard (click a header to sort, shift-click to add a tie-breaker). Harness swap only; the table widget body is unchanged (same real ui.zig table API: beginTable/tableSetupColumn/tableGetSortSpecs/...).
 
-*133 lines · 4 fns*  
+*134 lines · 4 fns*  
 **Deps:** `zimr` (module)  
 **Dependents:** —
 
@@ -6885,7 +7941,7 @@ ui_tables_basic — port of the GL `ui_tables_basic` onto the WebGPU UI host. A 
 
 (no description yet — add a //! header or a dict entry)
 
-*348 lines · 7 fns*  
+*350 lines · 7 fns*  
 **Deps:** `zimr` (module)  
 **Dependents:** —
 
@@ -6893,7 +7949,15 @@ ui_tables_basic — port of the GL `ui_tables_basic` onto the WebGPU UI host. A 
 
 (no description yet — add a //! header or a dict entry)
 
-*163 lines · 5 fns*  
+*165 lines · 5 fns*  
+**Deps:** `zimr` (module)  
+**Dependents:** —
+
+### `examples/ui_text_editing/ui_text_editing.zig`
+
+ui_text_editing - the editing of text fields: selection by keyboard and mouse, the shortcuts of a text editor, undo and redo, Escape, scrolling, filters, and fields of several lines.
+
+*200 lines · 10 fns*  
 **Deps:** `zimr` (module)  
 **Dependents:** —
 
@@ -6907,7 +7971,7 @@ ui_tables_basic — port of the GL `ui_tables_basic` onto the WebGPU UI host. A 
 
 ### `examples/ui_window_menubar/ui_window_menubar.zig`
 
-ui_window_menubar — per-window menu bars ported to WebGPU. Three windows, each with its own `beginMenuBar` pinned to its top (not a canvas-wide bar): a Document window (File/Edit/View, with a dirty bit and undo depth), a Properties window (its own Tools menu), and a Settings window (Help -> About). Drag any window and its bar drags with it. A foreground draw list paints an About overlay and a bottom status bar…
+ui_window_menubar - per-window menu bars ported to WebGPU. Three windows, each with its own `beginMenuBar` pinned to its top (not a canvas-wide bar): a Document window (File/Edit/View, with a dirty bit and undo depth), a Properties window (its own Tools menu), and a Settings window (Help -> About). Drag any window and its bar drags with it. A foreground draw list paints an About overlay and a bottom status bar…
 
 *238 lines · 4 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -6923,15 +7987,15 @@ ui_window_menubar — per-window menu bars ported to WebGPU. Three windows, each
 
 ### `examples/vao_multibuffer/vao_multibuffer.zig`
 
-vao_multibuffer — a vertex layout split across SEPARATE buffers (one per attribute) instead of one interleaved buffer. Positions live in slot 0, colours in slot 1, and the colour buffer is rebound between two palettes every ~1.2s — proving the slots are independent (swap one without touching the other). This is the groundwork for instancing.
+vao_multibuffer - a vertex layout split across SEPARATE buffers (one per attribute) instead of one interleaved buffer. Positions live in slot 0, colours in slot 1, and the colour buffer is rebound between two palettes every ~1.2s - proving the slots are independent (swap one without touching the other). This is the groundwork for instancing.
 
-*171 lines · 5 fns*  
+*173 lines · 5 fns*  
 **Deps:** `examples/vao_multibuffer/pipeline_uniforms_fs_io.zig`, `examples/vao_multibuffer/pipeline_uniforms_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/vector_angle/vector_angle.zig`
 
-vector_angle — the angle between 2D vectors; v2 follows the pointer (mouse/touch), the mode cycles every five seconds. MODE 0: the signed angle at v0 between a fixed reference v0->v1 and v0->v2. MODE 1: the angle of v0->v2 vs the horizontal axis. All the vector math is zimrmath — native `-` for difference, zm.angle2 for the signed between- angle, zm.lineAngle2 for a ray's angle — no hand-rolled helpers. From…
+vector_angle - the angle between 2D vectors; v2 follows the pointer (mouse/touch), the mode cycles every five seconds. MODE 0: the signed angle at v0 between a fixed reference v0->v1 and v0->v2. MODE 1: the angle of v0->v2 vs the horizontal axis. All the vector math is zimrmath - native `-` for difference, zm.angle2 for the signed between- angle, zm.lineAngle2 for a ray's angle - no hand-rolled helpers. From…
 
 *90 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -6939,15 +8003,15 @@ vector_angle — the angle between 2D vectors; v2 follows the pointer (mouse/tou
 
 ### `examples/vertex_texture_test/vertex_texture_test.zig`
 
-vertex_texture_test — the end-to-end proof that zimr can sample a texture in the VERTEX stage.  A flat grid of triangles is warped in the vertex shader by reading a checkerboard texture (via the explicit-LOD `warpLevel` accessor) and offsetting each vertex.  A distorted grid (not a clean one) means vertex texture fetch works end-to-end: schema-declared vertex-visible sampler -> bind-group layout ->…
+vertex_texture_test - the end-to-end proof that zimr can sample a texture in the VERTEX stage.  A flat grid of triangles is warped in the vertex shader by reading a checkerboard texture (via the explicit-LOD `warpLevel` accessor) and offsetting each vertex.  A distorted grid (not a clean one) means vertex texture fetch works end-to-end: schema-declared vertex-visible sampler -> bind-group layout ->…
 
-*163 lines · 4 fns*  
+*164 lines · 4 fns*  
 **Deps:** `examples/vertex_texture_test/vertex_texture_test_fs_io.zig`, `examples/vertex_texture_test/vertex_texture_test_vs_io.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/vertex_texture_test_fs.zig`
 
-examples/vertex_texture_test_fs.zig — emits the interpolated colour.
+examples/vertex_texture_test_fs.zig - emits the interpolated colour.
 
 *18 lines · 1 fns*  
 **Deps:** `examples/vertex_texture_test_fs_io.zig`, `vertex_texture_test_fs_externs` (module)  
@@ -6955,7 +8019,7 @@ examples/vertex_texture_test_fs.zig — emits the interpolated colour.
 
 ### `examples/vertex_texture_test_fs_io.zig`
 
-examples/vertex_texture_test_fs_io.zig — fragment schema (pass-through).
+examples/vertex_texture_test_fs_io.zig - fragment schema (pass-through).
 
 *[shader-safe] · 12 lines · 0 fns*  
 **Deps:** `zm` (module)  
@@ -6963,15 +8027,15 @@ examples/vertex_texture_test_fs_io.zig — fragment schema (pass-through).
 
 ### `examples/vertex_texture_test_vs.zig`
 
-examples/vertex_texture_test_vs.zig — the vertex shader that samples a texture IN THE VERTEX STAGE. `warpLevel` is the explicit-LOD accessor (→ textureSampleLevel), which needs no derivatives and is legal here.
+examples/vertex_texture_test_vs.zig - the vertex shader that samples a texture IN THE VERTEX STAGE. `warpLevel` is the explicit-LOD accessor (-> textureSampleLevel), which needs no derivatives and is legal here.
 
-*30 lines · 1 fns*  
+*32 lines · 1 fns*  
 **Deps:** `examples/vertex_texture_test_vs_io.zig`, `vertex_texture_test_vs_externs` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/vertex_texture_test_vs_io.zig`
 
-examples/vertex_texture_test_vs_io.zig — schema for the vertex-texture-fetch smoke test. The novel bit: a sampler declared VERTEX-VISIBLE, so the vertex shader can read it (via the explicit-LOD `warpLevel` accessor) to warp the grid — proving zimr can sample textures in the vertex stage.
+examples/vertex_texture_test_vs_io.zig - schema for the vertex-texture-fetch smoke test. The novel bit: a sampler declared VERTEX-VISIBLE, so the vertex shader can read it (via the explicit-LOD `warpLevel` accessor) to warp the grid - proving zimr can sample textures in the vertex stage.
 
 *[shader-safe] · 27 lines · 0 fns*  
 **Deps:** `shader_interface` (module), `zm` (module)  
@@ -6987,23 +8051,31 @@ examples/vertex_texture_test_vs_io.zig — schema for the vertex-texture-fetch s
 
 ### `examples/voxel/voxel.zig`
 
-voxel — raylib's `models_basic_voxel`, the zimr way.
+voxel - raylib's `models_basic_voxel`, the zimr way.
 
-*272 lines · 8 fns*  
+*274 lines · 8 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/waving_cubes/waving_cubes.zig`
 
-waving_cubes — raylib's `models_waving_cubes`, the zimr way.
+waving_cubes - raylib's `models_waving_cubes`, the zimr way.
 
 *164 lines · 4 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
+### `examples/window_requests/window_requests.zig`
+
+window_requests - asking the platform for things beyond the window's contents: fullscreen, a screen kept on, and a web page opened.
+
+*152 lines · 8 fns*  
+**Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
 ### `examples/wireframe/wireframe.zig`
 
-wireframe — port of the GL `wireframe`: a generated sphere + two cubes, drawn solid or as wireframe (TAB toggles), proving the retained Mesh/Model tier — `genMeshSphereLegacy`/`genMeshCube` → `loadModelFromMesh` → `drawModel` / `drawModelWires`. The wgpu retained path CPU-transforms each mesh into the immediate 3D batch (Step 3a); true GPU instancing lands in Step 4. The camera auto-orbits; the caption is 2D,…
+wireframe - port of the GL `wireframe`: a generated sphere + two cubes, drawn solid or as wireframe (TAB toggles), proving the retained Mesh/Model tier - `genMeshSphereLegacy`/`genMeshCube` -> `loadModelFromMesh` -> `drawModel` / `drawModelWires`. The wgpu retained path CPU-transforms each mesh into the immediate 3D batch (Step 3a); true GPU instancing lands in Step 4. The camera auto-orbits; the caption is 2D,…
 
 *106 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
@@ -7011,23 +8083,23 @@ wireframe — port of the GL `wireframe`: a generated sphere + two cubes, drawn 
 
 ### `examples/worker_png/kernels.zig`
 
-examples/worker_png/kernels.zig — the PURE half of the example.
+examples/worker_png/kernels.zig - the PURE half of the example.
 
-*95 lines · 1 fns · 1 tests*  
+*97 lines · 1 fns · 1 tests*  
 **Deps:** `zimr` (module)  
 **Dependents:** `examples/worker_png/worker_png.zig`
 
 ### `examples/worker_png/worker_png.zig`
 
-worker_png — start a task on a worker, and watch the frame NOT freeze.
+worker_png - start a task on a worker, and watch the frame NOT freeze.
 
-*347 lines · 3 fns*  
+*348 lines · 3 fns*  
 **Deps:** `examples/worker_png/kernels.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/writing_anim/writing_anim.zig`
 
-writing_anim — a typewriter effect: a line of text is revealed one character at a time with a blinking cursor, then it pauses and restarts. The reveal is just slicing the message to its first N chars (N grows with time), no allocation; measureText places the cursor exactly at the end of the revealed text. Ported from raylib text_writing_anim.
+writing_anim - a typewriter effect: a line of text is revealed one character at a time with a blinking cursor, then it pauses and restarts. The reveal is just slicing the message to its first N chars (N grows with time), no allocation; measureText places the cursor exactly at the end of the revealed text. Ported from raylib text_writing_anim.
 
 *73 lines · 3 fns*  
 **Deps:** `example_common` (module), `zimr` (module)  
@@ -7035,39 +8107,47 @@ writing_anim — a typewriter effect: a line of text is revealed one character a
 
 ### `examples/yaw_pitch_roll/yaw_pitch_roll.zig`
 
-yaw_pitch_roll — raylib's `models_yaw_pitch_roll`.
+yaw_pitch_roll - raylib's `models_yaw_pitch_roll`.
 
 *218 lines · 6 fns*  
 **Deps:** `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
+### `examples/zimr_gallery/zimr_gallery.zig`
+
+zimr_gallery - the native gallery: every example as its own program, started from one list.
+
+*312 lines · 8 fns*  
+**Deps:** `gallery_options` (module), `zimr` (module), `zm` (module)  
+**Dependents:** —
+
 ### `examples/zimrnum_field/zimrnum_field.zig`
 
-zimrnum_field — a scalar field built with zimrnum, computed twice, drawn three times.
+zimrnum_field - a scalar field built with zimrnum, computed twice, drawn three times.
 
-*859 lines · 11 fns*  
-**Deps:** `zimr` (module), `zm` (module), `zn` (module), `zn_binary` (module), `zn_conformance` (module), `zn_matmul` (module), `zn_unary` (module)  
+*743 lines · 9 fns*  
+**Deps:** `zimr` (module), `zm` (module), `zn_binary` (module), `zn_conformance` (module), `zn_matmul` (module), `zn_unary` (module), `zrl_binary` (module)  
 **Dependents:** —
 
 ### `examples/zimrnum_hello.zig`
 
 (no description yet — add a //! header or a dict entry)
 
-*56 lines · 1 fns*  
+*58 lines · 1 fns*  
 **Deps:** `zn` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `examples/zimrnum_train/zimrnum_train.zig`
 
-zimrnum_train — the XOR network trained on the GPU and on the CPU in the same page, one step per frame, side by side.
+zimrnum_train - the XOR network trained on the GPU and on the CPU in the same page, one step per frame, side by side.
 
-*301 lines · 6 fns*  
+*302 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module), `zn` (module), `zn_train` (module)  
 **Dependents:** —
 
 ### `examples/zimrphysics2d_demo/render.zig`
 
-render.zig — visualize a `zimrphysics2d` World by adapting the engine's box2d-faithful DebugDraw callbacks into zimr's batched `ui.DrawList`.
+render.zig - visualize a `zimrphysics2d` World by adapting the engine's box2d-faithful DebugDraw callbacks into zimr's batched `ui.DrawList`.
 
 *323 lines · 19 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
@@ -7075,33 +8155,33 @@ render.zig — visualize a `zimrphysics2d` World by adapting the engine's box2d-
 
 ### `examples/zimrphysics2d_demo/scenes.zig`
 
-scenes.zig — box2d sample ports for the zimrphysics2d testbed.
+scenes.zig - box2d sample ports for the zimrphysics2d testbed.
 
-*5,398 lines · 206 fns*  
+*5,411 lines · 206 fns*  
 **Deps:** `examples/zimrphysics2d_demo/render.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** `examples/zimrphysics2d_demo/zimrphysics2d_demo.zig`
 
 ### `examples/zimrphysics2d_demo/zimrphysics2d_demo.zig`
 
-zimrphysics2d_demo — a box2d-style testbed for the `zimrphysics2d` engine.
+zimrphysics2d_demo - a box2d-style testbed for the `zimrphysics2d` engine.
 
-*632 lines · 16 fns*  
+*634 lines · 16 fns*  
 **Deps:** `examples/zimrphysics2d_demo/render.zig`, `examples/zimrphysics2d_demo/scenes.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
 ### `examples/zimrphysics_demo/render.zig`
 
-render.zig — draw a `zimrphysics` World with zimr's 3D immediate-mode API.
+render.zig - draw a `zimrphysics` World with zimr's 3D immediate-mode API.
 
-*230 lines · 6 fns*  
+*231 lines · 6 fns*  
 **Deps:** `zimr` (module), `zm` (module)  
 **Dependents:** `examples/zimrphysics_demo/zimrphysics_demo.zig`
 
 ### `examples/zimrphysics_demo/zimrphysics_demo.zig`
 
-zimrphysics_demo — switchable physics scenes driven by the `zimrphysics` (Jolt port) World and drawn with `render.drawWorld`, the pure-ECS render pass over `world.bodies` (see render.zig). Six scenes inspired by Jolt's samples: showcase (mixed shape rain), pyramid, stack (alternating yaw), restitution (0..1), friction ramp (0..1), and a funnel/bowl. TAB cycles scenes (rebuilding the World via `World.deinit`), R…
+zimrphysics_demo - switchable physics scenes driven by the `zimrphysics` (Jolt port) World and drawn with `render.drawWorld`, the pure-ECS render pass over `world.bodies` (see render.zig). Six scenes inspired by Jolt's samples: showcase (mixed shape rain), pyramid, stack (alternating yaw), restitution (0..1), friction ramp (0..1), and a funnel/bowl. TAB cycles scenes (rebuilding the World via `World.deinit`), R…
 
-*2,996 lines · 60 fns*  
+*3,000 lines · 60 fns*  
 **Deps:** `examples/zimrphysics_demo/render.zig`, `example_common` (module), `zimr` (module), `zm` (module)  
 **Dependents:** —
 
@@ -7110,7 +8190,7 @@ zimrphysics_demo — switchable physics scenes driven by the `zimrphysics` (Jolt
 
 ### `examples/shared_smoke/shared_rotate.zig`
 
-shared_rotate.zig — workgroup shared-memory + barrier DIAGNOSTIC.
+shared_rotate.zig - workgroup shared-memory + barrier DIAGNOSTIC.
 
 *97 lines · 1 fns · 1 tests*  
 **Deps:** `kompute` (module), `zm` (module)  
@@ -7118,7 +8198,7 @@ shared_rotate.zig — workgroup shared-memory + barrier DIAGNOSTIC.
 
 ### `examples/shared_smoke/shared_smoke.zig`
 
-shared_smoke — workgroup shared-memory + barrier DIAGNOSTIC, on device. Runs the `diag` kernel once and checks three independent results so a single run pinpoints which primitive works on this GPU: 1. local id     (out_localid)  — is local_invocation_id delivered? 2. shared self  (out_self)     — does a workgroup var round-trip a value? 3. shared rotate(out_rotate)   — does cross-thread sharing + the barrier…
+shared_smoke - workgroup shared-memory + barrier DIAGNOSTIC, on device. Runs the `diag` kernel once and checks three independent results so a single run pinpoints which primitive works on this GPU: 1. local id     (out_localid)  - is local_invocation_id delivered? 2. shared self  (out_self)     - does a workgroup var round-trip a value? 3. shared rotate(out_rotate)   - does cross-thread sharing + the barrier…
 
 *172 lines · 8 fns*  
 **Deps:** `examples/shared_smoke/shared_rotate.zig`, `zimr` (module), `zm` (module)  
@@ -7128,36 +8208,52 @@ shared_smoke — workgroup shared-memory + barrier DIAGNOSTIC, on device. Runs t
 
 Example: bringup on the wgpu backend.
 
-*393 lines · 1 fns · 1 tests*  
+*394 lines · 1 fns · 1 tests*  
 **Deps:** `examples/wgpu_bringup/julia_fs_io.zig`, `examples/wgpu_bringup/mandel_julia_fs_io.zig`, `examples/wgpu_bringup/mandelbrot_fs_io.zig`, `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 
 ## tools
 
+### `tools/bridge_import_check.zig`
+
+bridge_import_check - fails the build when a web page's wasm imports a function the bridge does not register.
+
+*341 lines · 9 fns · 2 tests*  
+**Deps:** `cli` (module)  
+**Dependents:** `build.zig (wired)`
+
 ### `tools/buildaux.zig`
 
 Build helper subcommands invoked by build.zig: dist-copy, check-wgsl-clean (ERROR-marker gate on transpiled WGSL), publish-pages (force-pushes prebuilt/ as the orphan `pages` branch for `zig build publish`), and the standalone HTML baker that inlines wasm + JS into a single phone-verifiable file.
 
-*124 lines · 5 fns*  
-**Deps:** —  
+*304 lines · 10 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/bvh_trim.zig`
 
-tools/bvh_trim.zig — cut a frame range out of a BVH file.
+tools/bvh_trim.zig - cut a frame range out of a BVH file.
 
-*96 lines · 1 fns*  
-**Deps:** `codecs` (module)  
+*202 lines · 1 fns*  
+**Deps:** `cli` (module), `codecs` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/c2js.zig`
 
-lint:off std-math: c2js is a standalone host-only transpiler - Zig-emitted C in, JavaScript out. It never reaches a shader, so the GPU-portability reason for the std.math ban does not apply, and it should stay extractable from zimr without dragging zimrmath along for a single NaN constant. c_to_js.zig — a single-file C -> JavaScript transpiler, written in Zig.
+lint:off std-math: c2js is a standalone host-only transpiler - Zig-emitted C in, JavaScript out. It never reaches a shader, so the GPU-portability reason for the std.math ban does not apply, and it should stay extractable from zimr without dragging zimrmath along for a single NaN constant. c_to_js.zig - a single-file C -> JavaScript transpiler, written in Zig.
 
-*9,777 lines · 134 fns*  
-**Deps:** `jobs_abi` (module)  
+*10,574 lines · 151 fns · 2 tests*  
+**Deps:** `cli` (module), `jobs_abi` (module)  
 **Dependents:** `build.zig (wired)`
+
+### `tools/c2js_cases/audio_worklet_test.cjs`
+
+(no description yet — add a //! header or a dict entry)
+
+*61 lines*  
+**Deps:** —  
+**Dependents:** —
 
 ### `tools/c2js_cases/cases/abs_wide.zig`
 
@@ -7169,7 +8265,7 @@ lint:off std-math: c2js is a standalone host-only transpiler - Zig-emitted C in,
 
 ### `tools/c2js_cases/cases/addr_of_local.zig`
 
-Address-of a local SCALAR (`&w` for a plain `var w`) — the C out-parameter idiom `f(&x)`. Such a local is heap-backed like an aggregate, so `&w` is a real address: reads load from its slot and writes store to it (via the same __ld/st-or-view path, so 64-bit works too). `&x` inside the bitcast/copy idioms (`memcpy(&a,&b,n)`) is deliberately NOT treated this way — those temps stay plain SSA values. run_test()…
+Address-of a local SCALAR (`&w` for a plain `var w`) - the C out-parameter idiom `f(&x)`. Such a local is heap-backed like an aggregate, so `&w` is a real address: reads load from its slot and writes store to it (via the same __ld/st-or-view path, so 64-bit works too). `&x` inside the bitcast/copy idioms (`memcpy(&a,&b,n)`) is deliberately NOT treated this way - those temps stay plain SSA values. run_test()…
 
 *55 lines · 5 fns*  
 **Deps:** —  
@@ -7281,7 +8377,7 @@ Arithmetic semantics: wrapping ops, shifts, floored div/mod, float math and comp
 
 ### `tools/c2js_cases/cases/builtins.zig`
 
-Bit / abs / saturating / overflow builtins that lower to zig.h runtime helpers (zig_abs, zig_clz, zig_ctz, zig_popcount, zig_byte_swap, zig_bit_reverse, zig_adds/subs, zig_addo, ...). These used to be emitted as verbatim calls to undefined JS functions — a SILENT runtime ReferenceError. This case pins their correct lowering. run_test() returns 0 on success, or a nonzero code identifying the first failed check.…
+Bit / abs / saturating / overflow builtins that lower to zig.h runtime helpers (zig_abs, zig_clz, zig_ctz, zig_popcount, zig_byte_swap, zig_bit_reverse, zig_adds/subs, zig_addo, ...). These used to be emitted as verbatim calls to undefined JS functions - a SILENT runtime ReferenceError. This case pins their correct lowering. run_test() returns 0 on success, or a nonzero code identifying the first failed check.…
 
 *74 lines · 0 fns*  
 **Deps:** —  
@@ -7449,7 +8545,7 @@ Float formatting drives Zig's Ryu shortest-round-trip printer, which uses 128-bi
 
 ### `tools/c2js_cases/cases/global_ptr_array_index.zig`
 
-Indexing a MUTABLE global array-of-pointers at a runtime index — `tbl[i].*` where `var tbl = [_]*u32{ &a, &b, &c }`. The element-address lowering used to emit a spurious load (`__HEAPU32[tbl_base] + i*4` instead of `tbl_base + i*4`), reading garbage: silent, 0 markers. parseArrTag didn't recognize a pointer element (`arr_N_ptr_*`), so the fixed-array element-address handler bailed and the `&` fallback produced…
+Indexing a MUTABLE global array-of-pointers at a runtime index - `tbl[i].*` where `var tbl = [_]*u32{ &a, &b, &c }`. The element-address lowering used to emit a spurious load (`__HEAPU32[tbl_base] + i*4` instead of `tbl_base + i*4`), reading garbage: silent, 0 markers. parseArrTag didn't recognize a pointer element (`arr_N_ptr_*`), so the fixed-array element-address handler bailed and the `&` fallback produced…
 
 *32 lines · 0 fns*  
 **Deps:** —  
@@ -7471,11 +8567,11 @@ Indexing a MUTABLE global array-of-pointers at a runtime index — `tbl[i].*` wh
 **Deps:** —  
 **Dependents:** —
 
-### `tools/c2js_cases/cases/interop.zig`
+### `tools/c2js_cases/cases/long_byte_constants.zig`
 
-JS interop through the raw kernel (the helper layer is covered by the demo scenario). Exercises property reads, numeric/float args, and a string argument — the string travels through js_str + js_call, the path where the pointer-field load once returned an address instead of the string pointer. Runs against a `fixture` object the test runner installs on globalThis. run_test() returns 0 on success.
+(no description yet — add a //! header or a dict entry)
 
-*71 lines · 9 fns*  
+*35 lines · 2 fns*  
 **Deps:** —  
 **Dependents:** —
 
@@ -7529,7 +8625,7 @@ JS interop through the raw kernel (the helper layer is covered by the demo scena
 
 ### `tools/c2js_cases/cases/mulo_wide.zig`
 
-@mulWithOverflow on integers wide enough that the TRUE product exceeds 2^53. The wrapped (stored) result was computed with a plain JS `*`, which loses low bits once the product passes 2^53, so the truncated value was silently wrong for large 32-bit operands — even though the regular `*%` multiply (Math.imul) was correct. The overflow BIT was fine (a float multiply preserves the product's magnitude). The fix…
+@mulWithOverflow on integers wide enough that the TRUE product exceeds 2^53. The wrapped (stored) result was computed with a plain JS `*`, which loses low bits once the product passes 2^53, so the truncated value was silently wrong for large 32-bit operands - even though the regular `*%` multiply (Math.imul) was correct. The overflow BIT was fine (a float multiply preserves the product's magnitude). The fix…
 
 *59 lines · 0 fns*  
 **Deps:** —  
@@ -7545,7 +8641,7 @@ JS interop through the raw kernel (the helper layer is covered by the demo scena
 
 ### `tools/c2js_cases/cases/mutable_global_reloc.zig`
 
-Relocation of `&otherGlobal` inside a MUTABLE global's static initializer. A `var` global aggregate (struct with pointer fields, a slice, or a bare pointer) initialized with the address of another global must have the pointee's heap offset written into its data image; the transpiler used to leave it null, so the field read back as 0 — a silent wrong result. (Const globals escape this: the C backend…
+Relocation of `&otherGlobal` inside a MUTABLE global's static initializer. A `var` global aggregate (struct with pointer fields, a slice, or a bare pointer) initialized with the address of another global must have the pointee's heap offset written into its data image; the transpiler used to leave it null, so the field read back as 0 - a silent wrong result. (Const globals escape this: the C backend…
 
 *39 lines · 0 fns*  
 **Deps:** —  
@@ -7657,7 +8753,7 @@ Relocation of `&otherGlobal` inside a MUTABLE global's static initializer. A `va
 
 ### `tools/c2js_cases/cases/packed_signed_field.zig`
 
-Signed sub-32-bit packed-struct bitfields (`i7`, `i3`, `i9`, `i13`) read back WITHOUT sign extension — a negative field read as its raw unsigned bits (e.g. i7 -3 -> 125): silent, 0 markers. The C backend extracts the field and calls `zig_wrap_iN(x, UINT8_C(width))`; the transpiler parsed the leading token (`UINT8_C`) of the width arg instead of the unwrapped number, so the width silently defaulted to 32 and the…
+Signed sub-32-bit packed-struct bitfields (`i7`, `i3`, `i9`, `i13`) read back WITHOUT sign extension - a negative field read as its raw unsigned bits (e.g. i7 -3 -> 125): silent, 0 markers. The C backend extracts the field and calls `zig_wrap_iN(x, UINT8_C(width))`; the transpiler parsed the leading token (`UINT8_C`) of the width arg instead of the unwrapped number, so the width silently defaulted to 32 and the…
 
 *39 lines · 0 fns*  
 **Deps:** —  
@@ -7713,7 +8809,7 @@ Packed structs (`packed struct {...}`) lower to a single integer that the C back
 
 ### `tools/c2js_cases/cases/ptr_to_array_field.zig`
 
-Indexing a POINTER-typed struct field — `self.buf[i]` where the field is `*[N]T` (pointer to a fixed array) or `[*]T` (many-pointer). In the Zig C-backend this lowers via a pointer-to-pointer temp: t3 = &self->buf;    // address of the field    (arr_N_T **) t4 = *t3;           // LOAD the stored pointer  (the field's value) t5 = &t4->array[i]; // stride into the pointee The transpiler used to collapse `*t3` to…
+Indexing a POINTER-typed struct field - `self.buf[i]` where the field is `*[N]T` (pointer to a fixed array) or `[*]T` (many-pointer). In the Zig C-backend this lowers via a pointer-to-pointer temp: t3 = &self->buf;    // address of the field    (arr_N_T **) t4 = *t3;           // LOAD the stored pointer  (the field's value) t5 = &t4->array[i]; // stride into the pointee The transpiler used to collapse `*t3` to…
 
 *93 lines · 4 fns*  
 **Deps:** —  
@@ -7769,7 +8865,7 @@ Indexing a POINTER-typed struct field — `self.buf[i]` where the field is `*[N]
 
 ### `tools/c2js_cases/cases/scalar_inits.zig`
 
-Scalar global initializers, including the type-limit macros the C backend emits as bare names (UINT32_MAX, INT32_MIN, UINT64_MAX, …) that used to silently become 0. 32-bit limits are checked exactly. 64-bit globals now round-trip their FULL value when it fits in 2^53 (via the centralized __ld/st64 heap path); a value above 2^53 (UINT64_MAX) cannot be exact in a JS Number, so for that one we only assert the…
+Scalar global initializers, including the type-limit macros the C backend emits as bare names (UINT32_MAX, INT32_MIN, UINT64_MAX, ...) that used to silently become 0. 32-bit limits are checked exactly. 64-bit globals now round-trip their FULL value when it fits in 2^53 (via the centralized __ld/st64 heap path); a value above 2^53 (UINT64_MAX) cannot be exact in a JS Number, so for that one we only assert the…
 
 *33 lines · 0 fns*  
 **Deps:** —  
@@ -7833,7 +8929,7 @@ Scalar global initializers, including the type-limit macros the C backend emits 
 
 ### `tools/c2js_cases/cases/special_floats.zig`
 
-Non-finite float constants. The Zig C backend emits inf/nan NOT through zig_make_fNN(hexfloat, bits) but through zig_make_special_fNN(sign, name, arg, repr) / zig_init_special_fNN(...) — a distinct form. Both the runtime expression path and the static data-image path must map these to JS Infinity / -Infinity / NaN (a bare bit-reconstruction would mis-decode, and a zeroed data slot would read back as 0).…
+Non-finite float constants. The Zig C backend emits inf/nan NOT through zig_make_fNN(hexfloat, bits) but through zig_make_special_fNN(sign, name, arg, repr) / zig_init_special_fNN(...) - a distinct form. Both the runtime expression path and the static data-image path must map these to JS Infinity / -Infinity / NaN (a bare bit-reconstruction would mis-decode, and a zeroed data slot would read back as 0).…
 
 *47 lines · 1 fns*  
 **Deps:** —  
@@ -7849,7 +8945,7 @@ Non-finite float constants. The Zig C backend emits inf/nan NOT through zig_make
 
 ### `tools/c2js_cases/cases/struct_array_field.zig`
 
-Runtime-indexed array-typed struct *fields* (`s.vals[i]` where `vals: [N]T`). In the Zig C-backend such a field is a nested array-wrapper struct (`struct { T array[N]; }`), so the access lowers to `&s.vals.array[i]`. The transpiler must (a) size/align the field as that nested struct — so a field AFTER it lands at the right offset — and (b) resolve the `.array[i]` chain to a strided element address instead of…
+Runtime-indexed array-typed struct *fields* (`s.vals[i]` where `vals: [N]T`). In the Zig C-backend such a field is a nested array-wrapper struct (`struct { T array[N]; }`), so the access lowers to `&s.vals.array[i]`. The transpiler must (a) size/align the field as that nested struct - so a field AFTER it lands at the right offset - and (b) resolve the `.array[i]` chain to a strided element address instead of…
 
 *120 lines · 1 fns*  
 **Deps:** —  
@@ -7961,7 +9057,7 @@ Struct-by-value: passing/returning structs, nested struct fields, and the struct
 
 ### `tools/c2js_cases/cases/wide_int_and_f32.zig`
 
-64-bit integer arithmetic within 2^53 (mul/shl/shr/div/mod — these used to be computed in 32 bits via Math.imul / JS `<<` / `>>`, wrong above 2^32) and f32 single-precision rounding (f32 math used to run at f64 precision, off by an ULP). run_test() returns 0 on success, or a nonzero code for the first failed check. Loop-driven so the ops survive into the C (aren't constant-folded).
+64-bit integer arithmetic within 2^53 (mul/shl/shr/div/mod - these used to be computed in 32 bits via Math.imul / JS `<<` / `>>`, wrong above 2^32) and f32 single-precision rounding (f32 math used to run at f64 precision, off by an ULP). run_test() returns 0 on success, or a nonzero code for the first failed check. Loop-driven so the ops survive into the C (aren't constant-folded).
 
 *61 lines · 0 fns*  
 **Deps:** —  
@@ -7969,7 +9065,7 @@ Struct-by-value: passing/returning structs, nested struct fields, and the struct
 
 ### `tools/c2js_cases/cases/wide_mem.zig`
 
-64-bit integers living IN MEMORY — struct fields, array elements, and values reached through a pointer — round-trip correctly within 2^53. Previously a 64-bit heap load/store touched only the low 32-bit word, so the high bits were silently lost; the centralized __ld/st64 path (two little-endian words, with sign handling) plus a true 8-byte element stride fixed it. run_test() returns 0 on success, else a nonzero…
+64-bit integers living IN MEMORY - struct fields, array elements, and values reached through a pointer - round-trip correctly within 2^53. Previously a 64-bit heap load/store touched only the low 32-bit word, so the high bits were silently lost; the centralized __ld/st64 path (two little-endian words, with sign handling) plus a true 8-byte element stride fixed it. run_test() returns 0 on success, else a nonzero…
 
 *47 lines · 1 fns*  
 **Deps:** —  
@@ -7979,15 +9075,47 @@ Struct-by-value: passing/returning structs, nested struct fields, and the struct
 
 (no description yet — add a //! header or a dict entry)
 
-*73 lines*  
+*126 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/c2js_cases/global_struct_array_member.zig`
 
-Regression: a fixed array of extern structs INSIDE a struct INSIDE a GLOBAL struct — the shape a single consolidated `var g` produces. The C backend nests the element address as `&(&(&((Globals*)&g))->boot)->ring)->array[i]`; before the last-resort lvalue-walker hook this leaked into a JS property access on a heap offset (`(addr).ring` -> undefined). Found on-device in zimr's bridge event ring (t1178). run_test()…
+Regression: a fixed array of extern structs INSIDE a struct INSIDE a GLOBAL struct - the shape a single consolidated `var g` produces. The C backend nests the element address as `&(&(&((Globals*)&g))->boot)->ring)->array[i]`; before the last-resort lvalue-walker hook this leaked into a JS property access on a heap offset (`(addr).ring` -> undefined). Found on-device in zimr's bridge event ring (t1178). run_test()…
 
 *50 lines · 1 fns*  
+**Deps:** —  
+**Dependents:** —
+
+### `tools/c2js_cases/js_cases/interop.fixture.js`
+
+(no description yet — add a //! header or a dict entry)
+
+*9 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `tools/c2js_cases/js_cases/interop.zig`
+
+JS interop through the raw kernel (the helper layer is covered by the demo scenario). Exercises property reads, numeric/float args, and a string argument - the string travels through js_str + js_call, the path where the pointer-field load once returned an address instead of the string pointer. Runs against a `fixture` object the test runner installs on globalThis. run_test() returns 0 on success.
+
+*71 lines · 9 fns*  
+**Deps:** —  
+**Dependents:** —
+
+### `tools/c2js_cases/js_cases/subclass.fixture.js`
+
+(no description yet — add a //! header or a dict entry)
+
+*22 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `tools/c2js_cases/js_cases/subclass.zig`
+
+js_subclass: a class extending another, made by transpiled code - as the audio worklet's program will make its processor. Runs against subclass.fixture.js, which installs `AudioWorkletProcessor` - a base class standing in for the browser's, whose constructor gives each object a `port`, as the real one does - and `registerProcessor`, which, as the browser would, constructs the registered class with options and…
+
+*134 lines · 15 fns*  
 **Deps:** —  
 **Dependents:** —
 
@@ -7999,36 +9127,60 @@ Regression: a fixed array of extern structs INSIDE a struct INSIDE a GLOBAL stru
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
+### `tools/c2js_cases/prelude_fallbacks_test.js`
+
+(no description yet — add a //! header or a dict entry)
+
+*145 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `tools/c2js_cases/run_as_worklet.js`
+
+(no description yet — add a //! header or a dict entry)
+
+*18 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `tools/c2js_cases/run_js_case.js`
+
+(no description yet — add a //! header or a dict entry)
+
+*22 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `tools/cheatsheet.zig`
 
-cheatsheet — pure-Zig generator for zimr's public API cheatsheet.
+Generates the API cheatsheet page from src/'s public API on every build; one of the doc pages, so `publish` carries it (`zig build cheatsheet` builds just it).
 
-*463 lines · 17 fns*  
-**Deps:** `tools/x.zig`  
+*443 lines · 19 fns*  
+**Deps:** `tools/ui.zig`, `...` (module), `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/dag_check.zig`
 
 Import-graph DAG gate (Zig port of the old check_dag.py): tokenizer-based @import scan, Tarjan SCC, no whitelist; also prints the auto-computed DAG layering / reading order.
 
-*113 lines · 2 fns*  
-**Deps:** `tools/import_graph.zig`  
+*123 lines · 2 fns*  
+**Deps:** `tools/import_graph.zig`, `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/dag_png.zig`
 
 Renders the src dependency graph to src/notes/dag.png, drawn by zimr's own software rasterizer (Canvas): boxes area ~ lines-of-code, color = DAG level, edges = transitive reduction, laid out by level with barycenter + relaxation. `zig build dag-png`.
 
-*790 lines · 12 fns*  
-**Deps:** `tools/file_descriptions.zig`, `tools/import_graph.zig`, `zimr` (module), `zm` (module)  
+*1,081 lines · 22 fns*  
+**Deps:** `tools/file_descriptions.zig`, `tools/import_graph.zig`, `cli` (module), `zimr` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/decl_deps.zig`
 
 decl_deps - emit the file-scope dependency graph of a Zig file.
 
-*139 lines · 2 fns*  
-**Deps:** —  
+*149 lines · 2 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** —
 
 ### `tools/decl_reorder.py`
@@ -8039,60 +9191,84 @@ decl_deps - emit the file-scope dependency graph of a Zig file.
 **Deps:** —  
 **Dependents:** —
 
+### `tools/doc_folds.zig`
+
+doc_folds - the tutorials' code is GENERATED from the source, so it can't drift.
+
+*500 lines · 16 fns*  
+**Deps:** `cli` (module)  
+**Dependents:** `build.zig (wired)`
+
 ### `tools/doc_gate.zig`
 
-doc_gate — fail the build if a published page drifts back to its own style.
+doc_gate - the build's check that every published page follows the shared documentation style.
 
-*130 lines · 3 fns*  
-**Deps:** —  
+*299 lines · 7 fns · 3 tests*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/doc_sync.zig`
 
-doc_sync — check that the code shown in a tutorial is the code that actually ships.
+doc_sync - check that the code shown in a tutorial is the code that actually ships.
 
-*210 lines · 5 fns*  
-**Deps:** —  
+*257 lines · 5 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/docfmt.zig`
 
-docfmt — build-time formatter for every published zimr doc page.
+docfmt - build-time formatter for every published zimr doc page.
 
-*620 lines · 17 fns*  
-**Deps:** —  
+*769 lines · 17 fns · 1 tests*  
+**Deps:** `cli` (module)  
+**Dependents:** `build.zig (wired)`, `tools/example_source.zig`
+
+### `tools/example_source.zig`
+
+example_source - one example's source files, highlighted, as the JSON the gallery's code pane shows under the running example.
+
+*226 lines · 5 fns · 3 tests*  
+**Deps:** `tools/docfmt.zig`, `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/file_descriptions.zig`
 
-file_descriptions.zig — curated path -> description data for gen_files_md.zig (the file atlas).  GENERATED from the old scripts/gen_files_md.py dicts; edit descriptions here now. The right long-term home for a description is the file's own //! header — move entries out as files get touched.
+file_descriptions.zig - curated path -> description data for gen_files_md.zig (the file atlas).  GENERATED from the old scripts/gen_files_md.py dicts; edit descriptions here now. The right long-term home for a description is the file's own //! header - move entries out as files get touched.
 
-*626 lines · 0 fns*  
+*620 lines · 0 fns*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`, `tools/dag_png.zig`, `tools/gen_files_md.zig`
 
 ### `tools/files_html.zig`
 
-files_html — render `src/notes/files.md` (the per-file atlas) as a doc page.
+files_html - render `src/notes/files.md` (the per-file atlas) as a doc page.
 
-*311 lines · 6 fns*  
-**Deps:** —  
+*329 lines · 6 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/fs_space.zig`
 
-fs_space — free disk space, on whatever platform this is.
+fs_space - free disk space, on whatever platform this is.
 
 *119 lines · 3 fns*  
 **Deps:** —  
 **Dependents:** `build.zig`, `build.zig (wired)`, `tools/measure.zig`
 
+### `tools/gen_editor_configs.zig`
+
+Editor-config generator (Zig port of build_launch_json.py): reads the wgpu_examples array from build.zig and writes .vscode/.zed launch+task configs. Run via `zig build editor-configs`.
+
+*547 lines · 17 fns*  
+**Deps:** `cli` (module)  
+**Dependents:** `build.zig (wired)`
+
 ### `tools/gen_files_md.zig`
 
 This generator (Zig port of the old gen_files_md.py): walks the tree, computes per-file line/fn/test counts + deps/dependents, and assembles src/notes/files.md from //! headers + the curated table in file_descriptions.zig. Run via `zig build files-md`.
 
-*856 lines · 26 fns*  
-**Deps:** `tools/file_descriptions.zig`, `tools/import_graph.zig`, `X` (module)  
+*878 lines · 26 fns*  
+**Deps:** `tools/file_descriptions.zig`, `tools/import_graph.zig`, `X` (module), `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/gen_rtt_tut.sh`
@@ -8105,20 +9281,20 @@ Regenerates the RTT tutorial HTML from its sources.
 
 ### `tools/gen_shader_externs.zig`
 
-tools/gen_shader_externs.zig — codegen library for the per-shader The binding model this codegen implements (VS uniforms=group 0, samplers=group 1, FS uniforms=group 2) is documented centrally in src/zimr.zig (§3) — the single source of truth for the wgpu stack.
+tools/gen_shader_externs.zig - codegen library for the per-shader The binding model this codegen implements (VS uniforms=group 0, samplers=group 1, FS uniforms=group 2) is documented centrally in src/zimr.zig (section 3) - the single source of truth for the wgpu stack.
 
-*1,497 lines · 4 fns · 3 tests*  
+*1,531 lines · 7 fns · 5 tests*  
 **Deps:** `tools/mandelbrot_fs_io.zig`, `foo_fs.
-    // zig` (module), `gen` (module), `iface` (module), `io` (module), `shader_builtins` (module), `shader_interface` (module)  
-**Dependents:** —
-
-### `tools/gen_vscode.zig`
-
-Editor-config generator (Zig port of build_launch_json.py): reads the wgpu_examples array from build.zig and writes .vscode/.zed launch+task configs. Run via `zig build gen-vscode`.
-
-*430 lines · 14 fns*  
-**Deps:** —  
+    // zig` (module), `gen` (module), `iface` (module), `io` (module), `shader_builtins` (module), `shader_interface` (module), `wgsl_reflect` (module)  
 **Dependents:** `build.zig (wired)`
+
+### `tools/geno_fit.py`
+
+(no description yet — add a //! header or a dict entry)
+
+*575 lines*  
+**Deps:** —  
+**Dependents:** —
 
 ### `tools/gl2wgpu_ui.py`
 
@@ -8132,31 +9308,47 @@ The port-automation script (port_ui lineage): converts GL-era UI example mains t
 
 Shared src module import-graph analysis used by dag_check, gen_files_md and dag_png: tokenizer @import scan, Graph build, Tarjan SCC, longest-path levels, and transitive reduction.
 
-*353 lines · 13 fns*  
+*357 lines · 13 fns*  
 **Deps:** `tools/X.zig`, `tools/import_graph.zig`, `tools/x.zig`, `zm` (module)  
 **Dependents:** `tools/dag_check.zig`, `tools/dag_png.zig`, `tools/gen_files_md.zig`, `tools/import_graph.zig`
 
+### `tools/lafan_db.zig`
+
+lafan_db - LAFAN1 locomotion, out of Daniel Holden's motion-matching database and into BVH.
+
+*513 lines · 16 fns*  
+**Deps:** `cli` (module), `codecs` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`
+
 ### `tools/measure.zig`
 
-measure — run a command and record wall time, peak RSS, cache delta and free-disk delta.
+measure - run a command and record wall time, peak RSS, cache delta and free-disk delta.
 
-*154 lines · 2 fns*  
+*159 lines · 2 fns*  
 **Deps:** `tools/fs_space.zig`  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/mesh_bake.zig`
 
-mesh_bake — bake a DECIMATED glTF proxy into a generated `.zig` const.
+mesh_bake - bake a DECIMATED glTF proxy into a generated `.zig` const.
 
-*426 lines · 6 fns*  
-**Deps:** `codecs` (module), `zm` (module)  
+*444 lines · 6 fns*  
+**Deps:** `cli` (module), `codecs` (module), `zm` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `tools/native_wgsl_check.zig`
+
+native_wgsl_check - the build's check that a native program embeds no WGSL.
+
+*111 lines · 3 fns · 1 tests*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/physics_audit.zig`
 
-physics_audit — headless, deterministic probe of the zimrphysics engine.
+physics_audit - headless, deterministic probe of the zimrphysics engine.
 
-*2,148 lines · 41 fns*  
+*2,154 lines · 41 fns*  
 **Deps:** `zm` (module), `zp` (module)  
 **Dependents:** —
 
@@ -8164,24 +9356,24 @@ physics_audit — headless, deterministic probe of the zimrphysics engine.
 
 Host-only standalone: renders `plot.renderDemoSvg` to stdout (redirect to a .svg file).  Exercises the `plot.zig` rendering core through the `SvgSink`; the in-engine path uses a `ui.DrawList` sink instead. Build (ad-hoc; plot.zig is zm-only): zig build-exe -target x86_64-linux-gnu \ --dep plot -Mroot=tools/plot_svg_demo.zig \ --dep zm   -Mplot=src/plot.zig \ --dep build_options -Mzm=src/zimrmath.zig \…
 
-*27 lines · 1 fns*  
+*28 lines · 1 fns*  
 **Deps:** `plot` (module)  
 **Dependents:** —
 
 ### `tools/rename_local.zig`
 
-rename_local — scoped rename of a function-local variable.
+rename_local - scoped rename of a function-local variable.
 
-*197 lines · 2 fns*  
-**Deps:** —  
+*209 lines · 2 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** —
 
 ### `tools/rename_pub_fn.zig`
 
-rename_pub_fn — rename a top-level function within its defining file.
+rename_pub_fn - rename a top-level function within its defining file.
 
-*116 lines · 1 fns*  
-**Deps:** —  
+*126 lines · 1 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** —
 
 ### `tools/render.Dockerfile`
@@ -8194,42 +9386,42 @@ rename_pub_fn — rename a top-level function within its defining file.
 
 ### `tools/render_server.zig`
 
-============================================================================ render_server.zig — the signaling server, packaged to deploy on a host ============================================================================
+============================================================================ render_server.zig - the signaling server, packaged to deploy on a host ============================================================================
 
-*452 lines · 17 fns*  
-**Deps:** —  
+*393 lines · 14 fns*  
+**Deps:** `cli` (module), `net_core` (module)  
 **Dependents:** —
 
 ### `tools/serve.zig`
 
-serve — zimr's pure-Zig static dev server (ZIG_BRIDGE_PLAN D7 / Phase 5 step 1). Replaces the bun-run webtests/server.ts for the SERVING path: static files with correct MIME types (`.wasm` -> application/wasm in particular) and an HMR client `<script>` injected into every `.html` response so the on-disk files stay clean for static deploys.
+serve - zimr's pure-Zig dev server (ZIG_BRIDGE_PLAN D7 / Phase 5 step 1). Replaces the bun-run webtests/server.ts for the SERVING path: static files with correct MIME types (`.wasm` -> application/wasm in particular), and a live-reload `<script>` injected into every `.html` response, so the files on disk stay clean for static deploys.
 
-*238 lines · 8 fns*  
-**Deps:** —  
+*790 lines · 22 fns · 2 tests*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/signal_server.zig`
 
-============================================================================ signal_server.zig — a tiny WebSocket "signaling" server for zimr multiplayer ============================================================================
+============================================================================ signal_server.zig - a tiny WebSocket "signaling" server for zimr multiplayer ============================================================================
 
-*662 lines · 14 fns*  
-**Deps:** —  
+*513 lines · 11 fns*  
+**Deps:** `cli` (module), `net_core` (module)  
 **Dependents:** —
 
 ### `tools/spv2wgsl.zig`
 
-tools/spv2wgsl.zig — CLI wrapper around `src/spv2wgsl.zig`'s SPIR-V → WGSL translator.  Built once by `tools/build.zig`, invoked from `src/shader_codegen.zig`'s `addShaderWgsl` step as part of the WGSL shader pipeline (parallel to `spirv-cross` in the GLSL pipeline).
+tools/spv2wgsl.zig - CLI wrapper around `src/spv2wgsl.zig`'s SPIR-V -> WGSL translator.  Built once by `tools/build.zig`, invoked from `src/shader_codegen.zig`'s `addShaderWgsl` step as part of the WGSL shader pipeline (parallel to `spirv-cross` in the GLSL pipeline).
 
-*269 lines · 5 fns*  
-**Deps:** `spv2wgsl` (module)  
+*236 lines · 5 fns*  
+**Deps:** `cli` (module), `spv2wgsl` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/spv2wgsl_check.zig`
 
-tools/spv2wgsl_check.zig — pure-Zig differential validator for `spv2wgsl`.  Phase 0.4 of `src/notes/spv2wgsl-rewrite-plan.md`.
+tools/spv2wgsl_check.zig - pure-Zig differential validator for `spv2wgsl`.  Phase 0.4 of `src/notes/spv2wgsl-rewrite-plan.md`.
 
-*924 lines · 19 fns · 3 tests*  
-**Deps:** `spv2wgsl` (module)  
+*933 lines · 19 fns · 3 tests*  
+**Deps:** `cli` (module), `spv2wgsl` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/standalone_cursors.html`
@@ -8258,10 +9450,10 @@ tools/spv2wgsl_check.zig — pure-Zig differential validator for `spv2wgsl`.  Ph
 
 ### `tools/urdf_import.zig`
 
-urdf_import — read a URDF, write a Zig model.
+urdf_import - read a URDF, write a Zig model.
 
-*160 lines · 3 fns*  
-**Deps:** `urdf` (module)  
+*165 lines · 3 fns*  
+**Deps:** `cli` (module), `urdf` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/use-prebuilt-spirv.sh`
@@ -8282,17 +9474,57 @@ Switches the shader pipeline to prebuilt SPIR-V artifacts (skips the compile sta
 
 ### `tools/verify_imports.zig`
 
-verify_imports — pure-Zig replacement for webtests/verify_imports.js.
+verify_imports - pure-Zig replacement for webtests/verify_imports.js.
 
-*193 lines · 6 fns*  
-**Deps:** —  
+*215 lines · 6 fns*  
+**Deps:** `cli` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `tools/vk_abi_check.zig`
+
+VK-ABI-CHECK - every declaration in `src/vk.zig` compared with the official Vulkan headers, at compile time.
+
+*243 lines · 9 fns*  
+**Deps:** `vk` (module), `vk_c` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `tools/vk_gen.zig`
+
+THE VULKAN BINDING GENERATOR - writes the generated part of `src/vk.zig` from the Vulkan registry.
+
+*1,960 lines · 55 fns · 6 tests*  
+**Deps:** `codecs` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `tools/vk_host_test.zig`
+
+THE VULKAN HOST, HEADLESS - the native host driven through `wgpu.zig` exactly as the engine drives it, but without a window, on whatever Vulkan driver the machine has: a GPU, or Mesa's software driver (lavapipe) where there is none. Every run has the Khronos validation layer on, and passes only with no error and no warning from it - a run without the layer fails, since silence from a layer that is not there…
+
+*1,024 lines · 27 fns*  
+**Deps:** `double_it` (module), `sort_min` (module), `zimr` (module), `zm` (module), `zn_binary` (module), `zn_conformance` (module), `zn_matmul` (module), `zn_unary` (module), `zrl_binary` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `tools/vk_shader_probe.zig`
+
+THE SHADER PROBE - every engine shader, exactly as the native host would load it, handed to Vulkan with the Khronos validation layer watching.
+
+*393 lines · 9 fns*  
+**Deps:** `spv_vulkan` (module), `vk` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `tools/win32_abi_check.zig`
+
+WIN32-ABI-CHECK - every structure, constant and function declared in `src/win32.zig` compared with the Windows headers Zig ships (MinGW-w64), at compile time.
+
+*126 lines · 5 fns*  
+**Deps:** `win32` (module), `win32_c` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/zbuild.zig`
 
-zbuild — a build-log distiller for `zig build`.
+zbuild - a build-log distiller for `zig build`.
 
-*390 lines · 8 fns · 5 tests*  
+*653 lines · 12 fns · 7 tests*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -8300,49 +9532,25 @@ zbuild — a build-log distiller for `zig build`.
 
 zimrlint -- zimr's opinionated linter: an extension of the compiler.
 
-*6,809 lines · 139 fns · 52 tests*  
-**Deps:** `tools/codecs.zig`, `tools/foo.zig`, `tools/gpu.zig`, `tools/m.zig`, `tools/types.zig`, `tools/web.zig`, `tools/wgpu.zig`, `tools/x_test.zig`, `tools/zimrmath.zig`, `...` (module), `foo` (module), `zimrmath` (module), `zm` (module)  
-**Dependents:** `build.zig (wired)`
-
-### `tools/zimrnum_parity.zig`
-
-zimrnum_parity.zig - what zimrnum is still missing from znum, mechanically.
-
-*287 lines · 4 fns*  
-**Deps:** —  
+*11,161 lines · 232 fns · 113 tests*  
+**Deps:** `tools/*.zig`, `tools/codecs.zig`, `tools/foo.zig`, `tools/gpu.zig`, `tools/m.zig`, `tools/types.zig`, `tools/web.zig`, `tools/wgpu.zig`, `tools/x.zig`, `tools/x_test.zig`, `tools/zimrmath.zig`, `...` (module), `cli` (module), `foo` (module), `zimrmath` (module), `zm` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/zimrnum_ref.zig`
 
-zimrnum_ref — regenerate the reference table in the zimrnum tutorial from the source.
+zimrnum_ref - regenerate the reference table in the zimrnum tutorial from the source.
 
-*2,133 lines · 12 fns*  
-**Deps:** —  
+*2,462 lines · 13 fns*  
+**Deps:** `cli` (module)  
 **Dependents:** `build.zig (wired)`
 
 ### `tools/zm_namedimports.zig`
 
-zm_namedimports — migrate `zm.X` bodies to named imports (reserved-math P4).
+zm_namedimports - migrate `zm.X` bodies to named imports (reserved-math P4).
 
-*279 lines · 6 fns*  
-**Deps:** `zm` (module)  
+*294 lines · 6 fns*  
+**Deps:** `cli` (module), `zm` (module)  
 **Dependents:** —
-
-### `tools/zspv.zig`
-
-tools/zspv.zig — pure-Zig SPIR-V binary reader/writer.
-
-*577 lines · 10 fns · 5 tests*  
-**Deps:** `tools/zspv_rewrite.zig`  
-**Dependents:** `build.zig (wired)`, `tools/zspv_rewrite.zig`
-
-### `tools/zspv_rewrite.zig`
-
-tools/zspv_rewrite.zig — Phase 2 of the SPIR-V binary tooling.
-
-*1,612 lines · 8 fns · 2 tests*  
-**Deps:** `tools/zspv.zig`  
-**Dependents:** `build.zig (wired)`, `tools/zspv.zig`
 
 
 ## scripts
@@ -8376,11 +9584,99 @@ tools/zspv_rewrite.zig — Phase 2 of the SPIR-V binary tooling.
 
 ### `webtests/c2js_canary.zig`
 
-c2js CANARY — proves the transpiler still lowers Zig's C backend correctly after a compiler bump.
+c2js CANARY - proves the transpiler still lowers Zig's C backend correctly after a compiler bump.
 
-*119 lines · 1 fns*  
+*125 lines · 1 fns*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
+
+### `webtests/external_project/assets/hello.txt`
+
+(no description yet — add a //! header or a dict entry)
+
+*2 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `webtests/external_project/build.zig`
+
+(no description yet — add a //! header or a dict entry)
+
+*54 lines · 1 fns*  
+**Deps:** `zimr` (module)  
+**Dependents:** —
+
+### `webtests/external_project/build.zig.zon`
+
+(no description yet — add a //! header or a dict entry)
+
+*12 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `webtests/external_project/src/basic.zig`
+
+External-check fixture: one app reaching everything a project can wire into it from build.zig. It only has to build; each embed is logged once so the compiler has to produce it.
+
+*62 lines · 3 fns*  
+**Deps:** `bunny_proxy` (module), `shared` (module), `zimr` (module), `zn` (module)  
+**Dependents:** —
+
+### `webtests/external_project/src/shaded.zig`
+
+External-check fixture: typed Zig shaders from the project's src/shaders/. The pipeline compiled them to WGSL; the app embeds that and imports their IO declarations, which is all a real renderer needs from the build.
+
+*56 lines · 3 fns*  
+**Deps:** `webtests/external_project/src/trivial_fs_io.zig`, `webtests/external_project/src/trivial_vs_io.zig`, `shared` (module), `zimr` (module)  
+**Dependents:** —
+
+### `webtests/external_project/src/shaders/trivial_fs.zig`
+
+examples/trivial_fs.zig - minimal fragment shader for the wgpu_bringup's Phase D1 validation.  Reads the interpolated UV from the VS; emits a UV-gradient color (R = U, G = V, B = 0.5).  No Ubo, no Samplers.
+
+*34 lines · 1 fns*  
+**Deps:** `webtests/external_project/src/shaders/trivial_fs_io.zig`, `trivial_fs_externs` (module), `zm` (module)  
+**Dependents:** —
+
+### `webtests/external_project/src/shaders/trivial_fs_io.zig`
+
+examples/trivial_fs_io.zig - schema for the trivial FS used by the wgpu_bringup to validate Phase D1.
+
+*[shader-safe] · 37 lines · 0 fns*  
+**Deps:** `zm` (module)  
+**Dependents:** `webtests/external_project/src/shaders/trivial_fs.zig`
+
+### `webtests/external_project/src/shaders/trivial_vs.zig`
+
+examples/trivial_vs.zig - minimal vertex shader for the wgpu_bringup's Phase D1 validation.  Pass-through: caller pushes clip-space positions; VS forwards them with w=1.  UV varies to the FS unchanged.
+
+*35 lines · 1 fns*  
+**Deps:** `webtests/external_project/src/shaders/trivial_vs_io.zig`, `trivial_vs_externs` (module), `zm` (module)  
+**Dependents:** —
+
+### `webtests/external_project/src/shaders/trivial_vs_io.zig`
+
+examples/trivial_vs_io.zig - schema for the trivial VS used by the wgpu_bringup to validate Phase D1 (loadShader) end-to-end.
+
+*[shader-safe] · 24 lines · 0 fns*  
+**Deps:** `shader_interface` (module), `zm` (module)  
+**Dependents:** `webtests/external_project/src/shaders/trivial_vs.zig`
+
+### `webtests/external_project/src/shared.zig`
+
+Code two apps share, as its own module (`project.addModule`): it gets the imports an app gets.
+
+*12 lines · 1 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `webtests/external_project/src/util.zig`
+
+External-check fixture: a host unit test (`project.addTest`) importing zm and zn.
+
+*16 lines · 1 fns · 1 tests*  
+**Deps:** `zm` (module), `zn` (module)  
+**Dependents:** —
 
 ### `webtests/panic_probe.mjs`
 
@@ -8394,7 +9690,7 @@ c2js CANARY — proves the transpiler still lowers Zig's C backend correctly aft
 
 (no description yet — add a //! header or a dict entry)
 
-*723 lines*  
+*726 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -8402,7 +9698,7 @@ c2js CANARY — proves the transpiler still lowers Zig's C backend correctly aft
 
 Phase 5c dogfood: the spv2wgsl corpus/fixture test LOGIC in Zig, transpiled to JS by our own c2js and run under runner.mjs. Walks .opt.spv inputs, transpiles each through the spv2wgsl wasm, MD5s the WGSL in-Zig (std.crypto), scans for unresolved placeholders, and checks/refreshes tests/fixtures/wgsl_corpus.json. Byte-identical to the deleted .ts.
 
-*737 lines · 43 fns*  
+*761 lines · 43 fns*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
 
@@ -8418,9 +9714,20 @@ Phase 5c dogfood: the spv2wgsl corpus/fixture test LOGIC in Zig, transpiled to J
 
 Phase 5b dogfood: the headless smoke-test LOGIC in Zig, compiled to wasm32 and transpiled to JS by our own c2js, run under webtests/runner.mjs. Loads an example wasm, runs N frames, counts bridge calls per type, prints the PASS line tier-a greps. Byte-identical to the deleted .ts.
 
-*933 lines · 43 fns*  
+*1,087 lines · 45 fns*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
+
+
+## .claude
+
+### `.claude/launch.json`
+
+(no description yet — add a //! header or a dict entry)
+
+*12 lines*  
+**Deps:** —  
+**Dependents:** —
 
 
 ## assets
@@ -8481,6 +9788,94 @@ Phase 5b dogfood: the headless smoke-test LOGIC in Zig, compiled to wasm32 and t
 **Deps:** —  
 **Dependents:** —
 
+### `assets/lafan1/Geno_stance.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*225 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/README.md`
+
+Note: LAFAN1 clips
+
+*47 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/dance1_subject2.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*2,264 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/dance2_subject2.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,424 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/fallAndGetUp2_subject2.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,304 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/pushAndStumble1_subject5.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*416 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/run1_subject2.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,424 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/run1_subject5.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*3,735 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/walk1_subject2.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*1,424 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/walk1_subject2.zclip`
+
+(no description yet — add a //! header or a dict entry)
+
+*705 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `assets/lafan1/walk1_subject5.bvh`
+
+(no description yet — add a //! header or a dict entry)
+
+*3,735 lines*  
+**Deps:** —  
+**Dependents:** —
+
 ### `assets/robots/kuka/link_0.obj`
 
 (no description yet — add a //! header or a dict entry)
@@ -8504,4 +9899,71 @@ Runtime-fetched OGG sample for audio examples.
 *19,742 lines*  
 **Deps:** —  
 **Dependents:** `build.zig (wired)`
+
+
+## template
+
+### `template/.gitignore`
+
+(no description yet — add a //! header or a dict entry)
+
+*7 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `template/README.md`
+
+Note: zimr_template
+
+*228 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `template/build.zig`
+
+(no description yet — add a //! header or a dict entry)
+
+*130 lines · 1 fns*  
+**Deps:** `zimr` (module)  
+**Dependents:** `build.zig (wired)`
+
+### `template/build.zig.zon`
+
+(no description yet — add a //! header or a dict entry)
+
+*42 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `template/public/index.html`
+
+(no description yet — add a //! header or a dict entry)
+
+*137 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `template/public/manifest.json`
+
+(no description yet — add a //! header or a dict entry)
+
+*11 lines*  
+**Deps:** —  
+**Dependents:** —
+
+### `template/src/myproject1.zig`
+
+myproject1 - 2D bouncing balls with an ImGui control panel.
+
+*213 lines · 6 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
+
+### `template/src/myproject2.zig`
+
+myproject2 - 3D rotating cube with an ImGui control panel.
+
+*192 lines · 5 fns*  
+**Deps:** `zimr` (module), `zm` (module)  
+**Dependents:** —
 

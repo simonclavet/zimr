@@ -13,6 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const png_mod = @import("codecs.zig").png;
+// lint:off browser-call: the loaders' fetch status - browser-only until C10
 const fetch_mod = @import("web.zig").fetch;
 
 /// Errors any zimr loader (texture, image, audio/font/model) might

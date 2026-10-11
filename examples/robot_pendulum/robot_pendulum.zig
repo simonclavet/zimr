@@ -47,6 +47,10 @@ const float = zm.float;
 const pi = zm.pi;
 const assertUnreachable = zm.assertUnreachable;
 
+const upper_half: f32 = 0.25;
+
+const lower_half: f32 = 0.20;
+
 /// The model. Two links hanging along -Y, hinged about Z, so the whole thing swings in the
 /// screen plane and can be drawn in 2D without a camera.
 ///
@@ -75,9 +79,6 @@ const Pendulum = rbt.Spec(.{
     },
     .options = .{ .timestep = 1.0 / 240.0 },
 });
-
-const upper_half: f32 = 0.25;
-const lower_half: f32 = 0.20;
 
 /// Metres to pixels. The pendulum is about 0.9 m tall, so this keeps it comfortably on a
 /// phone screen in portrait.

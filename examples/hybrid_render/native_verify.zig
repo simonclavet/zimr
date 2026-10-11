@@ -12,6 +12,8 @@ const std = @import("std");
 const z = @import("zimr");
 const zm = @import("zm");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const sliceAsBytes = std.mem.sliceAsBytes;
 const Vec = zm.Vec;
 const cross = zm.cross;
 const lookAtRh = zm.lookAtRh;
@@ -20,6 +22,7 @@ const perspectiveFovRh = zm.perspectiveFovRh;
 const float = zm.float;
 const normalize = zm.normalize;
 const vec = zm.vec;
+const Mat = zm.Mat;
 
 const quad_vs = z.deferred_shaders.shading_vs;
 const march_fs = z.hybrid_raymarch_shader;
@@ -36,18 +39,18 @@ const quad_indices = [_]u32{ 0, 1, 2, 3, 4, 5 };
 
 pub fn main() !void {
     const gpa: Allocator = std.heap.page_allocator;
-    var io_threaded: std.Io.Threaded = .init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
+    const io: Io = io_threaded.io();
 
     // The example's camera at a frozen, photogenic instant.
     const t: f32 = 1.4;
     const cam_eye: Vec = vec(4.6, 3.2, 4.6);
     const cam_target: Vec = vec(0, 1.0, 0);
     const aspect: f32 = float(img_w) / float(img_h);
-    const view: zm.Mat = lookAtRh(cam_eye, cam_target, vec(0, 1, 0));
-    const proj: zm.Mat = perspectiveFovRh(fov_y, aspect, 0.1, 100.0);
-    const vp: zm.Mat = mulMat(proj, view);
+    const view: Mat = lookAtRh(cam_eye, cam_target, vec(0, 1, 0));
+    const proj: Mat = perspectiveFovRh(fov_y, aspect, 0.1, 100.0);
+    const vp: Mat = mulMat(proj, view);
     const fwd: Vec = normalize(cam_target - cam_eye);
     const right: Vec = normalize(cross(fwd, vec(0, 1, 0)));
     const up: Vec = normalize(cross(right, fwd));
@@ -109,9 +112,9 @@ pub fn main() !void {
         .{ sky, floor_light, floor_dark, blob },
     );
 
-    const png: []u8 = try z.codecs.png.encode(gpa, std.mem.sliceAsBytes(img[0..]), img_w, img_h);
+    const png: []u8 = try z.codecs.png.encode(gpa, sliceAsBytes(img[0..]), img_w, img_h);
     defer gpa.free(png);
-    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "hybrid_verify.png", .data = png });
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = "hybrid_verify.png", .data = png });
     std.debug.print("  wrote hybrid_verify.png\n", .{});
 
     if (sky == 0 or floor_light == 0 or floor_dark == 0 or blob == 0) {

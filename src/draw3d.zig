@@ -7,10 +7,15 @@
 //! (updateModelAnimation/Blend), and CPU material descriptors.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const platform = @import("platform.zig");
 const gpu = @import("gpu.zig");
 const ArrayList = std.ArrayList;
 const bufPrint = std.fmt.bufPrint;
 const Allocator = std.mem.Allocator;
+const eql = std.mem.eql;
+const expectEqualSlices = std.testing.expectEqualSlices;
+const expectError = std.testing.expectError;
 
 /// Flip to `true` to re-enable the on-page `pbr3d.*` diagnostic logs
 /// (glTF load counts, resolved map sizes, per-draw eye position). Off by
@@ -42,6 +47,13 @@ const Vec2 = zm.Vec2;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const Io = std.Io;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
+const zeroes = std.mem.zeroes;
 const perspectiveFovRh = zm.perspectiveFovRh;
 const lookAtRh = zm.lookAtRh;
 const inverse = zm.inverse;
@@ -73,6 +85,7 @@ const WgpuBackend = @import("gpu_iface.zig").WgpuBackend;
 
 const types = @import("types.zig");
 const Color = zm.Color;
+const Camera3D = zm.Camera3D;
 
 // ============================================================================
 // Static unit-cube geometry (CPU-side, expanded per drawCube into the batch)
@@ -193,6 +206,8 @@ pub const MeshGpu = struct {
 /// WGSL for the instanced VS (emitted from `src/shaders/cube3d_instanced_vs.zig`
 /// by the shader_runtime pipeline). Reuses `cube3d_fs` for shading.
 const cube_instanced_vs_wgsl = @embedFile("cube3d_instanced_vs.wgsl");
+
+const Vec = zm.Vec;
 
 /// UBO (group 0): the camera view-projection, mirroring
 /// `cube3d_vs_io.Ubo` field-for-field.
@@ -328,7 +343,7 @@ fn makePipeline(
     depth: wgpu.DepthMode,
     fmt: wgpu.TextureFormat,
 ) !wgpu.RenderPipelineHandle {
-    const state_combo: gpu.StateCombo = gpu.StateCombo.fromParts(
+    const state_combo: gpu.StateCombo = .fromParts(
         topology,
         .alpha,
         depth,
@@ -361,7 +376,7 @@ fn makeInstancedPipeline(
     instance_layout: gpu.VertexBufferLayout,
     fmt: wgpu.TextureFormat,
 ) !wgpu.RenderPipelineHandle {
-    const state_combo: gpu.StateCombo = gpu.StateCombo.fromParts(
+    const state_combo: gpu.StateCombo = .fromParts(
         .triangle_list,
         .alpha,
         .less,
@@ -388,8 +403,6 @@ fn sphereDir(theta: f32, phi: f32) [3]f32 {
     const st: f32 = @sin(theta);
     return .{ st * @cos(phi), @cos(theta), st * @sin(phi) };
 }
-
-const Vec = zm.Vec;
 
 /// World position of a unit direction scaled by `r` and offset to `center`.
 fn radialPos(
@@ -422,7 +435,7 @@ pub fn genMeshCube(
     height: f32,
     length: f32,
 ) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     const verts: []f32 = try gpa.alloc(f32, cube_vertices.len * 3);
     errdefer gpa.free(verts);
     const norms: []f32 = try gpa.alloc(f32, cube_vertices.len * 3);
@@ -500,7 +513,7 @@ fn parametricWeldNormals(
             norms[vi * 3 + 2] += nz;
         }
     }
-    var map: std.AutoHashMap([3]i32, [3]f32) = std.AutoHashMap([3]i32, [3]f32).init(gpa);
+    var map: std.AutoHashMap([3]i32, [3]f32) = .init(gpa);
     defer map.deinit();
     const vcount: usize = verts.len / 3;
     var v: usize = 0;
@@ -538,7 +551,7 @@ pub fn parametricMesh(
     slices: i32,
     stacks: i32,
 ) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     if (slices < 1 or stacks < 1) {
         return mesh;
     }
@@ -814,7 +827,7 @@ pub fn meshMerge(
     a: types.Mesh,
     b: types.Mesh,
 ) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     const avc: usize = @intCast(a.vertexCount);
     const bvc: usize = @intCast(b.vertexCount);
     const atc: usize = @intCast(a.triangleCount);
@@ -941,7 +954,7 @@ pub fn meshComputeAabb(mesh: types.Mesh) [6]f32 {
 
 /// Deep copy (verts/normals/texcoords/indices). Caller owns the result.
 pub fn meshClone(gpa: Allocator, src: types.Mesh) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     const vc: usize = @intCast(src.vertexCount);
     const tc: usize = @intCast(src.triangleCount);
     const verts: []f32 = try gpa.alloc(f32, vc * 3);
@@ -1066,7 +1079,7 @@ pub fn genMeshDisk(
     radius: f32,
     slices: i32,
 ) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     if (slices < 3) {
         return mesh; // fewer than 3 rim points can't even make one triangle
     }
@@ -1147,7 +1160,7 @@ fn flatShadedFromFaces(
     corner_positions: []const f32,
     triangle_indices: []const u16,
 ) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     const triangle_count: usize = triangle_indices.len / 3;
     // "unwelded": three unique vertices per triangle so they can share one normal
     const vertex_count: usize = triangle_count * 3;
@@ -1342,7 +1355,7 @@ pub fn genMeshDodecahedron(gpa: Allocator) Allocator.Error!types.Mesh {
 /// Without it we'd get cracks between triangles and a pile of duplicate verts.
 fn icosphereMidpoint(
     gpa: Allocator,
-    unit_positions: *std.ArrayList([3]f32),
+    unit_positions: *ArrayList([3]f32),
     edge_midpoint_cache: *std.AutoHashMap(u64, u32),
     index_a: u32,
     index_b: u32,
@@ -1383,13 +1396,13 @@ pub fn genMeshIcosphere(
     radius: f32,
     subdivisions: i32,
 ) Allocator.Error!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     const levels: usize = @intCast(clamp(subdivisions, 0, 6));
 
     // working lists that grow as we subdivide
-    var unit_positions: std.ArrayList([3]f32) = .empty;
+    var unit_positions: ArrayList([3]f32) = .empty;
     defer unit_positions.deinit(gpa);
-    var triangles: std.ArrayList([3]u32) = .empty;
+    var triangles: ArrayList([3]u32) = .empty;
     defer triangles.deinit(gpa);
 
     // seed with the icosahedron, each corner normalized straight onto the sphere
@@ -1426,10 +1439,9 @@ pub fn genMeshIcosphere(
     // subdivide: each triangle becomes four, sharing its edge midpoints
     var level: usize = 0;
     while (level < levels) : (level += 1) {
-        var edge_midpoint_cache: std.AutoHashMap(u64, u32) =
-            std.AutoHashMap(u64, u32).init(gpa);
+        var edge_midpoint_cache: std.AutoHashMap(u64, u32) = .init(gpa);
         defer edge_midpoint_cache.deinit();
-        var subdivided: std.ArrayList([3]u32) = .empty;
+        var subdivided: ArrayList([3]u32) = .empty;
         errdefer subdivided.deinit(gpa);
         for (triangles.items) |tri| {
             const a: u32 = tri[0];
@@ -1554,6 +1566,66 @@ fn fractalNoise3(px: f32, py: f32, pz: f32) f32 {
     return total / amplitude_sum; // renormalize back to [0, 1)
 }
 
+const Mesh = types.Mesh;
+
+const allocator_mod = @import("runtime.zig").allocator;
+
+const max_mesh_vertex_buffers: usize = 9; // matches raylib's #define
+
+/// Free GPU + CPU memory for a Mesh. Safe to call even if some buffers
+/// are null (raylib's malloc/free pattern allows that).
+pub fn unloadMesh(
+    gpa: Allocator,
+    mesh: Mesh,
+) void {
+    if (mesh.vboId != null) {
+        allocator_mod.freeMany(gpa, mesh.vboId, max_mesh_vertex_buffers);
+    }
+
+    const vc: usize = @intCast(mesh.vertexCount);
+    const tc: usize = @intCast(mesh.triangleCount);
+
+    // CPU-side per-vertex arrays - lengths derived from vertexCount.
+    if (mesh.vertices != null) {
+        allocator_mod.freeMany(gpa, mesh.vertices, vc * 3);
+    }
+    if (mesh.texcoords != null) {
+        allocator_mod.freeMany(gpa, mesh.texcoords, vc * 2);
+    }
+    if (mesh.normals != null) {
+        allocator_mod.freeMany(gpa, mesh.normals, vc * 3);
+    }
+    if (mesh.colors != null) {
+        allocator_mod.freeMany(gpa, mesh.colors, vc * 4);
+    }
+    if (mesh.tangents != null) {
+        allocator_mod.freeMany(gpa, mesh.tangents, vc * 4);
+    }
+    if (mesh.texcoords2 != null) {
+        allocator_mod.freeMany(gpa, mesh.texcoords2, vc * 2);
+    }
+    if (mesh.indices != null) {
+        allocator_mod.freeMany(gpa, mesh.indices, tc * 3);
+    }
+
+    // Skinning data: 4 weights/indices per vertex.
+    if (mesh.boneWeights != null) {
+        allocator_mod.freeMany(gpa, mesh.boneWeights, vc * 4);
+    }
+    if (mesh.boneIndices != null) {
+        allocator_mod.freeMany(gpa, mesh.boneIndices, vc * 4);
+    }
+
+    // Runtime CPU-side skinned vertex buffers (computed in
+    // updateModelAnimation when GPU skinning is off).
+    if (mesh.animVertices != null) {
+        allocator_mod.freeMany(gpa, mesh.animVertices, vc * 3);
+    }
+    if (mesh.animNormals != null) {
+        allocator_mod.freeMany(gpa, mesh.animNormals, vc * 3);
+    }
+}
+
 /// A procedural rock: take an icosphere and shove each vertex in/out along its
 /// own direction by a fractal-noise amount. THIS is why the icosphere's uniform
 /// triangles matter - displace a UV sphere and the crowded poles stretch into a
@@ -1614,7 +1686,7 @@ pub fn genMeshRock(
 /// faceted, or make a clean base for per-triangle edits. Result has
 /// 3xtriangleCount vertices with sequential indices; source texcoords are kept.
 pub fn meshUnweld(gpa: Allocator, mesh: types.Mesh) Allocator.Error!types.Mesh {
-    var result: types.Mesh = std.mem.zeroes(types.Mesh);
+    var result: types.Mesh = zeroes(types.Mesh);
     if (mesh.vertices == null or mesh.indices == null) {
         return result;
     }
@@ -1695,7 +1767,7 @@ pub fn meshWeld(
     mesh: types.Mesh,
     epsilon: f32,
 ) Allocator.Error!types.Mesh {
-    var result: types.Mesh = std.mem.zeroes(types.Mesh);
+    var result: types.Mesh = zeroes(types.Mesh);
     if (mesh.vertices == null or mesh.indices == null) {
         return result;
     }
@@ -1706,15 +1778,15 @@ pub fn meshWeld(
     // bucket size = epsilon; verts landing in the same bucket get merged
     const inv_epsilon: f32 = if (epsilon > 1e-8) 1.0 / epsilon else 100000.0;
 
-    var bucket_to_survivor: std.AutoHashMap([3]i32, u16) = std.AutoHashMap([3]i32, u16).init(gpa);
+    var bucket_to_survivor: std.AutoHashMap([3]i32, u16) = .init(gpa);
     defer bucket_to_survivor.deinit();
     const old_to_new: []u16 = try gpa.alloc(u16, source_vertex_count);
     defer gpa.free(old_to_new);
-    var kept_positions: std.ArrayList([3]f32) = .empty;
+    var kept_positions: ArrayList([3]f32) = .empty;
     defer kept_positions.deinit(gpa);
-    var kept_normals: std.ArrayList([3]f32) = .empty;
+    var kept_normals: ArrayList([3]f32) = .empty;
     defer kept_normals.deinit(gpa);
-    var kept_texcoords: std.ArrayList([2]f32) = .empty;
+    var kept_texcoords: ArrayList([2]f32) = .empty;
     defer kept_texcoords.deinit(gpa);
 
     var v: usize = 0;
@@ -1796,7 +1868,7 @@ pub fn meshRemoveDegenerate(
     mesh: types.Mesh,
     min_area: f32,
 ) Allocator.Error!types.Mesh {
-    var result: types.Mesh = std.mem.zeroes(types.Mesh);
+    var result: types.Mesh = zeroes(types.Mesh);
     if (mesh.vertices == null or mesh.indices == null) {
         return result;
     }
@@ -1804,7 +1876,7 @@ pub fn meshRemoveDegenerate(
     const triangle_count: usize = @intCast(mesh.triangleCount);
 
     // pass 1: collect the indices of the triangles worth keeping
-    var kept_indices: std.ArrayList(u16) = .empty;
+    var kept_indices: ArrayList(u16) = .empty;
     defer kept_indices.deinit(gpa);
     var t: usize = 0;
     while (t < triangle_count) : (t += 1) {
@@ -1888,7 +1960,7 @@ pub fn genMeshHeightmap(
     heightmap: types.Image,
     size: Vec,
 ) error{ OutOfMemory, UnsupportedImageFormat }!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     const map_x: i32 = heightmap.width;
     const map_z: i32 = heightmap.height;
     if (map_x < 2 or map_z < 2) {
@@ -1992,6 +2064,11 @@ pub fn genMeshHeightmap(
     return mesh;
 }
 
+/// A pixel is "empty" (a maze corridor) when it is pure black.
+inline fn isBlack(c: Color) bool {
+    return c.r == 0 and c.g == 0 and c.b == 0;
+}
+
 /// Cubicmap image -> cube-walled maze mesh (raylib `GenMeshCubicmap`).
 /// Each WHITE pixel becomes a solid 1x1 cube column of height `size.y`;
 /// BLACK pixels are empty (floor). Top and bottom faces are always
@@ -2006,7 +2083,7 @@ pub fn genMeshCubicmap(
     cubicmap: types.Image,
     cube_size: Vec,
 ) error{ OutOfMemory, UnsupportedImageFormat }!types.Mesh {
-    var mesh: types.Mesh = std.mem.zeroes(types.Mesh);
+    var mesh: types.Mesh = zeroes(types.Mesh);
     if (cubicmap.width < 1 or cubicmap.height < 1) {
         return mesh;
     }
@@ -2188,13 +2265,8 @@ pub fn genMeshCubicmap(
     return mesh;
 }
 
-/// A pixel is "empty" (a maze corridor) when it is pure black.
-inline fn isBlack(c: Color) bool {
-    return c.r == 0 and c.g == 0 and c.b == 0;
-}
-
 pub fn loadModelFromMesh(gpa: Allocator, mesh: types.Mesh) Allocator.Error!types.Model {
-    var model: types.Model = std.mem.zeroes(types.Model);
+    var model: types.Model = zeroes(types.Model);
     model.transform = identity();
     const meshes: []types.Mesh = try gpa.alloc(types.Mesh, 1);
     meshes[0] = mesh;
@@ -2283,7 +2355,7 @@ pub const Cube3D = struct {
     tex_buffer: wgpu.BufferHandle,
     tex_batch: ArrayList(TexVertex),
     tex_draws: ArrayList(TexDraw),
-    tex_bind_cache: std.AutoHashMapUnmanaged(u64, wgpu.BindGroupHandle),
+    tex_bind_cache: AutoHashMapUnmanaged(u64, wgpu.BindGroupHandle),
     // Shader-projected decals: a dedicated pipeline that re-draws a receiver
     // mesh (pos-only) and paints a projected decal texture onto the fragments
     // inside the projector box - no mesh clipping, scales to any density.
@@ -2538,7 +2610,7 @@ pub const Cube3D = struct {
             wgpu.createShaderModuleWgsl(device, skybox_vs_wgsl, "skybox_vs");
         const sky_fs: wgpu.ShaderModuleHandle =
             wgpu.createShaderModuleWgsl(device, skybox_fs_wgsl, "skybox_fs");
-        const sky_state: gpu.StateCombo = gpu.StateCombo.fromParts(
+        const sky_state: gpu.StateCombo = .fromParts(
             .triangle_list,
             .none,
             .less,
@@ -3328,7 +3400,7 @@ pub const Cube3D = struct {
             .{ needed, cap_ptr.* },
         );
         const byte_base: u64 = @as(u64, base) * @sizeOf(BatchVertex);
-        wgpu.queueWriteBuffer(ps.queue, buffer_ptr.*, byte_base, std.mem.sliceAsBytes(items[0..n]));
+        wgpu.queueWriteBuffer(ps.queue, buffer_ptr.*, byte_base, sliceAsBytes(items[0..n]));
         WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = pipeline });
         self.bindViewProj(ps);
         render_pass.setVertexBuffer(ps.pass, .{
@@ -3429,7 +3501,7 @@ pub const Cube3D = struct {
         const vbo: wgpu.BufferHandle = wgpu.createBufferInit(
             self.device,
             queue,
-            std.mem.sliceAsBytes(data),
+            sliceAsBytes(data),
             .{ .vertex = true, .copy_dst = true },
             "draw3d_decal_receiver",
         );
@@ -3653,7 +3725,7 @@ pub const Cube3D = struct {
             return;
         }
         const byte_base: u64 = @as(u64, base) * @sizeOf(TexVertex);
-        wgpu.queueWriteBuffer(ps.queue, self.tex_buffer, byte_base, std.mem.sliceAsBytes(self.tex_batch.items[0..n]));
+        wgpu.queueWriteBuffer(ps.queue, self.tex_buffer, byte_base, sliceAsBytes(self.tex_batch.items[0..n]));
         render_pass.setVertexBuffer(ps.pass, .{
             .slot = 0,
             .buffer = self.tex_buffer,
@@ -3985,7 +4057,7 @@ pub const Cube3D = struct {
                     .{ 0, 1, 0 },
             };
         }
-        wgpu.queueWriteBuffer(queue, self.mesh_gpu.items[slot].vbo, 0, std.mem.sliceAsBytes(verts));
+        wgpu.queueWriteBuffer(queue, self.mesh_gpu.items[slot].vbo, 0, sliceAsBytes(verts));
     }
 
     fn ensureMeshGpu(self: *Cube3D, mesh: *types.Mesh, queue: wgpu.QueueHandle) ?u32 {
@@ -4028,11 +4100,11 @@ pub const Cube3D = struct {
         // Nothing about the caller can prevent this: an artist's mesh has whatever triangle
         // count it has. `createBufferInit` sizes the buffer up to the next multiple of four
         // and writes the tail padded, so the alignment stops being anyone's problem.
-        wgpu.queueWriteBuffer(queue, vbo, 0, std.mem.sliceAsBytes(verts));
+        wgpu.queueWriteBuffer(queue, vbo, 0, sliceAsBytes(verts));
         const ibo: wgpu.BufferHandle = wgpu.createBufferInit(
             self.device,
             queue,
-            std.mem.sliceAsBytes(mesh.indices[0..icount]),
+            sliceAsBytes(mesh.indices[0..icount]),
             .{ .index = true, .copy_dst = true },
             "mesh_ibo",
         );
@@ -4086,7 +4158,7 @@ pub const Cube3D = struct {
             insts[i] = .{ .model = @bitCast(transforms[i]), .color = col };
         }
         const byte_base: u64 = @as(u64, base) * @sizeOf(InstanceVertex);
-        wgpu.queueWriteBuffer(ps.queue, self.instance_buffer, byte_base, std.mem.sliceAsBytes(insts));
+        wgpu.queueWriteBuffer(ps.queue, self.instance_buffer, byte_base, sliceAsBytes(insts));
         self.inst_cursor = needed;
 
         WgpuBackend.setPipeline(ps, shader_runtime.RenderPipeline(void, void){ .gpu_handle = self.instanced_pipeline });
@@ -4118,8 +4190,6 @@ pub const Cube3D = struct {
 // CPU pose computation the future wgpu GPU-skinning variant will consume.
 // ===========================================================================
 
-const allocator_mod = @import("runtime.zig").allocator;
-
 // ---- Default material (CPU port, GL-retirement P5) -----------------------
 const Material = types.Material;
 
@@ -4135,10 +4205,10 @@ pub const max_material_maps: usize = 12;
 pub fn loadMaterialDefault(
     gpa: Allocator,
 ) Allocator.Error!Material {
-    var mat: Material = std.mem.zeroes(Material);
+    var mat: Material = zeroes(Material);
     const maps: []MaterialMap = try gpa.alloc(MaterialMap, max_material_maps);
     errdefer gpa.free(maps);
-    @memset(maps, std.mem.zeroes(MaterialMap));
+    @memset(maps, zeroes(MaterialMap));
     mat.maps = maps.ptr;
     // MATERIAL_MAP_DIFFUSE = 0, MATERIAL_MAP_SPECULAR = 1.
     mat.maps[0].color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
@@ -4260,18 +4330,14 @@ inline fn v3Divide(a: Vec, b: Vec) Vec {
 
 const libc = @import("runtime.zig").libc;
 const codecs = @import("codecs.zig");
-const web = @import("web.zig");
 const Ray = zm.Ray;
 const RayCollision = zm.RayCollision;
 const BoundingBox = types.BoundingBox;
-const Mesh = types.Mesh;
 const Image = types.Image;
 const Model = types.Model;
 const MaterialMapIndex = types.MaterialMapIndex;
 const ModelAnimation = types.ModelAnimation;
 const Texture = types.Texture;
-
-const max_mesh_vertex_buffers: usize = 9; // matches raylib's #define
 
 pub const FlatMeshArrays = struct {
     verts: []f32,
@@ -4337,7 +4403,7 @@ fn debugCheckPbrWinding( // lint:off unused-global: debug tooling, kept intentio
 /// example needs it.
 pub fn getScreenToWorldRay(
     position: Vec2,
-    camera: zm.Camera3D,
+    camera: Camera3D,
     width: f32,
     height: f32,
 ) Ray {
@@ -4468,7 +4534,7 @@ pub fn getRayCollisionTriangle(
     p2: Vec,
     p3: Vec,
 ) RayCollision {
-    const EPS: f32 = 0.000001;
+    const epsilon: f32 = 0.000001;
     var collision: RayCollision = .{
         .hit = false,
         .distance = 0,
@@ -4479,7 +4545,7 @@ pub fn getRayCollisionTriangle(
     const edge2: Vec = vec(p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]);
     const p: Vec = v3Cross(ray.direction, edge2);
     const det: f32 = v3Dot(edge1, p);
-    if (det > -EPS and det < EPS) {
+    if (det > -epsilon and det < epsilon) {
         return collision;
     }
     const inv_det: f32 = 1.0 / det;
@@ -4494,7 +4560,7 @@ pub fn getRayCollisionTriangle(
         return collision;
     }
     const t: f32 = v3Dot(edge2, q) * inv_det;
-    if (t > EPS) {
+    if (t > epsilon) {
         collision.hit = true;
         collision.distance = t;
         collision.normal = v3Normalize(v3Cross(edge1, edge2));
@@ -4855,7 +4921,7 @@ pub fn genMeshPoly(
     sides: i32,
     radius: f32,
 ) Allocator.Error!Mesh {
-    var mesh: Mesh = std.mem.zeroes(Mesh);
+    var mesh: Mesh = zeroes(Mesh);
     if (sides < 3) {
         return mesh;
     }
@@ -4930,7 +4996,9 @@ fn materialsFromGltf(
     // errdefer can unwind the right ones.
     var built: usize = 0;
     errdefer {
-        for (out[0..built]) |m| unloadMaterial(gpa, m);
+        for (out[0..built]) |m| {
+            unloadMaterial(gpa, m);
+        }
     }
 
     if (data.materials.len == 0) {
@@ -5029,60 +5097,6 @@ fn meshMaterialIndicesFromGltf(
         }
     }
     return out;
-}
-
-/// Free GPU + CPU memory for a Mesh. Safe to call even if some buffers
-/// are null (raylib's malloc/free pattern allows that).
-pub fn unloadMesh(
-    gpa: Allocator,
-    mesh: Mesh,
-) void {
-    if (mesh.vboId != null) {
-        allocator_mod.freeMany(gpa, mesh.vboId, max_mesh_vertex_buffers);
-    }
-
-    const vc: usize = @intCast(mesh.vertexCount);
-    const tc: usize = @intCast(mesh.triangleCount);
-
-    // CPU-side per-vertex arrays - lengths derived from vertexCount.
-    if (mesh.vertices != null) {
-        allocator_mod.freeMany(gpa, mesh.vertices, vc * 3);
-    }
-    if (mesh.texcoords != null) {
-        allocator_mod.freeMany(gpa, mesh.texcoords, vc * 2);
-    }
-    if (mesh.normals != null) {
-        allocator_mod.freeMany(gpa, mesh.normals, vc * 3);
-    }
-    if (mesh.colors != null) {
-        allocator_mod.freeMany(gpa, mesh.colors, vc * 4);
-    }
-    if (mesh.tangents != null) {
-        allocator_mod.freeMany(gpa, mesh.tangents, vc * 4);
-    }
-    if (mesh.texcoords2 != null) {
-        allocator_mod.freeMany(gpa, mesh.texcoords2, vc * 2);
-    }
-    if (mesh.indices != null) {
-        allocator_mod.freeMany(gpa, mesh.indices, tc * 3);
-    }
-
-    // Skinning data: 4 weights/indices per vertex.
-    if (mesh.boneWeights != null) {
-        allocator_mod.freeMany(gpa, mesh.boneWeights, vc * 4);
-    }
-    if (mesh.boneIndices != null) {
-        allocator_mod.freeMany(gpa, mesh.boneIndices, vc * 4);
-    }
-
-    // Runtime CPU-side skinned vertex buffers (computed in
-    // updateModelAnimation when GPU skinning is off).
-    if (mesh.animVertices != null) {
-        allocator_mod.freeMany(gpa, mesh.animVertices, vc * 3);
-    }
-    if (mesh.animNormals != null) {
-        allocator_mod.freeMany(gpa, mesh.animNormals, vc * 3);
-    }
 }
 
 /// Compute per-vertex tangent vectors from `mesh.vertices`,
@@ -5245,7 +5259,6 @@ pub fn loadModelFromMemory(
     bytes: []const u8,
 ) errors.LoadError!Model {
     const codecs_mod = codecs;
-    const dom = web.dom;
     var doc: codecs_mod.gltf.Data = codecs_mod.gltf.parse(gpa, bytes) catch |err| {
         var buf: [192]u8 = undefined;
         const msg: []const u8 = bufPrint(
@@ -5260,7 +5273,7 @@ pub fn loadModelFromMemory(
                 if (bytes.len > 3) bytes[3] else '?',
             },
         ) catch "[gltf] parse failed (fmt err)";
-        dom.log(.err, msg);
+        platform.current.log(.err, msg);
         return errors.LoadError.GltfParseFailed;
     };
     defer doc.deinit();
@@ -5272,11 +5285,13 @@ pub fn loadModelFromMemory(
             "[gltf] meshesFromGltf failed: {s} (meshes={d}, accessors={d}, buffers={d})",
             .{ @errorName(err), doc.meshes.len, doc.accessors.len, doc.buffers.len },
         ) catch "[gltf] meshesFromGltf failed (fmt err)";
-        dom.log(.err, msg);
+        platform.current.log(.err, msg);
         return errors.LoadError.GltfParseFailed;
     };
     errdefer {
-        for (meshes) |m| unloadMesh(gpa, m);
+        for (meshes) |m| {
+            unloadMesh(gpa, m);
+        }
         gpa.free(meshes);
     }
 
@@ -5300,7 +5315,7 @@ pub fn loadModelFromMemory(
                     "[gltf] genMeshTangents failed: {s} (vc={d})",
                     .{ @errorName(err), m.vertexCount },
                 ) catch "[gltf] genMeshTangents failed (fmt err)";
-                dom.log(.warn, msg);
+                platform.current.log(.warn, msg);
             };
         }
     }
@@ -5314,7 +5329,9 @@ pub fn loadModelFromMemory(
     // to a single default material if the glTF has none.
     const mats: []Material = try materialsFromGltf(gpa, doc);
     errdefer {
-        for (mats) |mat| unloadMaterial(gpa, mat);
+        for (mats) |mat| {
+            unloadMaterial(gpa, mat);
+        }
         gpa.free(mats);
     }
 
@@ -5322,7 +5339,7 @@ pub fn loadModelFromMemory(
     const mm: []i32 = try meshMaterialIndicesFromGltf(gpa, doc);
     errdefer gpa.free(mm);
 
-    var model: Model = std.mem.zeroes(Model);
+    var model: Model = zeroes(Model);
     model.transform = identity();
     model.meshes = meshes.ptr;
     model.meshCount = @intCast(meshes.len);
@@ -5468,7 +5485,7 @@ pub fn loadModelAnimations(
     }
 
     for (doc.animations, 0..) |gltf_anim, i| {
-        var anim: ModelAnimation = std.mem.zeroes(ModelAnimation);
+        var anim: ModelAnimation = zeroes(ModelAnimation);
 
         // Copy name into the fixed-size [32]u8 (null-terminated).
         if (gltf_anim.name) |nm| {
@@ -6011,11 +6028,7 @@ pub const pbr3d = struct {
         if (comptime !log_pbr3d) {
             return;
         }
-        if (@import("builtin").target.cpu.arch.isWasm()) {
-            var buf: [256]u8 = undefined;
-            const msg: []u8 = bufPrint(&buf, fmt, args) catch return;
-            dom.js_log(1, msg.ptr, msg.len);
-        }
+        std.log.scoped(.pbr3d).info(fmt, args);
     }
 
     // The PBR shader_runtime caps these light counts; the host Ubo mirrors the sizes.
@@ -6157,13 +6170,15 @@ pub const pbr3d = struct {
     /// software-renderer half of a side-by-side gets byte-identical geometry to
     /// what `loadGltf` uploads.  Caller owns the result (`CpuMesh.deinit`).
     pub fn buildCpuMesh(gpa: Allocator, document: codecs.gltf.Data) !CpuMesh {
-        // KNOWN LEAK (documented in the module doc): the attribute arrays inside
-        // `meshes` are allocated by meshesFromGltf and the matching free
-        // (`unloadMesh`) lives in the GL-only drawing.zig.  One-shot init-time
-        // cost; the audit_cleanup_notes.md entry tracks giving codecs.gltf its
-        // own symmetric free.
+        // The glTF's meshes are read into the CPU mesh below, then released: each mesh's attribute arrays
+        // (`unloadMesh`), and the list.
         const meshes: []types.Mesh = try codecs.gltf.meshesFromGltf(gpa, document);
-        defer gpa.free(meshes);
+        defer {
+            for (meshes) |mesh| {
+                unloadMesh(gpa, mesh);
+            }
+            gpa.free(meshes);
+        }
         if (meshes.len == 0) {
             return error.NoMesh;
         }
@@ -6498,7 +6513,7 @@ pub const pbr3d = struct {
             // doesn't match the layout" - this names the cell in the console at
             // pipeline creation instead of leaving it to Dawn's cascade. Log-only
             // (never crashes) and compiled out of release builds.
-            if (@import("builtin").mode == .debug) {
+            if (builtin.mode == .debug) {
                 if (shader_introspect.layoutWgslMismatch(gpa, PbrFsIo, opts.fs_wgsl) catch null) |mm| {
                     std.log.warn(
                         "pbr3d host/WGSL layout drift: @group({d}) @binding({d}) '{s}' is {s} " ++
@@ -6510,7 +6525,7 @@ pub const pbr3d = struct {
             self.vs_module = wgpu.createShaderModuleWgsl(device, opts.vs_wgsl, "pbr3d_vs");
             self.fs_module = wgpu.createShaderModuleWgsl(device, opts.fs_wgsl, "pbr3d_fs");
 
-            const pipeline_state: gpu.StateCombo = gpu.StateCombo.fromParts(
+            const pipeline_state: gpu.StateCombo = .fromParts(
                 .triangle_list,
                 .alpha,
                 .less,
@@ -6566,7 +6581,7 @@ pub const pbr3d = struct {
                 .usage = .{ .vertex = true, .copy_dst = true },
                 .label = "pbr3d_vbo",
             });
-            wgpu.queueWriteBuffer(self.queue, vertex_buffer, 0, std.mem.sliceAsBytes(vertices));
+            wgpu.queueWriteBuffer(self.queue, vertex_buffer, 0, sliceAsBytes(vertices));
 
             // Same alignment rule as `ensureMeshGpu`: an odd index count is not a multiple
             // of four bytes. `createBufferInit` pads, so a glTF with an odd triangle count
@@ -6575,7 +6590,7 @@ pub const pbr3d = struct {
             const index_buffer: wgpu.BufferHandle = wgpu.createBufferInit(
                 self.device,
                 self.queue,
-                std.mem.sliceAsBytes(indices),
+                sliceAsBytes(indices),
                 .{ .index = true, .copy_dst = true },
                 "pbr3d_ibo",
             );
@@ -6794,7 +6809,7 @@ pub const pbr3d = struct {
                 .usage = .{ .vertex = true, .copy_dst = true },
                 .label = "pbr3d_obj_vbo",
             });
-            wgpu.queueWriteBuffer(self.queue, vertex_buffer, 0, std.mem.sliceAsBytes(vertices));
+            wgpu.queueWriteBuffer(self.queue, vertex_buffer, 0, sliceAsBytes(vertices));
 
             // WebGPU requires writeBuffer sizes to be a multiple of 4. u16
             // indices hit that only when the count is even; an odd count (e.g.
@@ -6808,7 +6823,7 @@ pub const pbr3d = struct {
             const index_buffer: wgpu.BufferHandle = wgpu.createBufferInit(
                 self.device,
                 self.queue,
-                std.mem.sliceAsBytes(indices),
+                sliceAsBytes(indices),
                 .{ .index = true, .copy_dst = true },
                 "pbr3d_obj_ibo",
             );
@@ -6889,11 +6904,11 @@ pub const pbr3d = struct {
             var view_value: Mat = camera.view;
             var projection_value: Mat = camera.proj;
             var identity_value: Mat = identity();
-            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][0], 0, std.mem.asBytes(&model_value));
-            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][1], 0, std.mem.asBytes(&view_value));
-            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][2], 0, std.mem.asBytes(&projection_value));
-            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][3], 0, std.mem.asBytes(&model_value));
-            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][4], 0, std.mem.asBytes(&identity_value));
+            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][0], 0, asBytes(&model_value));
+            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][1], 0, asBytes(&view_value));
+            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][2], 0, asBytes(&projection_value));
+            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][3], 0, asBytes(&model_value));
+            wgpu.queueWriteBuffer(frame.queue, self.vs_uniform_buffers[slot][4], 0, asBytes(&identity_value));
 
             // group 2: scene lights (this frame) + the model's material factors.
             const ubo: FsUbo = self.buildUbo(model.material);
@@ -7226,7 +7241,7 @@ pub const pbr3d = struct {
 
         // png.Image and jpeg.Image are distinct types with identical fields,
         // so each branch hands its pixels off on its own.
-        const is_png: bool = if (img.mime_type) |mime| std.mem.indexOf(u8, mime, "png") != null else false;
+        const is_png: bool = if (img.mime_type) |mime| indexOf(u8, mime, "png") != null else false;
         if (is_png) {
             const decoded: codecs.png.Image = codecs.png.decode(gpa, image_bytes) catch return null;
             return .{ .pixels = decoded.pixels, .width = decoded.width, .height = decoded.height };
@@ -7493,7 +7508,7 @@ pub const draw_points = struct {
     const PointsSchema = struct {
         pub const Ubo = Uniforms;
         pub const Storage = struct {
-            positions: shader_iface.StorageBuf(zm.Vec2, .read),
+            positions: shader_iface.StorageBuf(Vec2, .read),
         };
     };
 
@@ -7536,7 +7551,7 @@ pub const draw_points = struct {
 
             const pl: wgpu.PipelineLayoutHandle =
                 wgpu.createPipelineLayout(dev, &.{resources.bg_layouts[0]}, "draw_points_pl");
-            const state: gpu.StateCombo = gpu.StateCombo.fromParts(
+            const state: gpu.StateCombo = .fromParts(
                 .triangle_list,
                 .alpha,
                 .none,
@@ -7658,8 +7673,8 @@ pub const draw_points = struct {
     const FluidSchema = struct {
         pub const Ubo = FluidUniforms;
         pub const Storage = struct {
-            positions: shader_iface.StorageBuf(zm.Vec2, .read),
-            density: shader_iface.StorageBuf(zm.Vec2, .read),
+            positions: shader_iface.StorageBuf(Vec2, .read),
+            density: shader_iface.StorageBuf(Vec2, .read),
         };
     };
 
@@ -7725,7 +7740,7 @@ pub const draw_points = struct {
             // launcher child whose host frame is depth-enabled), or none when it
             // doesn't. A mismatch here invalidates the pass (black-screen).
             const depth_mode: wgpu.DepthMode = if (depth_format == .undefined_) .none else .always;
-            const state: gpu.StateCombo = gpu.StateCombo.fromParts(
+            const state: gpu.StateCombo = .fromParts(
                 .triangle_list,
                 .alpha,
                 depth_mode,
@@ -7833,7 +7848,7 @@ pub const draw_points = struct {
 };
 
 test "getScreenToWorldRay: center pixel looks down the camera axis" {
-    const cam: zm.Camera3D = .{
+    const cam: Camera3D = .{
         .position = .{ 0, 2, 5, 0 },
         .target = .{ 0, 0, 0, 0 },
         .up = .{ 0, 1, 0, 0 },
@@ -7851,7 +7866,7 @@ test "getScreenToWorldRay: center pixel looks down the camera axis" {
 }
 
 test "getScreenToWorldRay: corner pixel diverges from the axis" {
-    const cam: zm.Camera3D = .{
+    const cam: Camera3D = .{
         .position = .{ 0, 0, 5, 0 },
         .target = .{ 0, 0, 0, 0 },
         .up = .{ 0, 1, 0, 0 },
@@ -8030,7 +8045,7 @@ pub fn loadBvhSkeletalClip(
     // one name. Reported per pair so the message names the joints, not just the count.
     for (0..bone_count) |a| {
         for (a + 1..bone_count) |b| {
-            if (std.mem.eql(u8, &bones[a].name, &bones[b].name)) {
+            if (eql(u8, &bones[a].name, &bones[b].name)) {
                 std.log.warn(
                     "bvh: joints {d} (\"{s}\") and {d} (\"{s}\") share the truncated name \"{s}\" — " ++
                         "name-based lookup cannot tell them apart",
@@ -8224,19 +8239,19 @@ pub fn bvhForwardKinematics(
 }
 
 const bvh_synth = @import("bvh_synth.zig");
-const d3_expect = std.testing.expect;
-const d3_expectEqual = std.testing.expectEqual;
-const d3_expectError = std.testing.expectError;
-const d3_expectApproxEqAbs = std.testing.expectApproxEqAbs;
-const d3_expectEqualSlices = std.testing.expectEqualSlices;
+const d3_expect = expect;
+const d3_expectEqual = expectEqual;
+const d3_expectError = expectError;
+const d3_expectApproxEqAbs = expectApproxEqAbs;
+const d3_expectEqualSlices = expectEqualSlices;
 
 test "bvh clip: a real capture keeps its golden FK values through the conversion" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const path: []const u8 = "assets/0005_2FeetJump001.bvh";
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+    var fh: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.warn("(fixture {s} not present; skipping)", .{path});
             return;
@@ -8244,7 +8259,7 @@ test "bvh clip: a real capture keeps its golden FK values through the conversion
         else => return err,
     };
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -8271,10 +8286,10 @@ test "bvh clip: a real capture keeps its golden FK values through the conversion
     var head: usize = 0;
     for (0..n) |i| {
         const nm: []const u8 = clip.boneName(i);
-        if (std.mem.eql(u8, nm, "Hips")) {
+        if (eql(u8, nm, "Hips")) {
             hips = i;
         }
-        if (std.mem.eql(u8, nm, "Head")) {
+        if (eql(u8, nm, "Head")) {
             head = i;
         }
     }
@@ -8285,7 +8300,7 @@ test "bvh clip: a real capture keeps its golden FK values through the conversion
 }
 
 test "bvh clip: end sites survive as flags, and the bind pose is the offsets" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const src: []u8 = try bvh_synth.generate(gpa, .{
         .joint_count = 3,
         .frame_count = 2,
@@ -8316,7 +8331,7 @@ test "bvh clip: end sites survive as flags, and the bind pose is the offsets" {
 }
 
 test "bvh clip: a long joint name is truncated to 31 bytes plus NUL" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // 24-byte prefix + "Joint0" overflows BoneInfo.name's 32 bytes, the Mixamo case.
     const src: []u8 = try bvh_synth.generate(gpa, .{
         .joint_count = 2,
@@ -8512,6 +8527,89 @@ pub const LoadFbxModelOptions = struct {
     take: ?usize = null,
 };
 
+/// Copy a parsed mesh into engine-owned arrays that `unloadMesh` can free.
+///
+/// * `Mesh.indices` IS 16-BIT. Welding is what keeps a real character under 65535 - an
+/// unwelded `Beta_Surface` would be 84816 corner-vertices - but a big enough mesh still will
+/// not fit, and silently wrapping the indices scrambles the geometry instead of failing. So the
+/// bound is checked here, where the narrowing actually happens.
+fn fbxMeshToEngine(
+    gpa: Allocator,
+    source: codecs.fbx.MeshData,
+    skin: codecs.fbx.SkinData,
+    node_to_world: [16]f64,
+) errors.LoadError!Mesh {
+    const vertex_count: usize = source.vertexCount();
+    if (vertex_count > maxInt(u16)) {
+        return errors.LoadError.InvalidDimensions;
+    }
+
+    var mesh: Mesh = zeroes(Mesh);
+    mesh.vertexCount = @intCast(vertex_count);
+    mesh.triangleCount = @intCast(source.triangleCount());
+
+    const vertices: []f32 = gpa.alloc(f32, vertex_count * 3) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(vertices);
+    for (0..vertex_count) |v| {
+        const moved: [3]f32 = codecs.fbx.transformPoint(node_to_world, .{
+            source.positions[v * 3 + 0],
+            source.positions[v * 3 + 1],
+            source.positions[v * 3 + 2],
+        });
+        vertices[v * 3 + 0] = moved[0];
+        vertices[v * 3 + 1] = moved[1];
+        vertices[v * 3 + 2] = moved[2];
+    }
+    mesh.vertices = vertices.ptr;
+
+    const normals: []f32 = gpa.alloc(f32, vertex_count * 3) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(normals);
+    for (0..vertex_count) |v| {
+        // Directions take the rotation/scale but not the translation.
+        const turned: [3]f32 = codecs.fbx.transformDirection(node_to_world, .{
+            source.normals[v * 3 + 0],
+            source.normals[v * 3 + 1],
+            source.normals[v * 3 + 2],
+        });
+        const len: f32 = @sqrt(turned[0] * turned[0] + turned[1] * turned[1] + turned[2] * turned[2]);
+        const inv_len: f32 = if (len > 0) 1.0 / len else 0;
+        normals[v * 3 + 0] = turned[0] * inv_len;
+        normals[v * 3 + 1] = turned[1] * inv_len;
+        normals[v * 3 + 2] = turned[2] * inv_len;
+    }
+    mesh.normals = normals.ptr;
+
+    const texcoords: []f32 = gpa.alloc(f32, vertex_count * 2) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(texcoords);
+    @memcpy(texcoords, source.uvs);
+    mesh.texcoords = texcoords.ptr;
+
+    const indices: []u16 = gpa.alloc(u16, source.indices.len) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(indices);
+    for (source.indices, 0..) |wide, i| {
+        indices[i] = @intCast(wide);
+    }
+    mesh.indices = indices.ptr;
+
+    const bone_ids: []u8 = gpa.alloc(u8, vertex_count * 4) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bone_ids);
+    @memcpy(bone_ids, skin.bone_indices);
+    mesh.boneIndices = bone_ids.ptr;
+
+    const bone_weights: []f32 = gpa.alloc(f32, vertex_count * 4) catch
+        return errors.LoadError.OutOfMemory;
+    errdefer gpa.free(bone_weights);
+    @memcpy(bone_weights, skin.bone_weights);
+    mesh.boneWeights = bone_weights.ptr;
+
+    return mesh;
+}
+
 /// Load geometry + skin + skeleton + animation from FBX bytes.
 ///
 /// Returns `errors.LoadError.InvalidDimensions` when the file has no skeleton - a static mesh,
@@ -8549,7 +8647,7 @@ pub fn loadFbxModel(
     // has two (`Beta_Surface` and `Beta_Joints`); Geno has one.
     var mesh_count: usize = 0;
     for (scene.objects) |o| {
-        if (o.kind == .geometry and std.mem.eql(u8, o.sub_class, "Mesh")) {
+        if (o.kind == .geometry and eql(u8, o.sub_class, "Mesh")) {
             mesh_count += 1;
         }
     }
@@ -8560,7 +8658,7 @@ pub fn loadFbxModel(
     const meshes: []Mesh = gpa.alloc(Mesh, mesh_count) catch return errors.LoadError.OutOfMemory;
     errdefer gpa.free(meshes);
     for (meshes) |*m| {
-        m.* = std.mem.zeroes(Mesh);
+        m.* = zeroes(Mesh);
     }
     var built: usize = 0;
     errdefer for (meshes[0..built]) |m| {
@@ -8622,7 +8720,7 @@ pub fn loadFbxModel(
     }
 
     for (scene.objects) |geometry| {
-        if (geometry.kind != .geometry or !std.mem.eql(u8, geometry.sub_class, "Mesh")) {
+        if (geometry.kind != .geometry or !eql(u8, geometry.sub_class, "Mesh")) {
             continue;
         }
         var source: codecs.fbx.MeshData = codecs.fbx.meshOf(gpa, &scene, geometry) catch
@@ -8861,100 +8959,17 @@ pub fn skinMeshCpu(
         out_normals[v * 3 + 1] = n_out[1];
         out_normals[v * 3 + 2] = n_out[2];
     }
-    updateMeshBuffer(mesh, 0, std.mem.sliceAsBytes(out), 0);
-    updateMeshBuffer(mesh, 2, std.mem.sliceAsBytes(out_normals), 0);
-}
-
-/// Copy a parsed mesh into engine-owned arrays that `unloadMesh` can free.
-///
-/// * `Mesh.indices` IS 16-BIT. Welding is what keeps a real character under 65535 - an
-/// unwelded `Beta_Surface` would be 84816 corner-vertices - but a big enough mesh still will
-/// not fit, and silently wrapping the indices scrambles the geometry instead of failing. So the
-/// bound is checked here, where the narrowing actually happens.
-fn fbxMeshToEngine(
-    gpa: Allocator,
-    source: codecs.fbx.MeshData,
-    skin: codecs.fbx.SkinData,
-    node_to_world: [16]f64,
-) errors.LoadError!Mesh {
-    const vertex_count: usize = source.vertexCount();
-    if (vertex_count > maxInt(u16)) {
-        return errors.LoadError.InvalidDimensions;
-    }
-
-    var mesh: Mesh = std.mem.zeroes(Mesh);
-    mesh.vertexCount = @intCast(vertex_count);
-    mesh.triangleCount = @intCast(source.triangleCount());
-
-    const vertices: []f32 = gpa.alloc(f32, vertex_count * 3) catch
-        return errors.LoadError.OutOfMemory;
-    errdefer gpa.free(vertices);
-    for (0..vertex_count) |v| {
-        const moved: [3]f32 = codecs.fbx.transformPoint(node_to_world, .{
-            source.positions[v * 3 + 0],
-            source.positions[v * 3 + 1],
-            source.positions[v * 3 + 2],
-        });
-        vertices[v * 3 + 0] = moved[0];
-        vertices[v * 3 + 1] = moved[1];
-        vertices[v * 3 + 2] = moved[2];
-    }
-    mesh.vertices = vertices.ptr;
-
-    const normals: []f32 = gpa.alloc(f32, vertex_count * 3) catch
-        return errors.LoadError.OutOfMemory;
-    errdefer gpa.free(normals);
-    for (0..vertex_count) |v| {
-        // Directions take the rotation/scale but not the translation.
-        const turned: [3]f32 = codecs.fbx.transformDirection(node_to_world, .{
-            source.normals[v * 3 + 0],
-            source.normals[v * 3 + 1],
-            source.normals[v * 3 + 2],
-        });
-        const len: f32 = @sqrt(turned[0] * turned[0] + turned[1] * turned[1] + turned[2] * turned[2]);
-        const inv_len: f32 = if (len > 0) 1.0 / len else 0;
-        normals[v * 3 + 0] = turned[0] * inv_len;
-        normals[v * 3 + 1] = turned[1] * inv_len;
-        normals[v * 3 + 2] = turned[2] * inv_len;
-    }
-    mesh.normals = normals.ptr;
-
-    const texcoords: []f32 = gpa.alloc(f32, vertex_count * 2) catch
-        return errors.LoadError.OutOfMemory;
-    errdefer gpa.free(texcoords);
-    @memcpy(texcoords, source.uvs);
-    mesh.texcoords = texcoords.ptr;
-
-    const indices: []u16 = gpa.alloc(u16, source.indices.len) catch
-        return errors.LoadError.OutOfMemory;
-    errdefer gpa.free(indices);
-    for (source.indices, 0..) |wide, i| {
-        indices[i] = @intCast(wide);
-    }
-    mesh.indices = indices.ptr;
-
-    const bone_ids: []u8 = gpa.alloc(u8, vertex_count * 4) catch
-        return errors.LoadError.OutOfMemory;
-    errdefer gpa.free(bone_ids);
-    @memcpy(bone_ids, skin.bone_indices);
-    mesh.boneIndices = bone_ids.ptr;
-
-    const bone_weights: []f32 = gpa.alloc(f32, vertex_count * 4) catch
-        return errors.LoadError.OutOfMemory;
-    errdefer gpa.free(bone_weights);
-    @memcpy(bone_weights, skin.bone_weights);
-    mesh.boneWeights = bone_weights.ptr;
-
-    return mesh;
+    updateMeshBuffer(mesh, 0, sliceAsBytes(out), 0);
+    updateMeshBuffer(mesh, 2, sliceAsBytes(out_normals), 0);
 }
 
 test "fbx model: Geno loads as a skinned Model in one call" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const path: []const u8 = "assets/Geno.fbx";
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+    var fh: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.warn("(fixture {s} not present; skipping)", .{path});
             return;
@@ -8962,7 +8977,7 @@ test "fbx model: Geno loads as a skinned Model in one call" {
         else => return err,
     };
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -9015,21 +9030,21 @@ test "fbx model: files that are not characters are refused, not half-loaded" {
     if (true) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     // * An optical-marker capture and a blend-shape rig are perfectly valid FBX files that
     // are simply not characters. Reporting that beats rendering one bone and calling it a
     // skeleton - which is what an earlier joint heuristic did for both of these.
     for ([_][]const u8{ "assets/subject2.fbx", "assets/metahuman.fbx" }) |path| {
-        var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        var fh: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => continue,
             else => return err,
         };
         defer fh.close(io);
-        const st: std.Io.File.Stat = try fh.stat(io);
+        const st: Io.File.Stat = try fh.stat(io);
         const bytes: []u8 = try gpa.alloc(u8, st.size);
         defer gpa.free(bytes);
         _ = try fh.readPositionalAll(io, bytes, 0);
@@ -9038,12 +9053,12 @@ test "fbx model: files that are not characters are refused, not half-loaded" {
 }
 
 test "fbx model: the skinned mesh lands on the skeleton, not around it" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const path: []const u8 = "assets/Geno.fbx";
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+    var fh: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.warn("(fixture {s} not present; skipping)", .{path});
             return;
@@ -9051,7 +9066,7 @@ test "fbx model: the skinned mesh lands on the skeleton, not around it" {
         else => return err,
     };
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -9158,17 +9173,17 @@ test "zm: matFromQuat and rotate agree about direction" {
 }
 
 test "fbx model: the character skinned by a FOREIGN clip stays the size of that clip's skeleton" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch |err| switch (err) {
+    var fh: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -9176,12 +9191,12 @@ test "fbx model: the character skinned by a FOREIGN clip stays the size of that 
     defer unloadFbxModel(gpa, loaded);
 
     const dance_path: []const u8 = "examples/geno_dance/dance1_20s.bvh";
-    var dh: std.Io.File = std.Io.Dir.cwd().openFile(io, dance_path, .{}) catch |err| switch (err) {
+    var dh: Io.File = Io.Dir.cwd().openFile(io, dance_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
     defer dh.close(io);
-    const dst: std.Io.File.Stat = try dh.stat(io);
+    const dst: Io.File.Stat = try dh.stat(io);
     const dbytes: []u8 = try gpa.alloc(u8, dst.size);
     defer gpa.free(dbytes);
     _ = try dh.readPositionalAll(io, dbytes, 0);
@@ -9298,13 +9313,13 @@ test "zm: mulMat and mulMatVec compose in the order the skinning path assumes" {
 }
 
 test "fbx model: the bind pose is the pose the MESH is in" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    const io: Io = threaded.io();
+    var fh: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -9388,13 +9403,13 @@ test "fbx model: the bind pose is the pose the MESH is in" {
 }
 
 test "fbx model: a second, unrelated rig loads and binds correctly too" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Drop_Kick.fbx", .{}) catch return;
+    const io: Io = threaded.io();
+    var fh: Io.File = Io.Dir.cwd().openFile(io, "assets/Drop_Kick.fbx", .{}) catch return;
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
@@ -9466,46 +9481,6 @@ test "fbx model: a second, unrelated rig loads and binds correctly too" {
     try d3_expect(total / float(owned) < 12.0);
 }
 
-test "fbx model: recomputing normals fixes a mesh whose stored ones oppose their winding" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
-    defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
-    defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
-    const bytes: []u8 = try gpa.alloc(u8, st.size);
-    defer gpa.free(bytes);
-    _ = try fh.readPositionalAll(io, bytes, 0);
-
-    // * MEASURED, NOT ASSUMED. `Geno.fbx` stores normals that oppose their triangle's winding
-    // on 52.6% of faces; `Drop_Kick.fbx` does so on 0.0%. That renders as dark banding across
-    // the limbs, and it is the ASSET, not the loader - but it IS fixable, which is worth
-    // knowing before writing it off.
-    const as_authored: FbxModel = try loadFbxModel(gpa, bytes, .{});
-    defer unloadFbxModel(gpa, as_authored);
-    const fixed: FbxModel = try loadFbxModel(gpa, bytes, .{ .recompute_normals = true });
-    defer unloadFbxModel(gpa, fixed);
-
-    try d3_expect(countOpposedNormals(as_authored.model.meshes[0]) > 8000);
-    // Recomputed normals come FROM the winding, so essentially none can oppose it - but a
-    // SMOOTH normal is the area-weighted average of a vertex's faces, so a sliver triangle can
-    // still end up on the wrong side of its own tiny face. Measured: 1 of 18660. Assert "a
-    // handful", not zero; demanding zero would be asserting that no mesh has slivers.
-    try d3_expect(countOpposedNormals(fixed.model.meshes[0]) < 10);
-
-    // And a mesh whose normals were already consistent must be left alone by the default path.
-    var kh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Drop_Kick.fbx", .{}) catch return;
-    defer kh.close(io);
-    const kst: std.Io.File.Stat = try kh.stat(io);
-    const kbytes: []u8 = try gpa.alloc(u8, kst.size);
-    defer gpa.free(kbytes);
-    _ = try kh.readPositionalAll(io, kbytes, 0);
-    const mixamo: FbxModel = try loadFbxModel(gpa, kbytes, .{});
-    defer unloadFbxModel(gpa, mixamo);
-    try d3_expectEqual(@as(usize, 0), countOpposedNormals(mixamo.model.meshes[0]));
-}
-
 /// How many triangles have a first-vertex normal pointing against their winding.
 fn countOpposedNormals(mesh: Mesh) usize {
     const triangle_count: usize = @intCast(@max(mesh.triangleCount, 0));
@@ -9532,24 +9507,64 @@ fn countOpposedNormals(mesh: Mesh) usize {
     return opposed;
 }
 
-test "skinning: a normal follows its bone's rotation, not just the position" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+test "fbx model: recomputing normals fixes a mesh whose stored ones oppose their winding" {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    const io: Io = threaded.io();
+    var fh: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, st.size);
+    defer gpa.free(bytes);
+    _ = try fh.readPositionalAll(io, bytes, 0);
+
+    // * MEASURED, NOT ASSUMED. `Geno.fbx` stores normals that oppose their triangle's winding
+    // on 52.6% of faces; `Drop_Kick.fbx` does so on 0.0%. That renders as dark banding across
+    // the limbs, and it is the ASSET, not the loader - but it IS fixable, which is worth
+    // knowing before writing it off.
+    const as_authored: FbxModel = try loadFbxModel(gpa, bytes, .{});
+    defer unloadFbxModel(gpa, as_authored);
+    const fixed: FbxModel = try loadFbxModel(gpa, bytes, .{ .recompute_normals = true });
+    defer unloadFbxModel(gpa, fixed);
+
+    try d3_expect(countOpposedNormals(as_authored.model.meshes[0]) > 8000);
+    // Recomputed normals come FROM the winding, so essentially none can oppose it - but a
+    // SMOOTH normal is the area-weighted average of a vertex's faces, so a sliver triangle can
+    // still end up on the wrong side of its own tiny face. Measured: 1 of 18660. Assert "a
+    // handful", not zero; demanding zero would be asserting that no mesh has slivers.
+    try d3_expect(countOpposedNormals(fixed.model.meshes[0]) < 10);
+
+    // And a mesh whose normals were already consistent must be left alone by the default path.
+    var kh: Io.File = Io.Dir.cwd().openFile(io, "assets/Drop_Kick.fbx", .{}) catch return;
+    defer kh.close(io);
+    const kst: Io.File.Stat = try kh.stat(io);
+    const kbytes: []u8 = try gpa.alloc(u8, kst.size);
+    defer gpa.free(kbytes);
+    _ = try kh.readPositionalAll(io, kbytes, 0);
+    const mixamo: FbxModel = try loadFbxModel(gpa, kbytes, .{});
+    defer unloadFbxModel(gpa, mixamo);
+    try d3_expectEqual(@as(usize, 0), countOpposedNormals(mixamo.model.meshes[0]));
+}
+
+test "skinning: a normal follows its bone's rotation, not just the position" {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+    var fh: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    defer fh.close(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);
     const loaded: FbxModel = try loadFbxModel(gpa, bytes, .{ .recompute_normals = true });
     defer unloadFbxModel(gpa, loaded);
 
-    var dh: std.Io.File =
-        std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var dh: Io.File =
+        Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer dh.close(io);
-    const dst: std.Io.File.Stat = try dh.stat(io);
+    const dst: Io.File.Stat = try dh.stat(io);
     const db: []u8 = try gpa.alloc(u8, dst.size);
     defer gpa.free(db);
     _ = try dh.readPositionalAll(io, db, 0);
@@ -9633,13 +9648,13 @@ test "skinning: a normal follows its bone's rotation, not just the position" {
 }
 
 test "fbx model: load-time scale moves mesh and bind together, not one of them" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var fh: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
+    const io: Io = threaded.io();
+    var fh: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno.fbx", .{}) catch return;
     defer fh.close(io);
-    const st: std.Io.File.Stat = try fh.stat(io);
+    const st: Io.File.Stat = try fh.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     defer gpa.free(bytes);
     _ = try fh.readPositionalAll(io, bytes, 0);

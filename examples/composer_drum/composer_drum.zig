@@ -6,6 +6,7 @@
 //! the pattern and a playhead sweeps it. All PCM - no streaming/OGG needed.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const float = zm.float;
@@ -23,12 +24,12 @@ const steps_per_loop: usize = 8;
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     audio: z.AudioState = .{},
     loop: z.Sound = .{},
     playing: bool = false,
-    play_started_at_frame: usize = 0,
-    frame_count: usize = 0,
+    /// When the loop started, in the app's seconds: the step cursor follows the time since.
+    play_started_at_seconds: f32 = 0,
 };
 
 fn deinit(gpa: Allocator, s: *State) void {
@@ -72,6 +73,8 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     var seq: z.composer.Sequence = .init(&audio.waves, gpa, sample_rate, 1);
     defer seq.deinit();
     const step_frames: u32 = (sample_rate * @as(u32, @intCast(step_ms))) / 1000;
+    // The wave lasts the whole bar - eight steps - so that, looped, its last step is as long as the others.
+    seq.length_frames = steps_per_loop * step_frames;
     try seq.add(kick, 0 * step_frames);
     try seq.add(kick, 4 * step_frames);
     try seq.add(snare, 2 * step_frames);
@@ -83,9 +86,11 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     defer z.waves.unload(&audio.waves, loop_wave);
 
     const loop_snd: z.Sound = try z.sounds.loadFromWave(&audio.sounds, f.audio_device, gpa, loop_wave);
+    // The mixer loops the baked pattern itself, sample for sample: no frame decides when it starts again.
+    z.sounds.setLooping(&audio.sounds, loop_snd, true);
     s.* = .{
         .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
+        .scratch = ArenaAllocator.init(gpa),
         .audio = audio,
         .loop = loop_snd,
     };
@@ -112,7 +117,6 @@ const lanes = [3]Lane{
 
 fn update(f: *z.Frame, state: *State) void {
     _ = state.scratch.reset(.retain_capacity);
-    state.frame_count += 1;
 
     const w: f32 = f.window.widthf();
     const mp: Vec2 = z.getMousePosition(f.input);
@@ -129,20 +133,9 @@ fn update(f: *z.Frame, state: *State) void {
         state.playing = !state.playing;
         if (state.playing) {
             z.sounds.play(&state.audio.sounds, state.loop);
-            state.play_started_at_frame = state.frame_count;
+            state.play_started_at_seconds = f.time.time;
         } else {
             z.sounds.stop(&state.audio.sounds, state.loop);
-        }
-    }
-
-    const total_ms: usize = steps_per_loop * step_ms;
-    // The baked Wave plays once (Sound.play is one-shot); re-trigger when it
-    // ends so the pattern loops continuously while "playing".
-    if (state.playing) {
-        const el: usize = (state.frame_count - state.play_started_at_frame) * 16;
-        if (el >= total_ms) {
-            z.sounds.play(&state.audio.sounds, state.loop);
-            state.play_started_at_frame = state.frame_count;
         }
     }
 
@@ -150,8 +143,10 @@ fn update(f: *z.Frame, state: *State) void {
     f.gl.text(.{ 16, 16 }, "8-step drum loop", .{ .size = 26, .color = c.white, .font = &state.font });
     f.gl.text(.{ 16, 50 }, "tap PLAY or press SPACE", .{ .size = 15, .color = c.slate_400, .font = &state.font });
 
-    // Playhead step (loops with the audio; ~60fps frame->ms approximation).
-    const elapsed_ms: usize = if (state.playing) (state.frame_count - state.play_started_at_frame) * 16 else 0;
+    // The step the loop is at: the time since it started, in steps, wrapped by the loop - the mixer loops the sound
+    // itself, so the two keep the same time whatever the frame rate.
+    const elapsed_seconds: f32 = if (state.playing) f.time.time - state.play_started_at_seconds else 0;
+    const elapsed_ms: usize = @trunc(@max(elapsed_seconds, 0) * 1000);
     const cur_step: usize = if (state.playing)
         (elapsed_ms / step_ms) % steps_per_loop
     else

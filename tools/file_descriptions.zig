@@ -105,6 +105,12 @@ pub const descriptions = [_]Entry{
             "fixture (iterative emitter queued in P6).",
     },
     .{
+        .path = "src/spv_vulkan.zig",
+        .text = "SPIR-V for the Vulkan host: reads a module, reflects an entry point's interface (sets, bindings, " ++
+            "locations, vertex inputs), checks it against the rules zimr knows, and legalizes it at load time " ++
+            "(DepthReplacing, NonWritable, unused pointer ArrayStrides; refuses Linkage). Std only.",
+    },
+    .{
         .path = "src/spv2wgsl_wasm.zig",
         .text = "Wasm entry root exposing the transpiler to the browser dev page. Excluded from " ++
             "refAllDecls (wasm root).",
@@ -168,10 +174,10 @@ pub const descriptions = [_]Entry{
     },
     .{
         .path = "src/renderer_trait.zig",
-        .text = "The renderer trait: assertIsGlContext, the comptime contract " ++
-            "(begin/end/vertex2f/color4ub/setTexture/...) that WgpuGl, raster adapters and " ++
-            "the test stub all satisfy, letting 2D draw code take `gl: anytype`. The GL-era " ++
-            "GlAdapter died in P5.",
+        .text = "The scene contract: requireGlScene - types.requireGl's 2D drawing surface plus " ++
+            "scene setup (matrixMode, loadIdentity, multMatrix, frustum, vertex3f, clearColor, " ++
+            "clear) - which WgpuGl, raster.Context and SwAdapter all satisfy, letting scene code " ++
+            "take `gl: anytype`; re-exports SwAdapter and BlendMode.",
     },
     .{
         .path = "src/errors.zig",
@@ -211,6 +217,11 @@ pub const descriptions = [_]Entry{
             "SCREAMING-case bans, unused-global detection, line length, plus text-based " ++
             "shader-DSL checks for _fs/_vs files. isSkipped is down to one data-file " ++
             "exception since P5.",
+    },
+    .{
+        .path = "tools/cheatsheet.zig",
+        .text = "Generates the API cheatsheet page from src/'s public API on every build; one of the " ++
+            "doc pages, so `publish` carries it (`zig build cheatsheet` builds just it).",
     },
     .{
         .path = "tools/buildaux.zig",
@@ -299,20 +310,15 @@ pub const descriptions = [_]Entry{
             "build_timings.tsv — the tier-a gate entry point.",
     },
     .{
-        .path = "scripts/build_cheatsheet.py",
-        .text = "Generates cheatsheet.html at the repo root from CHEATSHEET.md for the " ++
-            "published site.",
-    },
-    .{
         .path = "scripts/bootstrap-sandbox.sh",
         .text = "Sets up a fresh sandbox: PATH exports for the vendored zig + bun toolchains " ++
             "and first-build warmup.",
     },
     .{
-        .path = "tools/gen_vscode.zig",
+        .path = "tools/gen_editor_configs.zig",
         .text = "Editor-config generator (Zig port of build_launch_json.py): reads the " ++
             "wgpu_examples array from build.zig and writes .vscode/.zed launch+task " ++
-            "configs. Run via `zig build gen-vscode`.",
+            "configs. Run via `zig build editor-configs`.",
     },
     .{
         .path = "tools/dag_check.zig",
@@ -440,16 +446,11 @@ pub const descriptions = [_]Entry{
         .text = "Project license.",
     },
     .{
-        .path = "cheatsheet.html",
-        .text = "Generated API cheatsheet (from CHEATSHEET.md via scripts/build_cheatsheet.py); " ++
-            "carried into dist.",
-    },
-    .{
         .path = "build_everything.bat",
         .text = "Windows convenience: full build battery.",
     },
     .{
-        .path = "generate_vscode.bat",
+        .path = "generate_editor_configs.bat",
         .text = "Windows convenience: regenerate launch.json.",
     },
     .{
@@ -598,7 +599,7 @@ pub const key_symbols = [_]KeySyms{
     .{ .name = "wgpu_app", .syms = "App AppSpec|beginDrawing|drawCube|Launcher (facade)" },
     .{ .name = "wgpu_texture", .syms = "WgpuTexture|WgpuRenderTexture" },
     .{ .name = "gpu_iface", .syms = "ShapesBatch|WgpuBackend|SwBackend|FrameContext" },
-    .{ .name = "renderer_trait", .syms = "BlendMode|assertIsGlContext" },
+    .{ .name = "renderer_trait", .syms = "BlendMode|requireGlScene" },
     .{ .name = "BindGroupCache", .syms = "getOrBuild|invalidate|Key" },
     .{ .name = "compute_host", .syms = "Compute|Backend" },
     .{ .name = "kompute", .syms = "Config Ctx|installKernel" },

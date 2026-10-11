@@ -14,6 +14,10 @@
 //! accumulating the hierarchy (as here) is the same idea and a touch cleaner.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
 const z = @import("zimr");
 const zm = @import("zm");
 const common = @import("example_common");
@@ -112,7 +116,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 fn nameIsUpper(name: []const u8) bool {
     const keys = [_][]const u8{ "up", "hand", "hat", "arm", "head", "chest", "spine", "neck", "shoulder" };
     for (keys) |k| {
-        if (std.mem.indexOf(u8, name, k) != null) {
+        if (indexOf(u8, name, k) != null) {
             return true;
         }
     }
@@ -125,7 +129,7 @@ fn readClip(
     doc: z.codecs.gltf.Data,
     anim: z.codecs.gltf.Animation,
 ) !Clip {
-    var tracks: std.ArrayListUnmanaged(Track) = .empty;
+    var tracks: ArrayListUnmanaged(Track) = .empty;
     errdefer tracks.deinit(gpa);
     var duration: f32 = 0;
     for (anim.channels) |chn| {
@@ -165,7 +169,7 @@ fn findClip(
     var idx: usize = @min(fallback, doc.animations.len - 1);
     for (doc.animations, 0..) |a, ai| {
         if (a.name) |nm| {
-            if (std.mem.eql(u8, nm, want)) {
+            if (eql(u8, nm, want)) {
                 idx = ai;
             }
         }
@@ -286,34 +290,6 @@ fn lerpVec(a: Vec, b: Vec, alpha: f32) Vec {
     return a + (b - a) * splat(alpha);
 }
 
-/// Sample one clip at time t into per-node local TRS arrays, starting from each
-/// node's bind pose and overriding with the clip's channels.
-fn poseFromClip(
-    s: *State,
-    clip: Clip,
-    t: f32,
-    trans: *[max_nodes]Vec,
-    rot: *[max_nodes]Vec,
-    scal: *[max_nodes]Vec,
-) void {
-    for (0..s.node_count) |ni| {
-        trans[ni] = s.doc.nodes[ni].translation;
-        rot[ni] = s.doc.nodes[ni].rotation;
-        scal[ni] = s.doc.nodes[ni].scale;
-    }
-    for (clip.tracks) |tr| {
-        if (tr.target_node >= s.node_count) {
-            continue;
-        }
-        const v: [4]f32 = sampleTrack(tr, t);
-        switch (tr.path) {
-            .translation => trans[tr.target_node] = f32x4(v[0], v[1], v[2], 0),
-            .rotation => rot[tr.target_node] = f32x4(v[0], v[1], v[2], v[3]),
-            .scale => scal[tr.target_node] = f32x4(v[0], v[1], v[2], 0),
-        }
-    }
-}
-
 fn sampleTrack(tr: Track, t: f32) [4]f32 {
     const n: usize = tr.times.len;
     if (n == 0) {
@@ -341,6 +317,34 @@ fn sampleTrack(tr: Track, t: f32) [4]f32 {
         }
     }
     return out;
+}
+
+/// Sample one clip at time t into per-node local TRS arrays, starting from each
+/// node's bind pose and overriding with the clip's channels.
+fn poseFromClip(
+    s: *State,
+    clip: Clip,
+    t: f32,
+    trans: *[max_nodes]Vec,
+    rot: *[max_nodes]Vec,
+    scal: *[max_nodes]Vec,
+) void {
+    for (0..s.node_count) |ni| {
+        trans[ni] = s.doc.nodes[ni].translation;
+        rot[ni] = s.doc.nodes[ni].rotation;
+        scal[ni] = s.doc.nodes[ni].scale;
+    }
+    for (clip.tracks) |tr| {
+        if (tr.target_node >= s.node_count) {
+            continue;
+        }
+        const v: [4]f32 = sampleTrack(tr, t);
+        switch (tr.path) {
+            .translation => trans[tr.target_node] = f32x4(v[0], v[1], v[2], 0),
+            .rotation => rot[tr.target_node] = f32x4(v[0], v[1], v[2], v[3]),
+            .scale => scal[tr.target_node] = f32x4(v[0], v[1], v[2], 0),
+        }
+    }
 }
 
 fn update(f: *z.Frame, s: *State) void {
@@ -402,7 +406,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.char_skinned[vi * 3 + 1] = acc[1];
         s.char_skinned[vi * 3 + 2] = acc[2];
     }
-    z.updateMeshBuffer(s.char_model.meshes[0], 0, std.mem.sliceAsBytes(s.char_skinned), 0);
+    z.updateMeshBuffer(s.char_model.meshes[0], 0, sliceAsBytes(s.char_skinned), 0);
 
     // ---- UI ----
     const vw: f32 = @max(f.window.widthf(), 1);

@@ -23,6 +23,7 @@ const zm = @import("zm");
 const rbt = @import("robot.zig");
 const track = @import("robot_track.zig");
 const policy = @import("robot_policy.zig");
+const track_env = @import("robot_track_env.zig");
 const gym = @import("robot_gym.zig");
 const dance = @import("robot_dance.zig");
 const compute_host = @import("compute_host.zig");
@@ -31,11 +32,21 @@ const Allocator = std.mem.Allocator;
 const clamp = zm.clamp;
 const assertf = zm.assertf;
 const float = zm.float;
+const float64 = zm.float64;
 const bufPrint = std.fmt.bufPrint;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const Io = std.Io;
+const Random = std.Random;
+const asBytes = std.mem.asBytes;
+const eql = std.mem.eql;
+const sliceAsBytes = std.mem.sliceAsBytes;
 
 /// Every evaluation starts its episodes from the same frames, whatever training has done to the
 /// training fleet's random stream.
 pub const evaluation_seed: u64 = 20260920;
+
+/// What a clip running out means to the advantage (`Options.clip_end`) - the environment's, named here too.
+pub const ClipEnd = track_env.ClipEnd;
 
 pub const Options = struct {
     envs: u32 = 16,
@@ -119,19 +130,8 @@ const Batch = struct {
     ended_length: u64 = 0,
 };
 
-/// What a clip running out means to the advantage (`Options.clip_end`).
-pub const ClipEnd = enum { terminal, bootstrap };
-
-/// How one decision's transition ended, for the advantage.
-pub const EndKind = enum(u8) {
-    /// The episode went on: the next decision's value follows.
-    none,
-    /// Nothing follows: the reference was lost (or a clip's end counted as final, `ClipEnd.terminal`).
-    stop,
-    /// Cut short - the step cap, or a clip's end counted as a cut: what follows is the critic's value of the
-    /// state the episode ended IN (`bootstrap`), not of the fresh start that replaced it.
-    cut,
-};
+/// How one decision's transition ended, for the advantage - the environment's (`robot_track_env`), named here too.
+pub const EndKind = track_env.EndKind;
 
 /// GAE along one environment's column of a rollout: element t of every array sits at `t * stride + offset`;
 /// `values` has one more row - the state after the last decision. Writes `advantages` and `returns`. The
@@ -168,23 +168,43 @@ pub fn gaeColumn(
     }
 }
 
+/// The options that define the TASK - the environment every learner of it steps through (`TrackEnv`); the rest of
+/// `Options` is PPO's own (its network, its batch, its learning rate). Kept as one mapping so a new task setting has
+/// exactly one place to be handed over.
+fn taskOptions(options: Options) track_env.Options {
+    return .{
+        .envs = options.envs,
+        .decimation = options.decimation,
+        .beta = options.beta,
+        .clip_end = options.clip_end,
+        .max_episode_steps = options.max_episode_steps,
+        .action_scale = options.action_scale,
+        .task = options.task,
+        .bodies = options.bodies,
+        .seed = options.seed,
+    };
+}
+
 pub fn Trainer(comptime M: type) type {
     return struct {
         const Self = @This();
         const Ppo = gym.GpuPpoOn(M);
 
         gpa: Allocator,
-        arena: std.heap.ArenaAllocator,
+        arena: ArenaAllocator,
         m: *rbt.Model,
         /// The caller's body names (it owns them, like `m`) - kept for the judge's fleet, which resolves the
         /// task's contact exemptions by name (`robot_track.Task.contact_exempt`) the same way the training one does.
         body_names: []const []const u8,
         options: Options,
-        fleet: *track.Fleet,
-        subset: policy.Subset,
-        controller: policy.Controller,
+        /// The task, decision by decision - the one environment every learner of it steps through (`TrackEnv`):
+        /// its fleet, the DReCon controller and subset, and the scratch its observations are built with.
+        env: track_env.TrackEnv,
+        /// Per decision: how each environment's went, and the observation of any episode that was cut short.
+        outcomes: []track_env.Outcome,
+        terminal: []f32,
         ppo: Ppo,
-        rng: std.Random.DefaultPrng,
+        rng: Random.DefaultPrng,
         n_obs: usize,
         // The rollout, laid out [decision][environment].
         observations: []f32,
@@ -201,19 +221,14 @@ pub fn Trainer(comptime M: type) type {
         returns: []f32,
         order: []u32,
         // Scratch.
-        sim_state: track.State,
         reference_state: track.State,
         probe: rbt.Data,
-        /// The reference now and further ahead, for every observation this trainer builds (`policy.observeFrom`).
-        views: policy.Views,
-        applied: []f32,
         obs_scratch: []f32,
         /// The observation normaliser: a running mean and sum of squared deviations per input,
         /// in f64 - with a count in the millions, an f32 mean stops moving long before it is right.
         obs_mean: []f64,
         obs_m2: []f64,
         obs_count: u64 = 0,
-        episode_steps: []u32,
         decisions: u64 = 0,
         steps: u64 = 0,
         iterations: u64 = 0,
@@ -238,9 +253,9 @@ pub fn Trainer(comptime M: type) type {
                 .m = undefined,
                 .body_names = undefined,
                 .options = undefined,
-                .fleet = undefined,
-                .subset = undefined,
-                .controller = undefined,
+                .env = undefined,
+                .outcomes = undefined,
+                .terminal = undefined,
                 .ppo = undefined,
                 .rng = undefined,
                 .n_obs = undefined,
@@ -249,28 +264,25 @@ pub fn Trainer(comptime M: type) type {
                 .log_probs = undefined,
                 .rewards = undefined,
                 .dones = undefined,
-                .views = undefined,
                 .ends = undefined,
                 .bootstrap = undefined,
                 .values = undefined,
                 .advantages = undefined,
                 .returns = undefined,
                 .order = undefined,
-                .sim_state = undefined,
                 .reference_state = undefined,
                 .probe = undefined,
-                .applied = undefined,
                 .obs_scratch = undefined,
                 .obs_mean = undefined,
                 .obs_m2 = undefined,
-                .episode_steps = undefined,
             };
-            self.arena = .init(gpa);
+            self.arena = ArenaAllocator.init(gpa);
             errdefer self.arena.deinit();
             const owned: Allocator = self.arena.allocator();
-            const bodies: policy.Bodies = options.bodies;
-            const subset: policy.Subset = try policy.subsetFor(owned, m, body_names, bodies.watched, bodies.actuated);
-            const n_obs: usize = policy.observationSize(subset);
+            // The task, stepped decision by decision: the one environment every learner of it uses.
+            const env: track_env.TrackEnv = try .init(owned, m, body_names, clips, taskOptions(options));
+            const subset: policy.Subset = env.subset;
+            const n_obs: usize = env.n_obs;
             const envs: usize = options.envs;
             const transitions: usize = options.horizon * envs;
             self.* = .{
@@ -279,20 +291,9 @@ pub fn Trainer(comptime M: type) type {
                 .m = m,
                 .body_names = body_names,
                 .options = options,
-                .fleet = try track.Fleet.init(owned, m, clips, .{
-                    .envs = envs,
-                    .capacity = 16,
-                    .seed = options.seed,
-                    .max_steps = options.max_episode_steps,
-                    .action_scale = options.action_scale,
-                    .task = options.task,
-                    .body_names = body_names,
-                }),
-                .subset = subset,
-                .controller = try policy.Controller.init(owned, m, subset, envs, .{
-                    .beta = options.beta,
-                    .decimation = options.decimation,
-                }),
+                .env = env,
+                .outcomes = try owned.alloc(track_env.Outcome, envs),
+                .terminal = try owned.alloc(f32, envs * n_obs),
                 .ppo = try Ppo.init(owned, pipe, n_obs, subset.dofs, .{
                     .hidden = options.hidden,
                     .rows = options.minibatch,
@@ -300,33 +301,28 @@ pub fn Trainer(comptime M: type) type {
                     .initial_log_std = options.initial_log_std,
                     .seed = options.seed,
                 }),
-                .rng = .init(options.seed ^ 0x9e3779b97f4a7c15),
+                .rng = Random.DefaultPrng.init(options.seed ^ 0x9e3779b97f4a7c15),
                 .n_obs = n_obs,
                 .observations = try owned.alloc(f32, transitions * n_obs),
                 .raw = try owned.alloc(f32, transitions * subset.dofs),
                 .log_probs = try owned.alloc(f32, transitions),
                 .rewards = try owned.alloc(f32, transitions),
                 .dones = try owned.alloc(bool, transitions),
-                .views = try policy.Views.init(owned, m),
                 .ends = try owned.alloc(EndKind, transitions),
                 .bootstrap = try owned.alloc(f32, transitions),
                 .values = try owned.alloc(f32, transitions + envs),
                 .advantages = try owned.alloc(f32, transitions),
                 .returns = try owned.alloc(f32, transitions),
                 .order = try owned.alloc(u32, transitions),
-                .sim_state = try track.State.init(owned, m.nbody),
                 .reference_state = try track.State.init(owned, m.nbody),
                 .probe = try rbt.Data.init(owned, m),
-                .applied = try owned.alloc(f32, envs * subset.dofs),
                 .obs_scratch = try owned.alloc(f32, n_obs),
                 .obs_mean = try owned.alloc(f64, n_obs),
                 .obs_m2 = try owned.alloc(f64, n_obs),
-                .episode_steps = try owned.alloc(u32, envs),
             };
-            @memset(self.episode_steps, 0);
             @memset(self.obs_mean, 0.0);
             @memset(self.obs_m2, 0.0);
-            self.fleet.options.task.gains.assist = options.assist_start;
+            self.env.fleet.options.task.gains.assist = options.assist_start;
             for (self.order, 0..) |*slot, i| {
                 slot.* = @intCast(i);
             }
@@ -335,7 +331,7 @@ pub fn Trainer(comptime M: type) type {
 
         pub fn deinit(self: *Self) void {
             const gpa: Allocator = self.gpa;
-            self.fleet.deinit();
+            self.env.deinit();
             self.probe.deinit();
             self.arena.deinit();
             gpa.destroy(self);
@@ -385,7 +381,7 @@ pub fn Trainer(comptime M: type) type {
             const header: Header = .{
                 .magic = magic,
                 .observations = @intCast(self.n_obs),
-                .actions = @intCast(self.subset.dofs),
+                .actions = @intCast(self.env.subset.dofs),
                 .hidden = self.options.hidden,
                 .param_count = @intCast(count),
                 .adam_step = self.ppo.adam_step,
@@ -401,10 +397,10 @@ pub fn Trainer(comptime M: type) type {
             const normaliser: usize = if (self.options.normalize) 2 * self.n_obs else 0;
             const floats: usize = 3 * count + normaliser;
             const bytes: []u8 = try gpa.alloc(u8, @sizeOf(Header) + floats * @sizeOf(f32));
-            @memcpy(bytes[0..@sizeOf(Header)], std.mem.asBytes(&header));
+            @memcpy(bytes[0..@sizeOf(Header)], asBytes(&header));
             var at: usize = @sizeOf(Header);
             for ([_][]const f32{ params[0..count], moment1[0..count], moment2[0..count] }) |part| {
-                const raw: []const u8 = std.mem.sliceAsBytes(part);
+                const raw: []const u8 = sliceAsBytes(part);
                 @memcpy(bytes[at..][0..raw.len], raw);
                 at += raw.len;
             }
@@ -412,12 +408,12 @@ pub fn Trainer(comptime M: type) type {
                 const n: f64 = @floatFromInt(@max(self.obs_count, 1));
                 for (self.obs_mean) |mean| {
                     const value: f32 = @floatCast(mean);
-                    @memcpy(bytes[at..][0..4], std.mem.asBytes(&value));
+                    @memcpy(bytes[at..][0..4], asBytes(&value));
                     at += 4;
                 }
                 for (self.obs_m2) |m2| {
                     const value: f32 = @floatCast(m2 / n);
-                    @memcpy(bytes[at..][0..4], std.mem.asBytes(&value));
+                    @memcpy(bytes[at..][0..4], asBytes(&value));
                     at += 4;
                 }
             }
@@ -430,11 +426,11 @@ pub fn Trainer(comptime M: type) type {
                 return error.NotAWeightsFile;
             }
             const header: Header = std.mem.bytesToValue(Header, bytes[0..@sizeOf(Header)]);
-            if (!std.mem.eql(u8, &header.magic, &magic)) {
+            if (!eql(u8, &header.magic, &magic)) {
                 return error.NotAWeightsFile;
             }
             const count: usize = self.ppo.param_count;
-            if (header.observations != self.n_obs or header.actions != self.subset.dofs or
+            if (header.observations != self.n_obs or header.actions != self.env.subset.dofs or
                 header.hidden != self.options.hidden or header.param_count != count)
             {
                 return error.WeightsShape;
@@ -455,7 +451,7 @@ pub fn Trainer(comptime M: type) type {
             // Copied into aligned floats: the bytes came from a file and owe nothing to alignment.
             const values: []f32 = try self.gpa.alloc(f32, 3 * count);
             defer self.gpa.free(values);
-            @memcpy(std.mem.sliceAsBytes(values), bytes[@sizeOf(Header)..][0 .. 3 * count * @sizeOf(f32)]);
+            @memcpy(sliceAsBytes(values), bytes[@sizeOf(Header)..][0 .. 3 * count * @sizeOf(f32)]);
             self.ppo.pipe.upload(.params, values[0..count]);
             self.ppo.pipe.upload(.adam_m, values[count .. 2 * count]);
             self.ppo.pipe.upload(.adam_v, values[2 * count .. 3 * count]);
@@ -468,7 +464,7 @@ pub fn Trainer(comptime M: type) type {
                 const extra: []f32 = try self.gpa.alloc(f32, normaliser);
                 defer self.gpa.free(extra);
                 const start: usize = @sizeOf(Header) + 3 * count * @sizeOf(f32);
-                @memcpy(std.mem.sliceAsBytes(extra), bytes[start..]);
+                @memcpy(sliceAsBytes(extra), bytes[start..]);
                 self.obs_count = header.obs_count;
                 const n: f64 = @floatFromInt(@max(self.obs_count, 1));
                 const means: []const f32 = extra[0..self.n_obs];
@@ -485,30 +481,30 @@ pub fn Trainer(comptime M: type) type {
 
         /// The weights to a file, for runs on a machine with a disk. Written to a temporary name
         /// and renamed into place, so a run killed mid-write keeps its previous file intact.
-        pub fn save(self: *Self, io: std.Io, path: []const u8) !void {
+        pub fn save(self: *Self, io: Io, path: []const u8) !void {
             const bytes: []u8 = try self.exportWeights(self.gpa);
             defer self.gpa.free(bytes);
             if (std.fs.path.dirname(path)) |dir| {
-                try std.Io.Dir.cwd().createDirPath(io, dir);
+                try Io.Dir.cwd().createDirPath(io, dir);
             }
             var temp_buffer: [512]u8 = undefined;
             const temp: []const u8 = try bufPrint(&temp_buffer, "{s}.partial", .{path});
             {
-                const file: std.Io.File = try std.Io.Dir.cwd().createFile(io, temp, .{});
+                const file: Io.File = try Io.Dir.cwd().createFile(io, temp, .{});
                 defer file.close(io);
                 try file.writeStreamingAll(io, bytes);
             }
-            try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, io);
+            try Io.Dir.cwd().rename(temp, Io.Dir.cwd(), path, io);
         }
 
         /// And back. False when there is no file, which is how a run starts.
-        pub fn load(self: *Self, io: std.Io, path: []const u8) !bool {
-            const file: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        pub fn load(self: *Self, io: Io, path: []const u8) !bool {
+            const file: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
                 error.FileNotFound => return false,
                 else => return err,
             };
             defer file.close(io);
-            const info: std.Io.File.Stat = try file.stat(io);
+            const info: Io.File.Stat = try file.stat(io);
             const bytes: []u8 = try self.gpa.alloc(u8, info.size);
             defer self.gpa.free(bytes);
             _ = try file.readPositionalAll(io, bytes, 0);
@@ -522,10 +518,10 @@ pub fn Trainer(comptime M: type) type {
         /// (they do not). A no-op unless `options.normalize`.
         /// An observation scaled as the policy sees it, without touching the statistics.
         pub fn normalizeObservation(self: *Self, obs: []f32) void {
-            self.normalize(obs, false);
+            self.normalizeObservations(obs, false);
         }
 
-        fn normalize(self: *Self, obs: []f32, learn_stats: bool) void {
+        fn normalizeObservations(self: *Self, obs: []f32, learn_stats: bool) void {
             if (!self.options.normalize) {
                 return;
             }
@@ -542,41 +538,8 @@ pub fn Trainer(comptime M: type) type {
             for (obs, self.obs_mean, self.obs_m2) |*x, mean, m2| {
                 const deviation: f64 = @sqrt(m2 / n + 1.0e-8);
                 const z_score: f64 = (@as(f64, x.*) - mean) / deviation;
-                x.* = @floatCast(@max(-5.0, @min(5.0, z_score)));
+                x.* = @floatCast(clamp(z_score, -5.0, 5.0));
             }
-        }
-
-        /// The observation of the state an episode ENDED in (the fleet's capture, before its restart), with
-        /// the filter as it stood - what a cut-short episode is bootstrapped from.
-        fn observeTerminal(self: *Self, env: usize, out: []f32) void {
-            const fleet: *track.Fleet = self.fleet;
-            policy.observeFrom(
-                self.m,
-                self.subset,
-                fleet,
-                fleet.clips[fleet.terminal_clip[env]],
-                fleet.terminal_frame[env],
-                fleet.terminal[env],
-                &self.views,
-                self.controller.lastAction(env),
-                out,
-            );
-        }
-
-        fn observe(self: *Self, env: usize, out: []f32) void {
-            const fleet: *track.Fleet = self.fleet;
-            track.stateOf(self.m, &fleet.data[env], &self.sim_state);
-            policy.observeFrom(
-                self.m,
-                self.subset,
-                fleet,
-                fleet.clips[fleet.clip_of[env]],
-                fleet.frame[env],
-                self.sim_state,
-                &self.views,
-                self.controller.lastAction(env),
-                out,
-            );
         }
 
         /// Collect a batch, work out the advantages, and update. Returns how it went.
@@ -597,76 +560,58 @@ pub fn Trainer(comptime M: type) type {
             return self.cursor >= self.options.horizon;
         }
 
-        /// One decision for every environment, into row `t` of the batch.
+        /// One decision for every environment, into decision row `t` of the batch: observe and draw for each, live
+        /// with the decisions (`TrackEnv.decide` - the task's one definition of a decision), then PPO's bookkeeping.
+        /// The batch is laid out [decision][environment], so environment `env`'s entry for decision `t` sits at
+        /// `batch_row = t * envs + env` in every per-transition array.
         fn collectOne(self: *Self, t: usize) void {
             const envs: usize = self.options.envs;
-            const dofs: usize = self.subset.dofs;
-            const random: std.Random = self.rng.random();
+            const dofs: usize = self.env.subset.dofs;
+            const n_obs: usize = self.n_obs;
+            const random: Random = self.rng.random();
+            // Every environment's observation (normalised, with the statistics updated - PPO's normaliser, when on),
+            // its draw and that draw's log-probability, and the critic's value of where it stands - GAE's V(s_t).
             for (0..envs) |env| {
-                const at: usize = t * envs + env;
-                const obs: []f32 = self.observations[at * self.n_obs ..][0..self.n_obs];
-                self.observe(env, obs);
-                self.normalize(obs, true);
-                const action: []f32 = self.raw[at * dofs ..][0..dofs];
-                self.log_probs[at] = self.ppo.act(obs, action, random);
-                self.values[at] = self.ppo.value(obs);
-                // The log-probability is of the sample PPO drew; what reaches the character is
-                // clamped to the range the controller expects.
-                for (self.applied[env * dofs ..][0..dofs], action) |*applied, a| {
-                    applied.* = clamp(a, -1.0, 1.0);
-                }
-                self.rewards[at] = 0.0;
-                self.dones[at] = false;
-                self.ends[at] = .none;
-                self.bootstrap[at] = 0.0;
+                const batch_row: usize = t * envs + env;
+                const obs: []f32 = self.observations[batch_row * n_obs ..][0..n_obs];
+                self.env.observe(env, obs);
+                self.normalizeObservations(obs, true);
+                const action: []f32 = self.raw[batch_row * dofs ..][0..dofs];
+                self.log_probs[batch_row] = self.ppo.act(obs, action, random);
+                self.values[batch_row] = self.ppo.value(obs);
             }
-            // Live with the decision for `decimation` physics steps.
-            const hold: u32 = @max(self.options.decimation, 1);
-            for (0..hold) |_| {
-                const full: []const f32 = self.controller.apply(self.applied);
-                _ = self.fleet.step(full);
-                self.steps += envs;
-                for (0..envs) |env| {
-                    const at: usize = t * envs + env;
-                    self.episode_steps[env] += 1;
-                    self.batch.exposure += 1;
-                    if (self.fleet.failures[env]) {
-                        self.batch.failures += 1;
-                    }
-                    if (!self.dones[at]) {
-                        self.rewards[at] += self.fleet.rewards[env] / float(hold);
-                        self.batch.reward_sum += self.fleet.rewards[env];
-                        self.batch.reward_steps += 1;
-                    }
-                    if (self.fleet.dones[env]) {
-                        // How it ended, for the advantage - and, when it was cut short, what the state it
-                        // ended in is worth, valued before the filter it acted through is forgotten.
-                        if (!self.dones[at]) {
-                            self.ends[at] = switch (self.fleet.ends[env]) {
-                                .lost => .stop,
-                                .cap => .cut,
-                                .clip_end => if (self.options.clip_end == .bootstrap) .cut else .stop,
-                            };
-                            if (self.ends[at] == .cut) {
-                                self.observeTerminal(env, self.obs_scratch);
-                                self.normalize(self.obs_scratch, false);
-                                self.bootstrap[at] = self.ppo.value(self.obs_scratch);
-                            }
-                        }
-                        self.dones[at] = true;
-                        self.controller.forget(env);
-                        self.batch.ended += 1;
-                        self.batch.ended_length += self.episode_steps[env];
-                        self.episode_steps[env] = 0;
-                    }
+            // The environment clamps what reaches the character; the log-probability stays the sample PPO drew.
+            self.env.decide(self.raw[t * envs * dofs ..][0 .. envs * dofs], self.outcomes, self.terminal);
+            const held_steps: u32 = self.env.heldSteps();
+            self.steps += envs * held_steps;
+            for (self.outcomes, 0..) |outcome, env| {
+                const batch_row: usize = t * envs + env;
+                self.rewards[batch_row] = outcome.reward;
+                self.dones[batch_row] = outcome.ended > 0;
+                self.ends[batch_row] = outcome.end;
+                self.bootstrap[batch_row] = 0.0;
+                if (outcome.end == .cut) {
+                    // What the state it ended in is worth - from the environment's capture of it, taken before the
+                    // filter it acted through was forgotten. Valued now, after the decision: nothing the value reads
+                    // (the normaliser's statistics, the critic's weights) moves inside one. Normalised in place: the
+                    // terminal buffer is scratch, refilled by every `decide`.
+                    const terminal_obs: []f32 = self.terminal[env * n_obs ..][0..n_obs];
+                    self.normalizeObservations(terminal_obs, false);
+                    self.bootstrap[batch_row] = self.ppo.value(terminal_obs);
                 }
+                self.batch.exposure += held_steps;
+                self.batch.failures += outcome.failures;
+                self.batch.reward_sum += outcome.reward_sum;
+                self.batch.reward_steps += outcome.credited;
+                self.batch.ended += outcome.ended;
+                self.batch.ended_length += outcome.ended_length;
             }
             self.decisions += envs;
         }
 
         /// The batch is full: bootstrap its last values, work out the advantages, and dispatch
         /// the update. Returns how the batch went and starts the next one.
-        pub fn learn(self: *Self) !Stats {
+        pub fn learn(self: *Self) Stats {
             const envs: usize = self.options.envs;
             const horizon: usize = self.options.horizon;
             assertf(self.cursor >= horizon, @src(), "learn with {d} of {d} decisions collected", .{
@@ -675,23 +620,23 @@ pub fn Trainer(comptime M: type) type {
             });
             // The value of where each environment ended up, to bootstrap the last decisions.
             for (0..envs) |env| {
-                self.observe(env, self.obs_scratch);
-                self.normalize(self.obs_scratch, false);
+                self.env.observe(env, self.obs_scratch);
+                self.normalizeObservations(self.obs_scratch, false);
                 self.values[horizon * envs + env] = self.ppo.value(self.obs_scratch);
             }
 
             self.computeAdvantages();
-            try self.update(self.rng.random());
+            self.update(self.rng.random());
             _ = self.ppo.syncWeights();
             self.iterations += 1;
 
             const batch: Batch = self.batch;
             self.batch = .{};
             self.cursor = 0;
-            const assist_now: f32 = self.fleet.options.task.gains.assist;
+            const assist_now: f32 = self.env.fleet.options.task.gains.assist;
             // The next batch's helping hand: linearly down to nothing over `assist_batches`.
             const fade: f32 = float(self.iterations) / float(@max(self.options.assist_batches, 1));
-            self.fleet.options.task.gains.assist = self.options.assist_start * @max(0.0, 1.0 - fade);
+            self.env.fleet.options.task.gains.assist = self.options.assist_start * @max(0.0, 1.0 - fade);
             return .{
                 .exposure = batch.exposure,
                 .failures = batch.failures,
@@ -706,7 +651,7 @@ pub fn Trainer(comptime M: type) type {
 
         /// A whole batch in one call: `collect` until full, then `learn`. What a test or a
         /// chunk wants; a page calls the two halves itself, a slice per frame.
-        pub fn iterate(self: *Self) !Stats {
+        pub fn iterate(self: *Self) Stats {
             while (!self.collect(self.options.horizon)) {}
             return self.learn();
         }
@@ -742,7 +687,7 @@ pub fn Trainer(comptime M: type) type {
             seed: u64,
         ) !CloneResult {
             const n_obs: usize = self.n_obs;
-            const n_act: usize = self.subset.dofs;
+            const n_act: usize = self.env.subset.dofs;
             const rows: usize = labels.len / n_act;
             assertf(
                 observations.len == rows * n_obs and rows > 0,
@@ -753,7 +698,7 @@ pub fn Trainer(comptime M: type) type {
             const scratch: []f32 = self.obs_scratch[0..n_obs];
             for (0..rows) |row| {
                 @memcpy(scratch, observations[row * n_obs ..][0..n_obs]);
-                self.normalize(scratch, true);
+                self.normalizeObservations(scratch, true);
             }
             const before: f32 = self.cloneError(observations, labels);
             const batch: usize = self.options.minibatch;
@@ -761,14 +706,14 @@ pub fn Trainer(comptime M: type) type {
             defer self.gpa.free(x);
             const y: []f32 = try self.gpa.alloc(f32, batch * n_act);
             defer self.gpa.free(y);
-            var rng: std.Random.DefaultPrng = .init(seed);
-            const random: std.Random = rng.random();
+            var rng: Random.DefaultPrng = .init(seed);
+            const random: Random = rng.random();
             for (0..updates) |_| {
                 for (0..batch) |r| {
                     const row: usize = random.uintLessThan(usize, rows);
                     const into: []f32 = x[r * n_obs ..][0..n_obs];
                     @memcpy(into, observations[row * n_obs ..][0..n_obs]);
-                    self.normalize(into, false);
+                    self.normalizeObservations(into, false);
                     @memcpy(y[r * n_act ..][0..n_act], labels[row * n_act ..][0..n_act]);
                 }
                 self.ppo.cloneMinibatch(x, y);
@@ -779,27 +724,31 @@ pub fn Trainer(comptime M: type) type {
 
         /// The mean square error, per action number, between the policy's mean and the labels - over every row,
         /// on the CPU copy of the weights.
-        pub fn cloneError(self: *Self, observations: []const f32, labels: []const f32) f32 {
+        pub fn cloneError(
+            self: *Self,
+            observations: []const f32,
+            labels: []const f32,
+        ) f32 {
             const n_obs: usize = self.n_obs;
-            const n_act: usize = self.subset.dofs;
+            const n_act: usize = self.env.subset.dofs;
             const rows: usize = labels.len / n_act;
             const scratch: []f32 = self.obs_scratch[0..n_obs];
             var total: f64 = 0.0;
             for (0..rows) |row| {
                 @memcpy(scratch, observations[row * n_obs ..][0..n_obs]);
-                self.normalize(scratch, false);
+                self.normalizeObservations(scratch, false);
                 for (self.ppo.meanOf(scratch), labels[row * n_act ..][0..n_act]) |mean, label| {
                     total += (mean - label) * (mean - label);
                 }
             }
-            return @floatCast(total / @as(f64, @floatFromInt(rows * n_act)));
+            return @floatCast(total / float64(rows * n_act));
         }
 
         pub fn evaluate(self: *Self, decisions: usize, servo_only: bool) !Stats {
             const envs: usize = self.options.envs;
-            const dofs: usize = self.subset.dofs;
+            const dofs: usize = self.env.subset.dofs;
             const hold: u32 = @max(self.options.decimation, 1);
-            const judge: *track.Fleet = try track.Fleet.init(self.gpa, self.m, self.fleet.clips, .{
+            const judge: *track.Fleet = try track.Fleet.init(self.gpa, self.m, self.env.fleet.clips, .{
                 .envs = envs,
                 .capacity = 16,
                 .seed = evaluation_seed,
@@ -808,7 +757,7 @@ pub fn Trainer(comptime M: type) type {
                 .body_names = self.body_names,
             });
             defer judge.deinit();
-            var controller: policy.Controller = try policy.Controller.init(self.gpa, self.m, self.subset, envs, .{
+            var controller: policy.Controller = try .init(self.gpa, self.m, self.env.subset, envs, .{
                 .beta = self.options.beta,
                 .decimation = self.options.decimation,
             });
@@ -827,23 +776,23 @@ pub fn Trainer(comptime M: type) type {
             var ended_length: u64 = 0;
             for (0..decisions) |_| {
                 for (0..envs) |env| {
-                    const slot: []f32 = self.applied[env * dofs ..][0..dofs];
+                    const slot: []f32 = self.env.applied[env * dofs ..][0..dofs];
                     if (servo_only) {
                         @memset(slot, 0.0);
                     } else {
-                        track.stateOf(self.m, &judge.data[env], &self.sim_state);
+                        track.stateOf(self.m, &judge.data[env], &self.env.sim_state);
                         policy.observeFrom(
                             self.m,
-                            self.subset,
+                            self.env.subset,
                             judge,
                             judge.clips[judge.clip_of[env]],
                             judge.frame[env],
-                            self.sim_state,
-                            &self.views,
+                            self.env.sim_state,
+                            &self.env.views,
                             controller.lastAction(env),
                             self.obs_scratch,
                         );
-                        self.normalize(self.obs_scratch, false);
+                        self.normalizeObservations(self.obs_scratch, false);
                         self.ppo.actMean(self.obs_scratch, slot);
                         for (slot) |*a| {
                             a.* = clamp(a.*, -1.0, 1.0);
@@ -851,7 +800,7 @@ pub fn Trainer(comptime M: type) type {
                     }
                 }
                 for (0..hold) |_| {
-                    const full: []const f32 = controller.apply(self.applied);
+                    const full: []const f32 = controller.apply(self.env.applied);
                     _ = judge.step(full);
                     for (0..envs) |env| {
                         lengths[env] += 1;
@@ -915,15 +864,15 @@ pub fn Trainer(comptime M: type) type {
         }
 
         /// `epochs` passes over the batch in shuffled minibatches.
-        fn update(self: *Self, random: std.Random) !void {
-            const dofs: usize = self.subset.dofs;
+        fn update(self: *Self, random: Random) void {
+            const dofs: usize = self.env.subset.dofs;
             const rows: usize = self.options.minibatch;
             const transitions: usize = self.order.len;
             for (0..self.options.epochs) |_| {
                 random.shuffle(u32, self.order);
                 var first: usize = 0;
                 while (first + rows <= transitions) : (first += rows) {
-                    const staged = self.ppo.stage();
+                    const staged: Ppo.Staged = self.ppo.stage();
                     for (0..rows) |row| {
                         const at: usize = self.order[first + row];
                         const obs: []const f32 = self.observations[at * self.n_obs ..][0..self.n_obs];

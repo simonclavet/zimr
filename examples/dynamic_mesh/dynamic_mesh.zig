@@ -5,6 +5,8 @@
 //! draw path re-reads each frame (Step 3a). Drawn as a Model in a fixed camera.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const zeroes = std.mem.zeroes;
 const z = @import("zimr");
 
 const zm = @import("zm");
@@ -35,7 +37,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    var mesh: z.Mesh = std.mem.zeroes(z.Mesh);
+    var mesh: z.Mesh = zeroes(z.Mesh);
     mesh.vertexCount = 4;
     mesh.triangleCount = 2;
 
@@ -84,7 +86,7 @@ fn update(f: *z.Frame, s: *State) void {
         base_positions[6] * radial, base_positions[7] * radial,  0,
         base_positions[9] * radial, base_positions[10] * radial, 0,
     };
-    z.updateMeshBuffer(s.quad, 0, std.mem.sliceAsBytes(corners[0..]), 0);
+    z.updateMeshBuffer(s.quad, 0, sliceAsBytes(corners[0..]), 0);
 
     z.clearViewport(f, common.palette.bg);
 

@@ -1,22 +1,39 @@
 //! lint:alias sound
-// src/sound.zig - runtime audio API (raylib-shaped surface).
-// Wraps `web.audio` (Web Audio JS bridge) and `codecs.audio` (WAV
-// codec + format dispatch) into the Wave/Sound/Music/AudioStream
-// types raylib programs expect.  Layout matches the raylib 6.0
-// audio surface as closely as the web platform allows:
-//   audio_device - per-process singleton context lifecycle
-//   waves        - Wave-typed loading + manipulation + filter chain
-//   composer     - zimr-original synthesis primitives
-//   sounds       - Sound-typed playback (one-shot SFX)
-//   music        - Music-typed streaming (Phase 6+)
-// Web platform constraints worth noting:
-//   - Multiple AudioContexts work in modern browsers but burn CPU;
-//     `audio_device` owns ONE shared context.
-//   - `decodeAudioData` is async; OGG sounds enter a "pending" state
-//     and finalize a few frames later (`isSoundReady` polls).
-//   - Source nodes are one-shot.  Every `playSound` call creates a
-//     fresh node - `loadSoundAlias` is degenerate (returns the same
-//     buffer-id; aliasing is implicit at play time).
+//! lint:off arch-check: WebAudio - native audio comes with C5
+// src/sound.zig - the engine's sound.
+//
+// THE TWO LAYERS. Sound in the engine is moving from the browser's audio graph to the engine's own mixer (platforms
+// plan, decision D10, steps C5), and during the move this file holds both:
+//
+//   mixer - the engine's one mixer. Every sound is a voice reading a source - samples in memory, or a generator - with
+//           its own volume, pan and pitch. Once a drawn frame, after the app's update, the mixer mixes enough frames
+//           of every playing voice to keep a margin queued at the platform's output, and queues them. It plays through
+//           the headless output today; the browser's (an AudioWorklet) and Windows' (WASAPI) come next.
+//
+//   audio_device, waves, composer, sounds, streams, music, analyser - the raylib-shaped API apps use today, built on
+//           the browser's audio graph (`web.audio`): each sound a buffer the browser plays and mixes itself. Once every
+//           platform's output exists, these are rebuilt on the mixer, keeping their names, and the graph goes.
+//
+// HOW A SOUND REACHES A SPEAKER, through the mixer:
+//
+//   app: play(source) ---> a voice in the mixer          (main thread, during the app's update)
+//   engine, after update: mixer.mixFrame()               (main thread, once a drawn frame)
+//       asks the output how many frames still wait, mixes the difference up to the margin - 50 ms at first -
+//       every voice read at its pitch, scaled by its gains, summed, held to -1..1 - and queues the block
+//   platform's output: plays the queue on its own clock  (a device's thread, the browser's worklet, or a headless
+//       run's clock), playing silence - an underrun - when the queue runs dry; the mixer then widens its margin
+//
+// THE FORMAT is fixed: 48 000 frames a second, two channels, 32-bit float samples interleaved left, right, left,
+// right. A frame is one moment of sound, one sample per channel; durations of sound are counted in frames, exactly.
+//
+// THE SECTIONS, in order: mixer (the foundation the others are being moved onto), audio_device (the mixer's start
+// and stop, and the browser's context), analyser, waves (samples in memory, and their edits), composer (synthesis),
+// streams (pushed samples), music (long sounds), sounds (one-shot effects).
+//
+// RELATED FILES: src/platform/contract.zig (the four audio requests an output answers), src/platform/headless.zig (an
+// output with no speaker, playing on the run's clock, whose sound a script can capture), src/codecs.zig (`audio`:
+// WAV decoding and encoding), and the backends tutorial's chapter on sound, which explains the mixer's arithmetic
+// with worked numbers.
 
 const std = @import("std");
 const ArrayList = std.ArrayList;
@@ -26,21 +43,2894 @@ const expectEqual = std.testing.expectEqual;
 const expectEqualSlices = std.testing.expectEqualSlices;
 const expectError = std.testing.expectError;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const testing_allocator = std.testing.allocator;
+const readInt = std.mem.readInt;
+const writeInt = std.mem.writeInt;
 const builtin = @import("builtin");
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
+const cosTurns = zm.cosTurns;
 const float64 = zm.float64;
+const assert = zm.assert;
+const asBytes = std.mem.asBytes;
 const clamp = zm.clamp;
+const cache_line = std.atomic.cache_line;
 const float = zm.float;
 
+// lint:off browser-call: WebAudio; native audio comes with C5
 const web = @import("web.zig");
 const codecs = @import("codecs.zig");
+const platform = @import("platform.zig");
+const contract = platform.contract;
 const types = @import("types.zig");
 
 const Wave = types.Wave;
 const Sound = types.Sound;
 const Music = types.Music;
 const AudioStream = types.AudioStream;
+
+// ============================================================================
+// SECTION - mixer (the engine's one mixer: voices read from their sources, mixed each frame, pushed to the platform)
+// ============================================================================
+// Every sound the engine plays is a voice: a source of samples, read as it is needed, with its own volume, pan and
+// pitch. Once a frame, after the app's update, the mixer tops the platform's queue up to a margin (`render_ahead`):
+// it mixes that many frames of every playing voice into one block, and queues the block. The platform plays its queue
+// on its own clock - a device's, or a headless run's - so the mixer runs on the main thread, owns its voices alone,
+// and mixes the same samples on every run of the same frames.
+//
+// The format is fixed: 48 000 frames a second, two channels, 32-bit float samples, interleaved - left, right, left,
+// right. A frame is one moment of sound: one sample per channel.
+//
+// A voice's position in a sample source is counted in the source's frames as 32.32 fixed point: an unsigned 64-bit
+// integer whose high 32 bits are whole frames and whose low 32 bits are a fraction of a frame, in units of 1/2^32.
+// Pitch moves the position by fractions of a frame each mixed frame; fixed point adds those fractions exactly, frame
+// after frame, where a float position would gather rounding error over minutes of playing. Between the two source
+// frames around the position, the sample is interpolated linearly.
+
+pub const mixer = struct {
+    /// Frames a second the engine mixes.
+    pub const sample_rate: u32 = 48_000;
+    /// Channels in a mixed frame: left and right.
+    pub const channel_count: u8 = 2;
+    /// The most voices playing at once. A sound asked for when every voice is playing is not played: `play` returns
+    /// `Voice.none`.
+    pub const voice_capacity: usize = 64;
+
+    /// The margin kept queued, in frames, follows the gaps between the app's frames. Between two frames the output
+    /// plays what is queued, and the next frame tops it up: the margin must outlast the longest gap, or the output runs
+    /// dry - an underrun, heard as a gap in the sound. Each frame measures the gap since the last by the output's own
+    /// clock - the frames it played since the last top-up - and the mixer keeps the longest gap of the last thirty
+    /// seconds of playing (`gap_bucket_count` buckets of `gap_bucket_frames`). The margin is that gap and 25 ms more,
+    /// never less than 50 ms nor more than 200 ms. A stall that recurs is then ridden out before it ever empties the
+    /// queue, and thirty seconds after the stalls stop the margin is back at 50 ms. A larger margin does not delay a
+    /// new sound, which begins inside the queue (`late_start_lead_frames`).
+    pub const render_ahead_initial_frames: u32 = 2_400;
+    pub const render_ahead_safety_frames: u32 = 1_200;
+    pub const render_ahead_most_frames: u32 = 9_600;
+    pub const gap_bucket_frames: u32 = 48_000;
+    pub const gap_bucket_count: usize = 30;
+    /// How far after the output's play position a voice started this frame begins, inside the queue: 10 ms. An
+    /// output knows its play position only approximately - a browser's worklet reports what it played every 256
+    /// frames, a device's thread copies a period at a time - so a start any closer could fall on frames already
+    /// played and lose its first milliseconds.
+    pub const late_start_lead_frames: u32 = 480;
+
+    /// The platform's output, as the mixer uses it: the contract's audio requests - those of a pushed output, and the
+    /// one that opens a pulled output. They are held as function
+    /// pointers so that only a program that starts sound compiles the platform's own (`platformOutput`) - a platform
+    /// whose output is not written yet refuses at compile time - and so that a test can stand in an output of its own.
+    pub const Output = struct {
+        start: *const fn (wanted: contract.AudioFormat) contract.AudioFormat,
+        queue: *const fn (samples: []const f32) void,
+        queued_frames: *const fn () u32,
+        mix_into_queued: *const fn (samples: []const f32) void,
+        stop: *const fn () void,
+        /// Whether the output calls the renderer from a thread of its own - a device's audio thread - rather than
+        /// from the main thread. Then the main side never runs the renderer itself: it waits for a full queue to empty
+        /// (`Mixer.sendToRenderer`), and frees samples only once the renderer lets them go (`Mixer.releaseSamples`).
+        calls_renderer_from_another_thread: bool = false,
+        /// Opens the output so that it pulls its frames from the renderer (`contract.AudioOutputKind.pull`); null for
+        /// an output the mixer pushes to.
+        start_pulling: ?*const fn (
+            wanted: contract.AudioFormat,
+            render_callback: contract.AudioRenderCallback,
+        ) contract.AudioFormat = null,
+    };
+
+    /// The output of the platform the program was built for (`platform.current`), pulled from when the platform says
+    /// its output pulls (`audio_output_kind`).
+    pub fn platformOutput() Output {
+        return outputOf(platform.current);
+    }
+
+    /// The output of `Platform`, one of `platform.zig`'s: the tests name the headless one, whose clock they drive,
+    /// whatever system they run on.
+    fn outputOf(comptime Platform: type) Output {
+        const output_kind: contract.AudioOutputKind = comptime Platform.audio_output_kind;
+        const pulls: bool = output_kind != .push;
+        return .{
+            .start = &Platform.startAudio,
+            .queue = &Platform.queueAudio,
+            .queued_frames = &Platform.queuedAudioFrames,
+            .mix_into_queued = &Platform.mixIntoQueuedAudio,
+            .stop = &Platform.stopAudio,
+            .start_pulling = if (pulls) &Platform.startAudioPull else null,
+            .calls_renderer_from_another_thread = output_kind == .pull_on_audio_thread,
+        };
+    }
+
+    /// A voice's name: the index of its slot in the low 8 bits, and that slot's generation in the 24 bits above. A
+    /// slot's generation moves on when its voice ends, so a name kept after its voice ended names nothing: the slot's
+    /// next voice answers to a new name, and a call with the old one finds no voice and does nothing. `none` names no
+    /// voice; it cannot be made by a slot, since slot 255 is past the capacity.
+    pub const Voice = enum(u32) {
+        none = zm.maxInt(u32),
+        _,
+
+        /// The name of the voice now playing in slot `slot_index`, whose generation is `slot_generation`.
+        fn ofSlot(slot_index: usize, slot_generation: u24) Voice {
+            const generation_bits: u32 = @as(u32, slot_generation) << 8;
+            const slot_bits: u32 = @intCast(slot_index);
+            return @fromBackingInt(generation_bits | slot_bits);
+        }
+
+        fn slotIndex(voice: Voice) usize {
+            const slot_bits: u32 = @backingInt(voice) & 0xff;
+            return slot_bits;
+        }
+
+        fn generation(voice: Voice) u24 {
+            const generation_bits: u32 = @backingInt(voice) >> 8;
+            return @intCast(generation_bits);
+        }
+    };
+
+    /// Samples in memory, played from their start: interleaved, `channels` of them per frame (1 or 2), recorded at
+    /// their own `sample_rate`. A source recorded at another rate than the mixer's still plays at its own speed: its
+    /// voice's position moves by its rate over the mixer's each mixed frame.
+    pub const Samples = struct {
+        samples: []const f32,
+        channels: u8,
+        sample_rate: u32,
+        is_looping: bool = false,
+    };
+
+    /// A source that makes its frames when they are needed - a tone, a synthesizer. `generate` writes stereo frames
+    /// into `frames` (two samples each, left then right), the first of them being frame `first_frame` of the voice,
+    /// at the mixer's rate. A generator does not end by itself; stopping its voice ends it.
+    ///
+    /// Its state - a frequency, a phase, a filter's memory - is the voice's own. `play` copies `initial_state` into
+    /// the voice (at most `generator_state_capacity` bytes, needing no more alignment than 16), and `generate` is
+    /// handed the voice's copy, to read and change as it likes. Nothing is shared: `generate` runs where the renderer
+    /// runs - on a device's audio thread, or in the browser's audio worklet, which cannot see the app's memory at
+    /// all - and the main side changes the sound through the voice's commands, never by writing to a state.
+    ///
+    /// `channels` says what its frames hold, as a sample source's does, and so how a pan places it (`panLawOf`): 1 when
+    /// both samples of a frame are the same sound - a mono tone, placed at constant power - and 2 when they are two
+    /// channels of a stereo sound, balanced.
+    pub const Generator = struct {
+        generate: *const fn (state: *anyopaque, frames: []f32, first_frame: u64) void,
+        initial_state: []const u8 = &.{},
+        channels: u8 = 1,
+    };
+
+    /// The most bytes a generator's state may hold (`Generator.initial_state`): it travels inside the play command.
+    pub const generator_state_capacity: usize = 64;
+
+    /// What a voice plays.
+    pub const Source = union(enum) {
+        samples: Samples,
+        generator: Generator,
+    };
+
+    /// How a voice starts: its volume (1 plays the source as recorded), its pan (-1 left, 0 centre, 1 right; see
+    /// `PanLaw`), its pitch (2 plays an octave up, and twice as fast; 0.5 an octave down, and half as fast; held to at
+    /// least `lowest_pitch`).
+    pub const PlayOptions = struct {
+        volume: f32 = 1,
+        pan: f32 = 0,
+        pitch: f32 = 1,
+    };
+
+    /// The lowest pitch a voice plays at: 1/64, six octaves down. A pitch of 0 would hold a voice on one sample
+    /// forever.
+    pub const lowest_pitch: f32 = 1.0 / 64.0;
+    /// The highest pitch a voice plays at: 64, six octaves up, as far above as `lowest_pitch` is below. A position's
+    /// step - pitch times the source's rate over the mixer's, in units of 2^-32 of a frame - must fit 64 bits.
+    pub const highest_pitch: f32 = 64.0;
+
+    comptime {
+        // A voice's name keeps its slot in 8 bits; `Voice.none`'s slot bits, all ones, must name no slot.
+        if (voice_capacity >= 0xff) {
+            @compileError("the mixer's voice slots must number fewer than 255, " ++
+                "so that a voice's name keeps its slot in 8 bits");
+        }
+    }
+
+    /// How long a voice takes to fade to silence when stopped or paused: 5 ms. A voice cut off mid-waveform jumps
+    /// to zero between two samples, and a jump is heard as a click; 5 ms is too short to hear as a fade.
+    pub const fade_out_frames: u32 = 240;
+
+    /// A fade out a voice has pending: the next mix ramps it to silence over `fade_out_frames`, then ends it
+    /// (`stopVoice`) or pauses it (`pauseVoice`).
+    const FadeOut = enum { none, then_stop, then_pause };
+
+    /// The fixed-point position in a source (`readSampleSource` explains it): 32 bits of fraction, so one whole source
+    /// frame is 2^32.
+    const position_fraction_bits: u6 = 32;
+    const position_one_frame: u64 = @as(u64, 1) << position_fraction_bits;
+    /// The mask taking a position's fraction, and the factor turning that fraction into a float from 0 to 1.
+    const position_fraction_mask: u64 = position_one_frame - 1;
+    const position_fraction_to_float: f32 = 1.0 / float(position_one_frame);
+
+    /// A pair of gains, one per channel.
+    const StereoGains = struct {
+        left: f32,
+        right: f32,
+    };
+
+    /// One voice's slot: what it plays, where it is, and how loud and where in the stereo field.
+    const VoiceSlot = struct {
+        /// Moves on each time the slot's voice ends (`endVoice`), so that an old name no longer matches.
+        generation: u24 = 0,
+        is_playing: bool = false,
+        /// Started since the last frame's mix: its first frames go inside the queue (`startNewVoicesInsideQueue`).
+        is_new: bool = false,
+        /// Paused (`pauseVoice`): the voice keeps its slot and its place in its source, and is not mixed.
+        is_paused: bool = false,
+        /// A fade to silence under way, before the voice stops or pauses, and its frames still to mix: a fade lasts
+        /// `fade_out_frames` whatever the blocks it falls across.
+        fade_out: FadeOut = .none,
+        fade_frames_left: u32 = 0,
+        /// The id of the registered samples the voice plays (`SamplesId`); null for a generator, and once the voice
+        /// plays its own copy of its last frames (`Renderer.fadeVoicesReading`).
+        samples_id: ?SamplesId = null,
+        /// The pan law the voice started with (`panLawOf` its source), kept when its source is replaced by its tail.
+        pan_law: PanLaw = .constant_power,
+        /// A generator voice's state, copied from its play command (`Generator.initial_state`) and handed to its
+        /// `generate`.
+        generator_state: [generator_state_capacity]u8 align(16) = undefined,
+        /// Room for the voice's last frames, copied here when the samples it reads are about to be freed: it then fades
+        /// out over this copy, at the mixer's rate and its own pitch already applied (`fadeVoicesReading`).
+        tail_samples: [fade_out_frames * channel_count]f32 = undefined,
+        source: Source = undefined,
+        /// Where the voice is in a sample source, in the source's frames, 32.32 fixed point.
+        source_position: u64 = 0,
+        /// How many frames a generator source has made so far: the next block's `first_frame`.
+        generated_frame_count: u64 = 0,
+        volume: f32 = 1,
+        pan: f32 = 0,
+        pitch: f32 = 1,
+        /// The gains the last mixed block ended with. The next block moves from them to the gains its volume and pan
+        /// ask for, a step each frame, so that a change of either makes no click (`mixVoiceInto`).
+        last_block_gains: StereoGains = .{ .left = 0, .right = 0 },
+    };
+
+    /// How a voice's pan places it between the two speakers, by what its source holds.
+    ///
+    /// Loudness. A gain multiplies a sound's amplitude - how far its samples swing - and the power it carries goes with
+    /// the amplitude squared. Two speakers playing the same sound are heard about as loud as the sum of their powers:
+    /// left gain squared plus right gain squared. Loudness is compared in decibels (dB), ten times the base-10
+    /// logarithm of a ratio of powers: half the power is 3 dB less, a quarter 6 dB less. So a gain of 0.707 - whose
+    /// square is one half - is 3 dB down, and a gain of 0.5 is 6 dB down.
+    ///
+    /// A mono source - one channel of samples, or a generator of one - is one sound, to be placed somewhere between
+    /// the speakers by the constant-power law. The pan, from -1 (left) to 1 (right), turns an angle from 0, through an
+    /// eighth of a turn at the centre (45 degrees), to a quarter turn at the right (90 degrees); the left gain is the
+    /// angle's cosine and the right gain its sine. Cosine squared plus sine squared is always 1, so the sound keeps
+    /// the same power, and the same loudness, wherever it is placed. A plain crossfade - the left gain falling in a
+    /// straight line as the right one rises - would carry 0.5 to each speaker at the centre: half the power, 3 dB
+    /// quieter in the middle than at either side.
+    ///
+    /// A stereo source already holds its own placement - its left channel for the left speaker, its right for the
+    /// right - and at the centre both play as recorded. Its pan is a balance: the side it moves toward stays as
+    /// recorded, and the other side fades out along a cosine. Placed by the constant-power law instead, a stereo
+    /// recording would play 3 dB quieter than recorded at the centre.
+    ///
+    ///     pan      constant power       balance           plain crossfade
+    ///              left    right        left    right     left    right    power
+    ///     -1       1.000   0.000        1.000   0.000     1.000   0.000    1.000
+    ///     -0.5     0.924   0.383        1.000   0.707     0.750   0.250    0.625   (-2 dB)
+    ///      0       0.707   0.707        1.000   1.000     0.500   0.500    0.500   (-3 dB)
+    ///      0.5     0.383   0.924        0.707   1.000     0.250   0.750    0.625   (-2 dB)
+    ///      1       0.000   1.000        0.000   1.000     0.000   1.000    1.000
+    ///
+    /// Angles here are in turns, as `cosTurns` and `sinTurns` take them: a whole turn is 360 degrees.
+    const PanLaw = enum { constant_power, balance };
+
+    /// A voice's left and right gains: its volume, times the gains its pan gives by `pan_law` (`PanLaw`).
+    fn gainsForPan(volume: f32, pan: f32, pan_law: PanLaw) StereoGains {
+        const clamped_pan: f32 = clamp(pan, -1, 1);
+        switch (pan_law) {
+            .constant_power => {
+                // From 0 at the left to 2 at the right, then to an angle from 0 to a quarter turn.
+                const pan_from_left_edge: f32 = clamped_pan + 1;
+                const pan_angle_turns: f32 = pan_from_left_edge / 8;
+                const left_gain: f32 = cosTurns(pan_angle_turns);
+                const right_gain: f32 = sinTurns(pan_angle_turns);
+                return .{ .left = volume * left_gain, .right = volume * right_gain };
+            },
+            .balance => {
+                // The side away from the pan fades along a cosine, from 1 at the centre to 0 at the edge: at pan
+                // 0.5 an eighth of a turn, 0.707.
+                const far_side_angle_turns: f32 = @abs(clamped_pan) / 4;
+                const far_side_gain: f32 = cosTurns(far_side_angle_turns);
+                const is_toward_right: bool = clamped_pan > 0;
+                const left_gain: f32 = if (is_toward_right) far_side_gain else 1;
+                const right_gain: f32 = if (is_toward_right) 1 else far_side_gain;
+                return .{ .left = volume * left_gain, .right = volume * right_gain };
+            },
+        }
+    }
+
+    /// The pan law for a source (`PanLaw`): balance for a source of two channels or more - samples, or a generator
+    /// saying so - and constant power otherwise.
+    fn panLawOf(source: Source) PanLaw {
+        return switch (source) {
+            .samples => |sample_source| if (sample_source.channels >= 2) .balance else .constant_power,
+            .generator => |generator| if (generator.channels >= 2) .balance else .constant_power,
+        };
+    }
+
+    // ---- The two sides of the mixer ----
+    //
+    // A thread is one line of execution: a program can run several at once, each on its own processor core, all
+    // reading and writing the same memory. Sound gets a thread of its own, the audio thread, because the device asks
+    // for each block of sound at a time of its own choosing - every few milliseconds - and a block not ready in time is
+    // a gap heard. The main thread, which runs the app and draws its frames, may be busy for longer than that.
+    //
+    // So the mixer has two sides. The renderer owns the voices and renders them, block by block, where the sound is
+    // played - on the audio thread when the device asks from there. The main side, `Mixer`, is what the app calls: it
+    // names the voices, and asks the renderer for every change by a command. Commands travel one way through a queue;
+    // notices - a voice ended, samples let go of - travel back through another. The two sides share nothing else, so
+    // they need no lock: a lock would let one thread make the other wait, and the audio thread must never wait.
+    //
+    //     main side (Mixer), main thread                          renderer (Renderer), audio thread
+    //       play(sound)    names the voice: slot 5, at once
+    //                      command "start it in slot 5"  ----->     applied at the start of its next block
+    //                                                               ... the voice plays, block after block ...
+    //       each frame     reads: slot 5 is free again   <-----     notice "slot 5's voice ended"
+
+    /// A queue of items between two threads - one only ever pushing items in, the other only ever popping them out -
+    /// with no lock: neither thread ever waits for the other.
+    ///
+    /// The items lie in a ring of `capacity` places, used round and round. Two counters say where things stand:
+    /// `pushed_count`, the items pushed since the start, and `popped_count`, the items popped. Each is written by one
+    /// thread only - the pushing thread writes its count, the popping thread its own - so no two threads ever write the
+    /// same variable. Their difference is the items waiting: none means empty, `capacity` means full. An item's place
+    /// is its count modulo the capacity. With room for 4, after 6 pushes and 3 pops:
+    ///
+    ///     place          0       1       2       3
+    ///     item           item 4  item 5  -       item 3       pushed_count 6, popped_count 3: 3 waiting
+    ///                                    ^ next push (6 mod 4 = 2)          ^ next pop (3 mod 4 = 3)
+    ///
+    /// The capacity is a power of two, so "modulo the capacity" is a bit mask: 6 mod 4 is 6 & 3, which keeps the low
+    /// two bits of 110 - 10, that is 2 - and needs no division.
+    ///
+    /// The order of writes. A processor, and the compiler before it, may make writes visible to other cores in another
+    /// order than the program wrote them. So the counters are atomic, and their stores and loads say what must be seen
+    /// in order: the pushing thread writes the item, then stores its counter with release ordering - every write before
+    /// it is visible to a thread that loads the counter with acquire ordering and sees the new count. So the popping
+    /// thread, loading the count before reading the item, always finds the item whole. The same holds the other way:
+    /// the popping thread stores its count after reading the item out, and the pushing thread loads that count before
+    /// it writes over the place, so it never overwrites an item not yet read.
+    ///
+    /// Cache lines. Cores pass memory between them in lines of 64 bytes (128 on some), and a core writing a line takes
+    /// it from the others. Were both counters on one line, each push would take the line from the popping core and each
+    /// pop would take it back. So each side's counter sits on a line of its own; and each side keeps the other's
+    /// counter as it last loaded it, loading the real one only when that copy says the queue is full (for the pushing
+    /// thread) or empty (for the popping thread) - most calls touch no line the other side writes. A copy can only be
+    /// behind the real counter, which only makes the queue look fuller or emptier than it is: never wrong.
+    ///
+    /// Wrapping. The counters are `usize` - a 32-bit target has no 64-bit atomic operations - so after 4 294 967 295
+    /// pushes a count wraps around to 0. Every subtraction and addition of counts wraps the same way (`-%`, `+%`), and
+    /// the difference stays right: pushed 2 (after wrapping) less popped 4 294 967 294 (not yet) is 4, the true number
+    /// waiting. And a power of two divides 2^32, so the mask still finds the right place.
+    pub fn SingleProducerSingleConsumerQueue(comptime Item: type, comptime capacity: usize) type {
+        comptime {
+            const is_power_of_two: bool = capacity != 0 and (capacity & (capacity - 1)) == 0;
+            if (!is_power_of_two) {
+                @compileError("a queue's capacity is a power of two");
+            }
+        }
+        return struct {
+            /// The ring of places.
+            items: [capacity]Item = undefined,
+            /// The pushing thread's cache line, and the popping thread's.
+            pushing_side: PushingSide align(cache_line) = .{},
+            popping_side: PoppingSide align(cache_line) = .{},
+
+            const Queue = @This();
+            /// A count's place in the ring is its low bits: the capacity less one, as a mask.
+            const item_index_mask: usize = capacity - 1;
+
+            const PushingSide = struct {
+                /// Items pushed since the start, wrapping: stored by the pushing thread, loaded by the popping one.
+                pushed_count: std.atomic.Value(usize) = .{ .raw = 0 },
+                /// `popped_count` as the pushing thread last loaded it, never ahead of the real one.
+                popped_count_last_seen: usize = 0,
+            };
+
+            const PoppingSide = struct {
+                /// Items popped since the start, wrapping: stored by the popping thread, loaded by the pushing one.
+                popped_count: std.atomic.Value(usize) = .{ .raw = 0 },
+                /// `pushed_count` as the popping thread last loaded it, never ahead of the real one.
+                pushed_count_last_seen: usize = 0,
+            };
+
+            /// Appends `item`; false, and nothing appended, when the queue is full. Pushing thread only.
+            pub fn push(queue: *Queue, item: Item) bool {
+                const pushed_count: usize = queue.pushing_side.pushed_count.load(.monotonic);
+                const waiting_by_last_seen_count: usize = pushed_count -% queue.pushing_side.popped_count_last_seen;
+                if (waiting_by_last_seen_count == capacity) {
+                    // Full by the popping thread's count as last seen - it may have popped since: load its count.
+                    queue.pushing_side.popped_count_last_seen = queue.popping_side.popped_count.load(.acquire);
+                    const waiting_now: usize = pushed_count -% queue.pushing_side.popped_count_last_seen;
+                    if (waiting_now == capacity) {
+                        return false;
+                    }
+                }
+                const item_index: usize = pushed_count & item_index_mask;
+                queue.items[item_index] = item;
+                // Stored after the item is written: a popping thread that sees the new count sees the item whole.
+                const new_pushed_count: usize = pushed_count +% 1;
+                queue.pushing_side.pushed_count.store(new_pushed_count, .release);
+                return true;
+            }
+
+            /// Takes the oldest item; null when the queue is empty. Popping thread only.
+            pub fn pop(queue: *Queue) ?Item {
+                const popped_count: usize = queue.popping_side.popped_count.load(.monotonic);
+                const is_empty_by_last_seen_count: bool = popped_count == queue.popping_side.pushed_count_last_seen;
+                if (is_empty_by_last_seen_count) {
+                    // Empty by the pushing thread's count as last seen - it may have pushed since: load its count.
+                    queue.popping_side.pushed_count_last_seen = queue.pushing_side.pushed_count.load(.acquire);
+                    const is_empty_now: bool = popped_count == queue.popping_side.pushed_count_last_seen;
+                    if (is_empty_now) {
+                        return null;
+                    }
+                }
+                const item_index: usize = popped_count & item_index_mask;
+                const item: Item = queue.items[item_index];
+                // Stored after the item is read out: a pushing thread that sees the new count may write over its place.
+                const new_popped_count: usize = popped_count +% 1;
+                queue.popping_side.popped_count.store(new_popped_count, .release);
+                return item;
+            }
+        };
+    }
+
+    /// A voice's name and whether its sample source is to loop (`Mixer.setLooping`).
+    const VoiceLoopingChange = struct {
+        voice: Voice,
+        is_looping: bool,
+    };
+
+    /// A voice's name and a number: what a setter asks for.
+    const VoiceParameterChange = struct {
+        voice: Voice,
+        value: f32,
+    };
+
+    /// A sample buffer's name in the registry both sides keep (`Mixer.samples_registry`,
+    /// `Renderer.registered_samples`): its index there. A play command names its samples by it rather than by an
+    /// address, so that the command means the same in the renderer's memory wherever that memory is - in the browser's
+    /// audio worklet, a memory of its own, into which the buffer was copied when it was registered (`RendererHost`).
+    pub const SamplesId = u16;
+
+    /// The most sample buffers registered at once: every sound loaded and played, and every buffer an app plays itself.
+    pub const samples_registry_capacity: usize = 512;
+
+    /// Registered samples as a play command carries them: by their id, with their format.
+    const RegisteredSamplesSource = struct {
+        samples_id: SamplesId,
+        /// 1 for mono, 2 for stereo; a buffer of more channels gives its first two (`readSampleSource`).
+        channels: u8,
+        /// The frames a second the buffer was recorded at; the renderer reads it at the mixer's rate.
+        sample_rate: u32,
+        is_looping: bool,
+    };
+
+    /// A generator as a play command carries it: its function and its channels; its state travels beside it
+    /// (`VoiceToStart.generator_state`). The function's address means the same function on both sides: natively the
+    /// two sides are one program; in the browser, a function's address in wasm is its index in the module's table of
+    /// functions, the same in every instance of the module - the worklet's included.
+    const GeneratorToStart = struct {
+        generate: *const fn (state: *anyopaque, frames: []f32, first_frame: u64) void,
+        channels: u8,
+    };
+
+    /// A source as a play command carries it: samples by their id, a generator by its function - nothing that points
+    /// into the main side's memory.
+    const SourceToStart = union(enum) {
+        samples: RegisteredSamplesSource,
+        generator: GeneratorToStart,
+    };
+
+    /// A voice to start: the slot and generation its name was given by the main side, its source, its options, and -
+    /// for a generator - its state, copied in when the command is sent, so that the caller's may go at once.
+    const VoiceToStart = struct {
+        voice: Voice,
+        source: SourceToStart,
+        /// Its volume, pan and pitch to start at.
+        options: PlayOptions,
+        generator_state: [generator_state_capacity]u8 align(16) = undefined,
+    };
+
+    /// Samples entering the registry under an id. It is the one command that holds an address - where the samples lie
+    /// in the main side's memory: natively the renderer reads them there; for the browser's worklet the samples
+    /// themselves are sent, and copied into its memory (`forwardCommands`).
+    const SamplesToRegister = struct {
+        samples_id: SamplesId,
+        samples: []const f32,
+    };
+
+    /// What the main side asks of the renderer: applied at the start of the renderer's next block, in the order asked
+    /// (`Renderer.applyCommand`). A command naming a voice that has ended since reaches nothing.
+    const RendererCommand = union(enum) {
+        /// Start a voice, in the slot its name was given.
+        play: VoiceToStart,
+        /// Fade the voice out over `fade_out_frames`, then end it.
+        stop: Voice,
+        /// Fade the voice out, then hold it where it fell silent.
+        pause: Voice,
+        /// Play a paused voice on from where it fell silent.
+        resume_voice: Voice,
+        /// The voice's volume, pan or pitch from the next block on.
+        set_volume: VoiceParameterChange,
+        set_pan: VoiceParameterChange,
+        set_pitch: VoiceParameterChange,
+        /// Whether the voice's sample buffer loops.
+        set_looping: VoiceLoopingChange,
+        /// The volume of all the sound at once.
+        set_master_volume: f32,
+        /// Take these samples into the registry, under their id.
+        register_samples: SamplesToRegister,
+        /// Let go of the samples registered under this id: every voice reading them copies what it still needs and
+        /// fades out over the copy (`Renderer.fadeVoicesReading`), the id leaves the registry, and the renderer says
+        /// so (`RendererNotice.samples_released`).
+        release_samples: SamplesId,
+    };
+
+    /// What the renderer tells the main side (`Mixer.readRendererNotices`).
+    const RendererNotice = union(enum) {
+        /// The voice in this slot ended - its source ran out, or its fade was done - and the slot is free again. A
+        /// slot's index fits in 8 bits: there are fewer than 255 slots (checked with `voice_capacity`).
+        voice_ended: u8,
+        /// Nothing reads the samples registered under this id any more, and the id is free: the main side may free
+        /// them.
+        samples_released: SamplesId,
+    };
+
+    /// The command queue: room for the commands of many frames - more than an app sends in one - and the renderer
+    /// takes them all at each block.
+    const RendererCommandQueue = SingleProducerSingleConsumerQueue(RendererCommand, 1024);
+
+    /// The places in the notice queue. It never fills: a slot ends once, and is not used again before the main side
+    /// reads its notice; an id is released once, and is not used again before its notice is read either. So at most
+    /// one notice per slot and one per id wait at once - 64 + 512 = 576 of the 1 024 places.
+    const notice_queue_capacity: usize = 1024;
+    const RendererNoticeQueue = SingleProducerSingleConsumerQueue(RendererNotice, notice_queue_capacity);
+
+    comptime {
+        const most_notices_waiting: usize = voice_capacity + samples_registry_capacity;
+        if (most_notices_waiting > notice_queue_capacity) {
+            @compileError("the notice queue must hold a notice for every voice slot and every samples id at once");
+        }
+    }
+
+    /// The two queues between the sides.
+    pub const RendererQueues = struct {
+        commands: RendererCommandQueue = .{},
+        notices: RendererNoticeQueue = .{},
+    };
+
+    /// The rendering side: the voices, mixed block by block (`render`).
+    ///
+    /// The words, for a reader new to sound. A sound is a sequence of samples: numbers from -1 to 1, the positions of a
+    /// loudspeaker's cone at evenly spaced instants - 48 000 of them each second (`sample_rate`). Stereo sound has two
+    /// channels, left and right, and a frame is one sample of each; the mixer's samples are interleaved - a left
+    /// sample, then a right one, frame after frame. A block is a run of frames rendered at once: the 128 frames a
+    /// browser asks for, or a device's period of a few milliseconds. A voice is one sound playing - a buffer of samples
+    /// being read, or a generator making its frames - with its volume (how loud: 1 as recorded, 0 silent), its pan
+    /// (where between the speakers: -1 left, 0 centre, 1 right) and its pitch (how fast it is read: 2 is twice as fast,
+    /// an octave up). Volume and pan together make a voice's gains: one multiplier for each channel (`gainsForPan`).
+    /// Mixing is adding: each voice's frames, multiplied by its gains, are added into the block, and the sum is what
+    /// the speaker plays.
+    ///
+    /// The renderer applies the main side's commands at the start of each block, and tells the main side of each voice
+    /// that ends. It runs where its output calls it: on the main thread for an output the mixer pushes blocks to
+    /// (`Mixer.mixFrame`) and for the headless output, which pulls at each frame; on a device's audio thread for an
+    /// output that pulls from there; and in the browser, in the audio worklet's own instance (`RendererHost`). It
+    /// reaches the main side only through the two queues, so it works the same in all of them.
+    pub const Renderer = struct {
+        /// The voices, each in a slot of its own; a slot is free once its voice has ended.
+        voice_slots: [voice_capacity]VoiceSlot = @splat(.{}),
+        /// Every mixed sample is multiplied by it, after the voices are summed: the volume of all the sound at once.
+        master_volume: f32 = 1,
+        /// The samples registered under each id (`SamplesId`), in the renderer's own memory; empty for an id not in
+        /// use.
+        registered_samples: [samples_registry_capacity][]const f32 = @splat(&.{}),
+        /// One voice's frames, read from its source before its gains are applied, with room for the largest block.
+        voice_scratch_samples: []f32 = &.{},
+
+        /// Renders one block: applies the commands waiting - so that a sound asked for since the last block starts in
+        /// this one - then mixes every playing voice into `mix_block`.
+        pub fn render(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            mix_block: []f32,
+        ) void {
+            renderer.applyCommands(renderer_queues);
+            renderer.mixInto(renderer_queues, mix_block);
+        }
+
+        /// Applies every command waiting, in the order the main side sent them.
+        pub fn applyCommands(renderer: *Renderer, renderer_queues: *RendererQueues) void {
+            while (renderer_queues.commands.pop()) |renderer_command| {
+                renderer.applyCommand(renderer_queues, renderer_command);
+            }
+        }
+
+        /// Applies one command. A change of volume or pan is heard smoothly: the voice's next block moves its gains,
+        /// frame by frame, from where they were to where they are now asked to be (`mixVoiceInto`), so that no sudden
+        /// jump is heard as a click. A change of pitch takes effect from the next block's first frame. A command naming
+        /// a voice that has ended since it was sent reaches nothing (`playingSlotNamedBy`).
+        fn applyCommand(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            renderer_command: RendererCommand,
+        ) void {
+            switch (renderer_command) {
+                .play => |voice_to_start| renderer.startVoice(voice_to_start),
+                .stop => |voice| renderer.stopVoice(renderer_queues, voice),
+                .pause => |voice| renderer.pauseVoice(voice),
+                .resume_voice => |voice| renderer.resumeVoice(voice),
+                .set_volume => |parameter_change| {
+                    const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(parameter_change.voice) orelse return;
+                    voice_slot.volume = parameter_change.value;
+                },
+                .set_pan => |parameter_change| {
+                    const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(parameter_change.voice) orelse return;
+                    voice_slot.pan = parameter_change.value;
+                },
+                .set_pitch => |parameter_change| {
+                    const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(parameter_change.voice) orelse return;
+                    voice_slot.pitch = parameter_change.value;
+                },
+                .set_looping => |looping_change| {
+                    const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(looping_change.voice) orelse return;
+                    // Only a sample buffer has an end to loop back from; a generator makes frames for as long as it
+                    // plays.
+                    switch (voice_slot.source) {
+                        .samples => |*sample_source| sample_source.is_looping = looping_change.is_looping,
+                        .generator => {},
+                    }
+                },
+                .set_master_volume => |new_master_volume| renderer.master_volume = new_master_volume,
+                .register_samples => |samples_to_register| {
+                    const samples_id: SamplesId = samples_to_register.samples_id;
+                    renderer.registered_samples[samples_id] = samples_to_register.samples;
+                },
+                .release_samples => |samples_id| {
+                    // The voices still playing these samples copy what they need and fade out over the copy; then the
+                    // id leaves the registry, and the main side is told it may free the samples.
+                    renderer.fadeVoicesReading(renderer_queues, samples_id);
+                    renderer.registered_samples[samples_id] = &.{};
+                    const released_notice: RendererNotice = .{ .samples_released = samples_id };
+                    const is_noticed: bool = renderer_queues.notices.push(released_notice);
+                    assert(is_noticed, @src());
+                },
+            }
+        }
+
+        /// The slot of the voice `voice` names, while that voice plays; null when it has ended, or `voice` is `none`. A
+        /// name is a slot and a generation (`Voice`): each time a slot's voice ends, the slot's generation counts up,
+        /// so an old name - one an app kept after its voice ended - no longer matches, and reaches nothing, even once
+        /// the slot holds a new voice.
+        pub fn playingSlotNamedBy(renderer: *Renderer, voice: Voice) ?*VoiceSlot {
+            if (voice == .none) {
+                return null;
+            }
+            const slot_index: usize = voice.slotIndex();
+            const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+            const is_same_generation: bool = voice_slot.generation == voice.generation();
+            const is_named_voice_playing: bool = voice_slot.is_playing and is_same_generation;
+            return if (is_named_voice_playing) voice_slot else null;
+        }
+
+        /// Starts a voice in the slot its name was given (by the main side, `Mixer.play`). Its samples are found by
+        /// their id in the renderer's own registry, and a generator's state is copied into the slot. The voice starts
+        /// at the gains its volume and pan ask for, with no ramp up from silence, so that a sound's attack - a drum's
+        /// hit - stays sharp.
+        fn startVoice(renderer: *Renderer, voice_to_start: VoiceToStart) void {
+            const slot_index: usize = voice_to_start.voice.slotIndex();
+            const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+            // The main side gives a slot a new voice only after the renderer said its last one ended.
+            assert(!voice_slot.is_playing, @src());
+            const source: Source = switch (voice_to_start.source) {
+                .samples => |registered| .{ .samples = .{
+                    .samples = renderer.registered_samples[registered.samples_id],
+                    .channels = registered.channels,
+                    .sample_rate = registered.sample_rate,
+                    .is_looping = registered.is_looping,
+                } },
+                .generator => |generator_to_start| .{ .generator = .{
+                    .generate = generator_to_start.generate,
+                    .channels = generator_to_start.channels,
+                } },
+            };
+            const samples_id: ?SamplesId = switch (voice_to_start.source) {
+                .samples => |registered| registered.samples_id,
+                .generator => null,
+            };
+            const pan_law: PanLaw = panLawOf(source);
+            const options: PlayOptions = voice_to_start.options;
+            const starting_gains: StereoGains = gainsForPan(options.volume, options.pan, pan_law);
+            voice_slot.* = .{
+                .generation = voice_to_start.voice.generation(),
+                .is_playing = true,
+                .is_new = true,
+                .pan_law = pan_law,
+                .source = source,
+                .samples_id = samples_id,
+                .volume = options.volume,
+                .pan = options.pan,
+                .pitch = options.pitch,
+                .last_block_gains = starting_gains,
+            };
+            voice_slot.generator_state = voice_to_start.generator_state;
+        }
+
+        /// Stops a voice. Cutting a sound off in the middle of its wave would jump the output to zero between two
+        /// samples, and a jump is heard as a click; so the voice fades to silence over `fade_out_frames` - 5 ms - in
+        /// its next block, and only then ends and frees its slot. Its generation counts up at once, so that later
+        /// commands naming it reach nothing. A voice not yet heard - started in this same block - or paused is silent
+        /// already, and ends at once.
+        fn stopVoice(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            voice: Voice,
+        ) void {
+            const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(voice) orelse return;
+            const is_silent_already: bool = voice_slot.is_new or voice_slot.is_paused;
+            if (is_silent_already) {
+                renderer.endVoice(renderer_queues, voice.slotIndex());
+                return;
+            }
+            voice_slot.fade_out = .then_stop;
+            voice_slot.fade_frames_left = fade_out_frames;
+            voice_slot.generation +%= 1;
+        }
+
+        /// Lets every voice playing the samples registered under `samples_id` fade out before those samples are freed:
+        /// a sound unloaded while voices of it, or of its aliases, still sound. A fade needs 5 ms more of the sound, so
+        /// each such voice first copies its next `fade_out_frames` frames - read at its own pitch, and so already at
+        /// the mixer's rate - into a buffer of its own, and fades out over that copy. Nothing reads the samples after
+        /// this, and nothing is cut off. A voice not yet heard, or paused, is silent already, and ends at once.
+        fn fadeVoicesReading(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            samples_id: SamplesId,
+        ) void {
+            for (&renderer.voice_slots, 0..) |*voice_slot, slot_index| {
+                if (!voice_slot.is_playing) {
+                    continue;
+                }
+                // A generator, or a voice already playing its own copy, reads no registered samples.
+                const voice_samples_id: SamplesId = voice_slot.samples_id orelse continue;
+                const is_reading_these_samples: bool = voice_samples_id == samples_id;
+                if (!is_reading_these_samples) {
+                    continue;
+                }
+                const is_silent_already: bool = voice_slot.is_new or voice_slot.is_paused;
+                if (is_silent_already) {
+                    renderer.endVoice(renderer_queues, slot_index);
+                    continue;
+                }
+                // Its next 5 ms, into its own buffer: interleaved stereo at the mixer's rate, its pitch applied by the
+                // reading.
+                const tail_buffer: []f32 = &voice_slot.tail_samples;
+                const tail_frames_read: usize = readVoiceSource(voice_slot, tail_buffer);
+                const tail_sample_count: usize = tail_frames_read * channel_count;
+                const tail_samples_read: []const f32 = tail_buffer[0..tail_sample_count];
+                // From now on the voice plays its copy - at the mixer's rate and at pitch 1, its pitch being in the
+                // copy already - fading out to the copy's end.
+                voice_slot.source = .{ .samples = .{
+                    .samples = tail_samples_read,
+                    .channels = channel_count,
+                    .sample_rate = sample_rate,
+                } };
+                voice_slot.samples_id = null;
+                voice_slot.source_position = 0;
+                voice_slot.pitch = 1;
+                voice_slot.fade_out = .then_stop;
+                voice_slot.fade_frames_left = fade_out_frames;
+                voice_slot.generation +%= 1;
+            }
+        }
+
+        /// Pauses a voice: it keeps its slot and its place in its source, and is not mixed until resumed. As a stop
+        /// does, a pause fades the voice out over `fade_out_frames` first - its place in the source moving on only by
+        /// those frames, so that it resumes where it fell silent. A voice not yet heard pauses at once. (With an output
+        /// the mixer pushes blocks to, the voice's frames already queued still play out first.)
+        fn pauseVoice(renderer: *Renderer, voice: Voice) void {
+            const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(voice) orelse return;
+            const is_paused_or_pausing: bool = voice_slot.is_paused or voice_slot.fade_out != .none;
+            if (is_paused_or_pausing) {
+                return;
+            }
+            if (voice_slot.is_new) {
+                voice_slot.is_paused = true;
+                return;
+            }
+            voice_slot.fade_out = .then_pause;
+            voice_slot.fade_frames_left = fade_out_frames;
+        }
+
+        /// Resumes a paused voice where it fell silent, from the renderer's next block, its gains ramping up from
+        /// silence across that block. A pause whose fade has not finished is simply called off: the gains ramp back up
+        /// from wherever the fade had brought them. (With an output the mixer pushes blocks to, a resumed voice
+        /// continues after the frames already queued - not inside them, as a new voice starts: its frames queued before
+        /// the pause still play, and its continuation placed among them would sound twice.)
+        fn resumeVoice(renderer: *Renderer, voice: Voice) void {
+            const voice_slot: *VoiceSlot = renderer.playingSlotNamedBy(voice) orelse return;
+            const is_pause_still_fading: bool = voice_slot.fade_out == .then_pause;
+            if (is_pause_still_fading) {
+                voice_slot.fade_out = .none;
+                voice_slot.fade_frames_left = 0;
+                return;
+            }
+            voice_slot.is_paused = false;
+        }
+
+        /// Ends the voice in a slot: it is mixed no more, its generation counts up - so that its name reaches nothing
+        /// any more - and the main side is told, by a notice, that the slot is free (`Mixer.readRendererNotices`).
+        fn endVoice(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            slot_index: usize,
+        ) void {
+            const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+            if (!voice_slot.is_playing) {
+                return;
+            }
+            voice_slot.is_playing = false;
+            voice_slot.generation +%= 1;
+            const ended_notice: RendererNotice = .{ .voice_ended = @intCast(slot_index) };
+            const is_noticed: bool = renderer_queues.notices.push(ended_notice);
+            assert(is_noticed, @src());
+        }
+
+        /// Ends every voice at once: the output is closing.
+        fn endEveryVoice(renderer: *Renderer, renderer_queues: *RendererQueues) void {
+            for (0..voice_capacity) |slot_index| {
+                renderer.endVoice(renderer_queues, slot_index);
+            }
+        }
+
+        /// Mixes every playing voice into `mix_block`, interleaved stereo frames. The block starts silent; each voice
+        /// adds its frames into it (`mixVoiceInto`); then every sample is multiplied by the master volume and held to
+        /// -1..1, the range a device plays - several loud voices can add up past 1, and a device given more would
+        /// distort the sound, or wrap the sample round to the other end.
+        fn mixInto(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            mix_block: []f32,
+        ) void {
+            @memset(mix_block, 0);
+            for (&renderer.voice_slots, 0..) |*voice_slot, slot_index| {
+                const is_audible: bool = voice_slot.is_playing and !voice_slot.is_paused;
+                if (is_audible) {
+                    renderer.mixVoiceInto(renderer_queues, slot_index, mix_block);
+                }
+            }
+            for (mix_block) |*mixed_sample| {
+                const scaled_sample: f32 = mixed_sample.* * renderer.master_volume;
+                const held_sample: f32 = clamp(scaled_sample, -1, 1);
+                mixed_sample.* = held_sample;
+            }
+        }
+
+        /// For an output the mixer pushes blocks to (`Mixer.startNewVoicesInsideQueue`): mixes only the voices started
+        /// since the last frame into `inside_block`, scaled by the master volume, and says whether there were any.
+        fn mixNewVoicesInto(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            inside_block: []f32,
+        ) bool {
+            @memset(inside_block, 0);
+            var has_new_voice: bool = false;
+            for (0..voice_capacity) |slot_index| {
+                const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+                if (!voice_slot.is_new) {
+                    continue;
+                }
+                voice_slot.is_new = false;
+                const is_audible: bool = voice_slot.is_playing and !voice_slot.is_paused;
+                if (inside_block.len == 0 or !is_audible) {
+                    continue;
+                }
+                renderer.mixVoiceInto(renderer_queues, slot_index, inside_block);
+                has_new_voice = true;
+            }
+            for (inside_block) |*inside_sample| {
+                inside_sample.* *= renderer.master_volume;
+            }
+            return has_new_voice;
+        }
+
+        /// Adds one voice's frames for this block into `mix_block`.
+        ///
+        /// The voice's source is read first, into the scratch block: interleaved stereo at the mixer's rate, its pitch
+        /// applied by the reading (`readVoiceSource`). Then each frame is added in, its left sample times the left gain
+        /// and its right sample times the right gain. The gains never jump from one block to the next: they move in
+        /// equal steps, frame by frame, from where the last block left them to where the voice's volume and pan now ask
+        /// for - a change of volume is a short ramp, not a click. Raised from 0.5 to 1.0, over a block of n frames:
+        ///
+        ///     frame       1              2              ...   n
+        ///     gain        0.5 + 0.5/n    0.5 + 1.0/n    ...   1.0
+        ///
+        /// A voice fading out - stopped or paused - is mixed for what remains of its fade, as much as this block holds,
+        /// its gains falling by the same step every frame, so that a fade split across blocks is one straight line,
+        /// reaching silence at its last frame whichever block that falls in (`gainsPartWayDown`). Its source moves on
+        /// no further than it is heard, so a paused voice resumes where it fell silent. A source that runs out before
+        /// the block's end - a sound that has finished - ends its voice.
+        fn mixVoiceInto(
+            renderer: *Renderer,
+            renderer_queues: *RendererQueues,
+            slot_index: usize,
+            mix_block: []f32,
+        ) void {
+            const voice_slot: *VoiceSlot = &renderer.voice_slots[slot_index];
+            const block_frame_count: usize = mix_block.len / channel_count;
+            // Mixed, the voice is heard: a stop or a pause from now on fades it rather than ending it at once.
+            voice_slot.is_new = false;
+            const fade: FadeOut = voice_slot.fade_out;
+            const is_fading_out: bool = fade != .none;
+            const fade_frames_left_before: u32 = voice_slot.fade_frames_left;
+            const fade_frames_in_block: usize = @min(fade_frames_left_before, block_frame_count);
+            const frames_wanted: usize = if (is_fading_out) fade_frames_in_block else block_frame_count;
+            const voice_sample_count: usize = frames_wanted * channel_count;
+            const voice_samples: []f32 = renderer.voice_scratch_samples[0..voice_sample_count];
+            const frames_read: usize = readVoiceSource(voice_slot, voice_samples);
+            // The gains: from where the last block left them, to where this block must leave them.
+            const starting_gains: StereoGains = voice_slot.last_block_gains;
+            const fading_gains: StereoGains = gainsPartWayDown(starting_gains, frames_wanted, fade_frames_left_before);
+            const panned_gains: StereoGains = gainsForPan(voice_slot.volume, voice_slot.pan, voice_slot.pan_law);
+            const target_gains: StereoGains = if (is_fading_out) fading_gains else panned_gains;
+            const ramp_frame_count: f32 = @floatFromInt(frames_wanted);
+            const left_gain_step: f32 = (target_gains.left - starting_gains.left) / ramp_frame_count;
+            const right_gain_step: f32 = (target_gains.right - starting_gains.right) / ramp_frame_count;
+            var left_gain: f32 = starting_gains.left;
+            var right_gain: f32 = starting_gains.right;
+            var frame_index: usize = 0;
+            while (frame_index < frames_read) : (frame_index += 1) {
+                left_gain += left_gain_step;
+                right_gain += right_gain_step;
+                const left_sample_index: usize = frame_index * channel_count;
+                const right_sample_index: usize = left_sample_index + 1;
+                const left_voice_sample: f32 = voice_samples[left_sample_index];
+                const right_voice_sample: f32 = voice_samples[right_sample_index];
+                mix_block[left_sample_index] += left_voice_sample * left_gain;
+                mix_block[right_sample_index] += right_voice_sample * right_gain;
+            }
+            // The gains this block ends at, exactly - whatever rounding the steps gathered - for the next to start
+            // from.
+            voice_slot.last_block_gains = target_gains;
+            const has_source_ended: bool = frames_read < frames_wanted;
+            if (has_source_ended) {
+                renderer.endVoice(renderer_queues, slot_index);
+                return;
+            }
+            if (!is_fading_out) {
+                return;
+            }
+            voice_slot.fade_frames_left = fade_frames_left_before - @as(u32, @intCast(frames_wanted));
+            const is_fade_finished: bool = voice_slot.fade_frames_left == 0;
+            if (!is_fade_finished) {
+                return;
+            }
+            switch (fade) {
+                .then_stop => renderer.endVoice(renderer_queues, slot_index),
+                .then_pause => {
+                    voice_slot.fade_out = .none;
+                    voice_slot.is_paused = true;
+                },
+                .none => unreachable,
+            }
+        }
+    };
+
+    /// The gains `frames_mixed` frames into a fall to silence that had `frames_left` frames to go: the starting gains,
+    /// down by the fraction of the fall those frames make. A fall over 240 frames, 100 of them mixed in one block,
+    /// leaves 140/240 of the starting gains; the next block falls from there over the 140 left - by the same step per
+    /// frame, so the two blocks make one straight line down to silence.
+    fn gainsPartWayDown(
+        starting_gains: StereoGains,
+        frames_mixed: usize,
+        frames_left: u32,
+    ) StereoGains {
+        // No fall under way: nothing to scale (a voice not fading never uses the result).
+        if (frames_left == 0) {
+            return starting_gains;
+        }
+        const frames_mixed_float: f32 = @floatFromInt(frames_mixed);
+        const frames_left_float: f32 = @floatFromInt(frames_left);
+        const fraction_of_fall_done: f32 = frames_mixed_float / frames_left_float;
+        const fraction_remaining: f32 = 1 - fraction_of_fall_done;
+        return .{
+            .left = starting_gains.left * fraction_remaining,
+            .right = starting_gains.right * fraction_remaining,
+        };
+    }
+
+    /// Lets other threads run, while this one waits for the renderer's thread - to take commands, or to let go of
+    /// samples. A processor core runs one thread at a time, and the operating system decides which; yielding tells it
+    /// this thread has nothing to do for now, so the renderer's thread, if it waits for the same core, runs sooner. A
+    /// system that refuses leaves this thread looping on, which only costs it time.
+    fn yieldThisThread() void {
+        // A build with no threads - the browser's - has no renderer on another thread to wait for.
+        if (comptime builtin.single_threaded) {
+            return;
+        }
+        // lint:off catch-suppression: a yield refused only means this thread loops on while it waits
+        std.Thread.yield() catch {};
+    }
+
+    /// A sample buffer in the main side's registry (`Mixer.samples_registry`), under the id that is its index there.
+    const RegisteredSamplesRecord = struct {
+        /// The buffer, in the main side's memory.
+        samples: []const f32 = &.{},
+        /// Whether the id is in use.
+        is_registered: bool = false,
+        /// Once the buffer is being released: the allocator to free it with, when the renderer says it let it go
+        /// (`Mixer.releaseSamples`). Null while it may still be played.
+        release_allocator: ?Allocator = null,
+    };
+
+    /// A voice's name as the main side keeps it, one for each slot (`Mixer.voice_names`). A voice's life, as its record
+    /// sees it:
+    ///
+    ///     play             the slot held, the name live           (isPlaying: true)
+    ///     stopVoice        the name dead, the slot still held      (isPlaying: false; the renderer fades it out)
+    ///     ... the renderer's notice "this slot's voice ended" is read ...
+    ///                      the slot free, for the next play
+    ///
+    /// A voice that ends by itself - its sound finished - goes from live to free at the notice.
+    const VoiceNameRecord = struct {
+        /// The generation the slot's current name carries (`Voice`): counted up each time a name dies, so that an old
+        /// name never matches again.
+        generation: u24 = 0,
+        /// The renderer holds the slot: from `play` until its notice that the voice ended. A stopped voice still fading
+        /// keeps its slot.
+        is_slot_held: bool = false,
+        /// The name still names a voice: false from `stopVoice` on, though the slot may still be fading.
+        is_name_live: bool = false,
+        is_paused: bool = false,
+    };
+
+    /// The main side of the mixer: what the app calls. It names each voice when it is played, registers sample buffers
+    /// the first time they play, sends the renderer a command for every change, and reads back what the renderer
+    /// noticed - voices ended, samples let go of. Every question - `isPlaying`, `isPaused` - is answered at once from
+    /// the names it keeps, without asking the renderer: the answer may be a frame behind the sound, never wrong for
+    /// long.
+    pub const Mixer = struct {
+        // The main side's own bookkeeping.
+
+        /// Each slot's name, as the main side keeps it.
+        voice_names: [voice_capacity]VoiceNameRecord = @splat(.{}),
+        /// The sample buffers registered, each under its id - its index here (`SamplesId`).
+        samples_registry: [samples_registry_capacity]RegisteredSamplesRecord = @splat(.{}),
+        /// The master volume asked for, as the renderer will apply it (`setMasterVolume`).
+        master_volume: f32 = 1,
+
+        // The renderer and the two queues to it - in the browser, a renderer in another memory is reached instead
+        // (`RendererHost`), and this one stays unused.
+
+        renderer_queues: RendererQueues = .{},
+        renderer: Renderer = .{},
+
+        // The output.
+
+        /// The output the mixer plays through; null until `start`, and after `stop`.
+        output: ?Output = null,
+        /// Whether the output pulls its frames from the renderer (`renderForPullingOutput`), rather than being pushed
+        /// blocks.
+        is_output_pulling: bool = false,
+        /// Whether the renderer runs on another thread than this one (`Output.calls_renderer_from_another_thread`).
+        is_renderer_on_another_thread: bool = false,
+        /// What allocated the blocks, to free them at `stop`.
+        allocator: ?Allocator = null,
+
+        // For an output the mixer pushes blocks to only: the margin it keeps queued ahead of the device, and what
+        // decides it (`mixFrame`).
+
+        /// The margin kept queued, in frames (`render_ahead_initial_frames`).
+        render_ahead_frames: u32 = render_ahead_initial_frames,
+        /// Whether a block was queued since the start: an empty queue is an underrun only after the first block.
+        has_queued_any_block: bool = false,
+        /// How often the queue ran dry: each time, a gap was heard.
+        underrun_count: u32 = 0,
+        /// Frames queued just after the last frame's top-up: what the output played since is the gap between frames.
+        queued_after_last_top_up: u32 = 0,
+        /// The longest gap between frames, in frames, in each of the last `gap_bucket_count` seconds of playing: the
+        /// current second's is `gap_buckets[gap_bucket_index]`, and `frames_in_gap_bucket` counts its frames so far.
+        gap_buckets: [gap_bucket_count]u32 = @splat(0),
+        gap_bucket_index: usize = 0,
+        frames_in_gap_bucket: u32 = 0,
+        /// The block mixed each frame, interleaved stereo, with room for the largest margin; allocated at `start`.
+        mix_block_samples: []f32 = &.{},
+
+        /// Opens `output` at the mixer's format: 48 000 frames a second, stereo. The platform grants it - Windows and a
+        /// browser convert from it to their device's own format - so the mixer mixes at its own rate whatever the
+        /// device's. The blocks are allocated here, once, so that mixing allocates nothing. A mixer already started is
+        /// stopped first.
+        pub fn start(
+            engine_mixer: *Mixer,
+            allocator: Allocator,
+            output: Output,
+        ) Allocator.Error!void {
+            // Started again: the earlier output is closed and its blocks freed first, so that nothing leaks.
+            engine_mixer.stop();
+            const largest_block_frame_count: usize = render_ahead_most_frames;
+            const largest_block_sample_count: usize = largest_block_frame_count * channel_count;
+            engine_mixer.mix_block_samples = try allocator.alloc(f32, largest_block_sample_count);
+            errdefer allocator.free(engine_mixer.mix_block_samples);
+            engine_mixer.renderer.voice_scratch_samples = try allocator.alloc(f32, largest_block_sample_count);
+            engine_mixer.allocator = allocator;
+            const wanted_format: contract.AudioFormat = .{ .sample_rate = sample_rate, .channels = channel_count };
+            // An output that pulls is handed the renderer, reached through this mixer - which must stay where it is
+            // while the output runs, as the engine's own does, inside the app.
+            const render_callback: contract.AudioRenderCallback = .{
+                .context = engine_mixer,
+                .render = &renderForPullingOutput,
+            };
+            engine_mixer.is_output_pulling = output.start_pulling != null;
+            engine_mixer.is_renderer_on_another_thread = output.calls_renderer_from_another_thread;
+            const granted_format: contract.AudioFormat = if (output.start_pulling) |start_pulling|
+                start_pulling(wanted_format, render_callback)
+            else
+                output.start(wanted_format);
+            const is_rate_granted: bool = granted_format.sample_rate == sample_rate;
+            const are_channels_granted: bool = granted_format.channels == channel_count;
+            if (!is_rate_granted or !are_channels_granted) {
+                std.log.scoped(.mixer).warn("the output granted {d} Hz, {d} channels, not the mix's", .{
+                    granted_format.sample_rate,
+                    granted_format.channels,
+                });
+            }
+            engine_mixer.output = output;
+            engine_mixer.has_queued_any_block = false;
+            engine_mixer.render_ahead_frames = render_ahead_initial_frames;
+        }
+
+        /// Closes the output, applies the commands not yet applied - so that a release among them still frees its
+        /// samples - ends every voice, and frees the blocks.
+        pub fn stop(engine_mixer: *Mixer) void {
+            const output: Output = engine_mixer.output orelse return;
+            output.stop();
+            engine_mixer.output = null;
+            engine_mixer.is_output_pulling = false;
+            engine_mixer.is_renderer_on_another_thread = false;
+            // The output is stopped, so nothing renders any more: this thread may take the renderer's part.
+            engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
+            engine_mixer.renderer.endEveryVoice(&engine_mixer.renderer_queues);
+            engine_mixer.readRendererNotices();
+            if (engine_mixer.allocator) |allocator| {
+                allocator.free(engine_mixer.mix_block_samples);
+                allocator.free(engine_mixer.renderer.voice_scratch_samples);
+            }
+            engine_mixer.mix_block_samples = &.{};
+            engine_mixer.renderer.voice_scratch_samples = &.{};
+        }
+
+        pub fn isStarted(engine_mixer: *const Mixer) bool {
+            return engine_mixer.output != null;
+        }
+
+        /// How many slots the renderer holds: voices playing or paused, and stopped voices still fading.
+        pub fn playingVoiceCount(engine_mixer: *const Mixer) u32 {
+            var held_slot_count: u32 = 0;
+            for (engine_mixer.voice_names) |voice_name| {
+                if (voice_name.is_slot_held) {
+                    held_slot_count += 1;
+                }
+            }
+            return held_slot_count;
+        }
+
+        /// Starts a voice playing `source`, at its volume, pan and pitch (`options`), and returns its name;
+        /// `Voice.none` when it cannot play - a source that could not sound, every slot held, every samples id in use.
+        /// The voice is named at once; the renderer starts it in its next block.
+        pub fn play(engine_mixer: *Mixer, source: Source, options: PlayOptions) Voice {
+            if (!isPlayable(source)) {
+                return .none;
+            }
+            const slot_index: usize = engine_mixer.firstFreeSlotIndex() orelse return .none;
+            // Samples are named by their id: registered the first time they play.
+            const samples_id: ?SamplesId = switch (source) {
+                .samples => |sample_source| engine_mixer.samplesIdOf(sample_source.samples) orelse
+                    engine_mixer.registerSamples(sample_source.samples) orelse {
+                    std.log.scoped(.mixer).warn("no sound plays: every one of the {d} ids for samples is in use", .{
+                        samples_registry_capacity,
+                    });
+                    return .none;
+                },
+                .generator => null,
+            };
+            const voice_name: *VoiceNameRecord = &engine_mixer.voice_names[slot_index];
+            voice_name.* = .{ .generation = voice_name.generation, .is_slot_held = true, .is_name_live = true };
+            const voice: Voice = .ofSlot(slot_index, voice_name.generation);
+            const voice_to_start: VoiceToStart = voiceToStartOf(voice, source, samples_id, options);
+            const is_sent: bool = engine_mixer.sendToRenderer(.{ .play = voice_to_start });
+            if (!is_sent) {
+                // The renderer takes no commands: the name is given back, and nothing plays.
+                voice_name.* = .{ .generation = voice_name.generation };
+                return .none;
+            }
+            return voice;
+        }
+
+        /// Whether `source` could sound: a sample source needs channels and a rate - with no channels there are no
+        /// frames to count, and with no rate it would never move on - and a generator's state must fit in a voice.
+        fn isPlayable(source: Source) bool {
+            switch (source) {
+                .samples => |sample_source| {
+                    const has_channels: bool = sample_source.channels != 0;
+                    const has_rate: bool = sample_source.sample_rate != 0;
+                    return has_channels and has_rate;
+                },
+                .generator => |generator| {
+                    const state_length: usize = generator.initial_state.len;
+                    const does_state_fit: bool = state_length <= generator_state_capacity;
+                    if (!does_state_fit) {
+                        std.log.scoped(.mixer).warn("a generator's state of {d} bytes is more than a voice holds", .{
+                            state_length,
+                        });
+                    }
+                    return does_state_fit;
+                },
+            }
+        }
+
+        /// The first slot the renderer does not hold; null when it holds them all.
+        fn firstFreeSlotIndex(engine_mixer: *const Mixer) ?usize {
+            for (engine_mixer.voice_names, 0..) |voice_name, slot_index| {
+                if (!voice_name.is_slot_held) {
+                    return slot_index;
+                }
+            }
+            return null;
+        }
+
+        /// The play command for `voice`: its source as a command carries it - samples by their id, a generator by its
+        /// function - its options, and a generator's state, copied in here so that the caller's may go at once.
+        fn voiceToStartOf(
+            voice: Voice,
+            source: Source,
+            samples_id: ?SamplesId,
+            options: PlayOptions,
+        ) VoiceToStart {
+            const source_to_start: SourceToStart = switch (source) {
+                .samples => |sample_source| .{ .samples = .{
+                    .samples_id = samples_id.?,
+                    .channels = sample_source.channels,
+                    .sample_rate = sample_source.sample_rate,
+                    .is_looping = sample_source.is_looping,
+                } },
+                .generator => |generator| .{ .generator = .{
+                    .generate = generator.generate,
+                    .channels = generator.channels,
+                } },
+            };
+            var voice_to_start: VoiceToStart = .{ .voice = voice, .source = source_to_start, .options = options };
+            switch (source) {
+                .generator => |generator| {
+                    const state_length: usize = generator.initial_state.len;
+                    const state_room: []u8 = voice_to_start.generator_state[0..state_length];
+                    @memcpy(state_room, generator.initial_state);
+                },
+                .samples => {},
+            }
+            return voice_to_start;
+        }
+
+        /// The record kept for `voice`, while it names a live voice; null for a name that has died, or `Voice.none`.
+        fn voiceNameOf(engine_mixer: *Mixer, voice: Voice) ?*VoiceNameRecord {
+            if (voice == .none) {
+                return null;
+            }
+            const slot_index: usize = voice.slotIndex();
+            const voice_name: *VoiceNameRecord = &engine_mixer.voice_names[slot_index];
+            const is_same_generation: bool = voice_name.generation == voice.generation();
+            const is_live_voice: bool = voice_name.is_name_live and is_same_generation;
+            return if (is_live_voice) voice_name else null;
+        }
+
+        /// Whether `voice` still plays (or is paused). The answer comes from the names kept here, so a sound that
+        /// finished by itself is still reported playing until the renderer's notice is read, at the next frame.
+        pub fn isPlaying(engine_mixer: *Mixer, voice: Voice) bool {
+            return engine_mixer.voiceNameOf(voice) != null;
+        }
+
+        /// Stops a voice. Its name dies at once - `isPlaying` says false, and the setters reach nothing - while the
+        /// renderer fades it out over `fade_out_frames` and then frees its slot.
+        pub fn stopVoice(engine_mixer: *Mixer, voice: Voice) void {
+            const voice_name: *VoiceNameRecord = engine_mixer.voiceNameOf(voice) orelse return;
+            voice_name.is_name_live = false;
+            voice_name.is_paused = false;
+            voice_name.generation +%= 1;
+            _ = engine_mixer.sendToRenderer(.{ .stop = voice });
+        }
+
+        /// The voice's volume: 1 as recorded, 0 silent, above 1 louder. Heard from the renderer's next block, ramped
+        /// over it rather than jumping.
+        pub fn setVolume(engine_mixer: *Mixer, voice: Voice, volume: f32) void {
+            if (engine_mixer.voiceNameOf(voice) == null) {
+                return;
+            }
+            const volume_change: VoiceParameterChange = .{ .voice = voice, .value = volume };
+            _ = engine_mixer.sendToRenderer(.{ .set_volume = volume_change });
+        }
+
+        /// The voice's pan: -1 full left, 0 centre, 1 full right (`gainsForPan`). Heard from the renderer's next block,
+        /// ramped over it.
+        pub fn setPan(engine_mixer: *Mixer, voice: Voice, pan: f32) void {
+            if (engine_mixer.voiceNameOf(voice) == null) {
+                return;
+            }
+            const pan_change: VoiceParameterChange = .{ .voice = voice, .value = pan };
+            _ = engine_mixer.sendToRenderer(.{ .set_pan = pan_change });
+        }
+
+        /// The voice's pitch: how fast its source is read - 1 as recorded, 2 twice as fast and an octave up, 0.5 an
+        /// octave down. From the renderer's next block on.
+        pub fn setPitch(engine_mixer: *Mixer, voice: Voice, pitch: f32) void {
+            if (engine_mixer.voiceNameOf(voice) == null) {
+                return;
+            }
+            const pitch_change: VoiceParameterChange = .{ .voice = voice, .value = pitch };
+            _ = engine_mixer.sendToRenderer(.{ .set_pitch = pitch_change });
+        }
+
+        /// Whether a voice's sample source loops, from the renderer's next block on: a loop plays from its end back to
+        /// its start without a gap. A generator has no end, and is unchanged.
+        pub fn setLooping(engine_mixer: *Mixer, voice: Voice, is_looping: bool) void {
+            if (engine_mixer.voiceNameOf(voice) == null) {
+                return;
+            }
+            const looping_change: VoiceLoopingChange = .{ .voice = voice, .is_looping = is_looping };
+            _ = engine_mixer.sendToRenderer(.{ .set_looping = looping_change });
+        }
+
+        /// Pauses a voice where it is: the renderer fades it out over `fade_out_frames` and keeps its place, for
+        /// `resumeVoice`. `isPaused` says true at once.
+        pub fn pauseVoice(engine_mixer: *Mixer, voice: Voice) void {
+            const voice_name: *VoiceNameRecord = engine_mixer.voiceNameOf(voice) orelse return;
+            voice_name.is_paused = true;
+            _ = engine_mixer.sendToRenderer(.{ .pause = voice });
+        }
+
+        /// Resumes a paused voice where it fell silent, from the renderer's next block.
+        pub fn resumeVoice(engine_mixer: *Mixer, voice: Voice) void {
+            const voice_name: *VoiceNameRecord = engine_mixer.voiceNameOf(voice) orelse return;
+            voice_name.is_paused = false;
+            _ = engine_mixer.sendToRenderer(.{ .resume_voice = voice });
+        }
+
+        pub fn isPaused(engine_mixer: *Mixer, voice: Voice) bool {
+            const voice_name: *VoiceNameRecord = engine_mixer.voiceNameOf(voice) orelse return false;
+            return voice_name.is_paused;
+        }
+
+        /// Every mixed sample is multiplied by `volume`, from the renderer's next block on: the volume of all the sound
+        /// at once.
+        pub fn setMasterVolume(engine_mixer: *Mixer, volume: f32) void {
+            engine_mixer.master_volume = volume;
+            _ = engine_mixer.sendToRenderer(.{ .set_master_volume = volume });
+        }
+
+        /// The id `samples` is registered under; null when it is not registered, or is being released. A buffer is the
+        /// very same one when it starts at the same address and has the same length - two buffers holding equal
+        /// samples are two buffers.
+        pub fn samplesIdOf(engine_mixer: *const Mixer, samples: []const f32) ?SamplesId {
+            for (engine_mixer.samples_registry, 0..) |record, samples_index| {
+                const is_same_buffer: bool = record.samples.ptr == samples.ptr and record.samples.len == samples.len;
+                const is_playable_record: bool = record.is_registered and record.release_allocator == null;
+                if (is_playable_record and is_same_buffer) {
+                    return @intCast(samples_index);
+                }
+            }
+            return null;
+        }
+
+        /// Whether `samples` - the very buffer - was released, and the renderer has not yet said it let it go.
+        fn isBeingReleased(engine_mixer: *const Mixer, samples: []const f32) bool {
+            for (engine_mixer.samples_registry) |record| {
+                const is_same_buffer: bool = record.samples.ptr == samples.ptr and record.samples.len == samples.len;
+                const is_release_pending: bool = record.is_registered and record.release_allocator != null;
+                if (is_release_pending and is_same_buffer) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// Registers `samples` under a free id, telling the renderer; null when every id is in use, or the renderer
+        /// takes no commands.
+        fn registerSamples(engine_mixer: *Mixer, samples: []const f32) ?SamplesId {
+            for (&engine_mixer.samples_registry, 0..) |*record, samples_index| {
+                if (record.is_registered) {
+                    continue;
+                }
+                const samples_id: SamplesId = @intCast(samples_index);
+                const samples_to_register: SamplesToRegister = .{ .samples_id = samples_id, .samples = samples };
+                const is_sent: bool = engine_mixer.sendToRenderer(.{ .register_samples = samples_to_register });
+                if (!is_sent) {
+                    return null;
+                }
+                record.* = .{ .samples = samples, .is_registered = true };
+                return samples_id;
+            }
+            return null;
+        }
+
+        /// Frees `samples`, allocated by `allocator`, once nothing reads them. Samples never played were never
+        /// registered, and go at once. Otherwise every voice playing them - a sound's and its aliases' - first copies
+        /// what it still needs and fades out over the copy (`Renderer.fadeVoicesReading`), their id leaves the
+        /// registry, and the renderer says so. With the renderer on this thread all of that happens here, before the
+        /// call returns; with it on an audio thread, at its next block, and the samples are freed when this side reads
+        /// its notice (`readRendererNotices`, each frame). Releasing a buffer twice is a mistake, as freeing it twice
+        /// is, and is caught.
+        pub fn releaseSamples(
+            engine_mixer: *Mixer,
+            allocator: Allocator,
+            samples: []const f32,
+        ) void {
+            const samples_id: SamplesId = engine_mixer.samplesIdOf(samples) orelse {
+                // Not registered: never played - or already released, which would free it a second time at the notice.
+                const is_released_twice: bool = engine_mixer.isBeingReleased(samples);
+                assert(!is_released_twice, @src());
+                allocator.free(samples);
+                return;
+            };
+            const record: *RegisteredSamplesRecord = &engine_mixer.samples_registry[samples_id];
+            record.release_allocator = allocator;
+            const is_sent: bool = engine_mixer.sendToRenderer(.{ .release_samples = samples_id });
+            if (!is_sent) {
+                // The audio thread takes no commands: it reads nothing either, and the samples can go now.
+                allocator.free(samples);
+                record.* = .{};
+                return;
+            }
+            if (!engine_mixer.is_renderer_on_another_thread) {
+                engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
+                engine_mixer.readRendererNotices();
+            }
+        }
+
+        /// Sends a command to the renderer; false when it could not be sent. The queue fills only when commands of
+        /// many frames wait unapplied. With the renderer on this thread, this side applies them itself, here. With it
+        /// on an audio thread, which empties the queue at every block, a full queue means that thread is late: this
+        /// side waits for room - a million yields at most, longer than any device's block - and then drops the
+        /// command, saying so.
+        fn sendToRenderer(engine_mixer: *Mixer, renderer_command: RendererCommand) bool {
+            const command_queue: *RendererCommandQueue = &engine_mixer.renderer_queues.commands;
+            if (command_queue.push(renderer_command)) {
+                return true;
+            }
+            if (!engine_mixer.is_renderer_on_another_thread) {
+                engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
+                const is_sent: bool = command_queue.push(renderer_command);
+                assert(is_sent, @src());
+                return true;
+            }
+            const most_attempts: u32 = 1_000_000;
+            var attempt_count: u32 = 0;
+            while (attempt_count < most_attempts) : (attempt_count += 1) {
+                yieldThisThread();
+                if (command_queue.push(renderer_command)) {
+                    return true;
+                }
+            }
+            std.log.scoped(.mixer).err("the audio thread takes no commands: a {t} was dropped", .{renderer_command});
+            return false;
+        }
+
+        /// Reads the renderer's notices. A voice ended frees its slot for the next play; and a voice that ended by
+        /// itself - its sound finished, `stopVoice` never called - also has its name die here, so `isPlaying` says
+        /// false from now on. A release of samples frees them: no voice reads them any more.
+        fn readRendererNotices(engine_mixer: *Mixer) void {
+            const notice_queue: *RendererNoticeQueue = &engine_mixer.renderer_queues.notices;
+            while (notice_queue.pop()) |renderer_notice| {
+                switch (renderer_notice) {
+                    .voice_ended => |slot_index| {
+                        const voice_name: *VoiceNameRecord = &engine_mixer.voice_names[slot_index];
+                        const has_ended_by_itself: bool = voice_name.is_name_live;
+                        if (has_ended_by_itself) {
+                            voice_name.generation +%= 1;
+                        }
+                        voice_name.* = .{ .generation = voice_name.generation };
+                    },
+                    .samples_released => |samples_id| {
+                        const record: *RegisteredSamplesRecord = &engine_mixer.samples_registry[samples_id];
+                        if (record.release_allocator) |release_allocator| {
+                            release_allocator.free(record.samples);
+                        }
+                        record.* = .{};
+                    },
+                }
+            }
+        }
+
+        /// Renders the frames an output that pulls asks for (`contract.AudioRenderCallback`), in blocks no larger than
+        /// the renderer's scratch room: a device may ask for more at once - after a long stall, say.
+        fn renderForPullingOutput(context: *anyopaque, samples: []f32) void {
+            const engine_mixer: *Mixer = @ptrCast(@alignCast(context));
+            const largest_block_sample_count: usize = engine_mixer.renderer.voice_scratch_samples.len;
+            var first_sample: usize = 0;
+            while (first_sample < samples.len) {
+                const samples_left: usize = samples.len - first_sample;
+                const block_sample_count: usize = @min(samples_left, largest_block_sample_count);
+                const block: []f32 = samples[first_sample..][0..block_sample_count];
+                engine_mixer.renderer.render(&engine_mixer.renderer_queues, block);
+                first_sample += block_sample_count;
+            }
+        }
+
+        /// Renders `mix_block` on this thread and reads the notices: for an output that is not running, and for tests.
+        pub fn mixInto(engine_mixer: *Mixer, mix_block: []f32) void {
+            engine_mixer.renderer.render(&engine_mixer.renderer_queues, mix_block);
+            engine_mixer.readRendererNotices();
+        }
+
+        /// Once a frame, after the app's update. With an output that pulls, the device asks the renderer for blocks
+        /// itself, and the frame has only the renderer's notices to read.
+        ///
+        /// With an output the mixer pushes blocks to, it tops the output's queue up to the margin. The output has
+        /// played some of the queue since the last frame; the mixer mixes exactly what it played, plus whatever the
+        /// margin has grown by, so the queue holds `render_ahead_frames` again. An empty queue after the first block
+        /// means the output ran dry since the last frame and played silence - an underrun - and the margin grows by a
+        /// step, up to its most.
+        pub fn mixFrame(engine_mixer: *Mixer) void {
+            const output: Output = engine_mixer.output orelse return;
+            // A pulled output renders as its device asks: the frame has only the renderer's notices to read.
+            if (engine_mixer.is_output_pulling) {
+                engine_mixer.readRendererNotices();
+                return;
+            }
+            const queued_frame_count: u32 = output.queued_frames();
+            const has_run_dry: bool = queued_frame_count == 0 and engine_mixer.has_queued_any_block;
+            if (has_run_dry) {
+                engine_mixer.underrun_count += 1;
+            }
+            if (engine_mixer.has_queued_any_block) {
+                // The gap since the last frame, by the output's clock: the frames it played meanwhile. Run dry, it
+                // played everything and then silence for a while it cannot tell, so the gap counts the safety more.
+                const frames_played_since_last_frame: u32 = engine_mixer.queued_after_last_top_up -| queued_frame_count;
+                const dry_gap_frames: u32 = frames_played_since_last_frame + render_ahead_safety_frames;
+                const gap_frames: u32 = if (has_run_dry) dry_gap_frames else frames_played_since_last_frame;
+                engine_mixer.noteGapBetweenFrames(gap_frames, frames_played_since_last_frame);
+            }
+            engine_mixer.renderer.applyCommands(&engine_mixer.renderer_queues);
+            engine_mixer.startNewVoicesInsideQueue(output, queued_frame_count);
+            defer engine_mixer.readRendererNotices();
+            if (queued_frame_count >= engine_mixer.render_ahead_frames) {
+                engine_mixer.queued_after_last_top_up = queued_frame_count;
+                return;
+            }
+            const frames_to_mix: usize = engine_mixer.render_ahead_frames - queued_frame_count;
+            const block_sample_count: usize = frames_to_mix * channel_count;
+            const mix_block: []f32 = engine_mixer.mix_block_samples[0..block_sample_count];
+            engine_mixer.renderer.render(&engine_mixer.renderer_queues, mix_block);
+            output.queue(mix_block);
+            engine_mixer.has_queued_any_block = true;
+            engine_mixer.queued_after_last_top_up = engine_mixer.render_ahead_frames;
+        }
+
+        /// Voices started since the last frame (`play`) begin inside the queue rather than after it. The output holds
+        /// `queued_frame_count` frames not yet played. A new voice's first frames are mixed onto the last of them
+        /// (`Output.mix_into_queued`, aligned to the queue's end), so that the voice begins `late_start_lead_frames`
+        /// after the play position; the voice then continues past the queue's end, like every voice, with no seam.
+        /// Mixing is addition, so the frames already queued need no other change. Without this a new sound would wait
+        /// out the whole margin before reaching the speaker.
+        ///
+        ///     queued:      | play position ... lead | new voice's first frames ......| queue end
+        ///     this frame's top-up:                                                    | new voice continues ...
+        fn startNewVoicesInsideQueue(
+            engine_mixer: *Mixer,
+            output: Output,
+            queued_frame_count: u32,
+        ) void {
+            const frames_past_lead: u32 = queued_frame_count -| late_start_lead_frames;
+            const frames_inside: usize = @min(frames_past_lead, render_ahead_most_frames);
+            const inside_block: []f32 = engine_mixer.mix_block_samples[0 .. frames_inside * channel_count];
+            const renderer_queues: *RendererQueues = &engine_mixer.renderer_queues;
+            const has_new_voice: bool = engine_mixer.renderer.mixNewVoicesInto(renderer_queues, inside_block);
+            if (has_new_voice) {
+                output.mix_into_queued(inside_block);
+            }
+        }
+
+        /// Keeps the longest gap between frames of each second of playing, the last thirty of them, and sets the margin
+        /// from the longest: that gap and 25 ms more, held to 50..200 ms. A second passes by the frames played, so the
+        /// window moves with the sound, not with the app's frames.
+        fn noteGapBetweenFrames(
+            engine_mixer: *Mixer,
+            gap_frames: u32,
+            frames_played: u32,
+        ) void {
+            const current_bucket: *u32 = &engine_mixer.gap_buckets[engine_mixer.gap_bucket_index];
+            current_bucket.* = @max(current_bucket.*, gap_frames);
+            engine_mixer.frames_in_gap_bucket += frames_played;
+            if (engine_mixer.frames_in_gap_bucket >= gap_bucket_frames) {
+                engine_mixer.frames_in_gap_bucket = 0;
+                engine_mixer.gap_bucket_index = (engine_mixer.gap_bucket_index + 1) % gap_bucket_count;
+                engine_mixer.gap_buckets[engine_mixer.gap_bucket_index] = 0;
+            }
+            var longest_recent_gap_frames: u32 = 0;
+            for (engine_mixer.gap_buckets) |bucket_gap_frames| {
+                longest_recent_gap_frames = @max(longest_recent_gap_frames, bucket_gap_frames);
+            }
+            const wanted_margin_frames: u32 = longest_recent_gap_frames + render_ahead_safety_frames;
+            const least_margin_frames: u32 = render_ahead_initial_frames;
+            const most_margin_frames: u32 = render_ahead_most_frames;
+            engine_mixer.render_ahead_frames = clamp(wanted_margin_frames, least_margin_frames, most_margin_frames);
+        }
+    };
+
+    /// Reads a voice's next frames from its source into `voice_samples` - interleaved stereo, at the mixer's rate,
+    /// before the voice's gains are applied - and returns how many frames it read: as many as asked for, or fewer when
+    /// a sample buffer that does not loop reaches its end. A generator makes its frames itself: it is handed its state,
+    /// the block to fill, and the index of the block's first frame since the voice started, so that a tone, say, can
+    /// work out its phase from where it is.
+    fn readVoiceSource(voice_slot: *VoiceSlot, voice_samples: []f32) usize {
+        const frames_wanted: usize = voice_samples.len / channel_count;
+        switch (voice_slot.source) {
+            .generator => |generator| {
+                const first_frame_index: u64 = voice_slot.generated_frame_count;
+                generator.generate(&voice_slot.generator_state, voice_samples, first_frame_index);
+                voice_slot.generated_frame_count += frames_wanted;
+                return frames_wanted;
+            },
+            .samples => |sample_source| return readSampleSource(voice_slot, sample_source, voice_samples),
+        }
+    }
+
+    /// Reads a buffer of samples at the voice's pitch, resampled to the mixer's rate.
+    ///
+    /// Resampling. A buffer recorded at 44 100 frames a second, played by a mixer making 48 000, must be read a little
+    /// slower than one source frame per mixed frame: 44 100 / 48 000 = 0.91875 source frames for each mixed frame. The
+    /// pitch multiplies that speed - at pitch 2 the buffer is read twice as fast, so it sounds an octave higher and
+    /// lasts half as long. So the voice keeps a position in its source, which each mixed frame moves on by
+    ///
+    ///     step = pitch x source rate / mixer rate          (0.91875 at pitch 1, for 44 100 played at 48 000)
+    ///
+    /// Fixed point. The position is not a float but a 64-bit integer counting 2^32ths of a source frame: its high 32
+    /// bits are the whole frame, its low 32 bits the fraction of the way to the next one.
+    ///
+    ///     position 1.8375 frames  =  1 x 2^32  +  0.8375 x 2^32
+    ///                                high 32 bits: 1          low 32 bits: 3 597 035 110
+    ///
+    /// The step is rounded to that grid once - 0.91875 x 2^32 = 3 946 001 203.2, so 3 946 001 203 - and then added
+    /// exactly, frame after frame. The only error is that one rounding: at most about a ten-billionth of a frame per
+    /// mixed frame, a fiftieth of a frame after an hour of playing. A float position would lose precision as it grew -
+    /// at a million frames a float32 holds the fraction only to an eighth of a frame, and past 2^24 frames, under six
+    /// minutes at 48 000 a second, not at all - and a float step, added millions of times, rounds at every addition.
+    ///
+    /// Interpolation. A position usually falls between two source frames, `index` and `index + 1`, a `fraction` of the
+    /// way from the first to the second; the sample there is read off the straight line between them:
+    ///
+    ///     sample  =  s[index] + (s[index + 1] - s[index]) x fraction
+    ///     at 1.8375, between s[1] = 0.2 and s[2] = 0.6:   0.2 + 0.4 x 0.8375  =  0.535
+    ///
+    /// A straight line is the simplest curve through the samples, and the cheapest: two reads, a subtraction and a
+    /// multiplication. It softens the highest frequencies a little; and read fast, at a high pitch, it lets
+    /// frequencies above what the mixer's rate can carry fold back as false tones (aliasing). Finer filters avoid both
+    /// at many times the cost; for a game's sounds the straight line is the usual choice.
+    ///
+    /// The end. A buffer that does not loop stops at its end, and the voice reads fewer frames than asked for - which
+    /// ends it (`Renderer.mixVoiceInto`). A looping buffer goes on from its start, the position wrapped by the
+    /// remainder of the buffer's length: a step can be longer than the whole buffer - a short loop at a high pitch -
+    /// and one subtraction of the length could leave the position still past the end. At the last frame there is no
+    /// next one to draw the line to: a looping buffer draws it to its first frame, the one heard next; one that does
+    /// not loop holds its last sample.
+    ///
+    /// Channels. A mono buffer's single sample goes to both channels. A stereo buffer gives its left and its right; a
+    /// buffer of more channels gives its first two.
+    fn readSampleSource(
+        voice_slot: *VoiceSlot,
+        sample_source: Samples,
+        voice_samples: []f32,
+    ) usize {
+        const frames_wanted: usize = voice_samples.len / channel_count;
+        const source_channel_count: usize = sample_source.channels;
+        const source_frame_count: usize = sample_source.samples.len / source_channel_count;
+        if (source_frame_count == 0) {
+            return 0;
+        }
+        // The step: source frames per mixed frame, then on the fixed-point grid.
+        const source_rate: f64 = @floatFromInt(sample_source.sample_rate);
+        const mixer_rate: f64 = @floatFromInt(sample_rate);
+        // A pitch of 0 would hold the voice on one sample forever, and a negative one would read backward past the
+        // start: pitch is held between 1/64 - six octaves down - and 64.
+        const pitch: f64 = clamp(voice_slot.pitch, lowest_pitch, highest_pitch);
+        const source_frames_per_mixed_frame: f64 = pitch * source_rate / mixer_rate;
+        const one_frame_as_float: f64 = @floatFromInt(position_one_frame);
+        const position_step: u64 = @round(source_frames_per_mixed_frame * one_frame_as_float);
+        const source_end_position: u64 = @as(u64, source_frame_count) << position_fraction_bits;
+        // A frame's right sample is its second, or - in a mono buffer - the same one as its left.
+        const right_channel_offset: usize = if (source_channel_count > 1) 1 else 0;
+        var frame_index: usize = 0;
+        while (frame_index < frames_wanted) : (frame_index += 1) {
+            const is_past_source_end: bool = voice_slot.source_position >= source_end_position;
+            if (is_past_source_end) {
+                if (!sample_source.is_looping) {
+                    return frame_index;
+                }
+                voice_slot.source_position %= source_end_position;
+            }
+            // The position, split: its whole frame, and its fraction of the way to the next.
+            const source_frame_index: usize = @intCast(voice_slot.source_position >> position_fraction_bits);
+            const fraction_as_integer: u64 = voice_slot.source_position & position_fraction_mask;
+            const fraction_as_integer_float: f32 = @floatFromInt(fraction_as_integer);
+            const fraction_between_frames: f32 = fraction_as_integer_float * position_fraction_to_float;
+            // The frame the line is drawn to: the next one; at the last frame, the first again (looping) or the last
+            // itself.
+            const is_last_source_frame: bool = source_frame_index + 1 >= source_frame_count;
+            const next_source_frame_index: usize = if (!is_last_source_frame)
+                source_frame_index + 1
+            else if (sample_source.is_looping)
+                0
+            else
+                source_frame_index;
+            const first_sample_index: usize = source_frame_index * source_channel_count;
+            const next_sample_index: usize = next_source_frame_index * source_channel_count;
+            const left_at_frame: f32 = sample_source.samples[first_sample_index];
+            const left_at_next_frame: f32 = sample_source.samples[next_sample_index];
+            const right_at_frame: f32 = sample_source.samples[first_sample_index + right_channel_offset];
+            const right_at_next_frame: f32 = sample_source.samples[next_sample_index + right_channel_offset];
+            // The straight line between the two frames, read at the fraction.
+            const left_change: f32 = left_at_next_frame - left_at_frame;
+            const right_change: f32 = right_at_next_frame - right_at_frame;
+            const interpolated_left: f32 = left_at_frame + left_change * fraction_between_frames;
+            const interpolated_right: f32 = right_at_frame + right_change * fraction_between_frames;
+            const left_sample_index: usize = frame_index * channel_count;
+            const right_sample_index: usize = left_sample_index + 1;
+            voice_samples[left_sample_index] = interpolated_left;
+            voice_samples[right_sample_index] = interpolated_right;
+            voice_slot.source_position += position_step;
+        }
+        return frames_wanted;
+    }
+
+    /// A test's sine tone: amplitude 0.5 at the frequency `context` points to, the same on both channels. The sample
+    /// at frame `n` is `0.5 sin(2 pi f n / rate)` - in turns, `0.5 sinTurns(f n / rate)`.
+    // ---- A renderer in another memory ----
+    //
+    // A wasm module is a compiled program; an instance is one running copy of it, with its own memory - a single array
+    // of bytes holding all its variables, addressed from 0. In the browser the renderer runs in the audio worklet, on
+    // the audio thread, in a second instance of the app's own module: the same code, so the same layout of every type,
+    // but a memory of its own, which the main thread's instance cannot see. (Two instances may share one memory only
+    // on a page served with particular security headers, which a page opened from a file, or shown inside a viewer,
+    // does not have.) So the two sides talk by messages: the browser copies each message's data from one thread to
+    // the other.
+    //
+    // A command that holds no address is plain data: its bytes, copied into the other instance, mean the same command
+    // there, since both instances lay the type out alike. So each command is sent as its bytes (`forwardCommands`).
+    // One kind of command holds an address: a registration, which names samples by where they lie in the main side's
+    // memory - an address that means nothing in the worklet's. For it the samples themselves are sent; the worklet
+    // copies them into its own memory and registers that copy under the same id (`RendererHost.acceptSamples`). From
+    // then on a play names the samples by the id, which means the same on both sides. The renderer's notices come
+    // back the same way, as plain data (`RendererHost.takeNotices`, `acceptNotices`).
+    //
+    //     main instance, main thread                        worklet instance, audio thread: RendererHost
+    //       Mixer: commands queued
+    //       forwardCommands:  a command, as its bytes  --->   acceptCommandBytes: queued for the next block
+    //                         a registration, samples  --->   acceptSamples: copied here, registered by its id
+    //                                                         render: the next block, the commands applied first
+    //       acceptNotices: read as any renderer's      <---   takeNotices: a release frees the copy here
+
+    /// Where `forwardCommands` hands the commands, in order: in the browser, one message to the worklet for each. Its
+    /// two functions are called with `context`, a pointer to whatever state they need - Zig has no closures, functions
+    /// that carry state with them, so a function and the state it works on travel as a pair.
+    pub const CommandSink = struct {
+        context: *anyopaque,
+        /// A command other than a registration, as its bytes.
+        send_command_bytes: *const fn (context: *anyopaque, command_bytes: []const u8) void,
+        /// A registration: the id, and the samples themselves, to be copied into the other memory.
+        send_samples: *const fn (
+            context: *anyopaque,
+            samples_id: SamplesId,
+            samples: []const f32,
+        ) void,
+    };
+
+    /// Takes every command waiting on the main side and hands each to `command_sink`, in the order they were sent. The
+    /// order matters: the worklet applies the commands in the order they arrive, so a play naming samples by their id
+    /// must arrive after the registration that gave the samples that id.
+    pub fn forwardCommands(engine_mixer: *Mixer, command_sink: CommandSink) void {
+        const main_side_commands: *RendererCommandQueue = &engine_mixer.renderer_queues.commands;
+        while (main_side_commands.pop()) |renderer_command| {
+            switch (renderer_command) {
+                .register_samples => |samples_to_register| {
+                    const samples_id: SamplesId = samples_to_register.samples_id;
+                    const samples_in_main_memory: []const f32 = samples_to_register.samples;
+                    command_sink.send_samples(command_sink.context, samples_id, samples_in_main_memory);
+                },
+                else => {
+                    const command_bytes: []const u8 = asBytes(&renderer_command);
+                    command_sink.send_command_bytes(command_sink.context, command_bytes);
+                },
+            }
+        }
+    }
+
+    /// Hands the main side the notices of a renderer in another memory, as its host took them
+    /// (`RendererHost.takeNotices`): they are read as any renderer's, at the next frame (`Mixer.readRendererNotices`).
+    /// The queue always has room: a voice's slot ends once, and an id is released once, before the main side reads the
+    /// notice and may use the slot or the id again - so no more than one notice per slot and per id ever waits.
+    pub fn acceptNotices(engine_mixer: *Mixer, renderer_notices: []const RendererNotice) void {
+        const main_side_notices: *RendererNoticeQueue = &engine_mixer.renderer_queues.notices;
+        for (renderer_notices) |renderer_notice| {
+            const is_accepted: bool = main_side_notices.push(renderer_notice);
+            assert(is_accepted, @src());
+        }
+    }
+
+    /// A renderer in a memory of its own - the browser's audio worklet's - with what it needs there: its own queues,
+    /// the block it renders into, and its own copies of the main side's samples, made when they are registered and
+    /// freed when the renderer lets them go. The worklet's program reaches it through these calls, all on the audio
+    /// thread: `start` and `stop`; `acceptCommandBytes` and `acceptSamples` - or `allocateUploadedSamples` then
+    /// `registerUploadedSamples`, which let the samples be copied straight into this memory - for what the main side
+    /// sends; `render`, at each block the browser asks for; and `takeNotices`, for what goes back.
+    pub const RendererHost = struct {
+        renderer: Renderer = .{},
+        /// The host's own pair of queues: commands from the main side waiting for the next block, and the renderer's
+        /// notices waiting to go back. The worklet's one thread both pushes and pops them.
+        renderer_queues: RendererQueues = .{},
+        /// The block rendered at each request: interleaved stereo - for each frame, a left sample and then a right
+        /// one - with room for the largest block a request may ask for (`render_ahead_most_frames`).
+        render_block_samples: []f32 = &.{},
+        /// This memory's copies of the main side's samples, each under its id; empty where an id is not in use.
+        uploaded_samples: [samples_registry_capacity][]f32 = @splat(&.{}),
+        allocator: ?Allocator = null,
+
+        /// Allocates the blocks, once: from then on rendering allocates nothing, since the audio thread must never
+        /// wait - and asking for memory can mean waiting.
+        pub fn start(renderer_host: *RendererHost, allocator: Allocator) Allocator.Error!void {
+            const largest_block_frame_count: usize = render_ahead_most_frames;
+            const largest_block_sample_count: usize = largest_block_frame_count * channel_count;
+            renderer_host.render_block_samples = try allocator.alloc(f32, largest_block_sample_count);
+            errdefer allocator.free(renderer_host.render_block_samples);
+            renderer_host.renderer.voice_scratch_samples = try allocator.alloc(f32, largest_block_sample_count);
+            renderer_host.allocator = allocator;
+        }
+
+        /// Frees the blocks and every copy of samples still held.
+        pub fn stop(renderer_host: *RendererHost) void {
+            const allocator: Allocator = renderer_host.allocator orelse return;
+            allocator.free(renderer_host.render_block_samples);
+            allocator.free(renderer_host.renderer.voice_scratch_samples);
+            for (&renderer_host.uploaded_samples) |*uploaded_copy| {
+                allocator.free(uploaded_copy.*);
+                uploaded_copy.* = &.{};
+            }
+            renderer_host.allocator = null;
+        }
+
+        /// A command's bytes, as the main side sent them (`forwardCommands`): copied back into a command - whose layout
+        /// is the same in both instances - and queued for the renderer's next block.
+        pub fn acceptCommandBytes(renderer_host: *RendererHost, command_bytes: []const u8) void {
+            const expected_byte_count: usize = @sizeOf(RendererCommand);
+            assert(command_bytes.len == expected_byte_count, @src());
+            var renderer_command: RendererCommand = undefined;
+            const command_storage: []u8 = asBytes(&renderer_command);
+            @memcpy(command_storage, command_bytes);
+            const is_queued: bool = renderer_host.renderer_queues.commands.push(renderer_command);
+            assert(is_queued, @src());
+        }
+
+        /// Room in this memory for the `sample_count` samples the main side registered under `samples_id`: the caller
+        /// copies them in, then registers them (`registerUploadedSamples`). The id is free here: the main side uses an
+        /// id again only after the release notice that freed this side's copy.
+        pub fn allocateUploadedSamples(
+            renderer_host: *RendererHost,
+            samples_id: SamplesId,
+            sample_count: usize,
+        ) Allocator.Error![]f32 {
+            const allocator: Allocator = renderer_host.allocator.?;
+            const is_id_free_here: bool = renderer_host.uploaded_samples[samples_id].len == 0;
+            assert(is_id_free_here, @src());
+            const uploaded_copy: []f32 = try allocator.alloc(f32, sample_count);
+            renderer_host.uploaded_samples[samples_id] = uploaded_copy;
+            return uploaded_copy;
+        }
+
+        /// Registers the samples copied in under `samples_id`, for the renderer's next block - before any command that
+        /// arrives after it, a play of those samples among them.
+        pub fn registerUploadedSamples(renderer_host: *RendererHost, samples_id: SamplesId) void {
+            const uploaded_copy: []const f32 = renderer_host.uploaded_samples[samples_id];
+            const samples_to_register: SamplesToRegister = .{ .samples_id = samples_id, .samples = uploaded_copy };
+            const register_command: RendererCommand = .{ .register_samples = samples_to_register };
+            const is_queued: bool = renderer_host.renderer_queues.commands.push(register_command);
+            assert(is_queued, @src());
+        }
+
+        /// Copies `samples` into this memory and registers the copy under `samples_id`.
+        pub fn acceptSamples(
+            renderer_host: *RendererHost,
+            samples_id: SamplesId,
+            samples: []const f32,
+        ) Allocator.Error!void {
+            const uploaded_copy: []f32 = try renderer_host.allocateUploadedSamples(samples_id, samples.len);
+            @memcpy(uploaded_copy, samples);
+            renderer_host.registerUploadedSamples(samples_id);
+        }
+
+        /// Renders the next `frame_count` frames - the commands waiting applied first - and returns them, interleaved.
+        /// The worklet asks for 128 frames at a time; a request never passes the block's room.
+        pub fn render(renderer_host: *RendererHost, frame_count: usize) []const f32 {
+            const sample_count: usize = frame_count * channel_count;
+            const is_within_room: bool = sample_count <= renderer_host.render_block_samples.len;
+            assert(is_within_room, @src());
+            const rendered_block: []f32 = renderer_host.render_block_samples[0..sample_count];
+            renderer_host.renderer.render(&renderer_host.renderer_queues, rendered_block);
+            return rendered_block;
+        }
+
+        /// Takes the renderer's notices into `renderer_notices`, as many as fit, and says how many it took. A release
+        /// among them frees this memory's copy of those samples: the renderer has applied it, so no voice reads the
+        /// copy any more.
+        pub fn takeNotices(renderer_host: *RendererHost, renderer_notices: []RendererNotice) usize {
+            var taken_notice_count: usize = 0;
+            while (taken_notice_count < renderer_notices.len) {
+                const renderer_notice: RendererNotice = renderer_host.renderer_queues.notices.pop() orelse break;
+                switch (renderer_notice) {
+                    .samples_released => |samples_id| {
+                        const uploaded_copy: []f32 = renderer_host.uploaded_samples[samples_id];
+                        renderer_host.allocator.?.free(uploaded_copy);
+                        renderer_host.uploaded_samples[samples_id] = &.{};
+                    },
+                    .voice_ended => {},
+                }
+                renderer_notices[taken_notice_count] = renderer_notice;
+                taken_notice_count += 1;
+            }
+            return taken_notice_count;
+        }
+    };
+
+    // ---- The worklet's entry points ----
+    //
+    // In the browser the audio worklet runs a second instance of the app's own module, and reaches the renderer host
+    // in it through these functions, which the app's module exports (`exportWorkletEntryPoints`) under the names in
+    // `worklet_abi`; the worklet's program calls them by the same names. Each takes and gives plain numbers - counts,
+    // and addresses in the worklet instance's memory - since a JavaScript caller can pass nothing else: the program
+    // writes a command's bytes at the command buffer's address, copies samples to the address it is given room at, and
+    // reads a rendered block, and the notices, at the addresses returned.
+    //
+    //     the worklet's program                           the app's module, in the worklet's instance
+    //       once:          start                  --->      the host's blocks allocated
+    //       a command:     its bytes into the command buffer, then
+    //                      accept_command         --->      queued for the next block
+    //       samples:       allocate_samples(id, n) -->      room for n samples: its address
+    //                      the samples copied in, then
+    //                      register_samples(id)   --->      registered under the id
+    //       each quantum:  render(128)            --->      the block's address: 128 left samples, 128 right
+    //       then:          take_notices           --->      how many notices are in the notices buffer
+
+    /// The names the worklet's entry points are exported under, and the sizes of what crosses: read by the app's
+    /// module, which exports the functions, and by the worklet's program, which calls them - one spelling of each.
+    pub const worklet_abi = struct {
+        pub const start = "zimr_audio_worklet_start";
+        pub const command_buffer = "zimr_audio_worklet_command_buffer";
+        pub const accept_command = "zimr_audio_worklet_accept_command";
+        pub const allocate_samples = "zimr_audio_worklet_allocate_samples";
+        pub const register_samples = "zimr_audio_worklet_register_samples";
+        pub const render = "zimr_audio_worklet_render";
+        pub const take_notices = "zimr_audio_worklet_take_notices";
+        pub const notices_buffer = "zimr_audio_worklet_notices_buffer";
+        /// The bytes of one command and of one notice, as both sides lay them out: the worklet's program copies whole
+        /// ones.
+        pub const command_byte_count: usize = @sizeOf(RendererCommand);
+        pub const notice_byte_count: usize = @sizeOf(RendererNotice);
+        /// The name the worklet's processor is registered under, and the option of its constructor that holds the
+        /// app's compiled module (`processorOptions.module`).
+        pub const processor_name = "zimr-renderer";
+        pub const module_option = "module";
+        /// The messages between the main thread and the worklet: JavaScript objects, told apart by their kind.
+        ///
+        ///     main thread -> worklet   { kind: "commands", bytes }          whole commands, one after another
+        ///     main thread -> worklet   { kind: "samples", samplesId, samples }  samples to register under the id
+        ///     worklet -> main thread   { kind: "notices", bytes }           whole notices, one after another
+        ///
+        /// They are taken in the order sent, so samples sent before a command that plays them are registered first.
+        pub const message = struct {
+            pub const kind_field = "kind";
+            pub const commands_kind = "commands";
+            pub const samples_kind = "samples";
+            pub const notices_kind = "notices";
+            pub const bytes_field = "bytes";
+            pub const samples_id_field = "samplesId";
+            pub const samples_field = "samples";
+        };
+    };
+
+    /// What the worklet instance's host allocates with: the module's own heap, which grows the instance's memory as
+    /// needed. A test sets another before `workletStart`.
+    const default_worklet_allocator: Allocator = if (builtin.cpu.arch.isWasm())
+        std.heap.wasm_allocator
+    else
+        std.heap.page_allocator;
+    /// What the worklet's entry points share: the host they reach, what it allocates with, and the two buffers the
+    /// worklet's program reads and writes through. A module's exported functions can share state only through a
+    /// global - a JavaScript caller can hand them nothing else - and the worklet's instance has exactly one.
+    const WorkletState = struct {
+        allocator: Allocator = default_worklet_allocator,
+        renderer_host: RendererHost = .{},
+        /// Where the worklet's program writes a command's bytes, before `workletAcceptCommand`.
+        command_bytes: [@sizeOf(RendererCommand)]u8 align(@alignOf(RendererCommand)) = undefined,
+        /// Where `workletTakeNotices` writes the notices it took, for the worklet's program to send to the main
+        /// thread.
+        notices: [notice_queue_capacity]RendererNotice = undefined,
+        /// Each block rendered, one channel after the other (`workletRender`).
+        channel_samples: [render_ahead_most_frames * channel_count]f32 = undefined,
+    };
+    // lint:off module-var: the worklet instance's one state - its exported functions can share nothing else
+    var worklet_state: WorkletState = .{};
+
+    /// Exports the worklet's entry points under their names (`worklet_abi`). Called by the app module's root, in a
+    /// build for the browser.
+    pub fn exportWorkletEntryPoints() void {
+        @export(&workletStart, .{ .name = worklet_abi.start });
+        @export(&workletCommandBuffer, .{ .name = worklet_abi.command_buffer });
+        @export(&workletAcceptCommand, .{ .name = worklet_abi.accept_command });
+        @export(&workletAllocateSamples, .{ .name = worklet_abi.allocate_samples });
+        @export(&workletRegisterSamples, .{ .name = worklet_abi.register_samples });
+        @export(&workletRender, .{ .name = worklet_abi.render });
+        @export(&workletTakeNotices, .{ .name = worklet_abi.take_notices });
+        @export(&workletNoticesBuffer, .{ .name = worklet_abi.notices_buffer });
+    }
+
+    /// Allocates the host's blocks: 1 when it could, 0 when memory ran out.
+    fn workletStart() callconv(.c) u32 {
+        worklet_state.renderer_host.start(worklet_state.allocator) catch return 0;
+        return 1;
+    }
+
+    /// The address of the command buffer, where the worklet's program writes each command's bytes.
+    fn workletCommandBuffer() callconv(.c) [*]u8 {
+        return &worklet_state.command_bytes;
+    }
+
+    /// Queues the command whose bytes are in the command buffer, for the renderer's next block.
+    fn workletAcceptCommand() callconv(.c) void {
+        worklet_state.renderer_host.acceptCommandBytes(&worklet_state.command_bytes);
+    }
+
+    /// Room for the `sample_count` samples the main side registered under `samples_id`, in this memory: its address,
+    /// for the worklet's program to copy them to before `workletRegisterSamples`; 0 when memory ran out - the samples
+    /// are then never registered here, and a voice of them ends at once, silent.
+    fn workletAllocateSamples(samples_id: u32, sample_count: u32) callconv(.c) usize {
+        const is_valid_id: bool = samples_id < samples_registry_capacity;
+        assert(is_valid_id, @src());
+        const renderer_host: *RendererHost = &worklet_state.renderer_host;
+        const room: []f32 = renderer_host.allocateUploadedSamples(@intCast(samples_id), sample_count) catch return 0;
+        return @intFromPtr(room.ptr);
+    }
+
+    /// Registers the samples copied to the room `workletAllocateSamples` gave for `samples_id`.
+    fn workletRegisterSamples(samples_id: u32) callconv(.c) void {
+        const is_valid_id: bool = samples_id < samples_registry_capacity;
+        assert(is_valid_id, @src());
+        worklet_state.renderer_host.registerUploadedSamples(@intCast(samples_id));
+    }
+
+    /// Renders the next `frame_count` frames, the commands waiting applied first, and returns the address of the
+    /// samples one channel after the other - the left channel's `frame_count` samples, then the right channel's - as
+    /// the browser hands a processor its output: one array for each channel. Valid until the next call.
+    fn workletRender(frame_count: u32) callconv(.c) usize {
+        const interleaved_block: []const f32 = worklet_state.renderer_host.render(frame_count);
+        const left_channel: []f32 = worklet_state.channel_samples[0..frame_count];
+        const right_channel: []f32 = worklet_state.channel_samples[frame_count .. 2 * frame_count];
+        for (left_channel, right_channel, 0..) |*left_sample, *right_sample, frame_index| {
+            const left_sample_index: usize = frame_index * channel_count;
+            const right_sample_index: usize = left_sample_index + 1;
+            left_sample.* = interleaved_block[left_sample_index];
+            right_sample.* = interleaved_block[right_sample_index];
+        }
+        return @intFromPtr(&worklet_state.channel_samples);
+    }
+
+    /// Takes the renderer's notices into the notices buffer, and returns how many it took.
+    fn workletTakeNotices() callconv(.c) u32 {
+        const taken_notice_count: usize = worklet_state.renderer_host.takeNotices(&worklet_state.notices);
+        return @intCast(taken_notice_count);
+    }
+
+    /// The address of the notices buffer: `workletTakeNotices`'s count of notices, `worklet_abi.notice_byte_count`
+    /// bytes each.
+    fn workletNoticesBuffer() callconv(.c) usize {
+        return @intFromPtr(&worklet_state.notices);
+    }
+
+    /// Allocates a mixer's blocks, for tests that mix by hand (`Mixer.mixInto`) without an output.
+    fn allocateTestBlocks(engine_mixer: *Mixer) Allocator.Error!void {
+        const block_sample_count: usize = @as(usize, render_ahead_most_frames) * channel_count;
+        engine_mixer.mix_block_samples = try testing_allocator.alloc(f32, block_sample_count);
+        engine_mixer.renderer.voice_scratch_samples = try testing_allocator.alloc(f32, block_sample_count);
+    }
+
+    fn freeTestBlocks(engine_mixer: *Mixer) void {
+        testing_allocator.free(engine_mixer.mix_block_samples);
+        testing_allocator.free(engine_mixer.renderer.voice_scratch_samples);
+    }
+
+    /// The headless output pushed to rather than pulling - its queue, not the renderer called - for the tests of the
+    /// push path, which the platforms that do not pull yet still use.
+    fn headlessPushOutput() Output {
+        var output: Output = outputOf(platform.headless);
+        output.start_pulling = null;
+        return output;
+    }
+
+    /// A test generator whose state is a count: each call adds one to it and writes it, over 64 - exact in binary, and
+    /// within the -1..1 a mix is held to - into every sample it makes.
+    fn generateTestCount(state: *anyopaque, frames: []f32, first_frame: u64) void {
+        _ = first_frame;
+        const count: *u32 = @ptrCast(@alignCast(state));
+        count.* += 1;
+        const count_float: f32 = @floatFromInt(count.*);
+        @memset(frames, count_float / 64);
+    }
+
+    /// A test tone: a sine of amplitude 0.5 at the frequency its state holds (an `f32`), the same on both channels.
+    fn generateTestSine(state: *anyopaque, frames: []f32, first_frame: u64) void {
+        const frequency: *const f32 = @ptrCast(@alignCast(state));
+        const rate: f32 = @floatFromInt(sample_rate);
+        const frame_count: usize = frames.len / channel_count;
+        for (0..frame_count) |frame_offset| {
+            const frame_number: f32 = @floatFromInt(first_frame + frame_offset);
+            const phase_turns: f32 = frequency.* * frame_number / rate;
+            const value: f32 = 0.5 * sinTurns(phase_turns);
+            frames[frame_offset * channel_count] = value;
+            frames[frame_offset * channel_count + 1] = value;
+        }
+    }
+
+    /// How many times the left channel rises through zero - from below to at or above it. Over one second of a pure
+    /// tone, that is its frequency.
+    fn countRisingZeroCrossings(stereo_samples: []const f32) usize {
+        const frame_count: usize = stereo_samples.len / channel_count;
+        var crossing_count: usize = 0;
+        var frame_index: usize = 1;
+        while (frame_index < frame_count) : (frame_index += 1) {
+            const left_before: f32 = stereo_samples[(frame_index - 1) * channel_count];
+            const left_now: f32 = stereo_samples[frame_index * channel_count];
+            if (left_before < 0 and left_now >= 0) {
+                crossing_count += 1;
+            }
+        }
+        return crossing_count;
+    }
+
+    test "a queue between two threads keeps its items in order, across the wrap of its counters" {
+        const Queue = SingleProducerSingleConsumerQueue(u32, 8);
+        var queue: Queue = .{};
+        // Counters started just short of their largest value, so that they wrap within the test.
+        const near_wrap: usize = zm.maxInt(usize) - 5;
+        queue.pushing_side.pushed_count.raw = near_wrap;
+        queue.pushing_side.popped_count_last_seen = near_wrap;
+        queue.popping_side.popped_count.raw = near_wrap;
+        queue.popping_side.pushed_count_last_seen = near_wrap;
+        var item_number: u32 = 0;
+        while (item_number < 8) : (item_number += 1) {
+            try expect(queue.push(item_number));
+        }
+        try expect(!queue.push(99));
+        item_number = 0;
+        while (item_number < 8) : (item_number += 1) {
+            try expectEqual(@as(?u32, item_number), queue.pop());
+        }
+        try expectEqual(@as(?u32, null), queue.pop());
+        // And across threads: a hundred thousand items, each seen once, in order.
+        const item_total: u32 = 100_000;
+        const Pusher = struct {
+            fn run(target: *Queue) void {
+                var next_item: u32 = 0;
+                while (next_item < item_total) {
+                    if (target.push(next_item)) {
+                        next_item += 1;
+                    }
+                }
+            }
+        };
+        const pusher_thread: std.Thread = try .spawn(.{}, Pusher.run, .{&queue});
+        var expected_item: u32 = 0;
+        while (expected_item < item_total) {
+            if (queue.pop()) |popped_item| {
+                try expectEqual(expected_item, popped_item);
+                expected_item += 1;
+            }
+        }
+        pusher_thread.join();
+    }
+
+    test "the mixer: a centred tone at 0.707 a side, a stale voice_name naming nothing, samples at double pitch" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        var tone_frequency: f32 = 1000;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        const tone: Voice = engine_mixer.play(tone_source, .{});
+        var tenth_of_a_second: [4800 * 2]f32 = undefined;
+        engine_mixer.mixInto(&tenth_of_a_second);
+        // 0.1 s of 1000 Hz: 100 rising zero crossings, give or take the one at the very start.
+        const crossing_count: usize = countRisingZeroCrossings(&tenth_of_a_second);
+        try expect(crossing_count >= 99 and crossing_count <= 100);
+        var peak: f32 = 0;
+        for (tenth_of_a_second) |mixed_sample| {
+            peak = @max(peak, @abs(mixed_sample));
+        }
+        // Amplitude 0.5, at the centre 0.707 of it on each side.
+        try expectApproxEqAbs(@as(f32, 0.5 * 0.70710678), peak, 0.001);
+        engine_mixer.stopVoice(tone);
+        try expect(!engine_mixer.isPlaying(tone));
+        // The next voice reuses the slot under a new name; the old name, used again, changes nothing.
+        const next_tone: Voice = engine_mixer.play(tone_source, .{});
+        try expect(next_tone != tone);
+        engine_mixer.setVolume(tone, 0);
+        try expect(engine_mixer.isPlaying(next_tone));
+        engine_mixer.stopVoice(next_tone);
+        // The first tone, stopped once heard, fades out in the next mix and frees its slot.
+        engine_mixer.mixInto(&tenth_of_a_second);
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+        // A ramp from 0 up by 0.01 per frame, played at double pitch: each mixed frame skips one source frame, so the
+        // second mixed frame holds source frame 2 - the value 0.02. Panned hard left, the right channel is silent.
+        var ramp_samples: [100]f32 = undefined;
+        for (&ramp_samples, 0..) |*ramp_sample, ramp_index| {
+            const ramp_index_float: f32 = @floatFromInt(ramp_index);
+            ramp_sample.* = ramp_index_float / 100;
+        }
+        const ramp_source: Source = .{ .samples = .{
+            .samples = &ramp_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        const ramp: Voice = engine_mixer.play(ramp_source, .{ .pitch = 2, .pan = -1 });
+        var short_block: [60 * 2]f32 = undefined;
+        engine_mixer.mixInto(&short_block);
+        try expectApproxEqAbs(@as(f32, 0.02), short_block[2], 0.0001);
+        try expectApproxEqAbs(@as(f32, 0.0), short_block[3], 0.0001);
+        // 100 source frames at double pitch last 50 mixed frames: the 60-frame block ran past the end, which ended
+        // the voice.
+        try expect(!engine_mixer.isPlaying(ramp));
+    }
+
+    test "a stereo source is balanced, unity at the centre; a mono one placed at constant power" {
+        // Stereo at the centre: both sides as recorded. At pan 0.5: the left fades to cos(1/8 turn), the right stays.
+        const stereo_centre: StereoGains = gainsForPan(1, 0, .balance);
+        try expectApproxEqAbs(@as(f32, 1), stereo_centre.left, 0.0001);
+        try expectApproxEqAbs(@as(f32, 1), stereo_centre.right, 0.0001);
+        const stereo_half_right: StereoGains = gainsForPan(1, 0.5, .balance);
+        try expectApproxEqAbs(@as(f32, 0.70710678), stereo_half_right.left, 0.0001);
+        try expectApproxEqAbs(@as(f32, 1), stereo_half_right.right, 0.0001);
+        const stereo_full_left: StereoGains = gainsForPan(1, -1, .balance);
+        try expectApproxEqAbs(@as(f32, 0), stereo_full_left.right, 0.0001);
+        // Mono at the centre: 0.707 each, the sum of their squares 1 at every pan.
+        const mono_centre: StereoGains = gainsForPan(1, 0, .constant_power);
+        try expectApproxEqAbs(@as(f32, 0.70710678), mono_centre.left, 0.0001);
+        const mono_off_centre: StereoGains = gainsForPan(1, 0.3, .constant_power);
+        const power: f32 = mono_off_centre.left * mono_off_centre.left + mono_off_centre.right * mono_off_centre.right;
+        try expectApproxEqAbs(@as(f32, 1), power, 0.0001);
+        // The law follows the source.
+        const stereo_samples: [4]f32 = .{ 0, 0, 0, 0 };
+        const stereo_source: Source = .{ .samples = .{
+            .samples = &stereo_samples,
+            .channels = 2,
+            .sample_rate = 48_000,
+        } };
+        try expectEqual(PanLaw.balance, panLawOf(stereo_source));
+        // So does a generator's: mono unless it says it is stereo.
+        const mono_generator: Source = .{ .generator = .{ .generate = &generateTestSine } };
+        try expectEqual(PanLaw.constant_power, panLawOf(mono_generator));
+        const stereo_generator: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .channels = 2,
+        } };
+        try expectEqual(PanLaw.balance, panLawOf(stereo_generator));
+    }
+
+    test "a voice started between frames begins inside the queue, 10 ms after its frame, without a seam" {
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, headlessPushOutput());
+        defer engine_mixer.stop();
+        var tone_frequency: f32 = 440;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        var frame_number: usize = 0;
+        while (frame_number <= 60) : (frame_number += 1) {
+            const frame_number_float: f64 = @floatFromInt(frame_number);
+            platform.headless.playAudioUntil(frame_number_float * 1000.0 / 60.0);
+            if (frame_number == 30) {
+                _ = engine_mixer.play(tone_source, .{});
+            }
+            engine_mixer.mixFrame();
+        }
+        const played_samples: []const f32 = platform.headless.playedAudio();
+        // Frame 30 is at 500 ms: sound frame 24 000 was playing. The voice begins 480 frames later; its first sample is
+        // sin(0) = 0, so the first that sounds is the next.
+        var first_sounding_frame: usize = 0;
+        while (played_samples[first_sounding_frame * channel_count] == 0) {
+            first_sounding_frame += 1;
+        }
+        try expectEqual(@as(usize, 24_000 + 480 + 1), first_sounding_frame);
+        // Where the part mixed inside the queue meets the part mixed after it - sound frame 25 600, the voice's frame
+        // 1 120 - the tone goes on as one sine.
+        const voice_frame_at_join: f32 = 1_120;
+        const rate: f32 = @floatFromInt(sample_rate);
+        const expected_at_join: f32 = 0.5 * 0.70710678 * sinTurns(440 * voice_frame_at_join / rate);
+        const join_sample_index: usize = 25_600 * @as(usize, channel_count);
+        try expectApproxEqAbs(expected_at_join, played_samples[join_sample_index], 0.0001);
+        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
+    }
+
+    test "a stall that recurs is ridden out: the margin follows the longest gap between frames of the last seconds" {
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, headlessPushOutput());
+        defer engine_mixer.stop();
+        var frame_time_ms: f64 = 0;
+        var frame_number: usize = 0;
+        while (frame_number < 10) : (frame_number += 1) {
+            frame_time_ms += 1000.0 / 60.0;
+            platform.headless.playAudioUntil(frame_time_ms);
+            engine_mixer.mixFrame();
+        }
+        try expectEqual(render_ahead_initial_frames, engine_mixer.render_ahead_frames);
+        // A frame 45 ms after the last: the 50 ms queued outlasts it, and the margin becomes the gap and 25 ms - 70 ms.
+        frame_time_ms += 45;
+        platform.headless.playAudioUntil(frame_time_ms);
+        engine_mixer.mixFrame();
+        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
+        const margin_after_45_ms: i64 = engine_mixer.render_ahead_frames;
+        try expect(@abs(margin_after_45_ms - (45 * 48 + render_ahead_safety_frames)) <= 1);
+        // A frame 60 ms after the last: longer than the old 50 ms margin, shorter than the new 70 ms - no underrun.
+        frame_time_ms += 60;
+        platform.headless.playAudioUntil(frame_time_ms);
+        engine_mixer.mixFrame();
+        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
+        // Thirty-one steady seconds: the stalls leave the thirty-second window, and the margin is back at 50 ms.
+        frame_number = 0;
+        while (frame_number < 31 * 60) : (frame_number += 1) {
+            frame_time_ms += 1000.0 / 60.0;
+            platform.headless.playAudioUntil(frame_time_ms);
+            engine_mixer.mixFrame();
+        }
+        try expectEqual(render_ahead_initial_frames, engine_mixer.render_ahead_frames);
+        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
+    }
+
+    test "a frame later than the whole margin runs the output dry once, and the margin then covers that gap" {
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, headlessPushOutput());
+        defer engine_mixer.stop();
+        var frame_time_ms: f64 = 0;
+        var frame_number: usize = 0;
+        while (frame_number < 10) : (frame_number += 1) {
+            frame_time_ms += 1000.0 / 60.0;
+            platform.headless.playAudioUntil(frame_time_ms);
+            engine_mixer.mixFrame();
+        }
+        // 100 ms late: the 50 ms queued runs out. The gap is taken as everything queued and the safety - 75 ms -
+        // and the margin as that and the safety again: 100 ms.
+        frame_time_ms += 100;
+        platform.headless.playAudioUntil(frame_time_ms);
+        engine_mixer.mixFrame();
+        try expectEqual(@as(u32, 1), engine_mixer.underrun_count);
+        const expected_margin: u32 = render_ahead_initial_frames + 2 * render_ahead_safety_frames;
+        try expectEqual(expected_margin, engine_mixer.render_ahead_frames);
+        // The same stall again is ridden out.
+        frame_time_ms += 1000.0 / 60.0;
+        platform.headless.playAudioUntil(frame_time_ms);
+        engine_mixer.mixFrame();
+        frame_time_ms += 90;
+        platform.headless.playAudioUntil(frame_time_ms);
+        engine_mixer.mixFrame();
+        try expectEqual(@as(u32, 1), engine_mixer.underrun_count);
+    }
+
+    test "a looping source stepping past its whole length wraps by the remainder, reading only its own frames" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        // Ten frames, frame i holding i / 16 - exact in binary, so interpolation adds no rounding.
+        var ramp_samples: [10]f32 = undefined;
+        for (&ramp_samples, 0..) |*ramp_sample, ramp_index| {
+            const ramp_index_float: f32 = @floatFromInt(ramp_index);
+            ramp_sample.* = ramp_index_float / 16;
+        }
+        // At the mixer's rate and pitch 25.25, each mixed frame steps 25.25 frames through a 10-frame loop - more than
+        // twice its length. Wrapped by the remainder, the positions are 0, 5.25, 0.5 (30.5 less three lengths), 5.75;
+        // wrapped by one subtraction of the length, the second would be 15.25 - past the end.
+        const ramp_source: Source = .{ .samples = .{
+            .samples = &ramp_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+            .is_looping = true,
+        } };
+        const ramp: Voice = engine_mixer.play(ramp_source, .{ .pitch = 25.25, .pan = -1 });
+        var block: [4 * 2]f32 = undefined;
+        engine_mixer.mixInto(&block);
+        try expect(engine_mixer.isPlaying(ramp));
+        try expectApproxEqAbs(@as(f32, 0), block[0], 0.001);
+        try expectApproxEqAbs(@as(f32, 5.25 / 16.0), block[2], 0.001);
+        try expectApproxEqAbs(@as(f32, 0.5 / 16.0), block[4], 0.001);
+        try expectApproxEqAbs(@as(f32, 5.75 / 16.0), block[6], 0.001);
+        // A source of no channels, or of no rate, is refused.
+        const no_channels: Source = .{ .samples = .{
+            .samples = &ramp_samples,
+            .channels = 0,
+            .sample_rate = sample_rate,
+        } };
+        try expectEqual(Voice.none, engine_mixer.play(no_channels, .{}));
+        const no_rate: Source = .{ .samples = .{ .samples = &ramp_samples, .channels = 1, .sample_rate = 0 } };
+        try expectEqual(Voice.none, engine_mixer.play(no_rate, .{}));
+    }
+
+    test "a generator's state is the voice's own: copied when it plays, changed by it alone" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        var starting_count: u32 = 10;
+        const count_source: Source = .{ .generator = .{
+            .generate = &generateTestCount,
+            .initial_state = asBytes(&starting_count),
+        } };
+        const first_voice: Voice = engine_mixer.play(count_source, .{ .pan = -1 });
+        var block: [4 * 2]f32 = undefined;
+        // One block: the first voice counts 11.
+        engine_mixer.mixInto(&block);
+        try expectApproxEqAbs(@as(f32, 11.0 / 64.0), block[0], 0.0001);
+        // A second voice from the same source starts from its own copy, 10, while the first goes on: 12 and 11.
+        _ = engine_mixer.play(count_source, .{ .pan = -1 });
+        engine_mixer.mixInto(&block);
+        try expectApproxEqAbs(@as(f32, (12.0 + 11.0) / 64.0), block[0], 0.0001);
+        // The caller's state is untouched; and a state larger than a voice holds is refused.
+        try expectEqual(@as(u32, 10), starting_count);
+        try expect(engine_mixer.isPlaying(first_voice));
+        const oversized_state: [generator_state_capacity + 1]u8 = @splat(0);
+        const oversized_source: Source = .{ .generator = .{
+            .generate = &generateTestCount,
+            .initial_state = &oversized_state,
+        } };
+        const saved_log_level: std.log.Level = std.testing.log_level;
+        std.testing.log_level = .err; // the refusal's warning IS the behaviour; keep a passing test silent
+        defer std.testing.log_level = saved_log_level;
+        try expectEqual(Voice.none, engine_mixer.play(oversized_source, .{}));
+    }
+
+    test "a paused voice fades out, is not mixed, keeps its slot, and resumes where it fell silent" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        var tone_frequency: f32 = 1000;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        const tone: Voice = engine_mixer.play(tone_source, .{});
+        var block: [300 * 2]f32 = undefined;
+        engine_mixer.mixInto(block[0 .. 100 * 2]);
+        const voice_slot: *VoiceSlot = engine_mixer.renderer.playingSlotNamedBy(tone).?;
+        try expectEqual(@as(u64, 100), voice_slot.generated_frame_count);
+        // Paused: at once by name; in the next mix it fades over 240 frames, its source moving on by those only.
+        engine_mixer.pauseVoice(tone);
+        try expect(engine_mixer.isPaused(tone));
+        engine_mixer.mixInto(&block);
+        try expectEqual(@as(u64, 100 + fade_out_frames), voice_slot.generated_frame_count);
+        for (block[fade_out_frames * channel_count ..]) |mixed_sample| {
+            try expectEqual(@as(f32, 0), mixed_sample);
+        }
+        // Then silent, still named, its place kept.
+        engine_mixer.mixInto(&block);
+        for (block) |mixed_sample| {
+            try expectEqual(@as(f32, 0), mixed_sample);
+        }
+        try expect(engine_mixer.isPlaying(tone) and engine_mixer.isPaused(tone));
+        try expectEqual(@as(u64, 100 + fade_out_frames), voice_slot.generated_frame_count);
+        // Resumed: it continues from where it fell silent, its gains ramping up from silence across the block.
+        engine_mixer.resumeVoice(tone);
+        engine_mixer.mixInto(&block);
+        try expectEqual(@as(u64, 100 + fade_out_frames + 300), voice_slot.generated_frame_count);
+        const rate: f32 = @floatFromInt(sample_rate);
+        const last_frame_number: f32 = @floatFromInt(100 + fade_out_frames + 299);
+        const expected_last: f32 = 0.5 * 0.70710678 * sinTurns(1000 * last_frame_number / rate);
+        const last_sample_index: usize = 299 * @as(usize, channel_count);
+        try expectApproxEqAbs(expected_last, block[last_sample_index], 0.0001);
+    }
+
+    test "the worklet's entry points render and let go as a renderer reached by its queues" {
+        // The reference: a renderer reached by its queues, on this thread.
+        var local_mixer: Mixer = .{};
+        try allocateTestBlocks(&local_mixer);
+        defer freeTestBlocks(&local_mixer);
+        // The other: a main side whose commands reach the worklet's entry points, as the worklet's program hands
+        // them on - bytes into the command buffer, samples into the room given for them.
+        var main_side: Mixer = .{};
+        try allocateTestBlocks(&main_side);
+        defer freeTestBlocks(&main_side);
+        main_side.is_renderer_on_another_thread = true;
+        worklet_state.allocator = testing_allocator;
+        try expectEqual(@as(u32, 1), workletStart());
+        defer {
+            worklet_state.renderer_host.stop();
+            worklet_state = .{};
+        }
+        const EntryPointSink = struct {
+            fn sendCommandBytes(context: *anyopaque, command_bytes: []const u8) void {
+                _ = context;
+                const command_buffer: [*]u8 = workletCommandBuffer();
+                @memcpy(command_buffer[0..command_bytes.len], command_bytes);
+                workletAcceptCommand();
+            }
+
+            fn sendSamples(
+                context: *anyopaque,
+                samples_id: SamplesId,
+                samples: []const f32,
+            ) void {
+                _ = context;
+                const sample_count: u32 = @intCast(samples.len);
+                const room_address: usize = workletAllocateSamples(samples_id, sample_count);
+                if (room_address == 0) {
+                    zm.assertUnreachable(@src(), "the worklet had no room for samples {d}", .{samples_id});
+                }
+                const room: [*]f32 = @ptrFromInt(room_address);
+                @memcpy(room[0..samples.len], samples);
+                workletRegisterSamples(samples_id);
+            }
+        };
+        var unused_context: u8 = 0;
+        const command_sink: CommandSink = .{
+            .context = &unused_context,
+            .send_command_bytes = &EntryPointSink.sendCommandBytes,
+            .send_samples = &EntryPointSink.sendSamples,
+        };
+        // The same sounds on both: a ramp of samples - the other side's own buffer, to be released - and a tone.
+        var local_ramp: [960]f32 = undefined;
+        for (&local_ramp, 0..) |*ramp_sample, ramp_index| {
+            const ramp_index_float: f32 = @floatFromInt(ramp_index);
+            ramp_sample.* = ramp_index_float / 2048;
+        }
+        const owned_ramp: []f32 = try testing_allocator.dupe(f32, &local_ramp);
+        var tone_frequency: f32 = 440;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        _ = local_mixer.play(.{ .samples = .{ .samples = &local_ramp, .channels = 1, .sample_rate = 24_000 } }, .{});
+        _ = local_mixer.play(tone_source, .{ .pan = 0.5, .pitch = 1.5 });
+        _ = main_side.play(.{ .samples = .{ .samples = owned_ramp, .channels = 1, .sample_rate = 24_000 } }, .{});
+        _ = main_side.play(tone_source, .{ .pan = 0.5, .pitch = 1.5 });
+        forwardCommands(&main_side, command_sink);
+        // Three quanta of 128 frames, as the worklet renders them - one channel after the other: the same samples,
+        // bit for bit.
+        var local_block: [128 * 2]f32 = undefined;
+        var block_number: usize = 0;
+        while (block_number < 3) : (block_number += 1) {
+            local_mixer.mixInto(&local_block);
+            const rendered_address: usize = workletRender(128);
+            const rendered_samples: [*]const f32 = @ptrFromInt(rendered_address);
+            for (0..128) |frame_index| {
+                const local_left: f32 = local_block[frame_index * 2];
+                const local_right: f32 = local_block[frame_index * 2 + 1];
+                try expectEqual(local_left, rendered_samples[frame_index]);
+                try expectEqual(local_right, rendered_samples[128 + frame_index]);
+            }
+        }
+        // Released on the main side: the worklet's copy goes when its renderer lets go, the main side's own buffer
+        // when the notice comes back - the testing allocator would report either leaked, or freed twice.
+        main_side.releaseSamples(testing_allocator, owned_ramp);
+        forwardCommands(&main_side, command_sink);
+        _ = workletRender(128);
+        const notice_count: u32 = workletTakeNotices();
+        try expect(notice_count >= 1);
+        const notices: [*]const RendererNotice = @ptrFromInt(workletNoticesBuffer());
+        acceptNotices(&main_side, notices[0..notice_count]);
+        main_side.readRendererNotices();
+        try expect(!main_side.samples_registry[0].is_registered);
+    }
+
+    test "a renderer in another memory, reached by bytes, renders and lets go as one reached by its queues" {
+        // The reference: a renderer reached by its queues, on this thread.
+        var local_mixer: Mixer = .{};
+        try allocateTestBlocks(&local_mixer);
+        defer freeTestBlocks(&local_mixer);
+        // The other: a main side whose commands go as bytes to a host with a memory of its own.
+        var main_side: Mixer = .{};
+        try allocateTestBlocks(&main_side);
+        defer freeTestBlocks(&main_side);
+        main_side.is_renderer_on_another_thread = true;
+        var renderer_host: RendererHost = .{};
+        try renderer_host.start(testing_allocator);
+        defer renderer_host.stop();
+        const HostSink = struct {
+            fn sendCommandBytes(context: *anyopaque, command_bytes: []const u8) void {
+                const host: *RendererHost = @ptrCast(@alignCast(context));
+                host.acceptCommandBytes(command_bytes);
+            }
+
+            fn sendSamples(
+                context: *anyopaque,
+                samples_id: SamplesId,
+                samples: []const f32,
+            ) void {
+                const host: *RendererHost = @ptrCast(@alignCast(context));
+                host.acceptSamples(samples_id, samples) catch {
+                    zm.assertUnreachable(@src(), "the host had no room for samples {d}", .{samples_id});
+                };
+            }
+        };
+        const command_sink: CommandSink = .{
+            .context = &renderer_host,
+            .send_command_bytes = &HostSink.sendCommandBytes,
+            .send_samples = &HostSink.sendSamples,
+        };
+        // The same sounds on both: a ramp of samples - the other side's own buffer, to be released - and a tone.
+        var local_ramp: [960]f32 = undefined;
+        for (&local_ramp, 0..) |*ramp_sample, ramp_index| {
+            const ramp_index_float: f32 = @floatFromInt(ramp_index);
+            ramp_sample.* = ramp_index_float / 2048;
+        }
+        const owned_ramp: []f32 = try testing_allocator.dupe(f32, &local_ramp);
+        var tone_frequency: f32 = 440;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        _ = local_mixer.play(.{ .samples = .{ .samples = &local_ramp, .channels = 1, .sample_rate = 24_000 } }, .{});
+        _ = local_mixer.play(tone_source, .{ .pan = 0.5, .pitch = 1.5 });
+        _ = main_side.play(.{ .samples = .{ .samples = owned_ramp, .channels = 1, .sample_rate = 24_000 } }, .{});
+        _ = main_side.play(tone_source, .{ .pan = 0.5, .pitch = 1.5 });
+        forwardCommands(&main_side, command_sink);
+        // Three blocks of 128 frames, as a worklet asks: the same samples, bit for bit.
+        var local_block: [128 * 2]f32 = undefined;
+        var block_number: usize = 0;
+        while (block_number < 3) : (block_number += 1) {
+            local_mixer.mixInto(&local_block);
+            const host_block: []const f32 = renderer_host.render(128);
+            try expectEqualSlices(f32, &local_block, host_block);
+        }
+        // Released on the main side: the host's copy goes when its renderer lets go, the main side's own buffer when
+        // the notice comes back - the testing allocator would report either leaked, or freed twice.
+        main_side.releaseSamples(testing_allocator, owned_ramp);
+        forwardCommands(&main_side, command_sink);
+        _ = renderer_host.render(128);
+        var renderer_notices: [16]RendererNotice = undefined;
+        const notice_count: usize = renderer_host.takeNotices(&renderer_notices);
+        try expect(notice_count >= 1);
+        try expectEqual(@as(usize, 0), renderer_host.uploaded_samples[0].len);
+        acceptNotices(&main_side, renderer_notices[0..notice_count]);
+        main_side.readRendererNotices();
+        try expect(!main_side.samples_registry[0].is_registered);
+    }
+
+    test "a sample buffer is registered the first time it plays, and named by that id after" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        const owned_samples: []f32 = try testing_allocator.alloc(f32, 480);
+        @memset(owned_samples, 0.25);
+        const owned_source: Source = .{ .samples = .{
+            .samples = owned_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        try expectEqual(@as(?SamplesId, null), engine_mixer.samplesIdOf(owned_samples));
+        // Played twice: registered once, under one id.
+        _ = engine_mixer.play(owned_source, .{});
+        const samples_id: SamplesId = engine_mixer.samplesIdOf(owned_samples).?;
+        _ = engine_mixer.play(owned_source, .{});
+        try expectEqual(samples_id, engine_mixer.samplesIdOf(owned_samples).?);
+        var registered_count: usize = 0;
+        for (engine_mixer.samples_registry) |record| {
+            if (record.is_registered) {
+                registered_count += 1;
+            }
+        }
+        try expectEqual(@as(usize, 1), registered_count);
+        // The renderer found the samples by their id, in its own registry - here, the same buffer.
+        var block: [64 * 2]f32 = undefined;
+        engine_mixer.mixInto(&block);
+        try expectEqual(owned_samples.ptr, engine_mixer.renderer.registered_samples[samples_id].ptr);
+        // Released - the renderer on this thread - the buffer is freed and its id free again.
+        engine_mixer.releaseSamples(testing_allocator, owned_samples);
+        try expect(!engine_mixer.samples_registry[samples_id].is_registered);
+        // A buffer never played was never registered: released, it is freed at once.
+        const never_played_samples: []f32 = try testing_allocator.alloc(f32, 16);
+        engine_mixer.releaseSamples(testing_allocator, never_played_samples);
+    }
+
+    test "samples released while the renderer runs on another thread are freed only once it lets them go" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        // The renderer stands in for an audio thread's: the main side must not run it, and the test runs it by hand.
+        engine_mixer.is_renderer_on_another_thread = true;
+        const owned_samples: []f32 = try testing_allocator.alloc(f32, 4_800);
+        @memset(owned_samples, 0.5);
+        const owned_source: Source = .{ .samples = .{
+            .samples = owned_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        const voice: Voice = engine_mixer.play(owned_source, .{});
+        var block: [100 * 2]f32 = undefined;
+        engine_mixer.renderer.render(&engine_mixer.renderer_queues, &block);
+        // Played, the samples were registered. Released: nothing is freed yet - the renderer has not seen the command.
+        const samples_id: SamplesId = engine_mixer.samplesIdOf(owned_samples).?;
+        engine_mixer.releaseSamples(testing_allocator, owned_samples);
+        try expect(engine_mixer.samples_registry[samples_id].release_allocator != null);
+        // Its next block: the voice copies its tail and fades over it, and the renderer says it let go.
+        engine_mixer.renderer.render(&engine_mixer.renderer_queues, &block);
+        // The main side reads the notice and frees the samples - the testing allocator would report them leaked, or
+        // freed twice, otherwise.
+        engine_mixer.readRendererNotices();
+        try expect(!engine_mixer.samples_registry[samples_id].is_registered);
+        engine_mixer.renderer.render(&engine_mixer.renderer_queues, &block);
+        engine_mixer.renderer.render(&engine_mixer.renderer_queues, &block);
+        engine_mixer.renderer.render(&engine_mixer.renderer_queues, &block);
+        engine_mixer.readRendererNotices();
+        try expect(!engine_mixer.isPlaying(voice));
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+    }
+
+    test "a voice whose samples are about to be freed fades out over its own copy of them" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        var constant_samples: [1000]f32 = @splat(0.5);
+        const constant_source: Source = .{ .samples = .{
+            .samples = &constant_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        const voice: Voice = engine_mixer.play(constant_source, .{ .pan = -1 });
+        var block: [300 * 2]f32 = undefined;
+        engine_mixer.mixInto(block[0 .. 10 * 2]);
+        const samples_id: SamplesId = engine_mixer.samplesIdOf(&constant_samples).?;
+        engine_mixer.renderer.fadeVoicesReading(&engine_mixer.renderer_queues, samples_id);
+        // The samples change - as freed memory would - and the voice, reading its own copy, does not notice.
+        @memset(&constant_samples, 9.0);
+        engine_mixer.mixInto(&block);
+        try expect(!engine_mixer.isPlaying(voice));
+        try expect(block[0] < 0.5 and block[0] > 0.49);
+        try expectApproxEqAbs(@as(f32, 0.25), block[119 * 2], 0.003);
+        try expectEqual(@as(f32, 0), block[fade_out_frames * 2]);
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+    }
+
+    test "a fade lasts its 5 ms whatever the blocks it falls across, one straight line to silence" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        var constant_samples: [2000]f32 = @splat(0.5);
+        const constant_source: Source = .{ .samples = .{
+            .samples = &constant_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        const voice: Voice = engine_mixer.play(constant_source, .{ .pan = -1 });
+        var block: [100 * 2]f32 = undefined;
+        engine_mixer.mixInto(block[0 .. 10 * 2]);
+        engine_mixer.stopVoice(voice);
+        // Three blocks of 100 frames: the fade's 240 frames fall across them, 100, 100 and 40.
+        var fade_frame_number: usize = 0;
+        var block_number: usize = 0;
+        while (block_number < 3) : (block_number += 1) {
+            engine_mixer.mixInto(&block);
+            var frame_index: usize = 0;
+            while (frame_index < 100) : (frame_index += 1) {
+                const frames_into_fade: f32 = @floatFromInt(fade_frame_number + 1);
+                const fade_frames: f32 = @floatFromInt(fade_out_frames);
+                const expected: f32 = @max(0.5 * (1 - frames_into_fade / fade_frames), 0);
+                try expectApproxEqAbs(expected, block[frame_index * 2], 0.0001);
+                fade_frame_number += 1;
+            }
+        }
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+    }
+
+    test "a stopped voice fades to silence over 5 ms, rather than stopping mid-waveform" {
+        var engine_mixer: Mixer = .{};
+        try allocateTestBlocks(&engine_mixer);
+        defer freeTestBlocks(&engine_mixer);
+        // A constant: half on both sides, so the fade's shape is the samples themselves.
+        var constant_samples: [1000]f32 = @splat(0.5);
+        const constant_source: Source = .{ .samples = .{
+            .samples = &constant_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        const voice: Voice = engine_mixer.play(constant_source, .{ .pan = -1 });
+        var block: [300 * 2]f32 = undefined;
+        engine_mixer.mixInto(block[0 .. 10 * 2]);
+        try expectApproxEqAbs(@as(f32, 0.5), block[9 * 2], 0.0001);
+        engine_mixer.stopVoice(voice);
+        try expect(!engine_mixer.isPlaying(voice));
+        engine_mixer.mixInto(&block);
+        // Falling every frame, by 0.5 / 240, to zero at the fade's last frame; silent after it; the slot freed.
+        try expect(block[0] < 0.5 and block[0] > 0.49);
+        try expectApproxEqAbs(@as(f32, 0.25), block[119 * 2], 0.003);
+        try expectApproxEqAbs(@as(f32, 0), block[(fade_out_frames - 1) * 2], 0.0001);
+        try expectEqual(@as(f32, 0), block[fade_out_frames * 2]);
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+    }
+
+    test "pulled by the headless output, a sound starts at its frame's own time, with no lead" {
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, outputOf(platform.headless));
+        defer engine_mixer.stop();
+        try expect(engine_mixer.is_output_pulling);
+        // Thirty frames at 60 Hz, a constant sound played during frame 10's update.
+        var constant_samples: [48_000]f32 = @splat(0.5);
+        const constant_source: Source = .{ .samples = .{
+            .samples = &constant_samples,
+            .channels = 1,
+            .sample_rate = sample_rate,
+        } };
+        var frame_number: usize = 0;
+        while (frame_number <= 30) : (frame_number += 1) {
+            const frame_number_float: f64 = @floatFromInt(frame_number);
+            platform.headless.playAudioUntil(frame_number_float * 1000.0 / 60.0);
+            if (frame_number == 10) {
+                _ = engine_mixer.play(constant_source, .{ .pan = -1 });
+            }
+            engine_mixer.mixFrame();
+        }
+        // Frame 10 is 166.67 ms after the output started, at frame 0: 8 000 frames. Silence before, the sound after.
+        const played_samples: []const f32 = platform.headless.playedAudio();
+        const first_sound_frame: usize = 8_000;
+        try expectEqual(@as(f32, 0), played_samples[(first_sound_frame - 1) * 2]);
+        try expectApproxEqAbs(@as(f32, 0.5), played_samples[first_sound_frame * 2], 0.0001);
+        try expectEqual(@as(u32, 0), platform.headless.audioUnderrunCount());
+    }
+
+    test "the mixer through the headless output: a second of a tone, a frame at a time, no underrun" {
+        var engine_mixer: Mixer = .{};
+        try engine_mixer.start(testing_allocator, outputOf(platform.headless));
+        defer engine_mixer.stop();
+        var tone_frequency: f32 = 440;
+        const tone_source: Source = .{ .generator = .{
+            .generate = &generateTestSine,
+            .initial_state = asBytes(&tone_frequency),
+        } };
+        _ = engine_mixer.play(tone_source, .{});
+        // Sixty frames at 60 Hz, as a run draws them: the output plays what is due by each frame's time, then the
+        // mixer tops the queue up again.
+        var frame_number: usize = 0;
+        while (frame_number <= 60) : (frame_number += 1) {
+            const frame_number_float: f64 = @floatFromInt(frame_number);
+            const frame_time_ms: f64 = frame_number_float * 1000.0 / 60.0;
+            platform.headless.playAudioUntil(frame_time_ms);
+            engine_mixer.mixFrame();
+        }
+        const played_samples: []const f32 = platform.headless.playedAudio();
+        try expectEqual(@as(usize, 48_000 * 2), played_samples.len);
+        try expectEqual(@as(u32, 0), engine_mixer.underrun_count);
+        try expectEqual(@as(u32, 0), platform.headless.audioUnderrunCount());
+        const crossing_count: usize = countRisingZeroCrossings(played_samples);
+        try expect(crossing_count >= 439 and crossing_count <= 440);
+    }
+};
 
 // ============================================================================
 // SECTION - audio_device (raylib's InitAudioDevice / CloseAudioDevice family)
@@ -52,6 +2942,245 @@ const AudioStream = types.AudioStream;
 // reports true) but no real context exists - the JS bridge is
 // stubbed.  This lets host tests exercise the wrapper logic
 // without a browser.
+
+pub const audio_device = struct {
+    const is_wasm: bool = builtin.target.cpu.arch.isWasm();
+
+    /// Singleton state.  Populated by `init()`; cleared by `close()`.
+    /// Not thread-safe - wasm32-wasi is single-threaded by design.
+    pub const AudioDeviceState = struct {
+        ctx_id: web.audio.ContextId = 0,
+        ready: bool = false,
+        /// Cached at init; used by the pipeline so we don't ask the
+        /// JS bridge every time we resample a Sound.
+        sample_rate: u32 = 0,
+        /// The engine's mixer, and the allocator for its blocks: set by the engine as it makes each frame
+        /// (`App.makeFrame`), so that `init` starts the mixer and `close` stops it. Null for a state used outside the
+        /// engine.
+        engine_mixer: ?*mixer.Mixer = null,
+        mixer_allocator: ?Allocator = null,
+        /// Whether the sound's diagnostics are shown (`showDiagnostics`), so that the engine reports the mixer's state
+        /// to them each frame.
+        is_showing_diagnostics: bool = false,
+    };
+
+    /// Initialize the audio device.  Must be called once before any
+    /// Wave/Sound/Music op.  Idempotent - calling twice is harmless;
+    /// the second call is a no-op.
+    /// On wasm: creates a real Web Audio AudioContext.  Browsers
+    /// start contexts suspended; the first user gesture (click /
+    /// touch / keydown) auto-resumes via `resumeFromGesture` (Phase
+    /// 4).  Until then, sounds queue silently.
+    /// On host: marks ready with sample_rate = 48000 and a synthetic
+    /// ctx_id so wrappers don't bail with the "no context" path.
+    pub fn init(state: *AudioDeviceState) void {
+        if (state.ready) {
+            return;
+        }
+        // The engine's mixer plays on every platform, through the platform's output: it starts first. The state is then
+        // set whole, carrying the engine's two fields forward.
+        startEngineMixer(state);
+        if (comptime !is_wasm) {
+            // No browser audio graph here: a non-zero ctx_id lets the sections not yet ported onto the mixer take
+            // their usual path, and play nothing.
+            state.* = .{
+                .ctx_id = 1,
+                .ready = true,
+                .sample_rate = mixer.sample_rate,
+                .engine_mixer = state.engine_mixer,
+                .mixer_allocator = state.mixer_allocator,
+                .is_showing_diagnostics = state.is_showing_diagnostics,
+            };
+            return;
+        }
+        const id: web.audio.ContextId = web.audio.createContext();
+        if (id == 0) {
+            // AudioContext creation failed (very old browser / Web
+            // Audio disabled).  Stay un-ready; callers see all
+            // sound ops as no-ops via `isReady` checks.
+            return;
+        }
+        const sr: f32 = web.audio.getSampleRate(id);
+        state.* = .{
+            .ctx_id = id,
+            .ready = true,
+            .sample_rate = @trunc(sr),
+            .engine_mixer = state.engine_mixer,
+            .mixer_allocator = state.mixer_allocator,
+            .is_showing_diagnostics = state.is_showing_diagnostics,
+        };
+    }
+
+    /// Shows the sound's state where it can be read on the device - for finding glitches: in the browser, a panel at
+    /// the top of the page with the path to the speaker, the context and its latencies, what waits, how often the sink
+    /// ran dry, the mixer's margin, underruns and voices, and the newest warnings. Natively the console has the
+    /// warnings, and this does nothing.
+    pub fn showDiagnostics(state: *AudioDeviceState) void {
+        state.is_showing_diagnostics = true;
+        if (comptime is_wasm) {
+            web.dom.audio_output_show_diagnostics();
+        }
+    }
+
+    /// Reports the mixer's state to the diagnostics, when shown: the engine's, once a frame after the mix.
+    pub fn reportToDiagnostics(state: *const AudioDeviceState) void {
+        if (!state.is_showing_diagnostics) {
+            return;
+        }
+        const engine_mixer: *mixer.Mixer = state.engine_mixer orelse return;
+        if (comptime is_wasm) {
+            const voice_count: u32 = engine_mixer.playingVoiceCount();
+            web.dom.audio_output_note_mixer(engine_mixer.render_ahead_frames, engine_mixer.underrun_count, voice_count);
+        }
+    }
+
+    /// Starts the engine's mixer on the platform's output, when the engine gave the state one (`engine_mixer`).
+    fn startEngineMixer(state: *AudioDeviceState) void {
+        const engine_mixer: *mixer.Mixer = state.engine_mixer orelse return;
+        const allocator: Allocator = state.mixer_allocator orelse return;
+        engine_mixer.start(allocator, mixer.platformOutput()) catch {
+            std.log.scoped(.sound).err("the mixer could not start: out of memory for its blocks", .{});
+        };
+    }
+
+    /// Tear down the audio device.  Stops all in-flight sounds.
+    /// Idempotent.  After `close()`, callers must `init()` again
+    /// before any further sound ops.
+    pub fn close(state: *AudioDeviceState) void {
+        if (!state.ready) {
+            return;
+        }
+        if (state.engine_mixer) |engine_mixer| {
+            engine_mixer.stop();
+        }
+        if (comptime is_wasm) {
+            web.audio.closeContext(state.ctx_id);
+        }
+        state.ctx_id = 0;
+        state.ready = false;
+        state.sample_rate = 0;
+    }
+
+    /// True iff the device is initialized and ready to accept Sound
+    /// ops.  Higher-level wrappers gate every op on this.
+    pub fn isReady(state: *const AudioDeviceState) bool {
+        return state.ready;
+    }
+
+    /// Get the master volume (1.0 = unity).  Returns 1.0 if the
+    /// device isn't ready.
+    pub fn getMasterVolume(state: *const AudioDeviceState) f32 {
+        if (!state.ready) {
+            return 1.0;
+        }
+        if (state.engine_mixer) |engine_mixer| {
+            return engine_mixer.master_volume;
+        }
+        if (comptime !is_wasm) {
+            return 1.0;
+        }
+        return web.audio.getMasterVolume(state.ctx_id);
+    }
+
+    /// Set the master volume.  Clamped to `[0, 10]` (matches the
+    /// underlying `web.audio.setMasterVolume`).  Silent if the
+    /// device isn't ready.
+    pub fn setMasterVolume(
+        state: *const AudioDeviceState,
+        volume: f32,
+    ) void {
+        if (!state.ready) {
+            return;
+        }
+        if (state.engine_mixer) |engine_mixer| {
+            engine_mixer.setMasterVolume(clamp(volume, 0, 10));
+        }
+        if (comptime is_wasm) {
+            web.audio.setMasterVolume(state.ctx_id, volume);
+        }
+    }
+
+    /// Internal accessors for sibling namespaces.  Not part of the
+    /// raylib parity surface.
+    pub fn getContextId(state: *const AudioDeviceState) web.audio.ContextId {
+        return state.ctx_id;
+    }
+    pub fn getSampleRate(state: *const AudioDeviceState) u32 {
+        return state.sample_rate;
+    }
+
+    /// Try to resume a suspended AudioContext.  Browsers reject
+    /// the resume unless called from a user-gesture handler; the
+    /// runtime wires this into the input layer.  Direct callers can
+    /// also invoke it from their own click handler.
+    pub fn resumeFromGesture(state: *const AudioDeviceState) void {
+        if (!state.ready) {
+            return;
+        }
+        if (comptime is_wasm) {
+            web.audio.resumeContext(state.ctx_id);
+        }
+    }
+
+    // ---- Tests
+    test "init / close / isReady on host" {
+        var ad: AudioDeviceState = .{};
+        try expect(!isReady(&ad));
+        init(&ad);
+        try expect(isReady(&ad));
+        // Idempotent: second init is a no-op.
+        init(&ad);
+        try expect(isReady(&ad));
+        close(&ad);
+        try expect(!isReady(&ad));
+        // Idempotent: second close is a no-op.
+        close(&ad);
+        try expect(!isReady(&ad));
+    }
+
+    test "getSampleRate returns 48000 on host after init" {
+        var ad: AudioDeviceState = .{};
+        init(&ad);
+        defer close(&ad);
+        try expectEqual(@as(u32, 48000), getSampleRate(&ad));
+    }
+
+    test "getMasterVolume returns 1.0 on host" {
+        var ad: AudioDeviceState = .{};
+        try expectEqual(@as(f32, 1.0), getMasterVolume(&ad));
+        init(&ad);
+        defer close(&ad);
+        try expectEqual(@as(f32, 1.0), getMasterVolume(&ad));
+    }
+
+    test "setMasterVolume on host is silent" {
+        var ad: AudioDeviceState = .{};
+        // Must not panic regardless of device state or input.
+        setMasterVolume(&ad, 0.5);
+        init(&ad);
+        defer close(&ad);
+        setMasterVolume(&ad, 0.5);
+        setMasterVolume(&ad, -1.0);
+        setMasterVolume(&ad, 100.0);
+    }
+
+    test "getContextId is non-zero after init on host" {
+        var ad: AudioDeviceState = .{};
+        init(&ad);
+        defer close(&ad);
+        try expect(getContextId(&ad) != 0);
+    }
+
+    test "resumeFromGesture is silent (host stub)" {
+        var ad: AudioDeviceState = .{};
+        // No-op when not ready.
+        resumeFromGesture(&ad);
+        init(&ad);
+        defer close(&ad);
+        // Also no-op on host (is_wasm = false branch).
+        resumeFromGesture(&ad);
+    }
+};
 
 /// Spectrum analysis - a WebAudio `AnalyserNode` tapped off the master bus.
 ///
@@ -171,7 +3300,7 @@ pub const waves = struct {
         if (!fmt.syncDecodable()) {
             return error.OggRequiresAsyncDecode;
         }
-        var reader: std.Io.Reader = std.Io.Reader.fixed(bytes);
+        var reader: Io.Reader = .fixed(bytes);
         const cw: codecs.audio.CanonicalWave = try fmt.decode(gpa, &reader);
         defer cw.deinit();
         const w: Wave = try codecs.audio.waveFromCanonical(gpa, cw);
@@ -385,11 +3514,11 @@ pub const waves = struct {
             16 => {
                 const v_i: i32 = @round(clamped * 32767.0);
                 const clipped: i16 = @intCast(clamp(v_i, -32768, 32767));
-                std.mem.writeInt(i16, out[offset..][0..2], clipped, .little);
+                writeInt(i16, out[offset..][0..2], clipped, .little);
             },
             32 => {
                 // 32-bit IEEE float passthrough (no clipping needed).
-                std.mem.writeInt(u32, out[offset..][0..4], @bitCast(clamped), .little);
+                writeInt(u32, out[offset..][0..4], @bitCast(clamped), .little);
             },
             else => {},
         }
@@ -457,10 +3586,16 @@ pub const waves = struct {
             .bits = @intCast(wave.sampleSize),
             .format_code = if (wave.sampleSize == 32) .ieee_float else .pcm,
         };
-        var aw: std.Io.Writer.Allocating = .init(gpa);
+        var aw: Io.Writer.Allocating = .init(gpa);
         errdefer aw.deinit();
         try codecs.audio.wav.encode(cw, &aw.writer, fmt_code);
         return aw.toOwnedSlice();
+    }
+
+    /// How many channels `mixerSamplesOf` gives for `wave`: 1 for a mono wave, so that a pan places it at constant
+    /// power, and 2 for any wider one, balanced (`mixer.panLawOf`).
+    pub fn mixerChannelsOf(wave: Wave) u8 {
+        return if (wave.channels >= 2) 2 else 1;
     }
 
     /// Read one sample from a CanonicalWave, normalized to f32.
@@ -476,19 +3611,76 @@ pub const waves = struct {
                 break :blk centered / 128.0;
             },
             16 => blk: {
-                const raw: i16 = std.mem.readInt(i16, slice[0..2], .little);
+                const raw: i16 = readInt(i16, slice[0..2], .little);
                 break :blk float(raw) / 32768.0;
             },
             32 => blk: {
                 if (cw.format_tag == .ieee_float) {
-                    const raw_u: u32 = std.mem.readInt(u32, slice[0..4], .little);
+                    const raw_u: u32 = readInt(u32, slice[0..4], .little);
                     break :blk @as(f32, @bitCast(raw_u));
                 }
-                const raw: i32 = std.mem.readInt(i32, slice[0..4], .little);
+                const raw: i32 = readInt(i32, slice[0..4], .little);
                 break :blk float(raw) / 2147483648.0;
             },
             else => 0.0,
         };
+    }
+
+    /// The wave's samples as the mixer reads them (`mixer.Samples`): interleaved 32-bit floats from -1 to 1, at the
+    /// wave's own rate, with `mixerChannelsOf(wave)` channels - a mono wave's one, a wider wave's first two. Each
+    /// sample is converted from the wave's own format (`readSampleAt`: 8-bit unsigned, 16- or 32-bit signed, or 32-bit
+    /// float). The caller owns the samples.
+    pub fn mixerSamplesOf(gpa: Allocator, wave: Wave) ![]f32 {
+        if (!isValid(wave)) {
+            return error.InvalidWave;
+        }
+        const canonical: codecs.audio.CanonicalWave = codecs.audio.canonicalFromWave(wave);
+        const channel_count: usize = mixerChannelsOf(wave);
+        const frame_count: usize = wave.frameCount;
+        const bytes_per_sample: usize = wave.sampleSize / 8;
+        const bytes_per_frame: usize = bytes_per_sample * wave.channels;
+        const mixer_samples: []f32 = try gpa.alloc(f32, frame_count * channel_count);
+        for (0..frame_count) |frame_index| {
+            for (0..channel_count) |channel| {
+                const byte_offset: usize = frame_index * bytes_per_frame + channel * bytes_per_sample;
+                mixer_samples[frame_index * channel_count + channel] = readSampleAt(canonical, byte_offset);
+            }
+        }
+        return mixer_samples;
+    }
+
+    test "a wave's samples become the mixer's floats: mono kept mono, a wider wave's first two channels" {
+        // 16-bit mono: 0, half, minus half, full.
+        var mono_data: [4]i16 = .{ 0, 16_384, -16_384, 32_767 };
+        const mono_wave: Wave = .{
+            .frameCount = 4,
+            .sampleRate = 22_050,
+            .sampleSize = 16,
+            .channels = 1,
+            .data = &mono_data,
+        };
+        const mono_samples: []f32 = try mixerSamplesOf(testing_allocator, mono_wave);
+        defer testing_allocator.free(mono_samples);
+        try expectEqual(@as(u8, 1), mixerChannelsOf(mono_wave));
+        try expectEqual(@as(usize, 4), mono_samples.len);
+        try expectApproxEqAbs(@as(f32, 0.5), mono_samples[1], 0.0001);
+        try expectApproxEqAbs(@as(f32, -0.5), mono_samples[2], 0.0001);
+        // 8-bit, three channels - unsigned, 128 the middle: two frames, each keeping its first two channels.
+        var wide_data: [6]u8 = .{ 128, 192, 0, 64, 128, 255 };
+        const wide_wave: Wave = .{
+            .frameCount = 2,
+            .sampleRate = 8_000,
+            .sampleSize = 8,
+            .channels = 3,
+            .data = &wide_data,
+        };
+        const wide_samples: []f32 = try mixerSamplesOf(testing_allocator, wide_wave);
+        defer testing_allocator.free(wide_samples);
+        try expectEqual(@as(usize, 4), wide_samples.len);
+        try expectApproxEqAbs(@as(f32, 0), wide_samples[0], 0.0001);
+        try expectApproxEqAbs(@as(f32, 0.5), wide_samples[1], 0.0001);
+        try expectApproxEqAbs(@as(f32, -0.5), wide_samples[2], 0.0001);
+        try expectApproxEqAbs(@as(f32, 0), wide_samples[3], 0.0001);
     }
 
     /// Apply a filter function in-place, freeing the original
@@ -524,7 +3716,7 @@ pub const waves = struct {
 
     // ---- Tests
     test "loadFromMemory + isValid + unload: WAV round trip" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         const w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, w);
@@ -536,7 +3728,7 @@ pub const waves = struct {
     }
 
     test "loadFromMemory rejects unknown format" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         try expectError(
             error.UnknownAudioFormat,
@@ -545,7 +3737,7 @@ pub const waves = struct {
     }
 
     test "loadFromMemory rejects OGG (must use sounds.loadFromMemory)" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         try expectError(
             error.OggRequiresAsyncDecode,
@@ -567,7 +3759,7 @@ pub const waves = struct {
     }
 
     test "copy: deep copy with independent ownership" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         const orig: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, orig);
@@ -583,7 +3775,7 @@ pub const waves = struct {
     }
 
     test "crop: shrinks frame range" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         var w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, w);
@@ -593,7 +3785,7 @@ pub const waves = struct {
     }
 
     test "crop: out-of-range bounds clamp to empty" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         var w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, w);
@@ -605,7 +3797,7 @@ pub const waves = struct {
     }
 
     test "format: 22050 mono 16-bit -> 44100 stereo 16-bit" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         var w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, w);
@@ -618,7 +3810,7 @@ pub const waves = struct {
     }
 
     test "loadSamples / unloadSamples: f32 roundtrip" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         const w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, w);
@@ -632,7 +3824,7 @@ pub const waves = struct {
     }
 
     test "filter chain: scale + normalize" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         var w: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, w);
@@ -647,9 +3839,9 @@ pub const waves = struct {
                 const src_ptr: [*]const u8 = @ptrCast(src.data.?);
                 const sample_count: usize = byte_len / 2;
                 for (0..sample_count) |i| {
-                    const off = i * 2;
-                    const v: i16 = std.mem.readInt(i16, src_ptr[off..][0..2], .little);
-                    std.mem.writeInt(i16, new_bytes[off..][0..2], @divTrunc(v, 2), .little);
+                    const off: usize = i * 2;
+                    const v: i16 = readInt(i16, src_ptr[off..][0..2], .little);
+                    writeInt(i16, new_bytes[off..][0..2], @divTrunc(v, 2), .little);
                 }
                 const new_wave: Wave = .{
                     .frameCount = src.frameCount,
@@ -665,12 +3857,12 @@ pub const waves = struct {
 
         const orig_first: i16 = blk: {
             const ptr: [*]const u8 = @ptrCast(w.data.?);
-            break :blk std.mem.readInt(i16, ptr[0..2], .little);
+            break :blk readInt(i16, ptr[0..2], .little);
         };
         try filter(&ws, ta, &w, halve, .{});
         const new_first: i16 = blk: {
             const ptr: [*]const u8 = @ptrCast(w.data.?);
-            break :blk std.mem.readInt(i16, ptr[0..2], .little);
+            break :blk readInt(i16, ptr[0..2], .little);
         };
         try expectEqual(@divTrunc(orig_first, 2), new_first);
         // frameCount/etc preserved across filter.
@@ -678,7 +3870,7 @@ pub const waves = struct {
     }
 
     test "exportToMemory: round-trip via decode" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: AllocTable = .{};
         const orig: Wave = try loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
         defer unload(&ws, orig);
@@ -700,7 +3892,7 @@ pub const waves = struct {
     }
 
     test "exportToMemory: rejects invalid wave" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         try expectError(error.InvalidWave, exportToMemory(ta, .{}));
     }
 };
@@ -843,7 +4035,7 @@ pub const composer = struct {
             const raw: f32 = opts.shape.sample(phase) * opts.amplitude * env;
             const v_i: i32 = @round(raw * 32767.0);
             const clipped: i16 = @intCast(clamp(v_i, -32768, 32767));
-            std.mem.writeInt(i16, out[f * 2 ..][0..2], clipped, .little);
+            writeInt(i16, out[f * 2 ..][0..2], clipped, .little);
             phase += phase_step;
             if (phase >= 1.0) {
                 phase -= 1.0;
@@ -910,6 +4102,9 @@ pub const composer = struct {
         waves_state: *waves.AllocTable,
         sample_rate: u32,
         channels: u32,
+        /// The least length of the finished wave, in frames: a loop's whole bar, so that a pattern whose last sound
+        /// ends early still lasts its bar and loops in time. 0: the wave ends where its last sound ends.
+        length_frames: u32 = 0,
 
         pub fn init(
             waves_state: *waves.AllocTable,
@@ -964,6 +4159,7 @@ pub const composer = struct {
                     max_end = end;
                 }
             }
+            max_end = @max(max_end, self.length_frames);
             if (max_end == 0) {
                 return silence(self.waves_state, self.gpa, 0, self.sample_rate);
             }
@@ -992,7 +4188,7 @@ pub const composer = struct {
                             break;
                         }
                         const src_off: usize = (f * ch + c) * 2;
-                        const v: i16 = std.mem.readInt(i16, src_ptr[src_off..][0..2], .little);
+                        const v: i16 = readInt(i16, src_ptr[src_off..][0..2], .little);
                         const out_idx: usize = out_frame * self.channels + c;
                         accum[out_idx] += v;
                     }
@@ -1003,7 +4199,7 @@ pub const composer = struct {
             for (0..accum.len) |i| {
                 const v: i32 = accum[i];
                 const clipped: i16 = @intCast(clamp(v, -32768, 32767));
-                std.mem.writeInt(i16, out[i * 2 ..][0..2], clipped, .little);
+                writeInt(i16, out[i * 2 ..][0..2], clipped, .little);
             }
 
             const w: Wave = .{
@@ -1051,7 +4247,7 @@ pub const composer = struct {
     }
 
     test "tone: A440 sine for 50 ms" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         const w: Wave = try tone(&ws, ta, .{ .frequency_hz = 440.0, .duration_ms = 50 });
         defer waves.unload(&ws, w);
@@ -1062,7 +4258,7 @@ pub const composer = struct {
     }
 
     test "tone with envelope: starts and ends at zero" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         const w: Wave = try tone(&ws, ta, .{
             .frequency_hz = 440.0,
@@ -1071,17 +4267,17 @@ pub const composer = struct {
         });
         defer waves.unload(&ws, w);
         const ptr: [*]const u8 = @ptrCast(w.data.?);
-        const first: i16 = std.mem.readInt(i16, ptr[0..2], .little);
+        const first: i16 = readInt(i16, ptr[0..2], .little);
         try expectEqual(@as(i16, 0), first);
         // Last frame: 4410 - 1 = 4409 -> byte offset 8818.
         const last_off: usize = (w.frameCount - 1) * 2;
-        const last: i16 = std.mem.readInt(i16, ptr[last_off..][0..2], .little);
+        const last: i16 = readInt(i16, ptr[last_off..][0..2], .little);
         // With release ramp, the last frame is at gain = 0, so output ~ 0.
         try expect(@abs(last) < 100);
     }
 
     test "silence: all zeros" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         const w: Wave = try silence(&ws, ta, 100, 44100);
         defer waves.unload(&ws, w);
@@ -1093,7 +4289,7 @@ pub const composer = struct {
     }
 
     test "Sequence: empty produces empty" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         var seq: Sequence = .init(&ws, ta, 44100, 1);
         defer seq.deinit();
@@ -1103,7 +4299,7 @@ pub const composer = struct {
     }
 
     test "Sequence: two non-overlapping tones concatenate" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         const t1: Wave = try tone(&ws, ta, .{ .frequency_hz = 440.0, .duration_ms = 100 });
         defer waves.unload(&ws, t1);
@@ -1119,7 +4315,7 @@ pub const composer = struct {
     }
 
     test "Sequence: overlapping placements sum samples" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var ws: waves.AllocTable = .{};
         // Two short, identical waves at the same offset -> sum is
         // ~2x each sample, clipped at i16 range.
@@ -1137,187 +4333,8 @@ pub const composer = struct {
         // First frame's sample of a sine wave is exactly 0 (sin(0)
         // = 0), so 0 + 0 = 0.
         const ptr: [*]const u8 = @ptrCast(out.data.?);
-        const first: i16 = std.mem.readInt(i16, ptr[0..2], .little);
+        const first: i16 = readInt(i16, ptr[0..2], .little);
         try expectEqual(@as(i16, 0), first);
-    }
-};
-
-pub const audio_device = struct {
-    const is_wasm: bool = builtin.target.cpu.arch.isWasm();
-
-    /// Singleton state.  Populated by `init()`; cleared by `close()`.
-    /// Not thread-safe - wasm32-wasi is single-threaded by design.
-    pub const AudioDeviceState = struct {
-        ctx_id: web.audio.ContextId = 0,
-        ready: bool = false,
-        /// Cached at init; used by the pipeline so we don't ask the
-        /// JS bridge every time we resample a Sound.
-        sample_rate: u32 = 0,
-    };
-
-    /// Initialize the audio device.  Must be called once before any
-    /// Wave/Sound/Music op.  Idempotent - calling twice is harmless;
-    /// the second call is a no-op.
-    /// On wasm: creates a real Web Audio AudioContext.  Browsers
-    /// start contexts suspended; the first user gesture (click /
-    /// touch / keydown) auto-resumes via `resumeFromGesture` (Phase
-    /// 4).  Until then, sounds queue silently.
-    /// On host: marks ready with sample_rate = 48000 and a synthetic
-    /// ctx_id so wrappers don't bail with the "no context" path.
-    pub fn init(state: *AudioDeviceState) void {
-        if (state.ready) {
-            return;
-        }
-        if (comptime !is_wasm) {
-            // Host stub: synthesize a non-zero ctx_id so wrappers
-            // exercise their happy path.  No real Web Audio.
-            state.* = .{
-                .ctx_id = 1,
-                .ready = true,
-                .sample_rate = 48000,
-            };
-            return;
-        }
-        const id: web.audio.ContextId = web.audio.createContext();
-        if (id == 0) {
-            // AudioContext creation failed (very old browser / Web
-            // Audio disabled).  Stay un-ready; callers see all
-            // sound ops as no-ops via `isReady` checks.
-            return;
-        }
-        const sr: f32 = web.audio.getSampleRate(id);
-        state.* = .{
-            .ctx_id = id,
-            .ready = true,
-            .sample_rate = @trunc(sr),
-        };
-    }
-
-    /// Tear down the audio device.  Stops all in-flight sounds.
-    /// Idempotent.  After `close()`, callers must `init()` again
-    /// before any further sound ops.
-    pub fn close(state: *AudioDeviceState) void {
-        if (!state.ready) {
-            return;
-        }
-        if (comptime is_wasm) {
-            web.audio.closeContext(state.ctx_id);
-        }
-        state.* = .{};
-    }
-
-    /// True iff the device is initialized and ready to accept Sound
-    /// ops.  Higher-level wrappers gate every op on this.
-    pub fn isReady(state: *const AudioDeviceState) bool {
-        return state.ready;
-    }
-
-    /// Get the master volume (1.0 = unity).  Returns 1.0 if the
-    /// device isn't ready.
-    pub fn getMasterVolume(state: *const AudioDeviceState) f32 {
-        if (!state.ready) {
-            return 1.0;
-        }
-        if (comptime !is_wasm) {
-            return 1.0;
-        }
-        return web.audio.getMasterVolume(state.ctx_id);
-    }
-
-    /// Set the master volume.  Clamped to `[0, 10]` (matches the
-    /// underlying `web.audio.setMasterVolume`).  Silent if the
-    /// device isn't ready.
-    pub fn setMasterVolume(
-        state: *const AudioDeviceState,
-        volume: f32,
-    ) void {
-        if (!state.ready) {
-            return;
-        }
-        if (comptime is_wasm) {
-            web.audio.setMasterVolume(state.ctx_id, volume);
-        }
-    }
-
-    /// Internal accessors for sibling namespaces.  Not part of the
-    /// raylib parity surface.
-    pub fn getContextId(state: *const AudioDeviceState) web.audio.ContextId {
-        return state.ctx_id;
-    }
-    pub fn getSampleRate(state: *const AudioDeviceState) u32 {
-        return state.sample_rate;
-    }
-
-    /// Try to resume a suspended AudioContext.  Browsers reject
-    /// the resume unless called from a user-gesture handler; the
-    /// runtime wires this into the input layer.  Direct callers can
-    /// also invoke it from their own click handler.
-    pub fn resumeFromGesture(state: *const AudioDeviceState) void {
-        if (!state.ready) {
-            return;
-        }
-        if (comptime is_wasm) {
-            web.audio.resumeContext(state.ctx_id);
-        }
-    }
-
-    // ---- Tests
-    test "init / close / isReady on host" {
-        var ad: AudioDeviceState = .{};
-        try expect(!isReady(&ad));
-        init(&ad);
-        try expect(isReady(&ad));
-        // Idempotent: second init is a no-op.
-        init(&ad);
-        try expect(isReady(&ad));
-        close(&ad);
-        try expect(!isReady(&ad));
-        // Idempotent: second close is a no-op.
-        close(&ad);
-        try expect(!isReady(&ad));
-    }
-
-    test "getSampleRate returns 48000 on host after init" {
-        var ad: AudioDeviceState = .{};
-        init(&ad);
-        defer close(&ad);
-        try expectEqual(@as(u32, 48000), getSampleRate(&ad));
-    }
-
-    test "getMasterVolume returns 1.0 on host" {
-        var ad: AudioDeviceState = .{};
-        try expectEqual(@as(f32, 1.0), getMasterVolume(&ad));
-        init(&ad);
-        defer close(&ad);
-        try expectEqual(@as(f32, 1.0), getMasterVolume(&ad));
-    }
-
-    test "setMasterVolume on host is silent" {
-        var ad: AudioDeviceState = .{};
-        // Must not panic regardless of device state or input.
-        setMasterVolume(&ad, 0.5);
-        init(&ad);
-        defer close(&ad);
-        setMasterVolume(&ad, 0.5);
-        setMasterVolume(&ad, -1.0);
-        setMasterVolume(&ad, 100.0);
-    }
-
-    test "getContextId is non-zero after init on host" {
-        var ad: AudioDeviceState = .{};
-        init(&ad);
-        defer close(&ad);
-        try expect(getContextId(&ad) != 0);
-    }
-
-    test "resumeFromGesture is silent (host stub)" {
-        var ad: AudioDeviceState = .{};
-        // No-op when not ready.
-        resumeFromGesture(&ad);
-        init(&ad);
-        defer close(&ad);
-        // Also no-op on host (is_wasm = false branch).
-        resumeFromGesture(&ad);
     }
 };
 
@@ -2408,7 +5425,7 @@ pub const music = struct {
 
     // ---- Tests
     test "loadFromMemory: WAV path, ready immediately" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2422,7 +5439,7 @@ pub const music = struct {
     }
 
     test "loadFromMemory: rejects unknown format" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2435,7 +5452,7 @@ pub const music = struct {
     }
 
     test "play / stop / isPlaying lifecycle" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2452,7 +5469,7 @@ pub const music = struct {
     }
 
     test "pause / resume don't panic" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2467,7 +5484,7 @@ pub const music = struct {
     }
 
     test "setVolume / setPitch / setPan / setLooping: clamp + persist" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2494,7 +5511,7 @@ pub const music = struct {
     }
 
     test "getTimeLength: WAV reports proper duration" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2507,7 +5524,7 @@ pub const music = struct {
     }
 
     test "update: no-op (raylib parity)" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2536,7 +5553,7 @@ pub const music = struct {
         // duration_s SYNCHRONOUSLY (before `isReady` would ever
         // return true).  This is the "show duration in the
         // pre-play UI" use case.
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2563,7 +5580,7 @@ pub const music = struct {
         // null, music.loadFromMemory should still allocate a slot
         // and kick off the decode (which will eventually fail).
         // The fallback values are device-rate stereo with 0 frames.
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2582,7 +5599,7 @@ pub const music = struct {
     }
 
     test "seek: clamps + persists to play_offset" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2609,7 +5626,7 @@ pub const music = struct {
     }
 
     test "stop: resets play_offset" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         var dev: audio_device.AudioDeviceState = .{};
         audio_device.init(&dev);
         defer audio_device.close(&dev);
@@ -2628,41 +5645,40 @@ pub const music = struct {
 };
 
 pub const sounds = struct {
-    /// Side-table mapping `Sound.stream.buffer` (cast back to a
-    /// non-zero BufferId) to its owning AudioContext + ownership
-    /// flag.  We can't grow `Sound`'s extern struct (raylib parity);
-    /// this is the workaround that keeps the public type stable.
+    /// A sound's state, kept in a table beside its `Sound`: raylib's `Sound` is an extern struct the engine cannot
+    /// grow, so its `stream.buffer` holds the entry's place in the table, from 1 (null for no sound).
     const SoundEntry = struct {
-        ctx_id: web.audio.ContextId = 0,
-        buffer_id: web.audio.BufferId = 0,
-        /// Source-node table: each play creates one entry.  Stop /
-        /// pause / resume look up by sound + index.  Naturally-
-        /// finished sources auto-evict via the JS `onended` handler.
-        source_id: web.audio.SourceId = 0,
-        /// Last-set playback parameters.  Persist across stop/play
-        /// so a `play` after `stop` reuses the volume/pitch/pan the
-        /// caller set with `setVolume` / etc.
+        /// The sound's samples as the mixer reads them (`waves.mixerSamplesOf`): `channels` a frame, at `sample_rate`.
+        /// Shared by its aliases.
+        samples: []const f32 = &.{},
+        channels: u8 = 0,
+        sample_rate: u32 = 0,
+        /// The allocator that made `samples`, to free them at `unload`; null for an alias, which shares its original's.
+        samples_allocator: ?Allocator = null,
+        /// The mixer the sound plays on - the audio device's, given at load - and the voice of its most recent `play`.
+        /// Playing a sound again while it plays starts a second voice beside the first; `stop`, `pause`,
+        /// `resumeSound`, `isPlaying` and the setters act on the most recent.
+        engine_mixer: ?*mixer.Mixer = null,
+        voice: mixer.Voice = .none,
+        /// Kept across plays: each `play` starts at them.
         volume: f32 = 1.0,
         pitch: f32 = 1.0,
         pan: f32 = 0.0,
-        /// Whether THIS Sound owns the underlying buffer (false for
-        /// aliases).  Aliases skip the unloadAudioBuffer call.
-        owns_buffer: bool = true,
-        /// Async-decode tracking for OGG sounds.  When non-zero,
-        /// the sound is still loading.
-        decode_id: web.audio.DecodeId = 0,
-        /// Whether the sound finished its sync-load path (WAV) or
-        /// its async-decode path (OGG -> BufferId).  Distinct from
-        /// `buffer_id != 0` so host tests (where buffer_id is
-        /// always 0) work correctly.
-        loaded: bool = false,
-
+        /// Whether the sound loops (`setLooping`): from its end back to its start, until stopped.
+        is_looping: bool = false,
         in_use: bool = false,
+
+        /// The sound as a source of the mixer's.
+        fn source(entry: *const SoundEntry) mixer.Source {
+            return .{ .samples = .{
+                .samples = entry.samples,
+                .channels = entry.channels,
+                .sample_rate = entry.sample_rate,
+                .is_looping = entry.is_looping,
+            } };
+        }
     };
 
-    /// We use the Sound's `stream.buffer` opaque pointer as the
-    /// table key (cast from a small integer).  A `[*c]u8` cast of
-    /// the buffer_id gives us a stable, compact mapping.
     pub const SoundTable = struct {
         const Capacity = 128;
         entries: [Capacity]SoundEntry = @splat(.{}),
@@ -2707,265 +5723,7 @@ pub const sounds = struct {
         }
     };
 
-    /// Build a Sound from an in-memory `Wave`.  Resamples to the
-    /// device's sample rate, mixes/expands to stereo, uploads the
-    /// buffer through the JS bridge.  The `Wave`'s sample data is
-    /// NOT consumed - caller still owns its data and `unload`s it
-    /// independently (or doesn't, if it wants to keep editing and
-    /// reload).
-    /// Reads `device.is_ready` (early-out on closed device),
-    /// `device.ctx_id` (target sample rate + Web Audio context for
-    /// upload).  Mutates `state.entries` (allocates one slot on
-    /// success).  Mutates `gpa.*` (resampled buffer + table
-    /// allocations; resampled buffer freed on return).
-    /// Returns an empty Sound (`.stream.buffer = null`) if:
-    /// - Audio device not initialized (`audio_device.init(device)` first)
-    /// - Wave is invalid
-    /// - Buffer upload failed (browser denied or out of memory)
-    pub fn loadFromWave(
-        state: *SoundTable,
-        device: *const audio_device.AudioDeviceState,
-        gpa: Allocator,
-        wave: Wave,
-    ) !Sound {
-        if (!audio_device.isReady(device)) {
-            return .{};
-        }
-        if (!waves.isValid(wave)) {
-            return .{};
-        }
-        // Convert Wave -> CanonicalWave -> f32 stereo at the device's rate.
-        const cw: codecs.audio.CanonicalWave = codecs.audio.canonicalFromWave(wave);
-        const stereo_f32: []f32 = try codecs.audio.wav.toFloat32Stereo(gpa, cw);
-        defer gpa.free(stereo_f32);
-        const target_rate: u32 = audio_device.getSampleRate(device);
-        const resampled: []f32 = if (target_rate == wave.sampleRate)
-            try gpa.dupe(f32, stereo_f32)
-        else
-            try codecs.audio.wav.resampleLinear(gpa, stereo_f32, 2, wave.sampleRate, target_rate);
-        defer gpa.free(resampled);
-
-        const ctx_id: web.audio.ContextId = audio_device.getContextId(device);
-        const out_frames: u32 = @intCast(resampled.len / 2);
-        const buf_id: web.audio.BufferId = web.audio.loadAudioBuffer(
-            ctx_id,
-            target_rate,
-            2,
-            out_frames,
-            resampled,
-        );
-        if (buf_id == 0 and comptime builtin.target.cpu.arch.isWasm()) {
-            // Real wasm + bridge said no.
-            return .{};
-        }
-
-        const slot: u32 = state.allocate() orelse {
-            if (comptime builtin.target.cpu.arch.isWasm()) {
-                web.audio.unloadAudioBuffer(ctx_id, buf_id);
-            }
-            return error.SoundTableFull;
-        };
-        state.entries[slot - 1] = .{
-            .in_use = true,
-            .ctx_id = ctx_id,
-            .buffer_id = buf_id,
-            .owns_buffer = true,
-            .loaded = true,
-        };
-
-        return Sound{
-            .stream = .{
-                .buffer = @ptrFromInt(@as(usize, slot)),
-                .processor = null,
-                .sampleRate = target_rate,
-                .sampleSize = 32,
-                .channels = 2,
-            },
-            .frameCount = out_frames,
-        };
-    }
-
-    /// Construct a Sound from raw bytes.  WAV path is sync (decodes
-    /// immediately, returns ready Sound); OGG path is async (returns
-    /// a Sound in "loading" state - `isReady` polls).  For OGG, the
-    /// caller must keep `bytes` alive until the decode completes (we
-    /// have a copy on the JS side, but we need the format for
-    /// dispatch).
-    /// Reads `device.is_ready` (early-out), `device.ctx_id` (sample
-    /// rate + Web Audio context).  Mutates `state.entries` (one
-    /// slot per successful load).  Mutates `waves_state.entries`
-    /// for the WAV path (transient - the temporary Wave is unloaded
-    /// before return).  Mutates `gpa.*` (decode + resample buffers
-    /// + table allocations).
-    /// Errors only on truly broken input (unknown format, decode
-    /// errors for sync formats).
-    pub fn loadFromMemory(
-        state: *SoundTable,
-        device: *const audio_device.AudioDeviceState,
-        waves_state: *waves.AllocTable,
-        gpa: Allocator,
-        file_type: []const u8,
-        bytes: []const u8,
-    ) !Sound {
-        _ = file_type;
-        if (!audio_device.isReady(device)) {
-            return .{};
-        }
-        const fmt: codecs.audio.Format = codecs.audio.Format.detect(bytes) orelse return error.UnknownAudioFormat;
-        switch (fmt) {
-            .wav => {
-                // Sync path: decode -> loadFromWave.
-                const w: Wave = try waves.loadFromMemory(waves_state, gpa, ".wav", bytes);
-                defer waves.unload(waves_state, w);
-                return try loadFromWave(state, device, gpa, w);
-            },
-            .ogg => {
-                // Async path: kick off Web Audio decode, return a
-                // Sound in loading state.  Sniff Ogg container
-                // metadata for the source's sample_rate/channels
-                // so callers can introspect before the decode lands.
-                const ctx_id: web.audio.ContextId = audio_device.getContextId(device);
-                const decode_id: web.audio.DecodeId = web.audio.decodeOggBytes(ctx_id, bytes);
-                // Same host-tolerance as music.loadFromMemory: on
-                // host the bridge always returns 0 but we still
-                // want metadata-only mode to work for tests.
-                if (decode_id == 0 and comptime builtin.target.cpu.arch.isWasm()) {
-                    return .{};
-                }
-                const slot: u32 = state.allocate() orelse {
-                    web.audio.cancelDecode(ctx_id, decode_id);
-                    return error.SoundTableFull;
-                };
-                const meta_opt: ?codecs.audio.ogg.Metadata = codecs.audio.ogg.sniff(bytes);
-                const meta_sr: u32 = if (meta_opt) |m| m.sample_rate else audio_device.getSampleRate(device);
-                const meta_ch: u32 = if (meta_opt) |m| @as(u32, m.channels) else 2;
-                const total_samples: u64 = if (meta_opt) |m| m.total_samples else 0;
-                state.entries[slot - 1] = .{
-                    .in_use = true,
-                    .ctx_id = ctx_id,
-                    .buffer_id = 0,
-                    .decode_id = decode_id,
-                    .owns_buffer = true,
-                };
-                return Sound{
-                    .stream = .{
-                        .buffer = @ptrFromInt(@as(usize, slot)),
-                        .processor = null,
-                        .sampleRate = meta_sr,
-                        .sampleSize = 32,
-                        .channels = meta_ch,
-                    },
-                    .frameCount = @intCast(total_samples),
-                };
-            },
-        }
-    }
-
-    /// Build an alias of an existing Sound that shares its
-    /// AudioBuffer.  On the web platform this is essentially free
-    /// - Web Audio source nodes are already one-shot, so `play` on
-    /// either the original or alias creates a fresh source node
-    /// from the same buffer.
-    /// Aliases do NOT own the buffer; `unload` on an alias just
-    /// releases the table slot.  Unloading the original while
-    /// aliases are alive leaves the JS-side buffer alive (Web Audio
-    /// holds a ref via in-flight source nodes anyway), but future
-    /// `play` calls on the alias will fail because the buffer_id
-    /// is now stale on the JS side.  Don't do this; unload aliases
-    /// before originals.
-    pub fn loadAlias(
-        state: *SoundTable,
-        source: Sound,
-    ) Sound {
-        const slot: u32 = soundSlot(state, source) orelse return .{};
-        const orig_e: *SoundEntry = state.get(slot) orelse return .{};
-        const new_slot: u32 = state.allocate() orelse return .{};
-        state.entries[new_slot - 1] = .{
-            .in_use = true,
-            .ctx_id = orig_e.ctx_id,
-            .buffer_id = orig_e.buffer_id,
-            .owns_buffer = false,
-            .loaded = orig_e.loaded,
-        };
-        return Sound{
-            .stream = .{
-                .buffer = @ptrFromInt(@as(usize, new_slot)),
-                .processor = null,
-                .sampleRate = source.stream.sampleRate,
-                .sampleSize = source.stream.sampleSize,
-                .channels = source.stream.channels,
-            },
-            .frameCount = source.frameCount,
-        };
-    }
-
-    /// Whether this Sound has finished loading (relevant for the
-    /// async OGG path) and is ready for `play`.  WAV-loaded sounds
-    /// are immediately ready.
-    pub fn isReady(
-        state: *SoundTable,
-        sound: Sound,
-    ) bool {
-        const slot: u32 = soundSlot(state, sound) orelse return false;
-        const e: *SoundEntry = state.get(slot) orelse return false;
-        if (e.loaded) {
-            return true;
-        }
-        if (e.decode_id == 0) {
-            return false;
-        }
-        // Decode-pending: poll the bridge.
-        if (!web.audio.isDecodeReady(e.ctx_id, e.decode_id)) {
-            return false;
-        }
-        // Decode finished - promote to a real BufferId.
-        const buf_id: web.audio.BufferId = web.audio.takeDecodedBuffer(e.ctx_id, e.decode_id);
-        e.decode_id = 0;
-        if (buf_id == 0) {
-            // Decode failed; sound stays not-ready forever (caller
-            // should unload).
-            return false;
-        }
-        e.buffer_id = buf_id;
-        e.loaded = true;
-        return true;
-    }
-
-    /// Whether this Sound's slot is allocated (has gone through
-    /// loadFromWave / loadFromMemory / loadAlias and not yet
-    /// unloaded).  Empty defaults / unloaded sounds report false.
-    pub fn isValid(
-        state: *const SoundTable,
-        sound: Sound,
-    ) bool {
-        const slot: u32 = soundSlot(state, sound) orelse return false;
-        return state.getConst(slot) != null;
-    }
-
-    /// Free a Sound's resources.  For an owner: unloads the underlying
-    /// buffer.  For an alias: releases the slot only.  Idempotent /
-    /// silent on unloaded sounds.
-    pub fn unload(
-        state: *SoundTable,
-        sound: Sound,
-    ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        // Cancel any in-flight decode.
-        if (e.decode_id != 0) {
-            web.audio.cancelDecode(e.ctx_id, e.decode_id);
-        }
-        // Stop any in-flight play.
-        if (e.source_id != 0) {
-            web.audio.stopBuffer(e.ctx_id, e.source_id);
-        }
-        if (e.owns_buffer and e.buffer_id != 0) {
-            web.audio.unloadAudioBuffer(e.ctx_id, e.buffer_id);
-        }
-        state.release(slot);
-    }
-
-    /// Internal: extract the slot id from a Sound's opaque buffer ptr.
+    /// The table's place of `sound`, from 1; null for no sound.
     fn soundSlot(
         state: *const SoundTable,
         sound: Sound,
@@ -2979,326 +5737,363 @@ pub const sounds = struct {
         return @intCast(as_int);
     }
 
+    /// The entry of `sound`, or null for no sound or one unloaded.
+    fn entryOf(state: *SoundTable, sound: Sound) ?*SoundEntry {
+        const slot: u32 = soundSlot(state, sound) orelse return null;
+        return state.get(slot);
+    }
+
+    fn constEntryOf(state: *const SoundTable, sound: Sound) ?*const SoundEntry {
+        const slot: u32 = soundSlot(state, sound) orelse return null;
+        return state.getConst(slot);
+    }
+
+    // ---- Loading
+
+    /// A sound of `wave`'s samples, kept as the mixer reads them - at the wave's own rate, which the mixer steps
+    /// through at its own (no resampling at load), and with one channel for a mono wave, two for a wider one
+    /// (`waves.mixerSamplesOf`). It plays on the device's mixer. An empty wave gives an empty `Sound`.
+    pub fn loadFromWave(
+        state: *SoundTable,
+        device: *const audio_device.AudioDeviceState,
+        gpa: Allocator,
+        wave: Wave,
+    ) !Sound {
+        if (!waves.isValid(wave)) {
+            return .{};
+        }
+        const samples: []f32 = try waves.mixerSamplesOf(gpa, wave);
+        errdefer gpa.free(samples);
+        const slot: u32 = state.allocate() orelse return error.SoundTableFull;
+        const entry: *SoundEntry = state.get(slot).?;
+        entry.samples = samples;
+        entry.channels = waves.mixerChannelsOf(wave);
+        entry.sample_rate = wave.sampleRate;
+        entry.samples_allocator = gpa;
+        entry.engine_mixer = device.engine_mixer;
+        return .{
+            .stream = .{
+                .buffer = @ptrFromInt(@as(usize, slot)),
+                .sampleRate = wave.sampleRate,
+                .sampleSize = 32,
+                .channels = entry.channels,
+            },
+            .frameCount = wave.frameCount,
+        };
+    }
+
+    /// A sound from a file's bytes in memory: WAV, decoded at once. OGG needs a Vorbis decoder the engine does not yet
+    /// have (`error.OggNeedsDecoder`); any other format is unknown (`error.UnknownAudioFormat`).
+    pub fn loadFromMemory(
+        state: *SoundTable,
+        device: *const audio_device.AudioDeviceState,
+        waves_state: *waves.AllocTable,
+        gpa: Allocator,
+        file_type: []const u8,
+        bytes: []const u8,
+    ) !Sound {
+        _ = file_type;
+        const format: codecs.audio.Format = codecs.audio.Format.detect(bytes) orelse return error.UnknownAudioFormat;
+        switch (format) {
+            .wav => {
+                const wave: Wave = try waves.loadFromMemory(waves_state, gpa, ".wav", bytes);
+                defer waves.unload(waves_state, wave);
+                return try loadFromWave(state, device, gpa, wave);
+            },
+            .ogg => return error.OggNeedsDecoder,
+        }
+    }
+
+    /// A second sound sharing `source`'s samples, with playback parameters of its own - for playing one sound at
+    /// several places or pitches. Unloading the original stops the alias's voices and empties it (`unload`).
+    pub fn loadAlias(
+        state: *SoundTable,
+        source: Sound,
+    ) Sound {
+        const original: *SoundEntry = entryOf(state, source) orelse return .{};
+        const original_entry: SoundEntry = original.*;
+        const slot: u32 = state.allocate() orelse return .{};
+        const alias: *SoundEntry = state.get(slot).?;
+        alias.samples = original_entry.samples;
+        alias.channels = original_entry.channels;
+        alias.sample_rate = original_entry.sample_rate;
+        alias.engine_mixer = original_entry.engine_mixer;
+        var alias_sound: Sound = source;
+        alias_sound.stream.buffer = @ptrFromInt(@as(usize, slot));
+        return alias_sound;
+    }
+
+    /// Whether `sound` has samples to play.
+    pub fn isReady(
+        state: *SoundTable,
+        sound: Sound,
+    ) bool {
+        const entry: *SoundEntry = entryOf(state, sound) orelse return false;
+        return entry.samples.len > 0;
+    }
+
+    pub fn isValid(
+        state: *const SoundTable,
+        sound: Sound,
+    ) bool {
+        const entry: *const SoundEntry = constEntryOf(state, sound) orelse return false;
+        return entry.samples.len > 0;
+    }
+
+    /// Frees `sound`. An original's samples are freed once nothing reads them (`mixer.Mixer.releaseSamples`): every
+    /// voice reading them, its aliases' included, copies what it still needs and fades out over the copy; and its
+    /// aliases are emptied, so that playing one later plays nothing rather than freed memory. An
+    /// alias only stops its most recent voice and frees its entry. Unloading no sound, or one unloaded, does nothing.
+    pub fn unload(
+        state: *SoundTable,
+        sound: Sound,
+    ) void {
+        const slot: u32 = soundSlot(state, sound) orelse return;
+        const entry: *SoundEntry = state.get(slot) orelse return;
+        if (entry.samples_allocator) |allocator| {
+            for (&state.entries) |*other_entry| {
+                const is_alias: bool = other_entry.in_use and other_entry.samples_allocator == null and
+                    other_entry.samples.ptr == entry.samples.ptr;
+                if (is_alias) {
+                    other_entry.samples = &.{};
+                    other_entry.voice = .none;
+                }
+            }
+            // The mixer frees the samples once nothing reads them; with no mixer, nothing ever did.
+            if (entry.engine_mixer) |engine_mixer| {
+                engine_mixer.releaseSamples(allocator, entry.samples);
+            } else {
+                allocator.free(entry.samples);
+            }
+        } else if (entry.engine_mixer) |engine_mixer| {
+            engine_mixer.stopVoice(entry.voice);
+        }
+        state.release(slot);
+    }
+
     // ---- Playback
-    /// Start playing a Sound.  Each `play` call creates a fresh Web
-    /// Audio source node (Web Audio nodes are one-shot); re-playing
-    /// while a previous play is still active does NOT stop the
-    /// previous one - you get two sources playing concurrently.
-    /// `stop` stops only the most recently-started source (raylib
-    /// parity).  For exhaustive cleanup, `unload`.
-    /// Silent if the Sound isn't loaded yet (OGG decode pending) or
-    /// has been unloaded.
+
+    /// Starts `sound` playing at its volume, pitch and pan, on a voice of its own - beside any earlier play still
+    /// sounding. Does nothing for no sound, an emptied alias, or a sound with no mixer.
     pub fn play(
         state: *SoundTable,
         sound: Sound,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        if (!e.loaded) {
-            // Try to promote: if the OGG decode just finished,
-            // isReady's side effect picks up the BufferId.
-            if (!isReady(state, sound)) {
-                return;
-            }
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        const engine_mixer: *mixer.Mixer = entry.engine_mixer orelse return;
+        if (entry.samples.len == 0) {
+            return;
         }
-        const new_source_id: web.audio.SourceId = web.audio.playBuffer(
-            e.ctx_id,
-            e.buffer_id,
-            e.volume,
-            e.pitch,
-            e.pan,
-            false,
-        );
-        e.source_id = new_source_id;
+        entry.voice = engine_mixer.play(entry.source(), .{
+            .volume = entry.volume,
+            .pan = entry.pan,
+            .pitch = entry.pitch,
+        });
     }
 
-    /// Stop the most-recently-started in-flight play of this Sound.
-    /// Idempotent / silent on already-stopped or never-played sounds.
+    /// Stops the sound's most recent voice.
     pub fn stop(
         state: *SoundTable,
         sound: Sound,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        if (e.source_id == 0) {
-            return;
-        }
-        web.audio.stopBuffer(e.ctx_id, e.source_id);
-        e.source_id = 0;
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        const engine_mixer: *mixer.Mixer = entry.engine_mixer orelse return;
+        engine_mixer.stopVoice(entry.voice);
     }
 
-    /// Pause the most-recently-started in-flight play.  Resume with
-    /// `resumeSound` (named to dodge Zig's `resume` keyword
-    /// collision; raylib calls this `ResumeSound`).
+    /// Pauses the sound's most recent voice where it is.
     pub fn pause(
         state: *SoundTable,
         sound: Sound,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        if (e.source_id == 0) {
-            return;
-        }
-        web.audio.pauseBuffer(e.ctx_id, e.source_id);
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        const engine_mixer: *mixer.Mixer = entry.engine_mixer orelse return;
+        engine_mixer.pauseVoice(entry.voice);
     }
 
-    /// Resume a paused play.  Named `resumeSound` to dodge Zig's
-    /// `resume` keyword.
+    /// Resumes the sound's most recent voice where it paused.
     pub fn resumeSound(
         state: *SoundTable,
         sound: Sound,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        if (e.source_id == 0) {
-            return;
-        }
-        web.audio.resumeBuffer(e.ctx_id, e.source_id);
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        const engine_mixer: *mixer.Mixer = entry.engine_mixer orelse return;
+        engine_mixer.resumeVoice(entry.voice);
     }
 
-    /// Whether the Sound's most-recently-started source is still
-    /// playing (not stopped, not paused, not naturally finished).
+    /// Whether the sound's most recent voice plays: started, not stopped, not paused, not finished.
     pub fn isPlaying(
         state: *const SoundTable,
         sound: Sound,
     ) bool {
-        const slot: u32 = soundSlot(state, sound) orelse return false;
-        const e: *const SoundEntry = state.getConst(slot) orelse return false;
-        if (e.source_id == 0) {
-            return false;
-        }
-        return web.audio.isBufferPlaying(e.ctx_id, e.source_id);
+        const entry: *const SoundEntry = constEntryOf(state, sound) orelse return false;
+        const engine_mixer: *mixer.Mixer = entry.engine_mixer orelse return false;
+        return engine_mixer.isPlaying(entry.voice) and !engine_mixer.isPaused(entry.voice);
     }
 
-    /// Set the playback volume for this Sound.  Stored on the
-    /// Sound's table entry; takes effect on the NEXT `play` call.
-    /// (Web Audio's gain node lives inside the source-graph created
-    /// by `play` - we'd need a per-Sound persistent gain node to
-    /// retro-update in-flight plays, which costs CPU for the common
-    /// case.  Future enhancement if needed.)
-    /// Clamped to `[0, 10]` matching `web.audio` conventions.
+    /// The sound's volume, from 0 to 10, for its later plays and its most recent voice.
     pub fn setVolume(
         state: *SoundTable,
         sound: Sound,
         volume: f32,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        e.volume = clamp(volume, 0.0, 10.0);
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        entry.volume = clamp(volume, 0.0, 10.0);
+        if (entry.engine_mixer) |engine_mixer| {
+            engine_mixer.setVolume(entry.voice, entry.volume);
+        }
     }
 
-    /// Set the playback pitch (rate multiplier; 1.0 = native).
-    /// Same NEXT-`play` semantics as `setVolume`.  Clamped to
-    /// `[0.0625, 16.0]` matching `web.audio` conventions.
+    /// The sound's pitch, from 1/16 to 16, for its later plays and its most recent voice.
     pub fn setPitch(
         state: *SoundTable,
         sound: Sound,
         pitch: f32,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        e.pitch = clamp(pitch, 0.0625, 16.0);
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        entry.pitch = clamp(pitch, 0.0625, 16.0);
+        if (entry.engine_mixer) |engine_mixer| {
+            engine_mixer.setPitch(entry.voice, entry.pitch);
+        }
     }
 
-    /// Set the stereo pan (`-1.0` = left, `0.0` = center, `+1.0` =
-    /// right).  Same NEXT-`play` semantics as `setVolume`.
+    /// Whether the sound loops: a zimr addition to raylib's sounds, which play once. A looping sound plays from its end
+    /// back to its start without a gap until stopped - a rhythm baked into one sound keeps its time exactly, as
+    /// replaying it from a frame could not. For its later plays and its most recent voice.
+    pub fn setLooping(
+        state: *SoundTable,
+        sound: Sound,
+        is_looping: bool,
+    ) void {
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        entry.is_looping = is_looping;
+        if (entry.engine_mixer) |engine_mixer| {
+            engine_mixer.setLooping(entry.voice, is_looping);
+        }
+    }
+
+    /// The sound's pan, from -1 (left) to 1 (right), for its later plays and its most recent voice.
     pub fn setPan(
         state: *SoundTable,
         sound: Sound,
         pan: f32,
     ) void {
-        const slot: u32 = soundSlot(state, sound) orelse return;
-        const e: *SoundEntry = state.get(slot) orelse return;
-        e.pan = clamp(pan, -1.0, 1.0);
+        const entry: *SoundEntry = entryOf(state, sound) orelse return;
+        entry.pan = clamp(pan, -1.0, 1.0);
+        if (entry.engine_mixer) |engine_mixer| {
+            engine_mixer.setPan(entry.voice, entry.pan);
+        }
     }
 
     // ---- Tests
-    test "loadFromWave: empty Wave returns empty Sound" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var sd: SoundTable = .{};
-        const empty: Wave = .{};
-        const s: Sound = try loadFromWave(&sd, &dev, ta, empty);
-        try expectEqual(@as(?*types.rAudioBuffer, null), s.stream.buffer);
-        try expect(!isValid(&sd, s));
+
+    /// The engine's test WAV: a short sine.
+    const test_wav: []const u8 = codecs.audio.wav.test_sine_wav;
+
+    test "loadFromWave: an empty wave gives an empty sound" {
+        var device: audio_device.AudioDeviceState = .{};
+        var table: SoundTable = .{};
+        const sound: Sound = try loadFromWave(&table, &device, testing_allocator, .{});
+        try expect(sound.stream.buffer == null);
+        try expect(!isValid(&table, sound));
+        try expect(!isReady(&table, sound));
+        unload(&table, sound);
+        play(&table, sound);
+        setVolume(&table, sound, 0.5);
     }
 
-    test "loadFromWave: WAV -> Sound on host" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        const w: Wave = try waves.loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
-        defer waves.unload(&ws, w);
-        const s: Sound = try loadFromWave(&sd, &dev, ta, w);
-        defer unload(&sd, s);
-        try expect(isValid(&sd, s));
-        try expect(isReady(&sd, s));
-        // Resampled to device rate (48000 Hz), stereo, 32-bit float
-        try expectEqual(@as(u32, 48000), s.stream.sampleRate);
-        try expectEqual(@as(u32, 2), s.stream.channels);
-        try expectEqual(@as(u32, 32), s.stream.sampleSize);
+    test "loadFromWave: a WAV's sound keeps the wave's rate, and one channel for a mono wave" {
+        var device: audio_device.AudioDeviceState = .{};
+        var wave_table: waves.AllocTable = .{};
+        var table: SoundTable = .{};
+        const wave: Wave = try waves.loadFromMemory(&wave_table, testing_allocator, ".wav", test_wav);
+        defer waves.unload(&wave_table, wave);
+        const sound: Sound = try loadFromWave(&table, &device, testing_allocator, wave);
+        defer unload(&table, sound);
+        try expect(isValid(&table, sound) and isReady(&table, sound));
+        try expectEqual(wave.sampleRate, sound.stream.sampleRate);
+        try expectEqual(@as(u32, waves.mixerChannelsOf(wave)), sound.stream.channels);
+        try expectEqual(@as(u32, 32), sound.stream.sampleSize);
     }
 
-    test "loadFromMemory: WAV path uses sync decode" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        const s: Sound = try loadFromMemory(&sd, &dev, &ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
-        defer unload(&sd, s);
-        try expect(isValid(&sd, s));
-        try expect(isReady(&sd, s));
-    }
-
-    test "loadFromMemory: rejects unknown format" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        try expectError(
-            error.UnknownAudioFormat,
-            loadFromMemory(&sd, &dev, &ws, ta, ".png", "\x89PNG\r\n\x1a\n"),
+    test "loadFromMemory: WAV decodes at once; an unknown format is refused" {
+        var device: audio_device.AudioDeviceState = .{};
+        var wave_table: waves.AllocTable = .{};
+        var table: SoundTable = .{};
+        const sound: Sound = try loadFromMemory(
+            &table,
+            &device,
+            &wave_table,
+            testing_allocator,
+            ".wav",
+            test_wav,
         );
+        defer unload(&table, sound);
+        try expect(isReady(&table, sound));
+        const unknown: [8]u8 = .{ 1, 2, 3, 4, 5, 6, 7, 8 };
+        try expectError(error.UnknownAudioFormat, loadFromMemory(
+            &table,
+            &device,
+            &wave_table,
+            testing_allocator,
+            ".bin",
+            &unknown,
+        ));
     }
 
-    test "loadAlias: shares buffer, no double-unload" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        const w: Wave = try waves.loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
-        defer waves.unload(&ws, w);
-        const s: Sound = try loadFromWave(&sd, &dev, ta, w);
-        defer unload(&sd, s);
-        const a: Sound = loadAlias(&sd, s);
-        defer unload(&sd, a);
-        try expect(isValid(&sd, a));
-        // Both reference the same buffer, but slots are distinct.
-        const slot_s: u32 = soundSlot(&sd, s).?;
-        const slot_a: u32 = soundSlot(&sd, a).?;
-        try expect(slot_s != slot_a);
-        const e_s: *SoundEntry = sd.get(slot_s).?;
-        const e_a: *SoundEntry = sd.get(slot_a).?;
-        try expectEqual(e_s.buffer_id, e_a.buffer_id);
-        try expect(e_s.owns_buffer);
-        try expect(!e_a.owns_buffer);
+    test "a sound plays on the device's mixer: play, pause, resume, stop; the setters persist and reach its voice" {
+        var engine_mixer: mixer.Mixer = .{};
+        var device: audio_device.AudioDeviceState = .{ .engine_mixer = &engine_mixer };
+        var wave_table: waves.AllocTable = .{};
+        var table: SoundTable = .{};
+        const wave: Wave = try waves.loadFromMemory(&wave_table, testing_allocator, ".wav", test_wav);
+        defer waves.unload(&wave_table, wave);
+        const sound: Sound = try loadFromWave(&table, &device, testing_allocator, wave);
+        defer unload(&table, sound);
+        try expect(!isPlaying(&table, sound));
+        play(&table, sound);
+        try expect(isPlaying(&table, sound));
+        pause(&table, sound);
+        try expect(!isPlaying(&table, sound));
+        resumeSound(&table, sound);
+        try expect(isPlaying(&table, sound));
+        setVolume(&table, sound, 100.0);
+        setPitch(&table, sound, 0.001);
+        setPan(&table, sound, 5.0);
+        const entry: *SoundEntry = entryOf(&table, sound).?;
+        try expectEqual(@as(f32, 10.0), entry.volume);
+        try expectEqual(@as(f32, 0.0625), entry.pitch);
+        try expectEqual(@as(f32, 1.0), entry.pan);
+        stop(&table, sound);
+        try expect(!isPlaying(&table, sound));
     }
 
-    test "unload: idempotent on default Sound" {
-        var sd: SoundTable = .{};
-        unload(&sd, .{});
-        unload(&sd, .{});
-        // Must not panic.
-    }
-
-    test "isValid: rejects empty Sound" {
-        var sd: SoundTable = .{};
-        try expect(!isValid(&sd, .{}));
-    }
-
-    test "isReady: false for empty Sound" {
-        var sd: SoundTable = .{};
-        try expect(!isReady(&sd, .{}));
-    }
-
-    // ---- Playback tests
-    test "play: no-op on empty Sound" {
-        var sd: SoundTable = .{};
-        play(&sd, .{});
-        // Must not panic.
-    }
-
-    test "play / stop / isPlaying lifecycle on host" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        const w: Wave = try waves.loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
-        defer waves.unload(&ws, w);
-        const s: Sound = try loadFromWave(&sd, &dev, ta, w);
-        defer unload(&sd, s);
-
-        // Initially not playing.
-        try expect(!isPlaying(&sd, s));
-        // Host has no JS bridge so play creates source_id = 0.
-        // The contract is just "doesn't panic".
-        play(&sd, s);
-        stop(&sd, s);
-        // Still not playing after stop.
-        try expect(!isPlaying(&sd, s));
-    }
-
-    test "pause / resume don't panic on host" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        const w: Wave = try waves.loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
-        defer waves.unload(&ws, w);
-        const s: Sound = try loadFromWave(&sd, &dev, ta, w);
-        defer unload(&sd, s);
-        play(&sd, s);
-        pause(&sd, s);
-        resumeSound(&sd, s);
-        stop(&sd, s);
-    }
-
-    test "setVolume / setPitch / setPan: clamp + persist on entry" {
-        const ta: Allocator = std.testing.allocator;
-        var dev: audio_device.AudioDeviceState = .{};
-        audio_device.init(&dev);
-        defer audio_device.close(&dev);
-        var ws: waves.AllocTable = .{};
-        var sd: SoundTable = .{};
-        const w: Wave = try waves.loadFromMemory(&ws, ta, ".wav", codecs.audio.wav.test_sine_wav);
-        defer waves.unload(&ws, w);
-        const s: Sound = try loadFromWave(&sd, &dev, ta, w);
-        defer unload(&sd, s);
-        const slot: u32 = soundSlot(&sd, s).?;
-
-        setVolume(&sd, s, 0.5);
-        try expectEqual(@as(f32, 0.5), sd.get(slot).?.volume);
-        setVolume(&sd, s, -10.0);
-        try expectEqual(@as(f32, 0.0), sd.get(slot).?.volume);
-        setVolume(&sd, s, 100.0);
-        try expectEqual(@as(f32, 10.0), sd.get(slot).?.volume);
-
-        setPitch(&sd, s, 2.0);
-        try expectEqual(@as(f32, 2.0), sd.get(slot).?.pitch);
-        setPitch(&sd, s, 0.001);
-        try expectEqual(@as(f32, 0.0625), sd.get(slot).?.pitch);
-
-        setPan(&sd, s, -0.5);
-        try expectEqual(@as(f32, -0.5), sd.get(slot).?.pan);
-        setPan(&sd, s, 5.0);
-        try expectEqual(@as(f32, 1.0), sd.get(slot).?.pan);
-    }
-
-    test "setVolume on empty Sound is silent" {
-        var sd: SoundTable = .{};
-        setVolume(&sd, .{}, 0.5);
-        setPitch(&sd, .{}, 1.0);
-        setPan(&sd, .{}, 0.0);
+    test "unloading a sound stops every voice reading it, an alias's too, and empties the alias" {
+        var engine_mixer: mixer.Mixer = .{};
+        var device: audio_device.AudioDeviceState = .{ .engine_mixer = &engine_mixer };
+        var wave_table: waves.AllocTable = .{};
+        var table: SoundTable = .{};
+        const wave: Wave = try waves.loadFromMemory(&wave_table, testing_allocator, ".wav", test_wav);
+        defer waves.unload(&wave_table, wave);
+        const sound: Sound = try loadFromWave(&table, &device, testing_allocator, wave);
+        const alias: Sound = loadAlias(&table, sound);
+        defer unload(&table, alias);
+        try expect(soundSlot(&table, alias).? != soundSlot(&table, sound).?);
+        play(&table, sound);
+        play(&table, sound);
+        play(&table, alias);
+        try expectEqual(@as(u32, 3), engine_mixer.playingVoiceCount());
+        unload(&table, sound);
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
+        try expect(!isReady(&table, alias));
+        play(&table, alias);
+        try expectEqual(@as(u32, 0), engine_mixer.playingVoiceCount());
     }
 };
 
 // Force discovery of nested-namespace inline tests.
 comptime {
+    _ = mixer;
     _ = audio_device;
     _ = waves;
     _ = composer;

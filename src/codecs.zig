@@ -1,5 +1,4 @@
 //! lint:alias codecs
-//! lint:off prefer-std-alias: gltf sub-struct's local `testing` alias would clash
 // src/codecs.zig - file-format decoders/encoders for assets we ship with.
 // Aggregates parsing libraries into one file with namespaced sub-structs:
 //     codecs.png         - PNG decoder + encoder (RGBA8)
@@ -13,11 +12,29 @@
 // `const png = @import("codecs.zig").png`.
 
 const std = @import("std");
+const expectEqualSlices = std.testing.expectEqualSlices;
 const ArrayList = std.ArrayList;
 const eql = std.mem.eql;
 const expectError = std.testing.expectError;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const indexOf = std.mem.indexOf;
+const indexOfPos = std.mem.indexOfPos;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const splitScalar = std.mem.splitScalar;
+const trim = std.mem.trim;
+const swap = std.mem.swap;
+const writeInt = std.mem.writeInt;
+const sortSlice = std.mem.sort;
+const parseInt = std.fmt.parseInt;
+const parseFloat = std.fmt.parseFloat;
 const builtin = @import("builtin");
+const platform = @import("platform.zig");
 const zm = @import("zm");
 const float64 = zm.float64;
 const Vec = zm.Vec;
@@ -33,6 +50,7 @@ const quat_identity = zm.quat_identity;
 const sqrt = zm.sqrt;
 const subChecked = zm.subChecked;
 const vec = zm.vec;
+const Quat = zm.Quat;
 
 /// The render-side types (`Mesh`, `Color`, ...) the loaders hand back.
 /// Re-exported so out-of-module consumers (e.g. the `mesh_bake` build
@@ -44,6 +62,13 @@ pub const types = @import("types.zig");
 // ============================================================================
 // SECTION - png (was: src/png.zig)
 // ============================================================================
+
+const bvh_expectEqualSlices = expectEqualSlices;
+const allocPrint = std.fmt.allocPrint;
+const expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const expectEqual = std.testing.expectEqual;
+const expectEqualStrings = std.testing.expectEqualStrings;
+const indexOfScalar = std.mem.indexOfScalar;
 
 pub const png = struct {
     pub const Error = error{
@@ -71,7 +96,7 @@ pub const png = struct {
         }
     };
 
-    const SIGNATURE = [_]u8{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+    const png_signature = [_]u8{ 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
 
     const Header = struct {
         width: u32,
@@ -105,14 +130,14 @@ pub const png = struct {
     /// Decode PNG bytes into an RGBA8 image.  Caller owns `pixels`
     /// release with `Image.deinit(allocator)`.
     pub fn decode(allocator: Allocator, png_bytes: []const u8) Error!Image {
-        if (png_bytes.len < SIGNATURE.len) {
+        if (png_bytes.len < png_signature.len) {
             return Error.UnexpectedEnd;
         }
-        if (!eql(u8, png_bytes[0..SIGNATURE.len], &SIGNATURE)) {
+        if (!eql(u8, png_bytes[0..png_signature.len], &png_signature)) {
             return Error.InvalidSignature;
         }
 
-        var cursor: usize = SIGNATURE.len;
+        var cursor: usize = png_signature.len;
         var header: ?Header = null;
         var idat_concat: ArrayList(u8) = .empty;
         defer idat_concat.deinit(allocator);
@@ -202,8 +227,8 @@ pub const png = struct {
     /// Decompress + Reader/Writer interface.  Errors are mapped to a
     /// single bool via the caller's Error.DecompressionFailed.
     fn inflateZlib(input: []const u8, output: []u8) !void {
-        var reader: std.Io.Reader = std.Io.Reader.fixed(input);
-        var writer: std.Io.Writer = std.Io.Writer.fixed(output);
+        var reader: Io.Reader = .fixed(input);
+        var writer: Io.Writer = .fixed(output);
         var decompress: std.compress.flate.Decompress = .init(&reader, .zlib, &.{});
         _ = decompress.reader.streamRemaining(&writer) catch return error.DecompressionFailed;
         if (writer.end != output.len) {
@@ -361,6 +386,7 @@ pub const png = struct {
     // Async loader - fetches a PNG from URL and decodes when ready
     // ===========================================================================
 
+    // lint:off browser-call: the browser's fetch loads by URL; loading by path natively comes with C10
     const fetch = @import("web.zig").fetch;
 
     /// Async PNG load handle.  Wraps a `fetch.Handle` plus the allocator
@@ -490,12 +516,12 @@ pub const png = struct {
         errdefer out.deinit(allocator);
 
         // 1. PNG signature.
-        out.appendSlice(allocator, &SIGNATURE) catch return EncodeError.OutOfMemory;
+        out.appendSlice(allocator, &png_signature) catch return EncodeError.OutOfMemory;
 
         // 2. IHDR chunk - 13 bytes.
         var ihdr: [13]u8 = undefined;
-        std.mem.writeInt(u32, ihdr[0..4], width, .big);
-        std.mem.writeInt(u32, ihdr[4..8], height, .big);
+        writeInt(u32, ihdr[0..4], width, .big);
+        writeInt(u32, ihdr[4..8], height, .big);
         ihdr[8] = 8; // bit depth
         ihdr[9] = 6; // color type = RGBA
         ihdr[10] = 0; // compression = deflate
@@ -545,17 +571,17 @@ pub const png = struct {
         payload: []const u8,
     ) !void {
         var len_bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &len_bytes, @intCast(payload.len), .big);
+        writeInt(u32, &len_bytes, @intCast(payload.len), .big);
         try out.appendSlice(allocator, &len_bytes);
         try out.appendSlice(allocator, chunk_type);
         try out.appendSlice(allocator, payload);
 
         const Crc32 = std.hash.crc.@"CRC-32/ISO-HDLC";
-        var crc: Crc32 = Crc32.init();
+        var crc: Crc32 = .init();
         crc.update(chunk_type);
         crc.update(payload);
         var crc_bytes: [4]u8 = undefined;
-        std.mem.writeInt(u32, &crc_bytes, crc.final(), .big);
+        writeInt(u32, &crc_bytes, crc.final(), .big);
         try out.appendSlice(allocator, &crc_bytes);
     }
 
@@ -565,7 +591,7 @@ pub const png = struct {
         // Allocate a starting buffer for the writer.  Compress.init asserts
         // `output.buffer.len > 8`, so we can't pass the empty-buffer
         // default Allocating gives us - start at 256 bytes and let it grow.
-        var alloc_writer: std.Io.Writer.Allocating = try .initCapacity(allocator, 256);
+        var alloc_writer: Io.Writer.Allocating = try .initCapacity(allocator, 256);
         errdefer alloc_writer.deinit();
 
         // Window buffer for the deflater.  flate.Compress requires this.
@@ -589,7 +615,7 @@ pub const png = struct {
     }
 
     test "encode/decode roundtrip 4x4 RGBA" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         // 4x4 image = 64 bytes RGBA.  Mix of fully-opaque + semi-transparent
         // + fully-transparent pixels so we cover every alpha edge.
         var pixels: [64]u8 = undefined;
@@ -603,7 +629,7 @@ pub const png = struct {
         const png_bytes: []u8 = try encode(allocator, &pixels, 4, 4);
         defer allocator.free(png_bytes);
         try std.testing.expect(png_bytes.len > 0);
-        try bvh_expectEqualSlices(u8, &SIGNATURE, png_bytes[0..SIGNATURE.len]);
+        try bvh_expectEqualSlices(u8, &png_signature, png_bytes[0..png_signature.len]);
 
         // Decode it back and check we got the same pixels out.
         const decoded: Image = try decode(allocator, png_bytes);
@@ -614,19 +640,19 @@ pub const png = struct {
     }
 
     test "encode rejects size mismatch" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         const bad: [10]u8 = @splat(0); // 10 bytes for a 4x4 image (needs 64)
         try expectError(EncodeError.InvalidPixelBufferSize, encode(allocator, &bad, 4, 4));
     }
 
     test "encode rejects zero dimensions" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         const empty = &[_]u8{};
         try expectError(EncodeError.InvalidPixelBufferSize, encode(allocator, empty, 0, 0));
     }
 
     test "encode produces valid IHDR for non-square image" {
-        const allocator: Allocator = std.testing.allocator;
+        const allocator: Allocator = testing_allocator;
         // 7 wide x 3 tall = 21 px = 84 bytes
         var pixels: [84]u8 = @splat(0xff);
         const png_bytes: []u8 = try encode(allocator, &pixels, 7, 3);
@@ -677,24 +703,24 @@ pub const png = struct {
 
     test "decode: rejects bytes with no PNG signature" {
         const fake = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 };
-        try expectError(Error.InvalidSignature, decode(std.testing.allocator, &fake));
+        try expectError(Error.InvalidSignature, decode(testing_allocator, &fake));
     }
 
     test "decode: rejects truncated input" {
-        try expectError(Error.UnexpectedEnd, decode(std.testing.allocator, &[_]u8{ 0x89, 0x50 }));
+        try expectError(Error.UnexpectedEnd, decode(testing_allocator, &[_]u8{ 0x89, 0x50 }));
     }
 
     test "decode: 4x4 RGBA - header" {
-        const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_4x4_rgba);
+        defer img.deinit(testing_allocator);
         try std.testing.expectEqual(@as(u32, 4), img.width);
         try std.testing.expectEqual(@as(u32, 4), img.height);
         try std.testing.expectEqual(@as(usize, 64), img.pixels.len); // 4*4*4
     }
 
     test "decode: 4x4 RGBA - top-left pixel is red" {
-        const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_4x4_rgba);
+        defer img.deinit(testing_allocator);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[0]); // R
         try std.testing.expectEqual(@as(u8, 0), img.pixels[1]); // G
         try std.testing.expectEqual(@as(u8, 0), img.pixels[2]); // B
@@ -702,8 +728,8 @@ pub const png = struct {
     }
 
     test "decode: 4x4 RGBA - top-right pixel is green" {
-        const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_4x4_rgba);
+        defer img.deinit(testing_allocator);
         // Pixel (3, 0): row 0, col 3 -> byte index (0*4 + 3) * 4 = 12
         try std.testing.expectEqual(@as(u8, 0), img.pixels[12]);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[13]);
@@ -712,8 +738,8 @@ pub const png = struct {
     }
 
     test "decode: 4x4 RGBA - bottom-left pixel is blue" {
-        const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_4x4_rgba);
+        defer img.deinit(testing_allocator);
         // Pixel (0, 3): row 3, col 0 -> byte (3*4 + 0) * 4 = 48
         try std.testing.expectEqual(@as(u8, 0), img.pixels[48]);
         try std.testing.expectEqual(@as(u8, 0), img.pixels[49]);
@@ -721,8 +747,8 @@ pub const png = struct {
     }
 
     test "decode: 4x4 RGBA - bottom-right pixel is white" {
-        const img: Image = try decode(std.testing.allocator, &png_4x4_rgba);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_4x4_rgba);
+        defer img.deinit(testing_allocator);
         // Pixel (3, 3) -> byte (3*4 + 3) * 4 = 60
         try std.testing.expectEqual(@as(u8, 255), img.pixels[60]);
         try std.testing.expectEqual(@as(u8, 255), img.pixels[61]);
@@ -731,8 +757,8 @@ pub const png = struct {
     }
 
     test "decode: 2x2 grayscale expands to RGBA8 with alpha=255" {
-        const img: Image = try decode(std.testing.allocator, &png_2x2_gray);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_2x2_gray);
+        defer img.deinit(testing_allocator);
         try std.testing.expectEqual(@as(u32, 2), img.width);
         try std.testing.expectEqual(@as(u32, 2), img.height);
         try std.testing.expectEqual(@as(usize, 16), img.pixels.len); // 2*2*4
@@ -749,8 +775,8 @@ pub const png = struct {
     }
 
     test "decode: 2x2 RGB expands to RGBA8 with alpha=255" {
-        const img: Image = try decode(std.testing.allocator, &png_2x2_rgb);
-        defer img.deinit(std.testing.allocator);
+        const img: Image = try decode(testing_allocator, &png_2x2_rgb);
+        defer img.deinit(testing_allocator);
         try std.testing.expectEqual(@as(u32, 2), img.width);
         try std.testing.expectEqual(@as(u32, 2), img.height);
         // Pixel (0,0) is red
@@ -1232,7 +1258,7 @@ pub const gif = struct {
     };
 
     test "gif: tiny 2x2 two-frame decode + composite" {
-        const alloc = std.testing.allocator;
+        const alloc = testing_allocator;
         const anim: Anim = try decode(alloc, &tiny_2x2_2f);
         defer anim.deinit(alloc);
         try std.testing.expectEqual(@as(u32, 2), anim.width);
@@ -1258,7 +1284,7 @@ pub const gif = struct {
     }
 
     test "gif: rejects non-gif signature" {
-        const alloc = std.testing.allocator;
+        const alloc = testing_allocator;
         try expectError(Error.InvalidSignature, decode(alloc, "NOTAGIF-------"));
     }
 };
@@ -2468,10 +2494,10 @@ pub const jpeg = struct {
                     // rounded up to the nearest 8x8 block boundary.
                     var i: usize = 0;
                     while (i < nf) : (i += 1) {
-                        const comp_w: usize = (@as(usize, width) * components[i].h + max_h - 1) / max_h;
-                        const comp_h: usize = (@as(usize, height) * components[i].v + max_v - 1) / max_v;
-                        const blocks_w: usize = (comp_w + 7) / 8;
-                        const blocks_h: usize = (comp_h + 7) / 8;
+                        const comp_w: usize = @divCeil(@as(usize, width) * components[i].h, max_h);
+                        const comp_h: usize = @divCeil(@as(usize, height) * components[i].v, max_v);
+                        const blocks_w: usize = @divCeil(comp_w, 8);
+                        const blocks_h: usize = @divCeil(comp_h, 8);
                         const stride: usize = blocks_w * 8;
                         const buf: []u8 = allocator.alloc(u8, stride * blocks_h * 8) catch {
                             return Error.OutOfMemory;
@@ -2676,8 +2702,8 @@ pub const jpeg = struct {
                     // Set up the bit reader on the entropy-coded stream
                     var br: BitReader = .{ .bytes = bytes, .cursor = cursor };
 
-                    const mcus_w: usize = (@as(usize, width) + (max_h * 8) - 1) / (max_h * 8);
-                    const mcus_h: usize = (@as(usize, height) + (max_v * 8) - 1) / (max_v * 8);
+                    const mcus_w: usize = @divCeil(@as(usize, width), max_h * 8);
+                    const mcus_h: usize = @divCeil(@as(usize, height), max_v * 8);
 
                     if (progressive) {
                         // Decode this scan's coefficients into block storage.
@@ -2965,12 +2991,12 @@ pub const jpeg = struct {
     // ------------------------------------------------------------------------
 
     test "jpeg: rejects empty input" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         try expectError(Error.UnexpectedEnd, decode(ta, &.{}));
     }
 
     test "jpeg: rejects non-jpeg" {
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const bad: []const u8 = "this is not a jpeg at all";
         try expectError(Error.InvalidSignature, decode(ta, bad));
     }
@@ -2987,7 +3013,7 @@ pub const jpeg = struct {
         // dequant+IDCT finalize pass.  Expected pixel values come from
         // decoding the same bytes with PIL, allowing some lossy-JPEG
         // tolerance.
-        const ta: Allocator = std.testing.allocator;
+        const ta: Allocator = testing_allocator;
         const data: []const u8 = &[_]u8{
             0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
             0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xDB, 0x00, 0x43,
@@ -3182,7 +3208,7 @@ pub const truetype = struct {
             if (cff == 0) {
                 return error.MissingRequiredTable;
             }
-            cff_data = try .init(cff, bytes.ptr);
+            cff_data = try CffData.init(cff, bytes.ptr);
         }
 
         const maxp: u32 = table_offsets[@backingInt(TableId.maxp)];
@@ -4426,7 +4452,7 @@ pub const truetype = struct {
         off_x: i32,
         off_y: i32,
     ) Allocator.Error!void {
-        var arena_allocator: std.heap.ArenaAllocator = std.heap.ArenaAllocator.init(gpa);
+        var arena_allocator: ArenaAllocator = .init(gpa);
         defer arena_allocator.deinit();
         const arena: Allocator = arena_allocator.allocator();
 
@@ -4643,11 +4669,11 @@ pub const truetype = struct {
                             // flip scanline vertically; signed area is the same
                             sy0 = y_bottom - (sy0 - y_top);
                             sy1 = y_bottom - (sy1 - y_top);
-                            std.mem.swap(f32, &sy0, &sy1);
-                            std.mem.swap(f32, &x_bottom, &x_top);
+                            swap(f32, &sy0, &sy1);
+                            swap(f32, &x_bottom, &x_top);
                             dx = -dx;
                             dy = -dy;
-                            std.mem.swap(f32, &x0, &xb);
+                            swap(f32, &x0, &xb);
                         }
                         assert(dy >= 0, @src());
                         assert(dx >= 0, @src());
@@ -5002,7 +5028,7 @@ pub const truetype = struct {
         pub fn init(cff_offset: u32, bytes: [*]const u8) !CffData {
             var result: CffData = .empty;
             // TODO this should use size from table (not 512MB)
-            result.cff = .init(bytes + cff_offset, 512 * 1024 * 1024);
+            result.cff = Buf.init(bytes + cff_offset, 512 * 1024 * 1024);
             var b: Buf = result.cff;
             // read the header
             b.skip(2);
@@ -5498,7 +5524,7 @@ pub const truetype = struct {
                         maskbits += (sp / 2);
                     } // implicit "vstem"
                     in_header = false;
-                    b.skip((maskbits + 7) / 8);
+                    b.skip(@divCeil(maskbits, 8));
                 },
                 Instruction.hstem.asInt(), // 0x01
                 Instruction.vstem.asInt(), // 0x03
@@ -5955,7 +5981,7 @@ pub const rectpack = struct {
         // by height; std.mem.sort is not stable but for our use case
         // (font atlas with many same-height-ish glyphs) the exact tie
         // ordering doesn't matter - we just need predictable packing.
-        std.mem.sort(Rect, rects, {}, byHeightDesc);
+        sortSlice(Rect, rects, {}, byHeightDesc);
 
         var shelf_x: u32 = 0;
         var shelf_y: u32 = 0;
@@ -6183,6 +6209,8 @@ pub const rectpack = struct {
 // UTF-8 decoder, originally from atman/zg.  See THIRD_PARTY_LICENSES.md.
 // ============================================================================
 
+const bvh_expectEqual = std.testing.expectEqual;
+
 pub const code_point = struct {
     pub const uoffset = u32;
 
@@ -6257,7 +6285,7 @@ pub const code_point = struct {
         // Second:
         var class: u4 = @intCast(u8dfa[byte]);
         var st: u32 = state_dfa[class];
-        if (st == RUNE_REJECT or cursor.* == bytes.len) {
+        if (st == rune_reject or cursor.* == bytes.len) {
             @branchHint(.cold);
             // First one is never a truncation
             return .{
@@ -6272,14 +6300,14 @@ pub const code_point = struct {
         st = state_dfa[st + class];
         rune = (byte & 0x3f) | (rune << 6);
         cursor.* += 1; // +2
-        if (st == RUNE_ACCEPT) {
+        if (st == rune_accept) {
             return .{
                 .code = @intCast(rune),
                 .len = 2,
                 .offset = this_off,
             };
         }
-        if (st == RUNE_REJECT or cursor.* == bytes.len) {
+        if (st == rune_reject or cursor.* == bytes.len) {
             @branchHint(.cold);
             // Truncation and other bad bytes the same here:
             cursor.* -= 1; // + 1
@@ -6295,19 +6323,19 @@ pub const code_point = struct {
         st = state_dfa[st + class];
         rune = (byte & 0x3f) | (rune << 6);
         cursor.* += 1; // +3
-        if (st == RUNE_ACCEPT) {
+        if (st == rune_accept) {
             return .{
                 .code = @intCast(rune),
                 .len = 3,
                 .offset = this_off,
             };
         }
-        if (st == RUNE_REJECT or cursor.* == bytes.len) {
+        if (st == rune_reject or cursor.* == bytes.len) {
             @branchHint(.cold);
             // This, and the branch below, detect truncation, the
             // only invalid state handled differently by the Maximal
             // Subparts algorithm.
-            if (state_dfa[@intCast(u8dfa[byte])] == RUNE_REJECT) {
+            if (state_dfa[@intCast(u8dfa[byte])] == rune_reject) {
                 cursor.* -= 2; // +1
                 return .{
                     .code = 0xfffd,
@@ -6328,9 +6356,9 @@ pub const code_point = struct {
         st = state_dfa[st + class];
         rune = (byte & 0x3f) | (rune << 6);
         cursor.* += 1; // +4
-        if (st == RUNE_REJECT) {
+        if (st == rune_reject) {
             @branchHint(.cold);
-            if (state_dfa[@intCast(u8dfa[byte])] == RUNE_REJECT) {
+            if (state_dfa[@intCast(u8dfa[byte])] == rune_reject) {
                 cursor.* -= 3; // +1
                 return .{
                     .code = 0xfffd,
@@ -6346,7 +6374,7 @@ pub const code_point = struct {
                 };
             }
         }
-        assert(st == RUNE_ACCEPT, @src());
+        assert(st == rune_accept, @src());
         return .{
             .code = @intCast(rune),
             .len = 4,
@@ -6377,7 +6405,7 @@ pub const code_point = struct {
         /// the last CodePoint seen.
         pub fn reverseIterator(iter: *const Iterator) ReverseIterator {
             if (iter.i == iter.bytes.len) {
-                return .init(iter.bytes);
+                return ReverseIterator.init(iter.bytes);
             }
             return .{ .i = iter.i, .bytes = iter.bytes };
         }
@@ -6400,10 +6428,10 @@ pub const code_point = struct {
     // original code may be found in the ./credits folder.
 
     /// Successful codepoint parse
-    const RUNE_ACCEPT = 0;
+    const rune_accept = 0;
 
     /// Error state
-    const RUNE_REJECT = 12;
+    const rune_reject = 12;
 
     /// Byte transitions: value to class
     const u8dfa: [256]u8 = .{
@@ -6989,7 +7017,7 @@ pub const audio = struct {
 
         test "decode: embedded test_sine.wav succeeds" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(test_sine_wav);
+            var reader: std_mod.Io.Reader = .fixed(test_sine_wav);
             const cw: CanonicalWave = try decode(ta, &reader);
             defer cw.deinit();
             try std_mod.testing.expectEqual(@as(u32, 22050), cw.sample_rate);
@@ -7003,7 +7031,7 @@ pub const audio = struct {
         test "decode: invalid signature" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             const bad: []const u8 = "NOTWAVE\x00NOTWAVE\x00NOTWAVE\x00NOTWAVE\x00";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(bad);
+            var reader: std_mod.Io.Reader = .fixed(bad);
             try std_mod.testing.expectError(
                 DecodeError.InvalidSignature,
                 decode(ta, &reader),
@@ -7012,7 +7040,7 @@ pub const audio = struct {
 
         test "decode: empty input is truncated" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed("");
+            var reader: std_mod.Io.Reader = .fixed("");
             try std_mod.testing.expectError(
                 DecodeError.TruncatedFile,
                 decode(ta, &reader),
@@ -7022,7 +7050,7 @@ pub const audio = struct {
         test "decode: WAVE header but no chunks -> data missing" {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             const just_header: []const u8 = "RIFF\x04\x00\x00\x00WAVE";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(just_header);
+            var reader: std_mod.Io.Reader = .fixed(just_header);
             try std_mod.testing.expectError(
                 DecodeError.DataChunkMissing,
                 decode(ta, &reader),
@@ -7040,7 +7068,7 @@ pub const audio = struct {
                 "\x88\x58\x01\x00" ++ "\x02\x00" ++ "\x10\x00" ++
                 "data" ++ "\x04\x00\x00\x00" ++
                 "\x00\x00" ++ "\xff\x7f";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav_bytes);
+            var reader: std_mod.Io.Reader = .fixed(wav_bytes);
             const cw: CanonicalWave = try decode(ta, &reader);
             defer cw.deinit();
             try std_mod.testing.expectEqual(@as(u32, 44100), cw.sample_rate);
@@ -7064,7 +7092,7 @@ pub const audio = struct {
                 "\x07\x00" ++ "\x01\x00" ++ "\x44\xac\x00\x00" ++
                 "\x44\xac\x00\x00" ++ "\x01\x00" ++ "\x08\x00" ++
                 "data" ++ "\x00\x00\x00\x00";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav_bytes);
+            var reader: std_mod.Io.Reader = .fixed(wav_bytes);
             try std_mod.testing.expectError(
                 DecodeError.UnsupportedFormatTag,
                 decode(ta, &reader),
@@ -7080,7 +7108,7 @@ pub const audio = struct {
                 "\x01\x00" ++ "\x01\x00" ++ "\x44\xac\x00\x00" ++
                 "\xcc\x04\x02\x00" ++ "\x03\x00" ++ "\x18\x00" ++
                 "data" ++ "\x00\x00\x00\x00";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav_bytes);
+            var reader: std_mod.Io.Reader = .fixed(wav_bytes);
             try std_mod.testing.expectError(
                 DecodeError.UnsupportedBitDepth,
                 decode(ta, &reader),
@@ -7097,7 +7125,7 @@ pub const audio = struct {
                 "\x88\x58\x01\x00" ++ "\x02\x00" ++ "\x10\x00" ++
                 "LIST" ++ "\x08\x00\x00\x00" ++ "INFOIART" ++
                 "data" ++ "\x02\x00\x00\x00" ++ "\x00\x10";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav_bytes);
+            var reader: std_mod.Io.Reader = .fixed(wav_bytes);
             const cw: CanonicalWave = try decode(ta, &reader);
             defer cw.deinit();
             try std_mod.testing.expectEqual(@as(usize, 2), cw.samples.len);
@@ -7114,7 +7142,7 @@ pub const audio = struct {
                 "\x01\x00" ++ "\x01\x00" ++ "\x44\xac\x00\x00" ++
                 "\x88\x58\x01\x00" ++ "\x02\x00" ++ "\x10\x00" ++
                 "data" ++ "\x08\x00\x00\x00" ++ "\x00\x00";
-            var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav_bytes);
+            var reader: std_mod.Io.Reader = .fixed(wav_bytes);
             try std_mod.testing.expectError(
                 DecodeError.TruncatedFile,
                 decode(ta, &reader),
@@ -7326,7 +7354,7 @@ pub const audio = struct {
             const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
             // Decode the embedded fixture, encode it back, decode again,
             // verify identity.
-            var r1: std_mod.Io.Reader = std_mod.Io.Reader.fixed(test_sine_wav);
+            var r1: std_mod.Io.Reader = .fixed(test_sine_wav);
             const cw1: CanonicalWave = try decode(ta, &r1);
             defer cw1.deinit();
 
@@ -7334,7 +7362,7 @@ pub const audio = struct {
             defer aw.deinit();
             try encode(cw1, &aw.writer, .{ .bits = 16, .format_code = .pcm });
 
-            var r2: std_mod.Io.Reader = std_mod.Io.Reader.fixed(aw.written());
+            var r2: std_mod.Io.Reader = .fixed(aw.written());
             const cw2: CanonicalWave = try decode(ta, &r2);
             defer cw2.deinit();
 
@@ -7761,22 +7789,44 @@ pub const audio = struct {
                 .ptr = undefined,
                 .vtable = &.{
                     .alloc = (struct {
-                        fn x(_: *anyopaque, _: usize, _: std_mod.mem.Alignment, _: usize) ?[*]u8 {
+                        fn x(
+                            _: *anyopaque,
+                            _: usize,
+                            _: std_mod.mem.Alignment,
+                            _: usize,
+                        ) ?[*]u8 {
                             unreachable;
                         }
                     }).x,
                     .resize = (struct {
-                        fn x(_: *anyopaque, _: []u8, _: std_mod.mem.Alignment, _: usize, _: usize) bool {
+                        fn x(
+                            _: *anyopaque,
+                            _: []u8,
+                            _: std_mod.mem.Alignment,
+                            _: usize,
+                            _: usize,
+                        ) bool {
                             unreachable;
                         }
                     }).x,
                     .remap = (struct {
-                        fn x(_: *anyopaque, _: []u8, _: std_mod.mem.Alignment, _: usize, _: usize) ?[*]u8 {
+                        fn x(
+                            _: *anyopaque,
+                            _: []u8,
+                            _: std_mod.mem.Alignment,
+                            _: usize,
+                            _: usize,
+                        ) ?[*]u8 {
                             unreachable;
                         }
                     }).x,
                     .free = (struct {
-                        fn x(_: *anyopaque, _: []u8, _: std_mod.mem.Alignment, _: usize) void {
+                        fn x(
+                            _: *anyopaque,
+                            _: []u8,
+                            _: std_mod.mem.Alignment,
+                            _: usize,
+                        ) void {
                             unreachable;
                         }
                     }).x,
@@ -7788,7 +7838,7 @@ pub const audio = struct {
     // ---- Step 7 tests
     test "toCanonical: WAV bytes -> f32 stereo at requested rate" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav.test_sine_wav);
+        var reader: std_mod.Io.Reader = .fixed(wav.test_sine_wav);
         // Source: 11025 frames at 22050 Hz mono.  Request 44100 Hz
         // stereo -> 2x upsample -> 22050 frames x 2 channels = 44100.
         const out: []f32 = try toCanonical(ta, &reader, 44100);
@@ -7801,7 +7851,7 @@ pub const audio = struct {
 
     test "toCanonical: same-rate skips resample (cheap path)" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav.test_sine_wav);
+        var reader: std_mod.Io.Reader = .fixed(wav.test_sine_wav);
         // Source rate matches requested rate -> no resample.
         const out: []f32 = try toCanonical(ta, &reader, 22050);
         defer ta.free(out);
@@ -7811,13 +7861,13 @@ pub const audio = struct {
 
     test "toCanonical: unknown signature errors" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed("\x89PNG\r\n\x1a\nthe rest is png");
+        var reader: std_mod.Io.Reader = .fixed("\x89PNG\r\n\x1a\nthe rest is png");
         try std_mod.testing.expectError(error.InvalidSignature, toCanonical(ta, &reader, 48000));
     }
 
     test "toCanonical: OGG bytes return OggRequiresAsyncDecode" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed("OggS\x00\x02\x00\x00\x00\x00");
+        var reader: std_mod.Io.Reader = .fixed("OggS\x00\x02\x00\x00\x00\x00");
         try std_mod.testing.expectError(
             error.OggRequiresAsyncDecode,
             toCanonical(ta, &reader, 48000),
@@ -7826,7 +7876,7 @@ pub const audio = struct {
 
     test "waveFromCanonical / canonicalFromWave round-trip" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        var r1: std_mod.Io.Reader = std_mod.Io.Reader.fixed(wav.test_sine_wav);
+        var r1: std_mod.Io.Reader = .fixed(wav.test_sine_wav);
         const cw1: CanonicalWave = try wav.decode(ta, &r1);
         defer cw1.deinit();
 
@@ -7881,7 +7931,7 @@ pub const audio = struct {
     test "Format.decode: ogg returns OggRequiresAsyncDecode error" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
         const bytes: []const u8 = "OggS\x00\x02";
-        var reader: std_mod.Io.Reader = std_mod.Io.Reader.fixed(bytes);
+        var reader: std_mod.Io.Reader = .fixed(bytes);
         try std_mod.testing.expectError(
             error.OggRequiresAsyncDecode,
             Format.ogg.decode(ta, &reader),
@@ -8183,7 +8233,6 @@ pub const gltf = struct {
             // before collapsing to our own Error.MalformedJson - without
             // this the caller can't distinguish "real JSON bug" from
             // "we ran out of memory growing the arena".
-            const dom = @import("web.zig").dom;
             var buf: [160]u8 = undefined;
             const msg: []const u8 = std_mod.fmt.bufPrint(
                 &buf,
@@ -8197,7 +8246,7 @@ pub const gltf = struct {
             // bad JSON and (b) misreport an expected rejection as a
             // fault.  The caller that turns a glTF load failure into a
             // user-visible problem is the right place to log at .err.
-            dom.log(.warn, msg);
+            platform.current.log(.warn, msg);
             return Error.MalformedJson;
         };
         defer parsed.deinit();
@@ -8947,7 +8996,7 @@ pub const gltf = struct {
         const positions = [_]f32{ 1, 2, 3, 4, 5, 6 };
         @memcpy(&src_buf, std_mod.mem.sliceAsBytes(positions[0..]));
 
-        var arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var arena: std_mod.heap.ArenaAllocator = .init(ta);
         defer arena.deinit();
         const aalloc: std_mod.mem.Allocator = arena.allocator();
         const bufs = try aalloc.alloc(Buffer, 1);
@@ -8957,7 +9006,7 @@ pub const gltf = struct {
 
         // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
-        var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var owned_arena: std_mod.heap.ArenaAllocator = .init(ta);
         const data: Data = .{
             .arena = &owned_arena,
             .buffers = bufs,
@@ -8987,7 +9036,7 @@ pub const gltf = struct {
         const indices = [_]u16{ 0, 1, 2, 0, 2, 3 };
         @memcpy(&src_buf, std_mod.mem.sliceAsBytes(indices[0..]));
 
-        var arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var arena: std_mod.heap.ArenaAllocator = .init(ta);
         defer arena.deinit();
         const aalloc: std_mod.mem.Allocator = arena.allocator();
         const bufs = try aalloc.alloc(Buffer, 1);
@@ -8997,7 +9046,7 @@ pub const gltf = struct {
 
         // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
-        var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var owned_arena: std_mod.heap.ArenaAllocator = .init(ta);
         var d: Data = .{
             .arena = &owned_arena,
             .buffers = bufs,
@@ -9021,7 +9070,7 @@ pub const gltf = struct {
         var src_buf: [24]u8 = undefined;
         @memset(&src_buf, 0);
 
-        var arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var arena: std_mod.heap.ArenaAllocator = .init(ta);
         defer arena.deinit();
         const aalloc: std_mod.mem.Allocator = arena.allocator();
         const bufs = try aalloc.alloc(Buffer, 1);
@@ -9031,7 +9080,7 @@ pub const gltf = struct {
 
         // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
-        var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var owned_arena: std_mod.heap.ArenaAllocator = .init(ta);
         var d: Data = .{
             .arena = &owned_arena,
             .buffers = bufs,
@@ -9459,7 +9508,7 @@ pub const gltf = struct {
         @memcpy(src_buf[36..42], std_mod.mem.sliceAsBytes(indices[0..]));
 
         // Build a mock Data.
-        var arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var arena: std_mod.heap.ArenaAllocator = .init(ta);
         defer arena.deinit();
         const aalloc: std_mod.mem.Allocator = arena.allocator();
         const bufs = try aalloc.alloc(Buffer, 1);
@@ -9473,7 +9522,7 @@ pub const gltf = struct {
 
         // * A local the `Data` BORROWS. It never moves, so `d.arena.deinit()` sees the
         // allocations it actually made.
-        var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var owned_arena: std_mod.heap.ArenaAllocator = .init(ta);
         var d: Data = .{
             .arena = &owned_arena,
             .buffers = bufs,
@@ -9510,7 +9559,7 @@ pub const gltf = struct {
 
     test "gltf.meshesFromGltf: returns MissingRequiredField when no meshes" {
         const ta: std_mod.mem.Allocator = std_mod.testing.allocator;
-        var owned_arena: std_mod.heap.ArenaAllocator = std_mod.heap.ArenaAllocator.init(ta);
+        var owned_arena: std_mod.heap.ArenaAllocator = .init(ta);
         var d: Data = .{ .arena = &owned_arena };
         defer d.arena.deinit();
         try std_mod.testing.expectError(Error.MissingRequiredField, meshesFromGltf(ta, d));
@@ -9650,9 +9699,9 @@ pub const stl = struct {
     }
 
     fn parseAscii(gpa: Allocator, bytes: []const u8) Error!Mesh {
-        var positions: std.ArrayListUnmanaged(f32) = .empty;
+        var positions: ArrayListUnmanaged(f32) = .empty;
         errdefer positions.deinit(gpa);
-        var normals: std.ArrayListUnmanaged(f32) = .empty;
+        var normals: ArrayListUnmanaged(f32) = .empty;
         errdefer normals.deinit(gpa);
 
         // Token-driven rather than line-driven: real ASCII STL varies in whitespace and
@@ -9660,11 +9709,11 @@ pub const stl = struct {
         // `facet normal` and `vertex` actually carry data.
         var it: std.mem.TokenIterator(u8, .any) = std.mem.tokenizeAny(u8, bytes, " \t\r\n");
         while (it.next()) |token| {
-            if (std.mem.eql(u8, token, "normal")) {
+            if (eql(u8, token, "normal")) {
                 for (0..3) |_| {
                     try normals.append(gpa, try nextFloat(&it));
                 }
-            } else if (std.mem.eql(u8, token, "vertex")) {
+            } else if (eql(u8, token, "vertex")) {
                 for (0..3) |_| {
                     try positions.append(gpa, try nextFloat(&it));
                 }
@@ -9687,7 +9736,7 @@ pub const stl = struct {
 
     fn nextFloat(it: *std.mem.TokenIterator(u8, .any)) Error!f32 {
         const token: []const u8 = it.next() orelse return Error.BadAscii;
-        return std.fmt.parseFloat(f32, token) catch Error.BadAscii;
+        return parseFloat(f32, token) catch Error.BadAscii;
     }
 };
 
@@ -9769,15 +9818,22 @@ pub const xml = struct {
         /// Span into `Document.elements`. Children are contiguous and in document order.
         child_start: u32,
         child_count: u32,
-        /// Text directly inside this element, trimmed. Empty for the overwhelming majority of
-        /// robot-file elements, which carry their data in attributes.
+        /// Text inside this element before its first child, trimmed - for an element without
+        /// children, all of its text. Empty for the overwhelming majority of robot-file elements,
+        /// which carry their data in attributes.
         text: []const u8,
+        /// Text after this element's end tag, before its next sibling or its parent's end tag,
+        /// trimmed. With `text` it recovers MIXED CONTENT in order - an element's text, then each
+        /// child followed by that child's tail - which is how `vk.xml` writes C declarations:
+        /// `<member>const <type>void</type>* <name>pNext</name></member>` is the text "const",
+        /// then `type` with tail "*", then `name`.
+        tail: []const u8 = "",
         /// Line the element opened on, for error messages the caller wants to produce.
         line: u32,
     };
 
     pub const Document = struct {
-        arena: *std.heap.ArenaAllocator,
+        arena: *ArenaAllocator,
         elements: []Element,
         attributes: []Attribute,
         /// Index of the root in `elements`.
@@ -9808,7 +9864,7 @@ pub const xml = struct {
             name: []const u8,
         ) ?*const Element {
             for (self.childrenOf(element)) |*candidate| {
-                if (std.mem.eql(u8, candidate.name, name)) {
+                if (eql(u8, candidate.name, name)) {
                     return candidate;
                 }
             }
@@ -9822,7 +9878,7 @@ pub const xml = struct {
             name: []const u8,
         ) ?[]const u8 {
             for (self.attributes[element.attribute_start..][0..element.attribute_count]) |attr| {
-                if (std.mem.eql(u8, attr.name, name)) {
+                if (eql(u8, attr.name, name)) {
                     return attr.value;
                 }
             }
@@ -9837,9 +9893,9 @@ pub const xml = struct {
         source: []const u8,
         diagnostic: ?*Diagnostic,
     ) Error!Document {
-        var arena: *std.heap.ArenaAllocator = try gpa.create(std.heap.ArenaAllocator);
+        var arena: *ArenaAllocator = try gpa.create(ArenaAllocator);
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
 
         var parser: Parser = .{
@@ -9865,8 +9921,8 @@ pub const xml = struct {
         arena: Allocator,
         diagnostic: ?*Diagnostic,
 
-        elements: std.ArrayListUnmanaged(Element) = .empty,
-        attributes: std.ArrayListUnmanaged(Attribute) = .empty,
+        elements: ArrayListUnmanaged(Element) = .empty,
+        attributes: ArrayListUnmanaged(Attribute) = .empty,
         root: ?u32 = null,
 
         /// Scratch for one element's children while its subtree is being read.
@@ -9877,7 +9933,7 @@ pub const xml = struct {
         /// its finished children on a stack and copies them into `elements` in one block when
         /// the element closes. The copy is what buys the flat, cache-friendly layout; without it
         /// the tree would need per-node pointers.
-        pending: std.ArrayListUnmanaged(Element) = .empty,
+        pending: ArrayListUnmanaged(Element) = .empty,
 
         fn fail(self: *Parser, err: Error, context: []const u8) Error {
             if (self.diagnostic) |d| {
@@ -9921,7 +9977,7 @@ pub const xml = struct {
             while (true) {
                 try self.skipSpaceAndComments();
                 if (self.startsWith("<?xml")) {
-                    const end: usize = std.mem.indexOfPos(u8, self.source, self.pos, "?>") orelse
+                    const end: usize = indexOfPos(u8, self.source, self.pos, "?>") orelse
                         return self.fail(Error.UnexpectedEndOfInput, "xml declaration");
                     self.advanceTo(end + 2);
                     continue;
@@ -9958,7 +10014,7 @@ pub const xml = struct {
                 // Duplicates are an error, not a last-wins. A file with `xyz` twice is a file
                 // whose author believed something untrue about it.
                 for (self.attributes.items[attribute_start..]) |existing| {
-                    if (std.mem.eql(u8, existing.name, attr.name)) {
+                    if (eql(u8, existing.name, attr.name)) {
                         return self.fail(Error.DuplicateAttribute, attr.name);
                     }
                 }
@@ -9986,16 +10042,18 @@ pub const xml = struct {
             self.advanceTo(self.pos + 1); // past '>'
 
             // ---- content ----
+            // A text segment before the first child is this element's `text`; one after a child is
+            // that child's `tail` (the first non-empty segment in each place).
             const pending_base: usize = self.pending.items.len;
             var text: []const u8 = "";
             while (true) {
                 const text_start: usize = self.pos;
-                const next: usize = std.mem.indexOfScalarPos(u8, self.source, self.pos, '<') orelse
+                const next: usize = indexOfScalarPos(u8, self.source, self.pos, '<') orelse
                     return self.fail(Error.UnexpectedEndOfInput, name);
                 if (next > text_start) {
-                    const raw: []const u8 = std.mem.trim(u8, self.source[text_start..next], " \t\r\n");
-                    if (raw.len > 0 and text.len == 0) {
-                        text = raw;
+                    const raw: []const u8 = trim(u8, self.source[text_start..next], " \t\r\n");
+                    if (raw.len > 0) {
+                        self.placeText(pending_base, &text, raw);
                     }
                 }
                 self.advanceTo(next);
@@ -10003,7 +10061,7 @@ pub const xml = struct {
                 if (self.startsWith("</")) {
                     self.advanceTo(self.pos + 2);
                     const closing: []const u8 = self.readName();
-                    if (!std.mem.eql(u8, closing, name)) {
+                    if (!eql(u8, closing, name)) {
                         return self.fail(Error.MismatchedClosingTag, name);
                     }
                     self.skipSpace();
@@ -10018,11 +10076,9 @@ pub const xml = struct {
                     continue;
                 }
                 if (self.startsWith("<![CDATA[")) {
-                    const end: usize = std.mem.indexOfPos(u8, self.source, self.pos, "]]>") orelse
+                    const end: usize = indexOfPos(u8, self.source, self.pos, "]]>") orelse
                         return self.fail(Error.UnexpectedEndOfInput, name);
-                    if (text.len == 0) {
-                        text = self.source[self.pos + 9 .. end];
-                    }
+                    self.placeText(pending_base, &text, self.source[self.pos + 9 .. end]);
                     self.advanceTo(end + 3);
                     continue;
                 }
@@ -10051,6 +10107,27 @@ pub const xml = struct {
             };
         }
 
+        /// Records a text segment where it belongs: as the element's `text` while no child has been
+        /// read at this level (`pending_base` marks where this level's children start), otherwise as
+        /// the most recent child's `tail`. The first non-empty segment in each place is kept.
+        fn placeText(
+            self: *Parser,
+            pending_base: usize,
+            text: *[]const u8,
+            segment: []const u8,
+        ) void {
+            if (self.pending.items.len == pending_base) {
+                if (text.len == 0) {
+                    text.* = segment;
+                }
+                return;
+            }
+            const last_child: *Element = &self.pending.items[self.pending.items.len - 1];
+            if (last_child.tail.len == 0) {
+                last_child.tail = segment;
+            }
+        }
+
         fn parseAttribute(self: *Parser, context: []const u8) Error!Attribute {
             const name: []const u8 = self.readName();
             if (name.len == 0) {
@@ -10071,7 +10148,7 @@ pub const xml = struct {
             }
             self.advanceTo(self.pos + 1);
             const value_start: usize = self.pos;
-            const close: usize = std.mem.indexOfScalarPos(u8, self.source, self.pos, quote) orelse
+            const close: usize = indexOfScalarPos(u8, self.source, self.pos, quote) orelse
                 return self.fail(Error.MalformedAttribute, name);
             const raw: []const u8 = self.source[value_start..close];
             self.advanceTo(close + 1);
@@ -10089,10 +10166,10 @@ pub const xml = struct {
             raw: []const u8,
             context: []const u8,
         ) Error![]const u8 {
-            if (std.mem.indexOfScalar(u8, raw, '&') == null) {
+            if (indexOfScalar(u8, raw, '&') == null) {
                 return raw;
             }
-            var out: std.ArrayListUnmanaged(u8) = .empty;
+            var out: ArrayListUnmanaged(u8) = .empty;
             try out.ensureTotalCapacity(self.arena, raw.len);
             var i: usize = 0;
             while (i < raw.len) {
@@ -10101,18 +10178,18 @@ pub const xml = struct {
                     i += 1;
                     continue;
                 }
-                const semi: usize = std.mem.indexOfScalarPos(u8, raw, i, ';') orelse
+                const semi: usize = indexOfScalarPos(u8, raw, i, ';') orelse
                     return self.fail(Error.UnknownEntity, context);
                 const entity: []const u8 = raw[i + 1 .. semi];
-                const replacement: u8 = if (std.mem.eql(u8, entity, "lt"))
+                const replacement: u8 = if (eql(u8, entity, "lt"))
                     '<'
-                else if (std.mem.eql(u8, entity, "gt"))
+                else if (eql(u8, entity, "gt"))
                     '>'
-                else if (std.mem.eql(u8, entity, "amp"))
+                else if (eql(u8, entity, "amp"))
                     '&'
-                else if (std.mem.eql(u8, entity, "quot"))
+                else if (eql(u8, entity, "quot"))
                     '"'
-                else if (std.mem.eql(u8, entity, "apos"))
+                else if (eql(u8, entity, "apos"))
                     '\''
                 else
                     return self.fail(Error.UnknownEntity, context);
@@ -10123,14 +10200,14 @@ pub const xml = struct {
         }
 
         fn skipComment(self: *Parser) Error!void { // lint:off useless-error-return: errors via self.fail()
-            const end: usize = std.mem.indexOfPos(u8, self.source, self.pos, "-->") orelse
+            const end: usize = indexOfPos(u8, self.source, self.pos, "-->") orelse
                 return self.fail(Error.UnexpectedEndOfInput, "comment");
             self.advanceTo(end + 3);
         }
 
         fn skipSpaceAndComments(self: *Parser) Error!void { // lint:off useless-error-return: errors via self.fail()
             while (self.startsWithCommentAfterSpace()) {
-                const end: usize = std.mem.indexOfPos(u8, self.source, self.pos, "-->") orelse
+                const end: usize = indexOfPos(u8, self.source, self.pos, "-->") orelse
                     return self.fail(Error.UnexpectedEndOfInput, "comment");
                 self.advanceTo(end + 3);
             }
@@ -10244,7 +10321,7 @@ pub const obj = struct {
             var indices: ArrayList(u32) = .empty;
             errdefer indices.deinit(gpa);
 
-            var seen: std.AutoHashMapUnmanaged(VertexKey, u32) = .empty;
+            var seen: AutoHashMapUnmanaged(VertexKey, u32) = .empty;
             defer seen.deinit(gpa);
 
             const had_normals: bool = self.normals.len > 0;
@@ -10377,7 +10454,7 @@ pub const obj = struct {
 
     fn parseFloatTok(it: *std.mem.TokenIterator(u8, .any)) !f32 {
         const tok: []const u8 = it.next() orelse return error.TooFewComponents;
-        return std.fmt.parseFloat(f32, tok);
+        return parseFloat(f32, tok);
     }
 
     /// Resolve one OBJ index field (1-based, or negative-from-end) to 0-based,
@@ -10386,7 +10463,7 @@ pub const obj = struct {
         if (tok.len == 0) {
             return null;
         }
-        const raw: i64 = try std.fmt.parseInt(i64, tok, 10);
+        const raw: i64 = try parseInt(i64, tok, 10);
         if (raw < 0) {
             const from_end: i64 = @as(i64, @intCast(pool_count)) + raw;
             if (from_end < 0) {
@@ -10413,7 +10490,7 @@ pub const obj = struct {
         var face_lengths: ArrayList(u32) = .empty;
         errdefer face_lengths.deinit(gpa);
 
-        var lines = std.mem.splitScalar(u8, bytes, '\n');
+        var lines = splitScalar(u8, bytes, '\n');
         while (lines.next()) |raw_line| {
             var line: []const u8 = raw_line;
             if (line.len > 0 and line[line.len - 1] == '\r') {
@@ -10421,22 +10498,22 @@ pub const obj = struct {
             }
             var it = std.mem.tokenizeAny(u8, line, " \t");
             const kind: []const u8 = it.next() orelse continue;
-            if (std.mem.eql(u8, kind, "v")) {
+            if (eql(u8, kind, "v")) {
                 try positions.append(gpa, try parseFloatTok(&it));
                 try positions.append(gpa, try parseFloatTok(&it));
                 try positions.append(gpa, try parseFloatTok(&it));
-            } else if (std.mem.eql(u8, kind, "vt")) {
+            } else if (eql(u8, kind, "vt")) {
                 try tex_coords.append(gpa, try parseFloatTok(&it));
-                const v: f32 = if (it.next()) |tok| try std.fmt.parseFloat(f32, tok) else 0;
+                const v: f32 = if (it.next()) |tok| try parseFloat(f32, tok) else 0;
                 try tex_coords.append(gpa, v);
-            } else if (std.mem.eql(u8, kind, "vn")) {
+            } else if (eql(u8, kind, "vn")) {
                 try normals.append(gpa, try parseFloatTok(&it));
                 try normals.append(gpa, try parseFloatTok(&it));
                 try normals.append(gpa, try parseFloatTok(&it));
-            } else if (std.mem.eql(u8, kind, "f")) {
+            } else if (eql(u8, kind, "f")) {
                 var count: u32 = 0;
                 while (it.next()) |corner_tok| {
-                    var parts = std.mem.splitScalar(u8, corner_tok, '/');
+                    var parts = splitScalar(u8, corner_tok, '/');
                     const v_tok: []const u8 = parts.next() orelse return error.TooFewComponents;
                     const position: u32 = (try resolveIndex(v_tok, positions.items.len / 3)) orelse
                         return error.BadIndex;
@@ -10480,8 +10557,8 @@ pub const obj = struct {
             \\vt 1 0
             \\vn 0 0 1
         ;
-        var data: Data = try parse(std.testing.allocator, src);
-        defer data.deinit(std.testing.allocator);
+        var data: Data = try parse(testing_allocator, src);
+        defer data.deinit(testing_allocator);
         try std.testing.expectEqual(@as(usize, 9), data.positions.len);
         try std.testing.expectEqual(@as(usize, 4), data.tex_coords.len);
         try std.testing.expectEqual(@as(usize, 3), data.normals.len);
@@ -10496,13 +10573,13 @@ pub const obj = struct {
             \\v 0 1 0
             \\f 1 2 3 4
         ;
-        var data: Data = try parse(std.testing.allocator, src);
-        defer data.deinit(std.testing.allocator);
+        var data: Data = try parse(testing_allocator, src);
+        defer data.deinit(testing_allocator);
         try std.testing.expectEqual(@as(usize, 1), data.face_lengths.len);
         try std.testing.expectEqual(@as(u32, 4), data.face_lengths[0]);
 
-        var mesh: Mesh = try data.toMesh(std.testing.allocator);
-        defer mesh.deinit(std.testing.allocator);
+        var mesh: Mesh = try data.toMesh(testing_allocator);
+        defer mesh.deinit(testing_allocator);
         try std.testing.expectEqual(@as(usize, 4), mesh.vertexCount());
         try std.testing.expectEqual(@as(usize, 6), mesh.indices.len);
         try std.testing.expect(!mesh.had_normals); // synthesized
@@ -10518,15 +10595,15 @@ pub const obj = struct {
             \\vn 0 0 1
             \\f -3//-1 -2//-1 -1//-1
         ;
-        var data: Data = try parse(std.testing.allocator, src);
-        defer data.deinit(std.testing.allocator);
+        var data: Data = try parse(testing_allocator, src);
+        defer data.deinit(testing_allocator);
         try std.testing.expectEqual(@as(usize, 3), data.corners.len);
         try std.testing.expectEqual(@as(u32, 0), data.corners[0].position);
         try std.testing.expectEqual(@as(?u32, null), data.corners[0].tex_coord);
         try std.testing.expectEqual(@as(?u32, 0), data.corners[0].normal);
 
-        var mesh: Mesh = try data.toMesh(std.testing.allocator);
-        defer mesh.deinit(std.testing.allocator);
+        var mesh: Mesh = try data.toMesh(testing_allocator);
+        defer mesh.deinit(testing_allocator);
         try std.testing.expectEqual(@as(usize, 3), mesh.vertexCount());
         try std.testing.expect(mesh.had_normals);
     }
@@ -10538,8 +10615,8 @@ pub const obj = struct {
 
 const xml_expect = std.testing.expect;
 const xml_expectEqual = std.testing.expectEqual;
-const xml_expectEqualStrings = std.testing.expectEqualStrings;
-const xml_expectError = std.testing.expectError;
+const xml_expectEqualStrings = expectEqualStrings;
+const xml_expectError = expectError;
 
 test "xml: a URDF-shaped document parses into the expected tree" {
     const source: []const u8 =
@@ -10558,7 +10635,7 @@ test "xml: a URDF-shaped document parses into the expected tree" {
         \\  </joint>
         \\</robot>
     ;
-    var doc: xml.Document = try xml.parse(std.testing.allocator, source, null);
+    var doc: xml.Document = try xml.parse(testing_allocator, source, null);
     defer doc.deinit();
 
     const root: *const xml.Element = doc.rootElement();
@@ -10576,6 +10653,37 @@ test "xml: a URDF-shaped document parses into the expected tree" {
     try xml_expectEqualStrings("base", doc.attribute(doc.child(joint, "parent").?, "link").?);
 }
 
+test "xml: mixed content keeps its order through text and tail" {
+    // Two `vk.xml` members: C declarations written as text interleaved with elements.
+    const source: []const u8 =
+        \\<types>
+        \\  <member>const <type>void</type>* <name>pNext</name></member>
+        \\  <member><type>char</type> <name>deviceName</name>[<enum>VK_MAX_PHYSICAL_DEVICE_NAME_SIZE</enum>]</member>
+        \\</types>
+    ;
+    var doc: xml.Document = try xml.parse(testing_allocator, source, null);
+    defer doc.deinit();
+    const members: []const xml.Element = doc.childrenOf(doc.rootElement());
+    try expectEqual(@as(usize, 2), members.len);
+
+    // "const", then `void` followed by "*", then `pNext`.
+    const pointer_member: []const xml.Element = doc.childrenOf(&members[0]);
+    try expectEqualStrings("const", members[0].text);
+    try expectEqualStrings("void", pointer_member[0].text);
+    try expectEqualStrings("*", pointer_member[0].tail);
+    try expectEqualStrings("pNext", pointer_member[1].text);
+    try expectEqualStrings("", pointer_member[1].tail);
+
+    // An array bound written with an enumerant: the brackets are the name's tail and the enumerant's.
+    const array_member: []const xml.Element = doc.childrenOf(&members[1]);
+    try expectEqualStrings("", members[1].text);
+    try expectEqualStrings("char", array_member[0].text);
+    try expectEqualStrings("deviceName", array_member[1].text);
+    try expectEqualStrings("[", array_member[1].tail);
+    try expectEqualStrings("VK_MAX_PHYSICAL_DEVICE_NAME_SIZE", array_member[2].text);
+    try expectEqualStrings("]", array_member[2].tail);
+}
+
 test "xml: children are contiguous even with nested grandchildren" {
     // * The structural property the pending-stack exists for. `a` has three children and
     // each has its own subtree; if subtrees were appended as they were parsed, `a`'s
@@ -10587,7 +10695,7 @@ test "xml: children are contiguous even with nested grandchildren" {
         \\  <d/>
         \\</a>
     ;
-    var doc: xml.Document = try xml.parse(std.testing.allocator, source, null);
+    var doc: xml.Document = try xml.parse(testing_allocator, source, null);
     defer doc.deinit();
 
     const a: *const xml.Element = doc.rootElement();
@@ -10614,7 +10722,7 @@ test "xml: malformed input fails with a line number instead of guessing" {
     };
     for (cases) |case| {
         var diagnostic: xml.Diagnostic = .{};
-        try xml_expectError(case.err, xml.parse(std.testing.allocator, case.source, &diagnostic));
+        try xml_expectError(case.err, xml.parse(testing_allocator, case.source, &diagnostic));
         try xml_expectEqual(case.line, diagnostic.line);
     }
 }
@@ -10626,7 +10734,7 @@ test "xml: entities, CDATA, quotes and text content" {
         \\  <c><![CDATA[raw < > & stuff]]></c>
         \\</a>
     ;
-    var doc: xml.Document = try xml.parse(std.testing.allocator, source, null);
+    var doc: xml.Document = try xml.parse(testing_allocator, source, null);
     defer doc.deinit();
     const a: *const xml.Element = doc.rootElement();
     try xml_expectEqualStrings("one & two", doc.attribute(a, "title").?);
@@ -10639,7 +10747,7 @@ test "xml: an attribute without entities is not copied" {
     // The cheap path, asserted rather than assumed: the returned value must be a slice INTO
     // the source, since that is what makes parsing a large file allocation-light.
     const source: []const u8 = "<a name=\"base_link\"/>";
-    var doc: xml.Document = try xml.parse(std.testing.allocator, source, null);
+    var doc: xml.Document = try xml.parse(testing_allocator, source, null);
     defer doc.deinit();
     const value: []const u8 = doc.attribute(doc.rootElement(), "name").?;
     const offset: usize = @intFromPtr(value.ptr) - @intFromPtr(source.ptr);
@@ -10656,7 +10764,7 @@ test "xml: the real KUKA iiwa URDF parses, with its topology intact" {
     // values in every notation a CAD exporter emits.
     const source: []const u8 = @embedFile("tests/fixtures/robot/kuka_iiwa.urdf");
     var diagnostic: xml.Diagnostic = .{};
-    var doc: xml.Document = try xml.parse(std.testing.allocator, source, &diagnostic);
+    var doc: xml.Document = try xml.parse(testing_allocator, source, &diagnostic);
     defer doc.deinit();
 
     const root: *const xml.Element = doc.rootElement();
@@ -10667,12 +10775,12 @@ test "xml: the real KUKA iiwa URDF parses, with its topology intact" {
     var joints: u32 = 0;
     var inertials: u32 = 0;
     for (doc.childrenOf(root)) |*element| {
-        if (std.mem.eql(u8, element.name, "link")) {
+        if (eql(u8, element.name, "link")) {
             links += 1;
             if (doc.child(element, "inertial") != null) {
                 inertials += 1;
             }
-        } else if (std.mem.eql(u8, element.name, "joint")) {
+        } else if (eql(u8, element.name, "joint")) {
             joints += 1;
             // Every joint must resolve a parent and a child, or the tree cannot be built.
             try xml_expect(doc.child(element, "parent") != null);
@@ -10696,9 +10804,9 @@ test "xml: deep nesting does not blow anything up" {
     // Robot files nest shallowly, but a link chain expressed as nested elements is a
     // plausible generated shape, and a recursive-descent parser should say where its limit
     // is rather than discover it in the field.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const depth: usize = 200;
-    var source: std.ArrayListUnmanaged(u8) = .empty;
+    var source: ArrayListUnmanaged(u8) = .empty;
     defer source.deinit(gpa);
     for (0..depth) |_| {
         try source.appendSlice(gpa, "<n>");
@@ -10722,8 +10830,8 @@ test "xml: deep nesting does not blow anything up" {
 
 const stl_expect = std.testing.expect;
 const stl_expectEqual = std.testing.expectEqual;
-const stl_expectError = std.testing.expectError;
-const stl_expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const stl_expectError = expectError;
+const stl_expectApproxEqAbs = expectApproxEqAbs;
 
 test "stl: a real KUKA collision mesh parses" {
     // * THE ACTUAL FILE the URDF names for `lbr_iiwa_link_0`'s collision geometry, checked
@@ -10733,8 +10841,8 @@ test "stl: a real KUKA collision mesh parses" {
     const bytes: []const u8 = @embedFile("tests/fixtures/robot/meshes/link_0.stl");
     try stl_expect(stl.isBinary(bytes));
 
-    const mesh: stl.Mesh = try stl.parse(std.testing.allocator, bytes);
-    defer mesh.deinit(std.testing.allocator);
+    const mesh: stl.Mesh = try stl.parse(testing_allocator, bytes);
+    defer mesh.deinit(testing_allocator);
     try stl_expectEqual(@as(usize, 3038), mesh.triangleCount());
     try stl_expectEqual(@as(usize, 3038 * 9), mesh.positions.len);
     try stl_expectEqual(@as(usize, 3038 * 3), mesh.normals.len);
@@ -10767,15 +10875,15 @@ test "stl: a BINARY file whose header starts with 'solid' is still detected as b
     // file as ASCII, finds no `vertex` tokens, and produces an EMPTY MESH. The failure looks
     // like a corrupt file rather than a misdetection, which is the worst place for it to
     // surface.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const triangles: usize = 2;
     var bytes: []u8 = try gpa.alloc(u8, 84 + triangles * 50);
     defer gpa.free(bytes);
     @memset(bytes, 0);
     @memcpy(bytes[0..21], "solid exported_by_cad");
-    std.mem.writeInt(u32, bytes[80..84], @intCast(triangles), .little);
+    writeInt(u32, bytes[80..84], @intCast(triangles), .little);
     // One triangle with a recognisable first vertex.
-    std.mem.writeInt(u32, bytes[84 + 12 ..][0..4], @bitCast(@as(f32, 1.5)), .little);
+    writeInt(u32, bytes[84 + 12 ..][0..4], @bitCast(@as(f32, 1.5)), .little);
 
     try stl_expect(stl.isBinary(bytes));
     const mesh: stl.Mesh = try stl.parse(gpa, bytes);
@@ -10804,8 +10912,8 @@ test "stl: ASCII parses, and is not mistaken for binary" {
         \\endsolid tetra
     ;
     try stl_expect(!stl.isBinary(source));
-    const mesh: stl.Mesh = try stl.parse(std.testing.allocator, source);
-    defer mesh.deinit(std.testing.allocator);
+    const mesh: stl.Mesh = try stl.parse(testing_allocator, source);
+    defer mesh.deinit(testing_allocator);
     try stl_expectEqual(@as(usize, 2), mesh.triangleCount());
     try stl_expectApproxEqAbs(@as(f32, 1), mesh.positions[3], 1.0e-6); // second vertex x
     // Second facet normal is `0 1 0`, so the 1 is at index 4 - the y component of the
@@ -10814,7 +10922,7 @@ test "stl: ASCII parses, and is not mistaken for binary" {
 }
 
 test "stl: malformed input is refused rather than silently truncated" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // Text with no triangles at all.
     try stl_expectError(stl.Error.BadAscii, stl.parse(gpa, "solid empty\nendsolid empty"));
     // A vertex line missing a coordinate - would otherwise shift every following number.
@@ -10826,7 +10934,7 @@ test "stl: malformed input is refused rather than silently truncated" {
     // falls through to the ASCII reader and is refused there rather than reading past the
     // end of the buffer.
     var truncated: [200]u8 = @splat(0);
-    std.mem.writeInt(u32, truncated[80..84], 9999, .little);
+    writeInt(u32, truncated[80..84], 9999, .little);
     try stl_expect(!stl.isBinary(&truncated));
 }
 
@@ -10987,7 +11095,7 @@ pub const fbx = struct {
     };
 
     pub const Document = struct {
-        arena: *std.heap.ArenaAllocator,
+        arena: *ArenaAllocator,
         /// FBX version times 1000: 7400 is FBX 2014/2015, 7500 is 2016+. The header layout CHANGES
         /// at 7500 (64-bit offsets), so this is not decoration.
         version: u32,
@@ -11012,7 +11120,7 @@ pub const fbx = struct {
         /// unlike BVH's.
         pub fn child(self: *const Document, parent: Node, name: []const u8) ?Node {
             for (parent.children(self)) |c| {
-                if (std.mem.eql(u8, c.name, name)) {
+                if (eql(u8, c.name, name)) {
                     return c;
                 }
             }
@@ -11032,14 +11140,14 @@ pub const fbx = struct {
     /// True if `bytes` opens with the FBX binary magic. ASCII FBX exists and is a different parser
     /// entirely; this reader refuses it rather than half-reading it.
     pub fn isBinary(bytes: []const u8) bool {
-        return bytes.len >= magic.len and std.mem.eql(u8, bytes[0..magic.len], magic);
+        return bytes.len >= magic.len and eql(u8, bytes[0..magic.len], magic);
     }
 
     /// True when the head looks like an ASCII FBX - they open with a `;` comment naming the
     /// format. Used only to turn "not an FBX" into the more useful "ASCII FBX".
     pub fn looksAscii(bytes: []const u8) bool {
         const head: []const u8 = bytes[0..@min(bytes.len, 256)];
-        return std.mem.indexOf(u8, head, "FBX") != null and
+        return indexOf(u8, head, "FBX") != null and
             (head.len > 0 and (head[0] == ';' or head[0] == '\n' or head[0] == '\r'));
     }
 
@@ -11064,10 +11172,10 @@ pub const fbx = struct {
             return Error.UnsupportedVersion;
         }
 
-        const arena: *std.heap.ArenaAllocator = gpa.create(std.heap.ArenaAllocator) catch
+        const arena: *ArenaAllocator = gpa.create(ArenaAllocator) catch
             return Error.OutOfMemory;
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
 
         // * ONE window buffer for the whole parse, not an empty slice per array.
@@ -11126,13 +11234,13 @@ pub const fbx = struct {
         /// Scratch window for the inflater, allocated ONCE for the whole parse.
         window: []u8,
 
-        nodes: std.ArrayListUnmanaged(Node) = .empty,
-        values: std.ArrayListUnmanaged(Value) = .empty,
+        nodes: ArrayListUnmanaged(Node) = .empty,
+        values: ArrayListUnmanaged(Value) = .empty,
         /// Scratch for one level's finished children, so they can be copied into `nodes` as one
         /// contiguous block. Identical reasoning to `codecs.xml`'s `pending`: a child's own subtree
         /// is parsed before the next sibling is known, so appending directly would interleave
         /// grandchildren between siblings and destroy the span layout.
-        pending: std.ArrayListUnmanaged(Node) = .empty,
+        pending: ArrayListUnmanaged(Node) = .empty,
 
         fn take(self: *Parser, n: usize) Error![]const u8 {
             // Subtraction, not addition: `pos + n` can wrap when `n` comes from a corrupt
@@ -11305,7 +11413,7 @@ pub const fbx = struct {
 
             if (encoding == 0) {
                 const raw: []const u8 = try self.take(want);
-                @memcpy(std.mem.sliceAsBytes(out), raw);
+                @memcpy(sliceAsBytes(out), raw);
                 return out;
             }
             if (encoding != 1) {
@@ -11317,8 +11425,8 @@ pub const fbx = struct {
             // decompressor's internal rebase path, which asserts against the (empty) window
             // buffer and panics with an integer overflow.
             const payload: []const u8 = try self.take(encoded);
-            const dst: []u8 = std.mem.sliceAsBytes(out);
-            var reader: std.Io.Reader = .fixed(payload);
+            const dst: []u8 = sliceAsBytes(out);
+            var reader: Io.Reader = .fixed(payload);
             var decompress: std.compress.flate.Decompress = .init(&reader, .zlib, self.window);
             decompress.reader.readSliceAll(dst) catch return Error.BadCompression;
             return out;
@@ -11385,7 +11493,7 @@ pub const fbx = struct {
                 .{ "AnimationCurve", ObjectKind.animation_curve },
             };
             inline for (table) |e| {
-                if (std.mem.eql(u8, name, e[0])) {
+                if (eql(u8, name, e[0])) {
                     return e[1];
                 }
             }
@@ -11491,7 +11599,7 @@ pub const fbx = struct {
                     continue;
                 }
                 const pname: []const u8 = vs[0].asString() orelse continue;
-                if (!std.mem.eql(u8, pname, name)) {
+                if (!eql(u8, pname, name)) {
                     continue;
                 }
                 return .{
@@ -11511,8 +11619,8 @@ pub const fbx = struct {
         errdefer doc.deinit();
         const arena: Allocator = doc.arena.allocator();
 
-        var objects: std.ArrayListUnmanaged(Object) = .empty;
-        var by_id: std.AutoHashMapUnmanaged(i64, u32) = .empty;
+        var objects: ArrayListUnmanaged(Object) = .empty;
+        var by_id: AutoHashMapUnmanaged(i64, u32) = .empty;
 
         if (doc.child(doc.rootNode(), "Objects")) |objects_node| {
             for (objects_node.children(&doc)) |rec_node| {
@@ -11535,7 +11643,7 @@ pub const fbx = struct {
             }
         }
 
-        var conns: std.ArrayListUnmanaged(Connection) = .empty;
+        var conns: ArrayListUnmanaged(Connection) = .empty;
         if (doc.child(doc.rootNode(), "Connections")) |conns_node| {
             for (conns_node.children(&doc)) |c| {
                 const vs: []const Value = c.values(&doc);
@@ -11545,7 +11653,7 @@ pub const fbx = struct {
                 const kind: []const u8 = vs[0].asString() orelse continue;
                 const src_id: i64 = vs[1].asInt() orelse continue;
                 const dst_id: i64 = vs[2].asInt() orelse continue;
-                const is_op: bool = std.mem.eql(u8, kind, "OP");
+                const is_op: bool = eql(u8, kind, "OP");
                 try conns.append(arena, .{
                     .src = by_id.get(src_id) orelse no_object,
                     .dst = by_id.get(dst_id) orelse no_object,
@@ -11607,7 +11715,7 @@ pub const fbx = struct {
     /// Split `"Hips\x00\x01Model"` into `"Hips"` and `"Model"`.
     fn splitName(raw: []const u8) SplitName {
         const sep: []const u8 = &.{ 0x00, 0x01 };
-        if (std.mem.indexOf(u8, raw, sep)) |i| {
+        if (indexOf(u8, raw, sep)) |i| {
             return .{ .name = raw[0..i], .class = raw[i + 2 ..] };
         }
         return .{ .name = raw, .class = "" };
@@ -12203,11 +12311,11 @@ pub const fbx = struct {
                     continue;
                 }
             }
-            const target: *[3]f64 = if (std.mem.eql(u8, c.property, "Lcl Translation"))
+            const target: *[3]f64 = if (eql(u8, c.property, "Lcl Translation"))
                 &p.translation
-            else if (std.mem.eql(u8, c.property, "Lcl Rotation"))
+            else if (eql(u8, c.property, "Lcl Rotation"))
                 &p.rotation
-            else if (std.mem.eql(u8, c.property, "Lcl Scaling"))
+            else if (eql(u8, c.property, "Lcl Scaling"))
                 &p.scale
             else
                 continue;
@@ -12222,11 +12330,11 @@ pub const fbx = struct {
                 if (curve_obj.kind != .animation_curve) {
                     continue;
                 }
-                const axis: usize = if (std.mem.eql(u8, cc.property, "d|X"))
+                const axis: usize = if (eql(u8, cc.property, "d|X"))
                     0
-                else if (std.mem.eql(u8, cc.property, "d|Y"))
+                else if (eql(u8, cc.property, "d|Y"))
                     1
-                else if (std.mem.eql(u8, cc.property, "d|Z"))
+                else if (eql(u8, cc.property, "d|Z"))
                     2
                 else
                     continue;
@@ -12269,16 +12377,16 @@ pub const fbx = struct {
         unsupported,
 
         pub fn parse(text: []const u8) MappingMode {
-            if (std.mem.eql(u8, text, "ByVertice") or std.mem.eql(u8, text, "ByControlPoint")) {
+            if (eql(u8, text, "ByVertice") or eql(u8, text, "ByControlPoint")) {
                 return .by_control_point;
             }
-            if (std.mem.eql(u8, text, "ByPolygonVertex")) {
+            if (eql(u8, text, "ByPolygonVertex")) {
                 return .by_polygon_vertex;
             }
-            if (std.mem.eql(u8, text, "ByPolygon")) {
+            if (eql(u8, text, "ByPolygon")) {
                 return .by_polygon;
             }
-            if (std.mem.eql(u8, text, "AllSame")) {
+            if (eql(u8, text, "AllSame")) {
                 return .all_same;
             }
             return .unsupported;
@@ -12361,8 +12469,8 @@ pub const fbx = struct {
             const vs: []const Value = r.values(&scene.doc);
             if (vs.len > 0) {
                 const text: []const u8 = vs[0].asString() orelse "";
-                out.indexed = std.mem.eql(u8, text, "IndexToDirect") or
-                    std.mem.eql(u8, text, "Index");
+                out.indexed = eql(u8, text, "IndexToDirect") or
+                    eql(u8, text, "Index");
             }
         }
         if (scene.doc.child(el, data_name)) |d| {
@@ -12389,7 +12497,7 @@ pub const fbx = struct {
 
     /// A triangulated, GPU-ready mesh.
     pub const MeshData = struct {
-        arena: *std.heap.ArenaAllocator,
+        arena: *ArenaAllocator,
         /// 3 floats per vertex.
         positions: []const f32,
         /// 3 per vertex; all zero when the geometry carried no normals.
@@ -12474,29 +12582,29 @@ pub const fbx = struct {
             2,
         );
 
-        const arena: *std.heap.ArenaAllocator = gpa.create(std.heap.ArenaAllocator) catch
+        const arena: *ArenaAllocator = gpa.create(ArenaAllocator) catch
             return Error.OutOfMemory;
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         const a: Allocator = arena.allocator();
 
-        var positions: std.ArrayListUnmanaged(f32) = .empty;
-        var out_normals: std.ArrayListUnmanaged(f32) = .empty;
-        var out_uvs: std.ArrayListUnmanaged(f32) = .empty;
-        var indices: std.ArrayListUnmanaged(u32) = .empty;
-        var sources: std.ArrayListUnmanaged(u32) = .empty;
+        var positions: ArrayListUnmanaged(f32) = .empty;
+        var out_normals: ArrayListUnmanaged(f32) = .empty;
+        var out_uvs: ArrayListUnmanaged(f32) = .empty;
+        var indices: ArrayListUnmanaged(u32) = .empty;
+        var sources: ArrayListUnmanaged(u32) = .empty;
         defer positions.deinit(gpa);
         defer out_normals.deinit(gpa);
         defer out_uvs.deinit(gpa);
         defer indices.deinit(gpa);
         defer sources.deinit(gpa);
 
-        var weld: std.AutoHashMapUnmanaged(WeldKey, u32) = .empty;
+        var weld: AutoHashMapUnmanaged(WeldKey, u32) = .empty;
         defer weld.deinit(gpa);
 
         // Corners of the polygon being accumulated, as emitted vertex indices.
-        var polygon: std.ArrayListUnmanaged(u32) = .empty;
+        var polygon: ArrayListUnmanaged(u32) = .empty;
         defer polygon.deinit(gpa);
 
         for (corners, 0..) |raw, corner| {
@@ -12586,7 +12694,7 @@ pub const fbx = struct {
     pub const max_influences: usize = 4;
 
     pub const SkinData = struct {
-        arena: *std.heap.ArenaAllocator,
+        arena: *ArenaAllocator,
         /// `max_influences` per vertex, indexing the JOINT array - not FBX objects.
         bone_indices: []const u8,
         /// `max_influences` per vertex, summing to 1 for any influenced vertex.
@@ -12639,29 +12747,29 @@ pub const fbx = struct {
         mesh: MeshData,
         joint_of_object: []const i32,
     ) Error!SkinData {
-        const arena: *std.heap.ArenaAllocator = gpa.create(std.heap.ArenaAllocator) catch
+        const arena: *ArenaAllocator = gpa.create(ArenaAllocator) catch
             return Error.OutOfMemory;
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         const a: Allocator = arena.allocator();
 
-        var influences: std.ArrayListUnmanaged(Influence) = .empty;
+        var influences: ArrayListUnmanaged(Influence) = .empty;
         defer influences.deinit(gpa);
-        var bind_links: std.ArrayListUnmanaged(BindLink) = .empty;
+        var bind_links: ArrayListUnmanaged(BindLink) = .empty;
         defer bind_links.deinit(gpa);
 
         // Walk Skin -> Cluster -> Model for this geometry. Both edge directions are checked
         // because exporters disagree about which end is the source.
         for (scene.objects, 0..) |skin, skin_i| {
-            if (skin.kind != .deformer or !std.mem.eql(u8, skin.sub_class, "Skin")) {
+            if (skin.kind != .deformer or !eql(u8, skin.sub_class, "Skin")) {
                 continue;
             }
             if (!connected(scene, @intCast(skin_i), geometryIndexOf(scene, geometry))) {
                 continue;
             }
             for (scene.objects, 0..) |cluster, cluster_i| {
-                if (cluster.kind != .deformer or !std.mem.eql(u8, cluster.sub_class, "Cluster")) {
+                if (cluster.kind != .deformer or !eql(u8, cluster.sub_class, "Cluster")) {
                     continue;
                 }
                 if (!connected(scene, @intCast(cluster_i), @intCast(skin_i))) {
@@ -13247,11 +13355,11 @@ pub const fbx = struct {
     /// Builds a binary FBX byte stream. Records are written depth-first; `beginNode`/`endNode`
     /// bracket a child list, matching the file's own nesting.
     pub const Writer = struct {
-        buf: std.ArrayListUnmanaged(u8) = .empty,
+        buf: ArrayListUnmanaged(u8) = .empty,
         gpa: Allocator,
         version: u32,
         /// Offsets of the end-offset fields still to be back-patched, innermost last.
-        open: std.ArrayListUnmanaged(usize) = .empty,
+        open: ArrayListUnmanaged(usize) = .empty,
 
         pub fn init(gpa: Allocator, version: u32) Writer {
             return .{ .gpa = gpa, .version = version };
@@ -13272,12 +13380,12 @@ pub const fbx = struct {
         }
         fn u32_(self: *Writer, v: u32) !void {
             var b: [4]u8 = undefined;
-            std.mem.writeInt(u32, &b, v, .little);
+            writeInt(u32, &b, v, .little);
             try self.buf.appendSlice(self.gpa, &b);
         }
         fn u64_(self: *Writer, v: u64) !void {
             var b: [8]u8 = undefined;
-            std.mem.writeInt(u64, &b, v, .little);
+            writeInt(u64, &b, v, .little);
             try self.buf.appendSlice(self.gpa, &b);
         }
 
@@ -13308,9 +13416,9 @@ pub const fbx = struct {
             const end_field: usize = self.open.pop().?;
             const here: u64 = self.buf.items.len;
             if (self.version >= 7500) {
-                std.mem.writeInt(u64, self.buf.items[end_field..][0..8], here, .little);
+                writeInt(u64, self.buf.items[end_field..][0..8], here, .little);
             } else {
-                std.mem.writeInt(u32, self.buf.items[end_field..][0..4], @intCast(here), .little);
+                writeInt(u32, self.buf.items[end_field..][0..4], @intCast(here), .little);
             }
         }
 
@@ -13323,13 +13431,13 @@ pub const fbx = struct {
         pub fn valueI32(self: *Writer, v: i32) !void {
             try self.u8_('I');
             var b: [4]u8 = undefined;
-            std.mem.writeInt(i32, &b, v, .little);
+            writeInt(i32, &b, v, .little);
             try self.buf.appendSlice(self.gpa, &b);
         }
         pub fn valueI64(self: *Writer, v: i64) !void {
             try self.u8_('L');
             var b: [8]u8 = undefined;
-            std.mem.writeInt(i64, &b, v, .little);
+            writeInt(i64, &b, v, .little);
             try self.buf.appendSlice(self.gpa, &b);
         }
         pub fn valueF64(self: *Writer, v: f64) !void {
@@ -13347,20 +13455,19 @@ pub const fbx = struct {
             try self.u32_(@intCast(vs.len));
             try self.u32_(0);
             try self.u32_(@intCast(vs.len * @sizeOf(f64)));
-            try self.buf.appendSlice(self.gpa, std.mem.sliceAsBytes(vs));
+            try self.buf.appendSlice(self.gpa, sliceAsBytes(vs));
         }
         /// A ZLIB-DEFLATED i64 array (encoding 1) - the shape real files use for key times.
         pub fn valueI64ArrayDeflated(self: *Writer, vs: []const i64) !void {
             // Same shape as `codecs.png`'s `deflateZlib`: Compress.init asserts the output
             // buffer is longer than 8 bytes, so the Allocating writer cannot start empty, and the
             // deflater needs its own window buffer.
-            const raw: []const u8 = std.mem.sliceAsBytes(vs);
-            var aw: std.Io.Writer.Allocating = try .initCapacity(self.gpa, 256);
+            const raw: []const u8 = sliceAsBytes(vs);
+            var aw: Io.Writer.Allocating = try .initCapacity(self.gpa, 256);
             defer aw.deinit();
             const window: []u8 = try self.gpa.alloc(u8, std.compress.flate.max_window_len);
             defer self.gpa.free(window);
-            var compress: std.compress.flate.Compress =
-                try std.compress.flate.Compress.init(&aw.writer, window, .zlib, .default);
+            var compress: std.compress.flate.Compress = try .init(&aw.writer, window, .zlib, .default);
             try compress.writer.writeAll(raw);
             try compress.finish();
             const bytes: []const u8 = aw.written();
@@ -13490,7 +13597,7 @@ pub const bvh = struct {
     /// shape as `xml.Document`, and for the same reason: a document is freed all at once or not
     /// at all, and per-field frees are a source of leaks nobody notices.
     pub const Data = struct {
-        arena: *std.heap.ArenaAllocator,
+        arena: *ArenaAllocator,
         joints: []const Joint,
         frame_count: usize,
         /// Columns per motion row, summed over every joint. End sites contribute zero.
@@ -13527,10 +13634,10 @@ pub const bvh = struct {
         source: []const u8,
         diagnostic: ?*Diagnostic,
     ) Error!Data {
-        const arena: *std.heap.ArenaAllocator = gpa.create(std.heap.ArenaAllocator) catch
+        const arena: *ArenaAllocator = gpa.create(ArenaAllocator) catch
             return Error.OutOfMemory;
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
 
         var parser: Parser = .{
@@ -13560,11 +13667,11 @@ pub const bvh = struct {
         arena: Allocator,
         diagnostic: ?*Diagnostic,
 
-        joints: std.ArrayListUnmanaged(Joint) = .empty,
+        joints: ArrayListUnmanaged(Joint) = .empty,
         /// The joint an OFFSET or CHANNELS applies to - the most recently opened one.
         current: i32 = -1,
         /// Parents of the open braces, so `}` can restore the right one.
-        open: std.ArrayListUnmanaged(i32) = .empty,
+        open: ArrayListUnmanaged(i32) = .empty,
         channel_count: usize = 0,
         frame_count: usize = 0,
         frame_time: f32 = 0,
@@ -13605,12 +13712,12 @@ pub const bvh = struct {
 
         fn nextFloat(self: *Parser, err: Error) Error!f32 {
             const t: []const u8 = self.it.next() orelse return self.fail(err, "end of input");
-            return std.fmt.parseFloat(f32, t) catch self.fail(err, t);
+            return parseFloat(f32, t) catch self.fail(err, t);
         }
 
         fn nextUsize(self: *Parser, err: Error) Error!usize {
             const t: []const u8 = self.it.next() orelse return self.fail(err, "end of input");
-            return std.fmt.parseInt(usize, t, 10) catch self.fail(err, t);
+            return parseInt(usize, t, 10) catch self.fail(err, t);
         }
 
         fn run(self: *Parser) Error!void {
@@ -13658,7 +13765,7 @@ pub const bvh = struct {
                     self.joints.items[@intCast(self.current)].name
                 else
                     "Root";
-                break :blk try std.fmt.allocPrint(self.arena, "{s}_end", .{parent_name});
+                break :blk try allocPrint(self.arena, "{s}_end", .{parent_name});
             } else blk: {
                 const t: []const u8 = self.it.next() orelse
                     return self.fail(Error.MalformedHierarchy, "joint without a name");
@@ -13762,9 +13869,9 @@ pub const bvh = struct {
     /// stores values like `1.81973137e-05`; `{d:.6}` flattens those to `0.000000`, and the
     /// round-trip test would then fail for a formatting reason unrelated to parsing.
     pub fn encode(gpa: Allocator, data: Data) Error![]u8 {
-        var out: std.ArrayListUnmanaged(u8) = .empty;
+        var out: ArrayListUnmanaged(u8) = .empty;
         errdefer out.deinit(gpa);
-        const w: *std.ArrayListUnmanaged(u8) = &out;
+        const w: *ArrayListUnmanaged(u8) = &out;
 
         try w.appendSlice(gpa, "HIERARCHY\n");
 
@@ -13836,7 +13943,7 @@ pub const bvh = struct {
         return n;
     }
 
-    fn indent(w: *std.ArrayListUnmanaged(u8), gpa: Allocator, depth: usize) Error!void {
+    fn indent(w: *ArrayListUnmanaged(u8), gpa: Allocator, depth: usize) Error!void {
         try w.appendNTimes(gpa, '\t', depth);
     }
 
@@ -13960,7 +14067,7 @@ pub const bvh = struct {
                 const names_match: bool = if (opts.ignore_case)
                     std.ascii.eqlIgnoreCase(bare_target_name, bare_source_name)
                 else
-                    std.mem.eql(u8, bare_target_name, bare_source_name);
+                    eql(u8, bare_target_name, bare_source_name);
 
                 if (names_match) {
                     source_of_target[target_joint] = @intCast(source_joint);
@@ -14047,7 +14154,7 @@ pub const bvh = struct {
     pub fn restBoneOrientations(
         parents: []const i32,
         rest_offsets: []const Vec,
-        out_rest_orientations: []zm.Quat,
+        out_rest_orientations: []Quat,
     ) void {
         const joint_count: usize = parents.len;
 
@@ -14099,7 +14206,7 @@ pub const bvh = struct {
     }
 
     /// The shortest rotation taking +Y onto `target_direction`.
-    fn shortestArcFromY(target_direction: Vec) zm.Quat {
+    fn shortestArcFromY(target_direction: Vec) Quat {
         const reference: Vec = vec(0, 1, 0);
         const alignment: f32 = reference[0] * target_direction[0] +
             reference[1] * target_direction[1] +
@@ -14155,8 +14262,8 @@ pub const bvh = struct {
     /// `pose_global_rotations` is that pose's world rotation per joint; this simply copies it,
     /// and exists so callers read a name that says what the values MEAN.
     pub fn referenceOrientationsFromPose(
-        pose_global_rotations: []const zm.Quat,
-        out_reference_orientations: []zm.Quat,
+        pose_global_rotations: []const Quat,
+        out_reference_orientations: []Quat,
     ) void {
         const joint_count: usize = @min(pose_global_rotations.len, out_reference_orientations.len);
         for (0..joint_count) |joint| {
@@ -14175,9 +14282,9 @@ pub const bvh = struct {
     /// so authoring it by hand is transcribing something the files already state.
     pub fn restAlignmentOffsets(
         source_of_target: []const i32,
-        source_rest_orientations: []const zm.Quat,
-        target_rest_orientations: []const zm.Quat,
-        out_alignment: []zm.Quat,
+        source_rest_orientations: []const Quat,
+        target_rest_orientations: []const Quat,
+        out_alignment: []Quat,
     ) void {
         for (source_of_target, 0..) |matched_source, target_joint| {
             const has_matching_source: bool = matched_source != no_source;
@@ -14185,8 +14292,8 @@ pub const bvh = struct {
                 out_alignment[target_joint] = zm.quat_identity;
                 continue;
             }
-            const source_rest: zm.Quat = source_rest_orientations[@intCast(matched_source)];
-            const target_rest: zm.Quat = target_rest_orientations[target_joint];
+            const source_rest: Quat = source_rest_orientations[@intCast(matched_source)];
+            const target_rest: Quat = target_rest_orientations[target_joint];
             out_alignment[target_joint] = zm.qmul(zm.conjugate(source_rest), target_rest);
         }
     }
@@ -14194,10 +14301,10 @@ pub const bvh = struct {
     pub fn retargetRotations(
         target_parents: []const i32,
         source_of_target: []const i32,
-        source_global_rotations: []const zm.Quat,
-        rest_alignment: []const zm.Quat,
-        out_target_local_rotations: []zm.Quat,
-        out_target_global_rotations: []zm.Quat,
+        source_global_rotations: []const Quat,
+        rest_alignment: []const Quat,
+        out_target_local_rotations: []Quat,
+        out_target_global_rotations: []Quat,
     ) void {
         const target_joint_count: usize = target_parents.len;
 
@@ -14209,7 +14316,7 @@ pub const bvh = struct {
             assert(parent_joint < @as(i32, @intCast(target_joint)), @src());
 
             const joint_is_root: bool = parent_joint < 0;
-            const parent_global_rotation: zm.Quat = if (joint_is_root)
+            const parent_global_rotation: Quat = if (joint_is_root)
                 zm.quat_identity
             else
                 out_target_global_rotations[@intCast(parent_joint)];
@@ -14232,16 +14339,16 @@ pub const bvh = struct {
             // * Without the correction a Mixamo leg receives a LAFAN1 leg's orientation and
             // bends backwards, because their rest bones point in opposite directions
             // (measured: dot = -1.000). See `restAlignmentOffsets`.
-            const source_global_rotation: zm.Quat =
+            const source_global_rotation: Quat =
                 source_global_rotations[@intCast(matched_source_joint)];
-            const desired_global_rotation: zm.Quat =
+            const desired_global_rotation: Quat =
                 zm.qmul(source_global_rotation, rest_alignment[target_joint]);
 
             // Turn that world-space goal into a rotation relative to the parent, which is what
             // an animation channel stores. Undoing the parent's rotation is a CONJUGATE
             // because a unit quaternion's inverse is its conjugate.
-            const undo_parent_rotation: zm.Quat = zm.conjugate(parent_global_rotation);
-            const local_rotation: zm.Quat =
+            const undo_parent_rotation: Quat = zm.conjugate(parent_global_rotation);
+            const local_rotation: Quat =
                 zm.qmul(undo_parent_rotation, desired_global_rotation);
 
             out_target_local_rotations[target_joint] = local_rotation;
@@ -14311,10 +14418,10 @@ pub const bvh = struct {
         scene: *const fbx.Scene,
         opts: FromFbxOptions,
     ) Error!Data {
-        const arena: *std.heap.ArenaAllocator = gpa.create(std.heap.ArenaAllocator) catch
+        const arena: *ArenaAllocator = gpa.create(ArenaAllocator) catch
             return Error.OutOfMemory;
         errdefer gpa.destroy(arena);
-        arena.* = .init(gpa);
+        arena.* = ArenaAllocator.init(gpa);
         errdefer arena.deinit();
         const arena_alloc: Allocator = arena.allocator();
 
@@ -14453,7 +14560,7 @@ pub const bvh = struct {
         arena: Allocator,
         gpa: Allocator,
         opts: FromFbxOptions,
-        joints: std.ArrayListUnmanaged(Joint) = .empty,
+        joints: ArrayListUnmanaged(Joint) = .empty,
         /// One bit per FBX object, so a cycle in `Connections` cannot be walked twice.
         visited: std.DynamicBitSetUnmanaged,
         /// How this scene identifies bones. Resolved once by `detectJointRule`.
@@ -14463,7 +14570,7 @@ pub const bvh = struct {
         parent_is_joint: bool = false,
         /// Parallel to `joints`: the FBX object index each came from. End Sites reuse their
         /// parent's, and never read it.
-        sources: std.ArrayListUnmanaged(u32) = .empty,
+        sources: ArrayListUnmanaged(u32) = .empty,
 
         /// FBX's own spellings for a skeleton joint. `LimbNode` is what every exporter here
         /// writes; `Limb` is the older form and `Root` appears in some rigs.
@@ -14478,7 +14585,7 @@ pub const bvh = struct {
 
         fn subtypeIn(sub: []const u8, list: []const []const u8) bool {
             for (list) |candidate| {
-                if (std.mem.eql(u8, sub, candidate)) {
+                if (eql(u8, sub, candidate)) {
                     return true;
                 }
             }
@@ -14522,7 +14629,7 @@ pub const bvh = struct {
                 }
             }
             for (scene.objects) |o| {
-                if (o.kind == .deformer and std.mem.eql(u8, o.sub_class, "Cluster")) {
+                if (o.kind == .deformer and eql(u8, o.sub_class, "Cluster")) {
                     return .by_skin_cluster;
                 }
             }
@@ -14546,7 +14653,7 @@ pub const bvh = struct {
                     continue;
                 }
                 const o: fbx.Object = self.scene.objects[other];
-                if (o.kind == .deformer and std.mem.eql(u8, o.sub_class, "Cluster")) {
+                if (o.kind == .deformer and eql(u8, o.sub_class, "Cluster")) {
                     return true;
                 }
             }
@@ -14656,7 +14763,7 @@ pub const bvh = struct {
             // A leaf gets a synthesised End Site so its bone has a length to draw. FBX has no
             // equivalent; flomo invents one the same way.
             if (children == 0) {
-                const en: []u8 = std.fmt.allocPrint(self.arena, "{s}_end", .{o.name}) catch
+                const en: []u8 = allocPrint(self.arena, "{s}_end", .{o.name}) catch
                     return Error.OutOfMemory;
                 self.joints.append(self.gpa, .{
                     .parent = me,
@@ -14690,10 +14797,8 @@ pub const bvh = struct {
 
 const bvh_synth = @import("bvh_synth.zig");
 const bvh_expect = std.testing.expect;
-const bvh_expectEqual = std.testing.expectEqual;
-const bvh_expectError = std.testing.expectError;
-const bvh_expectApproxEqAbs = std.testing.expectApproxEqAbs;
-const bvh_expectEqualSlices = std.testing.expectEqualSlices;
+const bvh_expectError = expectError;
+const bvh_expectApproxEqAbs = expectApproxEqAbs;
 
 fn bvh_qmul(a: [4]f32, b: [4]f32) [4]f32 {
     return .{
@@ -14723,7 +14828,7 @@ fn bvh_qrot(q: [4]f32, v: [3]f32) [3]f32 {
 
 /// Sample one frame then run forward kinematics - the reference semantics, written here so
 /// the test does not depend on engine code that does not exist yet.
-fn bvh_fk(gpa: std.mem.Allocator, d: bvh.Data, frame: usize) ![]const [3]f32 {
+fn bvh_fk(gpa: Allocator, d: bvh.Data, frame: usize) ![]const [3]f32 {
     const n: usize = d.joints.len;
     const lp: [][3]f32 = try gpa.alloc([3]f32, n);
     defer gpa.free(lp);
@@ -14784,11 +14889,11 @@ fn bvh_fk(gpa: std.mem.Allocator, d: bvh.Data, frame: usize) ![]const [3]f32 {
 /// to skip through this function, because the silent path below RETURNS NORMALLY - a test
 /// whose fixture is absent reports GREEN having asserted nothing. That is the failure mode
 /// worth knowing about if you add a fixture-backed test: guard it explicitly.
-fn bvh_readFixture(gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+fn bvh_readFixture(gpa: Allocator, path: []const u8) !?[]u8 {
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var f: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+    const io: Io = threaded.io();
+    var f: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.warn("(fixture {s} not present; skipping)", .{path});
             return null;
@@ -14796,7 +14901,7 @@ fn bvh_readFixture(gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
         else => return err,
     };
     defer f.close(io);
-    const st: std.Io.File.Stat = try f.stat(io);
+    const st: Io.File.Stat = try f.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     errdefer gpa.free(bytes);
     _ = try f.readPositionalAll(io, bytes, 0);
@@ -14805,7 +14910,7 @@ fn bvh_readFixture(gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
 
 fn bvh_findJoint(d: bvh.Data, name: []const u8) usize {
     for (d.joints, 0..) |j, i| {
-        if (std.mem.eql(u8, j.name, name)) {
+        if (eql(u8, j.name, name)) {
             return i;
         }
     }
@@ -14813,7 +14918,7 @@ fn bvh_findJoint(d: bvh.Data, name: []const u8) usize {
 }
 
 test "bvh: dance1 - 6 channels on every joint, ZYX order" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/dance1_subject2_300.bvh");
     if (maybe == null) {
         return;
@@ -14849,7 +14954,7 @@ test "bvh: dance1 - 6 channels on every joint, ZYX order" {
 }
 
 test "bvh: 2FeetJump - 6/3 layout, XYZ order, 120fps" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/0005_2FeetJump001.bvh");
     if (maybe == null) {
         return;
@@ -14891,7 +14996,7 @@ test "bvh: 2FeetJump - 6/3 layout, XYZ order, 120fps" {
 }
 
 test "bvh: synthetic - a rest-pose chain has a closed-form FK answer" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const src: []u8 = try bvh_synth.generate(gpa, .{ .joint_count = 3, .frame_count = 2, .bone_length = 10.0 });
     defer gpa.free(src);
     var d: bvh.Data = try bvh.parse(gpa, src, null);
@@ -14910,7 +15015,7 @@ test "bvh: synthetic - a rest-pose chain has a closed-form FK answer" {
 }
 
 test "bvh: synthetic - Z-up puts the chain on Z, the path no real fixture reaches" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const src: []u8 = try bvh_synth.generate(gpa, .{
         .joint_count = 3,
         .frame_count = 1,
@@ -14927,7 +15032,7 @@ test "bvh: synthetic - Z-up puts the chain on Z, the path no real fixture reache
 }
 
 test "bvh: rotation order changes the pose - proof the composition is data-driven" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // Same 45 deg on the first rotation channel, different declared orders. The first
     // channel differs (Z vs X), so an implementation that ignored `channels` would give
     // the same answer for both.
@@ -14960,7 +15065,7 @@ test "bvh: rotation order changes the pose - proof the composition is data-drive
 }
 
 test "bvh: malformed input is refused, and the diagnostic says where" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var diag: bvh.Diagnostic = .{};
 
     try bvh_expectError(
@@ -14993,7 +15098,7 @@ test "bvh: malformed input is refused, and the diagnostic says where" {
 }
 
 test "bvh: keywords are case-insensitive, as real files require" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const src: []const u8 =
         "hierarchy\nroot a\n{\noffset 0 0 0\nchannels 3 xrotation yrotation zrotation\n" ++
         "}\nmotion\nFrames: 1\nFrame Time: 0.03\n0 0 0\n";
@@ -15025,7 +15130,7 @@ fn bvh_expectSameData(a: bvh.Data, b: bvh.Data) !void {
 }
 
 test "bvh: parse -> encode -> parse is lossless for every generated variant" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // Sweep the axes the two real fixtures disagree on, plus the ones neither covers.
     const orders = [_]bvh_synth.RotationOrder{ .zyx, .xyz, .zxy };
     const layouts = [_]bvh_synth.ChannelLayout{ .root_only, .all_joints };
@@ -15058,7 +15163,7 @@ test "bvh: parse -> encode -> parse is lossless for every generated variant" {
 }
 
 test "bvh: round trip survives a real capture, tiny values and all" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/0005_2FeetJump001.bvh");
     if (maybe == null) {
         return;
@@ -15075,7 +15180,7 @@ test "bvh: round trip survives a real capture, tiny values and all" {
 }
 
 test "bvh: the encoder rebuilds nesting from parents, not from a depth counter" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // A branching skeleton: root -> (a -> a_end) and root -> b. The generator only makes
     // chains, so this one is written out by hand - closing the right number of braces when a
     // branch ends is exactly what a chain cannot exercise.
@@ -15102,9 +15207,9 @@ test "bvh: the encoder rebuilds nesting from parents, not from a depth counter" 
 
 const fbx_expect = std.testing.expect;
 const fbx_expectEqual = std.testing.expectEqual;
-const fbx_expectError = std.testing.expectError;
-const fbx_expectEqualSlices = std.testing.expectEqualSlices;
-const fbx_expectApproxEqAbs = std.testing.expectApproxEqAbs;
+const fbx_expectError = expectError;
+const fbx_expectEqualSlices = expectEqualSlices;
+const fbx_expectApproxEqAbs = expectApproxEqAbs;
 
 /// A small document with a nested record, one of each scalar, and both array encodings.
 fn fbx_buildSample(gpa: Allocator, version: u32) ![]u8 {
@@ -15135,7 +15240,7 @@ fn fbx_buildSample(gpa: Allocator, version: u32) ![]u8 {
 }
 
 test "fbx: container round-trips through both header widths (7400 and 7500)" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // * The header widens from 13 to 25 bytes at 7500. Reading the wrong width does not fail
     // loudly - it yields a plausible end offset and the parse walks into the middle of a
     // record - so both must be exercised.
@@ -15165,7 +15270,7 @@ test "fbx: container round-trips through both header widths (7400 and 7500)" {
 }
 
 test "fbx: arrays survive both encodings, including zlib-deflated" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bytes: []u8 = try fbx_buildSample(gpa, 7500);
     defer gpa.free(bytes);
     var doc: fbx.Document = try fbx.parse(gpa, bytes);
@@ -15186,7 +15291,7 @@ test "fbx: arrays survive both encodings, including zlib-deflated" {
 }
 
 test "fbx: children are a contiguous span, with no phantom holder levels" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const bytes: []u8 = try fbx_buildSample(gpa, 7500);
     defer gpa.free(bytes);
     var doc: fbx.Document = try fbx.parse(gpa, bytes);
@@ -15207,7 +15312,7 @@ test "fbx: children are a contiguous span, with no phantom holder levels" {
 }
 
 test "fbx: non-FBX and truncated input are refused" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     try fbx_expectError(fbx.Error.BadMagic, fbx.parse(gpa, "not an fbx file at all........."));
     try fbx_expectError(fbx.Error.BadMagic, fbx.parse(gpa, "short"));
     // Correct fbx.magic, nothing after it.
@@ -15217,10 +15322,10 @@ test "fbx: non-FBX and truncated input are refused" {
 /// Read a fixture, or skip when absent. See `bvh_readFixture` for the `assets/` (tracked)
 /// versus `intake/` (not tracked) split that makes the skip path necessary.
 fn fbx_readFixture(gpa: Allocator, path: []const u8) !?[]u8 {
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var f: std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+    const io: Io = threaded.io();
+    var f: Io.File = Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => {
             std.log.warn("(fixture {s} not present; skipping)", .{path});
             return null;
@@ -15228,7 +15333,7 @@ fn fbx_readFixture(gpa: Allocator, path: []const u8) !?[]u8 {
         else => return err,
     };
     defer f.close(io);
-    const st: std.Io.File.Stat = try f.stat(io);
+    const st: Io.File.Stat = try f.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, st.size);
     errdefer gpa.free(bytes);
     _ = try f.readPositionalAll(io, bytes, 0);
@@ -15241,7 +15346,7 @@ fn fbx_findObject(
     name: []const u8,
 ) ?fbx.Object {
     for (scene.objects) |o| {
-        if (o.kind == kind and std.mem.eql(u8, o.name, name)) {
+        if (o.kind == kind and eql(u8, o.name, name)) {
             return o;
         }
     }
@@ -15249,7 +15354,7 @@ fn fbx_findObject(
 }
 
 test "fbx scene: the real capture resolves into the measured object census" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15280,7 +15385,7 @@ test "fbx scene: the real capture resolves into the measured object census" {
 }
 
 test "fbx scene: names are split at the \\x00\\x01 separator" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15298,7 +15403,7 @@ test "fbx scene: names are split at the \\x00\\x01 separator" {
 }
 
 test "fbx scene: static Lcl Translation matches the BVH's golden offsets" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15326,7 +15431,7 @@ test "fbx scene: static Lcl Translation matches the BVH's golden offsets" {
 }
 
 test "fbx scene: connections resolve the three-hop animation path" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15351,10 +15456,10 @@ test "fbx scene: connections resolve the three-hop animation path" {
             curve_to_node += 1;
         }
         if (src.kind == .animation_curve_node and dst.kind == .model) {
-            if (std.mem.eql(u8, c.property, "Lcl Rotation")) {
+            if (eql(u8, c.property, "Lcl Rotation")) {
                 node_to_model_rot += 1;
             }
-            if (std.mem.eql(u8, c.property, "Lcl Translation")) {
+            if (eql(u8, c.property, "Lcl Translation")) {
                 node_to_model_trans += 1;
             }
         }
@@ -15373,7 +15478,7 @@ test "fbx scene: connections resolve the three-hop animation path" {
 }
 
 test "fbx scene: a static mesh export resolves with no animation, rather than failing" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/sample.fbx");
     if (maybe == null) {
         return;
@@ -15457,8 +15562,48 @@ test "fbx transform: PreRotation is applied, and is not the same as folding it i
     try fbx_expect(differs);
 }
 
+/// The Model that `object_index` hangs off, via its `OO` connection.
+fn fbx_parentOf(scene: *const fbx.Scene, object_index: u32) ?u32 {
+    for (scene.connections) |c| {
+        if (c.src != object_index or c.dst == fbx.no_object) {
+            continue;
+        }
+        if (c.property.len != 0) {
+            continue; // OP edges bind properties, not hierarchy
+        }
+        if (scene.objects[c.dst].kind == .model) {
+            return c.dst;
+        }
+    }
+    return null;
+}
+
+/// World position of a Model's origin in the REST pose, by composing static transforms up the
+/// parent chain.
+fn fbx_restPositionOf(scene: *const fbx.Scene, want: []const u8) ?[3]f64 {
+    for (scene.objects, 0..) |o, i| {
+        if (o.kind != .model or !eql(u8, o.name, want)) {
+            continue;
+        }
+        var pos: [3]f64 = fbx.localTransform(scene, o).translation;
+        var cur: u32 = @intCast(i);
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            const parent: ?u32 = fbx_parentOf(scene, cur) orelse break;
+            const pt: fbx.NodeTransform = fbx.localTransform(scene, scene.objects[parent.?]);
+            pos = fbx.quatRotate(pt.rotation, pos);
+            for (0..3) |k| {
+                pos[k] += pt.translation[k];
+            }
+            cur = parent.?;
+        }
+        return pos;
+    }
+    return null;
+}
+
 test "fbx transform: FK over the real capture reproduces the BVH, where rest == frame 0" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15498,50 +15643,10 @@ test "fbx transform: FK over the real capture reproduces the BVH, where rest == 
     try fbx_expectApproxEqAbs(@as(f64, 151.5824), head[1], 0.05);
 }
 
-/// World position of a Model's origin in the REST pose, by composing static transforms up the
-/// parent chain.
-fn fbx_restPositionOf(scene: *const fbx.Scene, want: []const u8) ?[3]f64 {
-    for (scene.objects, 0..) |o, i| {
-        if (o.kind != .model or !std.mem.eql(u8, o.name, want)) {
-            continue;
-        }
-        var pos: [3]f64 = fbx.localTransform(scene, o).translation;
-        var cur: u32 = @intCast(i);
-        var guard: usize = 0;
-        while (guard < 64) : (guard += 1) {
-            const parent: ?u32 = fbx_parentOf(scene, cur) orelse break;
-            const pt: fbx.NodeTransform = fbx.localTransform(scene, scene.objects[parent.?]);
-            pos = fbx.quatRotate(pt.rotation, pos);
-            for (0..3) |k| {
-                pos[k] += pt.translation[k];
-            }
-            cur = parent.?;
-        }
-        return pos;
-    }
-    return null;
-}
-
-/// The Model that `object_index` hangs off, via its `OO` connection.
-fn fbx_parentOf(scene: *const fbx.Scene, object_index: u32) ?u32 {
-    for (scene.connections) |c| {
-        if (c.src != object_index or c.dst == fbx.no_object) {
-            continue;
-        }
-        if (c.property.len != 0) {
-            continue; // OP edges bind properties, not hierarchy
-        }
-        if (scene.objects[c.dst].kind == .model) {
-            return c.dst;
-        }
-    }
-    return null;
-}
-
 /// World position of a Model's origin at `time`, composing ANIMATED transforms up the chain.
 fn fbx_animPositionOf(scene: *const fbx.Scene, want: []const u8, time: f64) ?[3]f64 {
     for (scene.objects, 0..) |o, i| {
-        if (o.kind != .model or !std.mem.eql(u8, o.name, want)) {
+        if (o.kind != .model or !eql(u8, o.name, want)) {
             continue;
         }
         var pos: [3]f64 = fbx.localTransformAt(scene, o, @intCast(i), time, null).translation;
@@ -15630,7 +15735,7 @@ test "fbx curve: cubic passes through its keys and differs from linear between t
 }
 
 test "fbx anim: sampling frame 0 tightens Head to the BVH golden value" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try fbx_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15663,7 +15768,7 @@ test "fbx anim: sampling frame 0 tightens Head to the BVH golden value" {
 }
 
 test "bvh fromFbx: the FBX of the same capture yields the BVH's own skeleton and pose" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15723,7 +15828,7 @@ test "bvh fromFbx: the FBX of the same capture yields the BVH's own skeleton and
 }
 
 test "bvh fromFbx: the converted clip round-trips through encode, like any other BVH" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15747,7 +15852,7 @@ test "bvh fromFbx: the converted clip round-trips through encode, like any other
 }
 
 test "bvh fromFbx: a static-mesh FBX reports NoSkeleton rather than inventing one" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/sample.fbx");
     if (maybe == null) {
         return;
@@ -15768,7 +15873,7 @@ test "bvh fromFbx: a static-mesh FBX reports NoSkeleton rather than inventing on
 }
 
 test "fbx: hostile and unsupported inputs are refused, never hang" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // * A BACKWARDS END OFFSET USED TO HANG THE PARSER FOREVER. The record loop trusts the
     // declared end and jumps to it; without a forward-only check it re-read the same records
@@ -15783,7 +15888,7 @@ test "fbx: hostile and unsupported inputs are refused, never hang" {
         const bytes: []u8 = try w.finish();
         defer gpa.free(bytes);
         // Rewrite the first record's end offset to point back at the header.
-        std.mem.writeInt(u64, bytes[fbx.magic.len + 4 ..][0..8], 4, .little);
+        writeInt(u64, bytes[fbx.magic.len + 4 ..][0..8], 4, .little);
         try fbx_expectError(fbx.Error.Truncated, fbx.parse(gpa, bytes));
     }
 
@@ -15797,7 +15902,7 @@ test "fbx: hostile and unsupported inputs are refused, never hang" {
     {
         var old: [fbx.magic.len + 8]u8 = @splat(0);
         @memcpy(old[0..fbx.magic.len], fbx.magic);
-        std.mem.writeInt(u32, old[fbx.magic.len..][0..4], 6100, .little);
+        writeInt(u32, old[fbx.magic.len..][0..4], 6100, .little);
         try fbx_expectError(fbx.Error.UnsupportedVersion, fbx.parse(gpa, &old));
     }
 
@@ -15828,7 +15933,7 @@ test "fbx: a curve stored at the other width still evaluates" {
 }
 
 test "fbx: a deep or cyclic hierarchy cannot run away" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     // Nesting past `max_depth` is refused rather than recursing until the stack dies. The
     // container parser uses an explicit depth counter for exactly this.
     var w: fbx.Writer = .init(gpa, 7500);
@@ -15847,7 +15952,7 @@ test "fbx: a deep or cyclic hierarchy cannot run away" {
 }
 
 test "fbx: takes are enumerable, with names and declared bounds" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15867,7 +15972,7 @@ test "fbx: takes are enumerable, with names and declared bounds" {
 }
 
 test "fbx: filtering by take gives the same pose when there is only one" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/dance1_subject2.fbx");
     if (maybe == null) {
         return;
@@ -15882,7 +15987,7 @@ test "fbx: filtering by take gives the same pose when there is only one" {
     // of regression a "harmless" filter introduces.
     const take: fbx.Take = fbx.takeAt(&scene, 0).?;
     for (scene.objects, 0..) |o, i| {
-        if (o.kind != .model or !std.mem.eql(u8, o.name, "Spine")) {
+        if (o.kind != .model or !eql(u8, o.name, "Spine")) {
             continue;
         }
         const all: fbx.NodeTransform = fbx.localTransformAt(&scene, o, @intCast(i), 0.5, null);
@@ -15910,7 +16015,7 @@ test "fbx: an optical marker capture is not mistaken for a skeleton" {
     if (true) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/subject2.fbx");
     if (maybe == null) {
         return;
@@ -15935,13 +16040,13 @@ test "fbx: an optical marker capture is not mistaken for a skeleton" {
         if (o.kind != .model) {
             continue;
         }
-        if (std.mem.eql(u8, o.sub_class, "OpticalMarker")) {
+        if (eql(u8, o.sub_class, "OpticalMarker")) {
             markers += 1;
         }
-        if (std.mem.eql(u8, o.sub_class, "Camera")) {
+        if (eql(u8, o.sub_class, "Camera")) {
             cameras += 1;
         }
-        if (std.mem.eql(u8, o.sub_class, "LimbNode")) {
+        if (eql(u8, o.sub_class, "LimbNode")) {
             limbs += 1;
         }
     }
@@ -15957,7 +16062,7 @@ test "fbx: an optical marker capture is not mistaken for a skeleton" {
 }
 
 test "bvh fromFbx: a bind-pose rig keeps its root joint" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Geno.fbx");
     if (maybe == null) {
         return;
@@ -15992,10 +16097,10 @@ test "bvh fromFbx: a bind-pose rig keeps its root joint" {
         if (o.kind != .deformer) {
             continue;
         }
-        if (std.mem.eql(u8, o.sub_class, "Cluster")) {
+        if (eql(u8, o.sub_class, "Cluster")) {
             clusters += 1;
         }
-        if (std.mem.eql(u8, o.sub_class, "Skin")) {
+        if (eql(u8, o.sub_class, "Skin")) {
             skins += 1;
         }
     }
@@ -16009,7 +16114,7 @@ test "bvh fromFbx: a blend-shape rig has no skeleton, and group Nulls are not bo
     if (true) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/metahuman.fbx");
     if (maybe == null) {
         return;
@@ -16029,16 +16134,16 @@ test "bvh fromFbx: a blend-shape rig has no skeleton, and group Nulls are not bo
     var clusters: usize = 0;
     var shapes: usize = 0;
     for (scene.objects) |o| {
-        if (o.kind == .model and std.mem.eql(u8, o.sub_class, "Null")) {
+        if (o.kind == .model and eql(u8, o.sub_class, "Null")) {
             nulls += 1;
         }
-        if (o.kind == .deformer and std.mem.eql(u8, o.sub_class, "BlendShape")) {
+        if (o.kind == .deformer and eql(u8, o.sub_class, "BlendShape")) {
             blend_shapes += 1;
         }
-        if (o.kind == .deformer and std.mem.eql(u8, o.sub_class, "Cluster")) {
+        if (o.kind == .deformer and eql(u8, o.sub_class, "Cluster")) {
             clusters += 1;
         }
-        if (o.kind == .geometry and std.mem.eql(u8, o.sub_class, "Shape")) {
+        if (o.kind == .geometry and eql(u8, o.sub_class, "Shape")) {
             shapes += 1;
         }
     }
@@ -16061,7 +16166,7 @@ test "bvh fromFbx: a blend-shape rig has no skeleton, and group Nulls are not bo
 }
 
 test "fbx: a Mixamo export picks the take that has the animation, not take 0" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Drop_Kick.fbx");
     if (maybe == null) {
         return;
@@ -16102,7 +16207,7 @@ test "fbx: a Mixamo export picks the take that has the animation, not take 0" {
 }
 
 test "fbx: a Mixamo rig has no container node, and its names nearly overflow BoneInfo" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Drop_Kick.fbx");
     if (maybe == null) {
         return;
@@ -16136,10 +16241,10 @@ test "fbx: a Mixamo rig has no container node, and its names nearly overflow Bon
         if (o.kind != .deformer) {
             continue;
         }
-        if (std.mem.eql(u8, o.sub_class, "Skin")) {
+        if (eql(u8, o.sub_class, "Skin")) {
             skins += 1;
         }
-        if (std.mem.eql(u8, o.sub_class, "Cluster")) {
+        if (eql(u8, o.sub_class, "Cluster")) {
             clusters += 1;
         }
     }
@@ -16158,7 +16263,7 @@ test "fbx: a Mixamo rig has no container node, and its names nearly overflow Bon
 
 fn fbx_firstGeometry(scene: *const fbx.Scene) ?fbx.Object {
     for (scene.objects) |o| {
-        if (o.kind == .geometry and std.mem.eql(u8, o.sub_class, "Mesh")) {
+        if (o.kind == .geometry and eql(u8, o.sub_class, "Mesh")) {
             return o;
         }
     }
@@ -16166,7 +16271,7 @@ fn fbx_firstGeometry(scene: *const fbx.Scene) ?fbx.Object {
 }
 
 test "fbx mesh: quads triangulate, corners weld, and the counts are exact" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Geno.fbx");
     if (maybe == null) {
         return;
@@ -16219,7 +16324,7 @@ test "fbx mesh: quads triangulate, corners weld, and the counts are exact" {
 }
 
 test "fbx mesh: a mixed quad/triangle mesh triangulates to the right count" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Drop_Kick.fbx");
     if (maybe == null) {
         return;
@@ -16252,7 +16357,7 @@ test "fbx mesh: a malformed geometry is refused rather than half-read" {
     if (true) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/metahuman.fbx");
     if (maybe == null) {
         return;
@@ -16265,7 +16370,7 @@ test "fbx mesh: a malformed geometry is refused rather than half-read" {
     // The MetaHuman's blend-shape targets are `Geometry` records of subtype "Shape" carrying
     // vertex DELTAS and no polygons at all. Asking one for a mesh must fail cleanly.
     for (scene.objects) |o| {
-        if (o.kind == .geometry and std.mem.eql(u8, o.sub_class, "Shape")) {
+        if (o.kind == .geometry and eql(u8, o.sub_class, "Shape")) {
             try fbx_expectError(fbx.Error.MalformedGeometry, fbx.meshOf(gpa, &scene, o));
             break;
         }
@@ -16277,7 +16382,7 @@ test "fbx mesh: a malformed geometry is refused rather than half-read" {
 }
 
 test "fbx skin: every vertex gets normalised weights over real joints" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Geno.fbx");
     if (maybe == null) {
         return;
@@ -16350,7 +16455,7 @@ test "fbx skin: every vertex gets normalised weights over real joints" {
 }
 
 test "fbx skin: the joint map is the SAME numbering the skeleton uses" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const maybe: ?[]u8 = try bvh_readFixture(gpa, "assets/Geno.fbx");
     if (maybe == null) {
         return;

@@ -44,7 +44,7 @@ fn initState(
     // The frame already carries the live device/queue/surface/format via its
     // GpuFrame -- no device boilerplate here. Build the renderer from it.
     const gf: *z.GpuFrame = f.gpu;
-    var renderer: z.pbr3d.Renderer = try z.pbr3d.Renderer.init(.{
+    var renderer: z.pbr3d.Renderer = try .init(.{
         .device = gf.device,
         .queue = gf.queue,
         .gpa = gpa,

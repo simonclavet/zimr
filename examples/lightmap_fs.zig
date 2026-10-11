@@ -11,10 +11,6 @@ const shader_externs = @import("lightmap_fs_externs");
 pub const Io = shader_externs.IoT(void);
 pub const Out = shader_externs.Out;
 
-comptime {
-    _ = shader_externs.installSpirvEntry(shaderMain);
-}
-
 pub fn shaderMain(io_in: Io) Out {
     var out: Out = undefined;
     const uv: Vec2 = .{ io_in.frag_uv[0], io_in.frag_uv[1] };
@@ -28,4 +24,8 @@ pub fn shaderMain(io_in: Io) Out {
         1.0,
     };
     return out;
+}
+
+comptime {
+    _ = shader_externs.installSpirvEntry(shaderMain);
 }

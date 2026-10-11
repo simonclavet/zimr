@@ -7,6 +7,7 @@
 const std = @import("std");
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const swap = std.mem.swap;
 const zm = @import("zm");
 const sinTurns = zm.sinTurns;
 const cosTurns = zm.cosTurns;
@@ -19,6 +20,8 @@ const pi = zm.pi;
 /// One turn in 36 steps, which is what this constant always meant.
 const seg_step36: f32 = 1.0 / 36.0;
 const pow = zm.pow;
+const Mat = zm.Mat;
+const identity = zm.identity;
 /// Inert renderer for the no-panic smoke tests below (GL-retirement P5d:
 /// they used to replay into rlgl.GlState, whose host build was no-op
 /// anyway).  Also re-exported as ui.TestGlStub - the one stub for the
@@ -59,7 +62,18 @@ pub const TestGl = struct {
     ) void {}
     pub fn pushMatrix(_: *TestGl) void {}
     pub fn popMatrix(_: *TestGl) void {}
-    pub fn translatef(_: *TestGl, _: anytype, _: anytype, _: anytype) void {}
+    pub fn translate(_: *TestGl, _: anytype, _: anytype, _: anytype) void {}
+    pub fn rotate(
+        _: *TestGl,
+        _: anytype,
+        _: anytype,
+        _: anytype,
+        _: anytype,
+    ) void {}
+    /// Identity: an inert renderer applies no transform (and drawRectangleLines divides by its scale).
+    pub fn getMatrixTransform(_: *TestGl) Mat {
+        return identity();
+    }
     pub fn viewport(
         _: *TestGl,
         _: anytype,
@@ -70,8 +84,8 @@ pub const TestGl = struct {
 };
 
 const types = @import("types.zig");
+const requireGl = types.requireGl;
 const runtime = @import("runtime.zig");
-const Mat = zm.Mat;
 const z = struct {
     pub const Rectangle = types.Rectangle;
     pub const Texture = types.Texture;
@@ -516,6 +530,7 @@ pub fn drawPixelV(
     position: Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     emitTexturedQuad(
         gl,
         shapes_state,
@@ -536,6 +551,7 @@ pub fn drawPixel(
     posY: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawPixelV(gl, shapes_state, .{ @floatFromInt(posX), @floatFromInt(posY) }, color);
 }
 
@@ -548,6 +564,7 @@ pub fn drawLine(
     endPosY: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.begin(.lines);
     gl.color4ub(color.r, color.g, color.b, color.a);
     gl.vertex2f(@floatFromInt(startPosX), @floatFromInt(startPosY));
@@ -562,6 +579,7 @@ pub fn drawLineV(
     endPos: Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.begin(.lines);
     gl.color4ub(color.r, color.g, color.b, color.a);
     gl.vertex2f(startPos[0], startPos[1]);
@@ -597,6 +615,7 @@ pub fn drawTriangleStrip(
     points: []const Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -629,6 +648,7 @@ pub fn drawLineThick(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const dx: f32 = endPos[0] - startPos[0];
     const dy: f32 = endPos[1] - startPos[1];
     const len: f32 = @sqrt(dx * dx + dy * dy);
@@ -660,6 +680,7 @@ pub fn drawRectanglePro(
     rotation_turns: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var top_left: Vec2 = undefined;
     var top_right: Vec2 = undefined;
     var bottom_left: Vec2 = undefined;
@@ -700,6 +721,7 @@ pub fn drawRectangleV(
     size: Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     drawRectanglePro(
         gl,
         shapes_state,
@@ -720,6 +742,7 @@ pub fn drawRectangle(
     height: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawRectangleV(
         gl,
         shapes_state,
@@ -736,6 +759,7 @@ pub fn drawRectangleRec(
     rec: Rectangle,
     color: Color,
 ) void {
+    requireGl(gl);
     drawRectanglePro(gl, shapes_state, rec, .{ 0, 0 }, 0.0, color);
 }
 
@@ -749,6 +773,7 @@ pub fn drawTriangle(
     v3: Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(shapes_state.texture.id);
     const uv: ShapesUV = shapesUv(shapes_state);
     gl.begin(.quads);
@@ -793,6 +818,7 @@ pub fn drawTriangleLines(
     v3: Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.begin(.lines);
     gl.color4ub(color.r, color.g, color.b, color.a);
     gl.vertex2f(v1[0], v1[1]);
@@ -821,6 +847,11 @@ pub fn drawTriangleGradient(
     c2: Color,
     c3: Color,
 ) void {
+    requireGl(gl);
+    // Bind the white texture: the batch keeps whatever texture was bound last
+    // (a glyph page after text), and an untextured shape sampling that draws
+    // transparent.
+    gl.setTexture(0);
     gl.begin(.triangles);
     gl.color4ub(c1.r, c1.g, c1.b, c1.a);
     gl.vertex2f(v1[0], v1[1]);
@@ -871,6 +902,7 @@ pub fn drawTriangleFan(
     points: []const Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 3) {
         return;
     }
@@ -903,6 +935,9 @@ pub fn drawEllipseV(
     radiusV: f32,
     color: Color,
 ) void {
+    requireGl(gl);
+    // White texture, as in drawTriangleGradient.
+    gl.setTexture(0);
     gl.begin(.triangles);
     var i: i32 = 0;
     while (i < 36) : (i += 1) {
@@ -926,6 +961,7 @@ pub fn drawEllipse(
     radiusV: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawEllipseV(gl, .{ @floatFromInt(centerX), @floatFromInt(centerY) }, radiusH, radiusV, color);
 }
 
@@ -937,6 +973,7 @@ pub fn drawEllipseLinesV(
     radiusV: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.begin(.lines);
     var i: i32 = 0;
     while (i < 36) : (i += 1) {
@@ -958,6 +995,7 @@ pub fn drawEllipseLines(
     radiusV: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawEllipseLinesV(gl, .{ @floatFromInt(centerX), @floatFromInt(centerY) }, radiusH, radiusV, color);
 }
 
@@ -972,6 +1010,7 @@ pub fn drawPoly(
     rotation_turns: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var sides: i32 = sides_in;
     if (sides < 3) {
         sides = 3;
@@ -1012,6 +1051,7 @@ pub fn drawPolyLines(
     rotation_turns: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var sides: i32 = sides_in;
     if (sides < 3) {
         sides = 3;
@@ -1042,6 +1082,9 @@ pub fn drawCircleGradient(
     inner: Color,
     outer: Color,
 ) void {
+    requireGl(gl);
+    // White texture, as in drawTriangleGradient.
+    gl.setTexture(0);
     gl.begin(.triangles);
     // 36 segments around the full circle; i is the segment index and
     // a0_turns/a1_turns are its bounds in TURNS: i/36 .. (i+1)/36.
@@ -1110,6 +1153,7 @@ pub fn drawCircleSector(
     segments_in: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     var start: f32 = start_turns;
     var end: f32 = end_turns;
     if (start == end) {
@@ -1120,7 +1164,7 @@ pub fn drawCircleSector(
         radius = 0.1; // avoid div-by-zero in the segment math
     }
     if (end < start) {
-        std.mem.swap(f32, &start, &end);
+        swap(f32, &start, &end);
     }
 
     const segments: i32 = adaptiveArcSegments(start, end, radius, segments_in);
@@ -1177,6 +1221,7 @@ pub fn drawCircleSectorLines(
     segments_in: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     var start: f32 = start_turns;
     var end: f32 = end_turns;
     if (start == end) {
@@ -1187,7 +1232,7 @@ pub fn drawCircleSectorLines(
         radius = 0.1;
     }
     if (end < start) {
-        std.mem.swap(f32, &start, &end);
+        swap(f32, &start, &end);
     }
 
     const segments: i32 = adaptiveArcSegments(start, end, radius, segments_in);
@@ -1224,6 +1269,7 @@ pub fn drawCircleV(
     radius: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawCircleSector(gl, shapes_state, center, radius, 0, 1.0, 36, color);
 }
 
@@ -1236,6 +1282,7 @@ pub fn drawCircle(
     radius: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawCircleV(gl, shapes_state, .{ @floatFromInt(centerX), @floatFromInt(centerY) }, radius, color);
 }
 
@@ -1246,6 +1293,7 @@ pub fn drawCircleLinesV(
     radius: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     gl.begin(.lines);
     gl.color4ub(color.r, color.g, color.b, color.a);
     var i: i32 = 0;
@@ -1266,6 +1314,7 @@ pub fn drawCircleLines(
     radius: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawCircleLinesV(gl, .{ @floatFromInt(centerX), @floatFromInt(centerY) }, radius, color);
 }
 
@@ -1283,6 +1332,7 @@ pub fn drawRing(
     segments_in: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     var inner: f32 = innerRadius_in;
     var outer: f32 = outerRadius_in;
     var start: f32 = start_turns;
@@ -1291,13 +1341,13 @@ pub fn drawRing(
         return;
     }
     if (outer < inner) {
-        std.mem.swap(f32, &outer, &inner);
+        swap(f32, &outer, &inner);
         if (outer <= 0) {
             outer = 0.1;
         }
     }
     if (end < start) {
-        std.mem.swap(f32, &start, &end);
+        swap(f32, &start, &end);
     }
 
     const segments: i32 = adaptiveArcSegments(start, end, outer, segments_in);
@@ -1343,6 +1393,7 @@ pub fn drawRingLines(
     segments_in: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     var inner: f32 = innerRadius_in;
     var outer: f32 = outerRadius_in;
     var start: f32 = start_turns;
@@ -1351,13 +1402,13 @@ pub fn drawRingLines(
         return;
     }
     if (outer < inner) {
-        std.mem.swap(f32, &outer, &inner);
+        swap(f32, &outer, &inner);
         if (outer <= 0) {
             outer = 0.1;
         }
     }
     if (end < start) {
-        std.mem.swap(f32, &start, &end);
+        swap(f32, &start, &end);
     }
 
     const segments: i32 = adaptiveArcSegments(start, end, outer, segments_in);
@@ -1418,6 +1469,7 @@ pub fn drawLineStrip(
     points: []const Vec2,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 2) {
         return;
     }
@@ -1442,6 +1494,7 @@ pub fn drawLineBezier(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var previous: Vec2 = startPos;
     var current: Vec2 = .{ 0, 0 };
 
@@ -1490,6 +1543,7 @@ pub fn drawLineDashed(
     spaceSize: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     const dx: f32 = endPos[0] - startPos[0];
     const dy: f32 = endPos[1] - startPos[1];
     const line_length: f32 = @sqrt(dx * dx + dy * dy);
@@ -1537,6 +1591,7 @@ pub fn drawRectangleGradientEx(
     bottomRight: Color,
     topRight: Color,
 ) void {
+    requireGl(gl);
     gl.setTexture(shapes_state.texture.id);
     const uv: ShapesUV = shapesUv(shapes_state);
     gl.begin(.quads);
@@ -1572,6 +1627,7 @@ pub fn drawRectangleGradientV(
     top: Color,
     bottom: Color,
 ) void {
+    requireGl(gl);
     drawRectangleGradientEx(
         gl,
         shapes_state,
@@ -1599,6 +1655,7 @@ pub fn drawRectangleGradientH(
     left: Color,
     right: Color,
 ) void {
+    requireGl(gl);
     drawRectangleGradientEx(
         gl,
         shapes_state,
@@ -1626,6 +1683,7 @@ pub fn drawRectangleLines(
     height: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     const mat: Mat = gl.getMatrixTransform();
     const x_offset: f32 = 0.5 / mat[0][0];
     const y_offset: f32 = 0.5 / mat[1][1];
@@ -1661,6 +1719,7 @@ pub fn drawRectangleLinesThick(
     lineThick_in: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var lineThick: f32 = lineThick_in;
     // Clamp lineThick so the four border rectangles don't overlap into the
     // interior when the border would otherwise cover the whole shape.
@@ -1712,6 +1771,7 @@ pub fn drawPolyLinesThick(
     lineThick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var sides: i32 = sides_in;
     if (sides < 3) {
         sides = 3;
@@ -1762,6 +1822,7 @@ pub fn drawRectangleRounded(
     segments_in: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (roundness_in <= 0.0) {
         drawRectangleRec(gl, shapes_state, rec, color);
         return;
@@ -1854,7 +1915,15 @@ pub fn drawRectangleRounded(
     // Five rectangles between the corner arcs (top, right, bottom, left,
     // middle). Each is one quad emitted in TL/BL/BR/TR winding order.
     const FillRect = struct {
-        fn go(gl_inner: anytype, uv0: ShapesUV, c: Color, p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2) void {
+        fn go(
+            gl_inner: anytype,
+            uv0: ShapesUV,
+            c: Color,
+            p0: Vec2,
+            p1: Vec2,
+            p2: Vec2,
+            p3: Vec2,
+        ) void {
             gl_inner.color4ub(c.r, c.g, c.b, c.a);
             gl_inner.texCoord2f(uv0.u0, uv0.v0);
             gl_inner.vertex2f(p0[0], p0[1]);
@@ -1888,6 +1957,7 @@ pub fn drawRectangleRoundedLinesThick(
     lineThick_in: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     var lineThick: f32 = lineThick_in;
     if (lineThick < 0) {
         lineThick = 0;
@@ -1989,7 +2059,15 @@ pub fn drawRectangleRoundedLinesThick(
         }
         // Four edge rectangles of the band.
         const edge = struct {
-            fn go(gl_inner: anytype, uv0: ShapesUV, c: Color, p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2) void {
+            fn go(
+                gl_inner: anytype,
+                uv0: ShapesUV,
+                c: Color,
+                p0: Vec2,
+                p1: Vec2,
+                p2: Vec2,
+                p3: Vec2,
+            ) void {
                 gl_inner.color4ub(c.r, c.g, c.b, c.a);
                 gl_inner.texCoord2f(uv0.u0, uv0.v0);
                 gl_inner.vertex2f(p0[0], p0[1]);
@@ -2042,6 +2120,7 @@ pub fn drawRectangleRoundedLines(
     segments: i32,
     color: Color,
 ) void {
+    requireGl(gl);
     drawRectangleRoundedLinesThick(gl, shapes_state, rec, roundness, segments, 1.0, color);
 }
 
@@ -2066,6 +2145,7 @@ pub fn drawSplineSegmentLinear(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const dx: f32 = p2[0] - p1[0];
     const dy: f32 = p2[1] - p1[1];
     const len: f32 = @sqrt(dx * dx + dy * dy);
@@ -2092,6 +2172,7 @@ pub fn drawSplineLinear(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 2) {
         return;
     }
@@ -2111,6 +2192,7 @@ pub fn drawSplineBasis(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -2179,6 +2261,7 @@ pub fn drawSplineCatmullRom(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -2235,6 +2318,7 @@ pub fn drawSplineSegmentBezierQuadratic(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const inv_div: f32 = 1.0 / float(spline_segment_divisions);
     var previous: Vec2 = p1;
     var current: Vec2 = .{ 0, 0 };
@@ -2272,6 +2356,7 @@ pub fn drawSplineBezierQuadratic(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 3) {
         return;
     }
@@ -2296,6 +2381,7 @@ pub fn drawSplineSegmentBezierCubic(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const inv_div: f32 = 1.0 / float(spline_segment_divisions);
     var previous: Vec2 = p1;
     var current: Vec2 = .{ 0, 0 };
@@ -2334,6 +2420,7 @@ pub fn drawSplineBezierCubic(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     if (points.len < 4) {
         return;
     }
@@ -2366,6 +2453,7 @@ pub fn drawSplineSegmentBasis(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const inv_div: f32 = 1.0 / float(spline_segment_divisions);
     var current: Vec2 = .{ 0, 0 };
     var next_turns: Vec2 = .{ 0, 0 };
@@ -2413,6 +2501,7 @@ pub fn drawSplineSegmentCatmullRom(
     thick: f32,
     color: Color,
 ) void {
+    requireGl(gl);
     const inv_div: f32 = 1.0 / float(spline_segment_divisions);
     var current: Vec2 = p1;
     var next_turns: Vec2 = .{ 0, 0 };
@@ -2899,6 +2988,7 @@ pub fn beginScissorMode(
     width: i32,
     height: i32,
 ) void {
+    requireGl(gl);
     // GL-retirement P5d: the rlgl arm (scope push + batch flush before
     // changing scissor state) died with the backend; WgpuGl and raster both
     // take the scissor through the generic trait directly.
@@ -2940,5 +3030,6 @@ pub fn beginScissorMode(
 /// `gl` mutated only to flush the active batch before the
 /// scissor is disabled (no scissor read).
 pub fn endScissorMode(gl: anytype) void {
+    requireGl(gl);
     gl.disable(.scissor_test);
 }

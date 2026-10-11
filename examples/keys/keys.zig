@@ -18,6 +18,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Vec2 = zm.Vec2;
@@ -37,7 +38,7 @@ const State = struct {
     /// Loaded default font (wgpu drawText takes a Font, not a cache).
     font: z.Font,
     /// Per-frame scratch arena, reset at top of update by user code.
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     frame_count: usize = 0,
 
     /// Player square position (centre).
@@ -61,7 +62,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, @embedFile("atkinson_mono_ttf"), 32);
-    s.* = .{ .font = font, .scratch = std.heap.ArenaAllocator.init(gpa) };
+    s.* = .{ .font = font, .scratch = ArenaAllocator.init(gpa) };
 }
 
 fn update(f: *z.Frame, state: *State) void {
@@ -74,30 +75,30 @@ fn update(f: *z.Frame, state: *State) void {
 
     // ---- Movement (isKeyDown - held-state polling)
     const KbK: type = z.KeyboardKey;
-    const KEY_W: KbK = .w;
-    const KEY_A: KbK = .a;
-    const KEY_S: KbK = .s;
-    const KEY_D: KbK = .d;
-    const KEY_LEFT: KbK = .left;
-    const KEY_RIGHT: KbK = .right;
-    const KEY_UP: KbK = .up;
-    const KEY_DOWN: KbK = .down;
-    const KEY_LEFT_SHIFT: KbK = .left_shift;
-    const KEY_SPACE: KbK = .space;
+    const key_w: KbK = .w;
+    const key_a: KbK = .a;
+    const key_s: KbK = .s;
+    const key_d: KbK = .d;
+    const key_left: KbK = .left;
+    const key_right: KbK = .right;
+    const key_up: KbK = .up;
+    const key_down: KbK = .down;
+    const key_left_shift: KbK = .left_shift;
+    const key_space: KbK = .space;
 
-    const speed: f32 = if (z.isKeyDown(f.input, KEY_LEFT_SHIFT)) 600 else 240;
+    const speed: f32 = if (z.isKeyDown(f.input, key_left_shift)) 600 else 240;
     var dx: f32 = 0;
     var dy: f32 = 0;
-    if (z.isKeyDown(f.input, KEY_A) or z.isKeyDown(f.input, KEY_LEFT)) {
+    if (z.isKeyDown(f.input, key_a) or z.isKeyDown(f.input, key_left)) {
         dx -= 1;
     }
-    if (z.isKeyDown(f.input, KEY_D) or z.isKeyDown(f.input, KEY_RIGHT)) {
+    if (z.isKeyDown(f.input, key_d) or z.isKeyDown(f.input, key_right)) {
         dx += 1;
     }
-    if (z.isKeyDown(f.input, KEY_W) or z.isKeyDown(f.input, KEY_UP)) {
+    if (z.isKeyDown(f.input, key_w) or z.isKeyDown(f.input, key_up)) {
         dy -= 1;
     }
-    if (z.isKeyDown(f.input, KEY_S) or z.isKeyDown(f.input, KEY_DOWN)) {
+    if (z.isKeyDown(f.input, key_s) or z.isKeyDown(f.input, key_down)) {
         dy += 1;
     }
     // Normalise diagonal so it doesn't move sqrt2x faster.
@@ -113,7 +114,7 @@ fn update(f: *z.Frame, state: *State) void {
     state.py = clamp(state.py, square_size / 2, @as(f32, screen_h) - square_size / 2);
 
     // ---- Background toggle (isKeyPressed - rising edge)
-    if (z.isKeyPressed(f.input, KEY_SPACE)) {
+    if (z.isKeyPressed(f.input, key_space)) {
         state.bg_mode = if (state.bg_mode == 0) 1 else 0;
     }
     // Smoothly interpolate towards the target.
@@ -136,7 +137,7 @@ fn update(f: *z.Frame, state: *State) void {
     // Mirrors raylib's standard idiom for two-state cross-fades.
     const slate: Color = z.colors.slate_900;
     const sky: Color = z.colors.sky_700;
-    const bg: Color = Color.lerp(slate, sky, clamp(state.bg_phase, 0, 1));
+    const bg: Color = .lerp(slate, sky, clamp(state.bg_phase, 0, 1));
     z.clearViewport(f, bg);
 
     // Splats - drawn first so the player + crosshair are on top.

@@ -20,13 +20,19 @@ const Mat = zm.Mat;
 const Vec = zm.Vec;
 const radFromDeg = zm.radFromDeg;
 const vec = zm.vec;
+const Camera3D = zm.Camera3D;
 const colors = z.colors;
 
 /// Wired by zimr's `Project`. zimr ships no default font: text needs one.
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
 const cube_center_y: f32 = 1.0;
-const initial_pitch_deg: f32 = 18;
+
+/// Where the spin has carried the cube. "reset" assigns `.{}`, like `Tunables`.
+const Angles = struct {
+    yaw_deg: f32 = 0,
+    pitch_deg: f32 = 18,
+};
 
 /// Everything the panel edits. "reset" assigns `.{}`, so the reset values are
 /// the defaults by construction and cannot drift apart.
@@ -45,8 +51,7 @@ const Tunables = struct {
 const State = struct {
     font: z.Font,
     ui_host: z.UiHost,
-    yaw_deg: f32 = 0,
-    pitch_deg: f32 = initial_pitch_deg,
+    angles: Angles = .{},
     tune: Tunables = .{},
 };
 
@@ -64,7 +69,7 @@ fn drawScene(f: *z.Frame, s: *State) void {
     const cube_center: Vec = zm.pointVec(0, cube_center_y, 0);
     const camera_distance: f32 = s.tune.camera_distance;
     // Aim at the cube itself rather than the origin, so a close camera keeps it framed.
-    const camera: zm.Camera3D = .{
+    const camera: Camera3D = .{
         .position = zm.pointVec(camera_distance, camera_distance * 0.8 + cube_center_y, camera_distance),
         .target = cube_center,
         .up = vec(0, 1, 0),
@@ -85,8 +90,8 @@ fn drawScene(f: *z.Frame, s: *State) void {
     }
 
     // Pitch is applied first, then yaw.
-    const pitch: Mat = zm.matFromAxisAngle(vec(1, 0, 0), radFromDeg(s.pitch_deg));
-    const yaw: Mat = zm.matFromAxisAngle(vec(0, 1, 0), radFromDeg(s.yaw_deg));
+    const pitch: Mat = zm.matFromAxisAngle(vec(1, 0, 0), radFromDeg(s.angles.pitch_deg));
+    const yaw: Mat = zm.matFromAxisAngle(vec(0, 1, 0), radFromDeg(s.angles.yaw_deg));
     const rotation: Mat = zm.compose(pitch, yaw);
     const edge: f32 = s.tune.cube_size;
     z.drawCube(f.gl, cube_center, .{
@@ -140,8 +145,7 @@ fn drawPanel(u: z.ui.Ui, f: *z.Frame, s: *State) void {
         u.spacing();
         if (u.button("reset", .{})) {
             s.tune = .{};
-            s.yaw_deg = 0;
-            s.pitch_deg = initial_pitch_deg;
+            s.angles = .{};
         }
     }
 }
@@ -150,8 +154,8 @@ fn update(f: *z.Frame, s: *State) void {
     if (!s.tune.paused) {
         const dt: f32 = f.time.delta_time;
         // `@mod` with a positive divisor is never negative, so this also wraps negative spins.
-        s.yaw_deg = @mod(s.yaw_deg + s.tune.spin_yaw_deg_per_s * dt, 360.0);
-        s.pitch_deg = @mod(s.pitch_deg + s.tune.spin_pitch_deg_per_s * dt, 360.0);
+        s.angles.yaw_deg = @mod(s.angles.yaw_deg + s.tune.spin_yaw_deg_per_s * dt, 360.0);
+        s.angles.pitch_deg = @mod(s.angles.pitch_deg + s.tune.spin_pitch_deg_per_s * dt, 360.0);
     }
 
     z.clearViewport(f, colors.slate_950);
@@ -165,7 +169,7 @@ fn update(f: *z.Frame, s: *State) void {
     const status: []const u8 = bufPrint(
         &status_buf,
         "yaw {d:.0} deg   pitch {d:.0} deg   {s}",
-        .{ s.yaw_deg, s.pitch_deg, if (s.tune.paused) "PAUSED" else "spinning" },
+        .{ s.angles.yaw_deg, s.angles.pitch_deg, if (s.tune.paused) "PAUSED" else "spinning" },
     ) catch "yaw ?";
     f.gl.text(.{ 12, f.window.heightf() - 28 }, status, .{ .size = 18, .color = colors.slate_400, .font = &s.font });
 

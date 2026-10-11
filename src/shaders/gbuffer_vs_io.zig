@@ -10,6 +10,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("gbuffer_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex attributes: the standard position+normal pair, matching the
 /// leading vec3s of every lit mesh layout in the engine.
@@ -22,12 +24,12 @@ pub const Attributes = struct {
 /// column-major mat4s back to back, no padding games.
 pub const Ubo = struct {
     /// projection * view * model - the one-hop route to clip space.
-    mvp: [4]@Vector(4, f32),
+    mvp: [4]Vec,
     /// model alone - vertex -> WORLD space, the space lighting lives in.
-    model: [4]@Vector(4, f32),
+    model: [4]Vec,
     /// inverse-transpose(model) for normals; rotation-only scenes can
     /// pass the rotation itself.
-    normal_matrix: [4]@Vector(4, f32),
+    normal_matrix: [4]Vec,
 };
 
 /// Varying outputs - aliases the shared `Interp`.

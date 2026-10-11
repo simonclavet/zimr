@@ -36,7 +36,12 @@ const Allocator = std.mem.Allocator;
 const clamp = zm.clamp;
 const float = zm.float;
 const Vec = zm.Vec;
+const vec = zm.vec;
 const expect = std.testing.expect;
+const Io = std.Io;
+const Random = std.Random;
+const testing_allocator = std.testing.allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const Options = struct {
     /// Hidden widths. The kit's buffers hold 2^18 floats and the parameters have to fit beside the
@@ -55,7 +60,7 @@ pub fn WorldModel(comptime M: type) type {
         const Net = kit.KitMlp(M);
 
         gpa: Allocator,
-        arena: std.heap.ArenaAllocator,
+        arena: ArenaAllocator,
         m: *rbt.Model,
         net: *Net,
         options: Options,
@@ -101,7 +106,7 @@ pub fn WorldModel(comptime M: type) type {
                 .scratch = undefined,
                 .data = undefined,
             };
-            self.arena = .init(gpa);
+            self.arena = ArenaAllocator.init(gpa);
             errdefer self.arena.deinit();
             const owned: Allocator = self.arena.allocator();
             const in_dim: u32 = @intCast(track.worldInputSize(m));
@@ -144,7 +149,7 @@ pub fn WorldModel(comptime M: type) type {
 
         /// Fill a batch from the replay and take one step on it. Null when the replay cannot yet
         /// supply a full batch of transitions.
-        pub fn trainStep(self: *Self, fleet: *track.Fleet, random: std.Random) !?f32 {
+        pub fn trainStep(self: *Self, fleet: *track.Fleet, random: Random) !?f32 {
             const in_dim: usize = track.worldInputSize(self.m);
             const out_dim: usize = track.worldOutputSize(self.m);
             const dt: f32 = self.m.opt.timestep;
@@ -201,6 +206,18 @@ const Host = compute_host.Compute(zn_mlp);
 
 const flex2_xml: []const u8 = @embedFile("tests/fixtures/robot/humanoid_flex2.xml");
 
+/// The baked walk (`zig build clip-bake`): retargeted, filtered and lifted exactly as these tests once
+/// did at startup, so the same clip - without half a minute of inverse kinematics before every test.
+fn loadBakedWalk(gpa: Allocator, io: Io) !dance.Clip {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, "assets/lafan1/walk1_subject2.zclip", .{});
+    defer file.close(io);
+    const info: Io.File.Stat = try file.stat(io);
+    const bytes: []u8 = try gpa.alloc(u8, info.size);
+    defer gpa.free(bytes);
+    _ = try file.readPositionalAll(io, bytes, 0);
+    return dance.Clip.fromBytes(gpa, bytes);
+}
+
 test "robot_world: the model predicts, and a planner acts through it" {
     // THE MEASUREMENT THAT MATTERS. A world model exists to be rolled forward, so it is judged by
     // how far its rollout has wandered from the simulator after one step, two, eight - against the
@@ -212,16 +229,16 @@ test "robot_world: the model predicts, and a planner acts through it" {
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, flex2_xml, null);
     defer doc.deinit();
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
     defer robot.deinit();
-    var mjcf_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = zm.vec(0, 0, -9.81), .max_contacts = 256 };
+    var mjcf_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
     mjcf_options.solver.algorithm = .newton;
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, mjcf_options);
     defer imported.deinit();
@@ -230,7 +247,7 @@ test "robot_world: the model predicts, and a planner acts through it" {
     var walk: dance.Clip = loadBakedWalk(gpa, io) catch
         return error.SkipZigTest;
     defer walk.deinit();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     // (The baked walk is already lifted clear of the floor; lifting it again is not the same clip.)
     const clips = [_]*const dance.Clip{&walk};
@@ -241,8 +258,8 @@ test "robot_world: the model predicts, and a planner acts through it" {
     // one to predict, since the character is falling over in every direction.
     const actions: []f32 = try gpa.alloc(f32, 8 * track.actionSize(m));
     defer gpa.free(actions);
-    var rng: std.Random.DefaultPrng = .init(5);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(5);
+    const random: Random = rng.random();
     for (0..300) |_| {
         for (actions) |*a| {
             a.* = 0.3 * (2.0 * random.float(f32) - 1.0);
@@ -274,9 +291,9 @@ test "robot_world: the model predicts, and a planner acts through it" {
 
     // The same windows for all three sources.
     const horizon: usize = 8;
-    var oracle_rng: std.Random.DefaultPrng = .init(77);
-    var baseline_rng: std.Random.DefaultPrng = .init(77);
-    var model_rng: std.Random.DefaultPrng = .init(77);
+    var oracle_rng: Random.DefaultPrng = .init(77);
+    var baseline_rng: Random.DefaultPrng = .init(77);
+    var model_rng: Random.DefaultPrng = .init(77);
     const oracle: track.Drift = try track.measureDrift(gpa, fleet, .oracle, 200, horizon, oracle_rng.random());
     defer track.freeDrift(gpa, oracle);
     const baseline: track.Drift = try track.measureDrift(gpa, fleet, .hold_first, 200, horizon, baseline_rng.random());
@@ -390,12 +407,20 @@ pub const PlanOptions = struct {
     action_weight: f32 = 0.02,
 };
 
+fn actionSize2(action: []const f32) f32 {
+    var total: f32 = 0.0;
+    for (action) |a| {
+        total += a * a;
+    }
+    return total / float(action.len);
+}
+
 pub fn Planner(comptime M: type) type {
     return struct {
         const Self = @This();
 
         gpa: Allocator,
-        arena: std.heap.ArenaAllocator,
+        arena: ArenaAllocator,
         model: *WorldModel(M),
         m: *rbt.Model,
         options: PlanOptions,
@@ -420,7 +445,7 @@ pub fn Planner(comptime M: type) type {
         /// stands on, so an imagined step is the step that would actually be taken.
         world: zimrphysics.World,
         bridge: robot_physics.Bridge,
-        rng: std.Random.DefaultPrng,
+        rng: Random.DefaultPrng,
 
         pub fn init(
             gpa: Allocator,
@@ -454,7 +479,7 @@ pub fn Planner(comptime M: type) type {
                 .bridge = undefined,
                 .rng = undefined,
             };
-            self.arena = .init(gpa);
+            self.arena = ArenaAllocator.init(gpa);
             errdefer self.arena.deinit();
             const owned: Allocator = self.arena.allocator();
             const action_size: usize = track.actionSize(m);
@@ -481,7 +506,7 @@ pub fn Planner(comptime M: type) type {
                 .data = try rbt.Data.init(owned, m),
                 .world = undefined,
                 .bridge = undefined,
-                .rng = .init(7),
+                .rng = Random.DefaultPrng.init(7),
             };
             self.world = try track.Fleet.floorWorld(owned, (track.Fleet.Options{}).floor_friction);
             self.bridge = try robot_physics.Bridge.init(owned, &self.world, m, &self.data, 256);
@@ -513,7 +538,7 @@ pub fn Planner(comptime M: type) type {
             const horizon: usize = self.options.horizon;
             const samples: usize = self.options.samples;
             const dt: f32 = m.opt.timestep;
-            const random: std.Random = self.rng.random();
+            const random: Random = self.rng.random();
             const clip: *const dance.Clip = fleet.clips[fleet.clip_of[env]];
             const frame: usize = fleet.frame[env];
 
@@ -578,7 +603,7 @@ pub fn Planner(comptime M: type) type {
             const action_size: usize = track.actionSize(m);
             const horizon: usize = self.options.horizon;
             const samples: usize = self.options.samples;
-            const random: std.Random = self.rng.random();
+            const random: Random = self.rng.random();
             const clip: *const dance.Clip = fleet.clips[fleet.clip_of[env]];
             const frame: usize = fleet.frame[env];
 
@@ -606,7 +631,7 @@ pub fn Planner(comptime M: type) type {
         }
 
         /// Shift the plan forward a step and scatter samples around it.
-        fn shiftAndSample(self: *Self, random: std.Random, action_size: usize) void {
+        fn shiftAndSample(self: *Self, random: Random, action_size: usize) void {
             const horizon: usize = self.options.horizon;
             for (0..horizon - 1) |h| {
                 @memcpy(
@@ -649,20 +674,17 @@ pub fn Planner(comptime M: type) type {
         }
 
         /// What one predicted step costs: how far it is from where the reference will be.
-        fn stepCost(self: *Self, predicted: track.State, want: track.State, root: usize) f32 {
+        fn stepCost(
+            self: *Self,
+            predicted: track.State,
+            want: track.State,
+            root: usize,
+        ) f32 {
             const err: track.TrackingError = track.trackingError(predicted, want, root);
             return self.options.position_weight * (err.pose_position + err.root_position) +
                 self.options.rotation_weight * (err.pose_rotation + err.root_rotation);
         }
     };
-}
-
-fn actionSize2(action: []const f32) f32 {
-    var total: f32 = 0.0;
-    for (action) |a| {
-        total += a * a;
-    }
-    return total / float(action.len);
 }
 
 test "robot_world: D15 - the latent model against the structured one, on the same windows" {
@@ -677,16 +699,16 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
     if (!slow) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, flex2_xml, null);
     defer doc.deinit();
     var robot: mjcf.Robot = try mjcf.readRobot(gpa, &doc);
     defer robot.deinit();
-    var mjcf_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = zm.vec(0, 0, -9.81), .max_contacts = 256 };
+    var mjcf_options: rbt.Options = .{ .timestep = 1.0 / 60.0, .gravity = vec(0, 0, -9.81), .max_contacts = 256 };
     mjcf_options.solver.algorithm = .newton;
     var imported: robot_mjcf.Imported = try robot_mjcf.build(gpa, &robot, mjcf_options);
     defer imported.deinit();
@@ -694,7 +716,7 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
     var walk: dance.Clip = loadBakedWalk(gpa, io) catch
         return error.SkipZigTest;
     defer walk.deinit();
-    var scratch_data: rbt.Data = try rbt.Data.init(gpa, m);
+    var scratch_data: rbt.Data = try .init(gpa, m);
     defer scratch_data.deinit();
     // (The baked walk is already lifted clear of the floor; lifting it again is not the same clip.)
     const clips = [_]*const dance.Clip{&walk};
@@ -702,8 +724,8 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
     defer fleet.deinit();
     const actions: []f32 = try gpa.alloc(f32, 8 * track.actionSize(m));
     defer gpa.free(actions);
-    var rng: std.Random.DefaultPrng = .init(5);
-    const random: std.Random = rng.random();
+    var rng: Random.DefaultPrng = .init(5);
+    const random: Random = rng.random();
     for (0..300) |_| {
         for (actions) |*a| {
             a.* = 0.3 * (2.0 * random.float(f32) - 1.0);
@@ -740,10 +762,10 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
     report.print("\n  D15 (pose drift, mean body distance in the root frame, same windows):\n", .{});
     report.print("    latent training loss {d:.3} -> {d:.3} (normalised units)\n", .{ first_loss, last_loss });
     for ([_]usize{ 8, 32 }) |horizon| {
-        var a_rng: std.Random.DefaultPrng = .init(91);
-        var b_rng: std.Random.DefaultPrng = .init(91);
-        var c_rng: std.Random.DefaultPrng = .init(91);
-        var d_rng: std.Random.DefaultPrng = .init(91);
+        var a_rng: Random.DefaultPrng = .init(91);
+        var b_rng: Random.DefaultPrng = .init(91);
+        var c_rng: Random.DefaultPrng = .init(91);
+        var d_rng: Random.DefaultPrng = .init(91);
         const oracle: track.Drift = try track.measureDrift(gpa, fleet, .oracle, 80, horizon, a_rng.random());
         defer track.freeDrift(gpa, oracle);
         const hold: track.Drift = try track.measureDrift(gpa, fleet, .hold_first, 80, horizon, b_rng.random());
@@ -773,16 +795,4 @@ test "robot_world: D15 - the latent model against the structured one, on the sam
         }
     }
     try expect(last_loss < first_loss);
-}
-
-/// The baked walk (`zig build clip-bake`): retargeted, filtered and lifted exactly as these tests once
-/// did at startup, so the same clip - without half a minute of inverse kinematics before every test.
-fn loadBakedWalk(gpa: Allocator, io: std.Io) !dance.Clip {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, "assets/lafan1/walk1_subject2.zclip", .{});
-    defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
-    const bytes: []u8 = try gpa.alloc(u8, info.size);
-    defer gpa.free(bytes);
-    _ = try file.readPositionalAll(io, bytes, 0);
-    return dance.Clip.fromBytes(gpa, bytes);
 }

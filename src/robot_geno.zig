@@ -61,6 +61,15 @@ const shapes = @import("robot_geno_shapes.zig");
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
 const ArrayList = std.ArrayList;
+const Io = std.Io;
+const Random = std.Random;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
+const indexOfScalar = std.mem.indexOfScalar;
+const copyForwards = std.mem.copyForwards;
+const readInt = std.mem.readInt;
+const sortSlice = std.mem.sort;
 const Vec = zm.Vec;
 const Quat = zm.Quat;
 const vec = zm.vec;
@@ -410,15 +419,15 @@ const LittleEndian = struct {
     }
 
     fn uint16(self: *LittleEndian) u16 {
-        return std.mem.readInt(u16, self.take(2)[0..2], .little);
+        return readInt(u16, self.take(2)[0..2], .little);
     }
 
     fn uint32(self: *LittleEndian) u32 {
-        return std.mem.readInt(u32, self.take(4)[0..4], .little);
+        return readInt(u32, self.take(4)[0..4], .little);
     }
 
     fn int32(self: *LittleEndian) i32 {
-        return std.mem.readInt(i32, self.take(4)[0..4], .little);
+        return readInt(i32, self.take(4)[0..4], .little);
     }
 
     fn float32(self: *LittleEndian) f32 {
@@ -483,7 +492,7 @@ pub fn readMesh(gpa: Allocator, bytes: []const u8) !Mesh {
     for (0..joint_count) |j| {
         // A C-style name: 32 bytes, the name, then zeros.
         const raw: []const u8 = r.take(32);
-        const name_length: usize = std.mem.indexOfScalar(u8, raw, 0) orelse raw.len;
+        const name_length: usize = indexOfScalar(u8, raw, 0) orelse raw.len;
         joint_names[j] = try gpa.dupe(u8, raw[0..name_length]);
         named += 1;
         joint_parents[j] = r.int32();
@@ -1117,9 +1126,9 @@ pub fn measureVolume(
             }
         }
     }
-    std.mem.sort(Crossing, crossings.items, {}, Crossing.before);
+    sortSlice(Crossing, crossings.items, {}, Crossing.before);
 
-    var nearest: Nearest = try Nearest.init(gpa, mesh.positions, 0.03);
+    var nearest: Nearest = try .init(gpa, mesh.positions, 0.03);
     defer nearest.deinit(gpa);
     const shares: []Share = try gpa.alloc(Share, mesh.joint_names.len);
     errdefer gpa.free(shares);
@@ -1264,7 +1273,7 @@ fn bodyAbove(pose: Posed, i: usize) ?usize {
 ///
 /// The caller owns the returned slice. Names point into `body_names`.
 pub fn measureRanges(gpa: Allocator, rest: Posed, captures: []const []const u8) ![]Range {
-    assertf(std.mem.eql(u8, body_names[0], "Hips"), @src(), "measureRanges: the root must come first", .{});
+    assertf(eql(u8, body_names[0], "Hips"), @src(), "measureRanges: the root must come first", .{});
     const measured: []const []const u8 = body_names[1..];
     const count: usize = measured.len;
 
@@ -1400,9 +1409,9 @@ pub fn measureRanges(gpa: Allocator, rest: Posed, captures: []const []const u8) 
         const total: []f32 = totals[m].items;
         const swing: []f32 = swings[m].items;
         const twist: []f32 = twists[m].items;
-        std.mem.sort(f32, total, {}, std.sort.asc(f32));
-        std.mem.sort(f32, swing, {}, std.sort.asc(f32));
-        std.mem.sort(f32, twist, {}, std.sort.asc(f32));
+        sortSlice(f32, total, {}, std.sort.asc(f32));
+        sortSlice(f32, swing, {}, std.sort.asc(f32));
+        sortSlice(f32, twist, {}, std.sort.asc(f32));
         ranges[m] = .{
             .name = name,
             .frames = total.len,
@@ -1463,6 +1472,10 @@ pub const drecon_actuated = [_][]const u8{
 /// and 2 on every joint makes each as strong standing as the load it carries needs. With the capture-point
 /// reflex it holds the T-pose the full 10 s; it costs the dance nothing (1.26 s against 1.24 for the servo).
 pub const standing_armature: f32 = 2.0;
+
+const robot_mjcf = @import("robot_mjcf.zig");
+
+const rbt = @import("robot.zig");
 
 /// THE CAPTURE-POINT REFLEX (S2c), shared by `ServoRun` and the page: lean the body back through the ankles'
 /// targets when its capture point drifts ahead of the feet. Treat the body as an inverted pendulum on its
@@ -2061,7 +2074,7 @@ pub fn copyClip(
     const residual_body: []u32 = try gpa.alloc(u32, frames);
     errdefer gpa.free(residual_body);
 
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
     @memcpy(data.pos, imported.model.qpos0);
     @memset(data.vel, 0);
@@ -2124,6 +2137,205 @@ pub fn copyClip(
         .residual_body = residual_body,
     };
 }
+
+const zimrphysics = @import("zimrphysics.zig");
+
+const robot_physics = @import("robot_physics.zig");
+
+/// Geno's TERMINATION: the reference lost by tracking error as before, and by HEIGHT - the bodies' mean height off
+/// the reference's (relative, so lying is fine while the reference lies too). The limit is set by what it must
+/// tell apart, not by any clip (Sep 26): lying while the reference stands is a ~0.8 m gap; a dancer dropping to
+/// recover balance, 0.2-0.3 m. At 0.2 m (first try) it cut those recoveries - the servo's failures crossed it at
+/// 0.17-0.19 m mean with the pose itself near perfect (0.01 m, 0.05 rad), and the teacher's dance fell from
+/// 3.43 s to 1.24 s. At 0.4 m a crouch survives and staying down fails once the reference is halfway up.
+///
+/// And NOT by drifting or turning (Sep 26). With the root's world limits in (0.6 m, 1.5 rad) the teacher's dance
+/// collapsed to 1.0-1.6 s: at every "loss" its hips were 0.44-0.58 m off ACROSS THE FLOOR and its heading
+/// 5-144 degrees off, while its pose, seen from its own root, was 55-120 mm off - it had wandered, not fallen.
+/// On flat ground SuperTrack terminates on the head's height only (root limits only for rough terrain, where the
+/// reference's place matters). So the rule is "fallen, or lost the pose": the pose limits, the height relative to
+/// the reference's, and the TILT against gravity (~47 degrees) - no root position, no heading. The reward keeps
+/// its root terms: staying on the reference's path is encouraged, just not fatal.
+///
+/// CORRECTED the same day (Simon: "we want the robot to follow the reference root motion, or else it can never
+/// learn to really turn on the spot and go somewhere reliably"). MimicKit's DeepMimic humanoid DOES hold the
+/// root to the reference's - `track_root` with `global_obs`: the reward's root term is the GLOBAL position and
+/// rotation, its observation places the targets relative to the character, and its termination fails once the
+/// root is 1 m from the reference's (it was SuperTrack's FLAT-ground rule that ignores drift - its rough-terrain
+/// one adds 1 m / 90 degrees). The teacher's wandering was the teacher's to fix (its cost barely weighs drift), not
+/// the task's to forgive. So: 1 m for the root's place, 90 degrees for its rotation (relative to the reference's,
+/// so lying is fine while the reference lies) - and the observation now SHOWS the policy where the reference is.
+///
+/// And the WORST BODY (plan T2, Sep 27): the pose limits are means over the bodies, which forgive one limb far off -
+/// an arm pinned under the body barely moves the mean. MimicKit fails on the worst body instead; here it is 0.8 m,
+/// measured: the servo alone never bends a limb over 0.16 m from the reference's shape (it fails whole), the
+/// teacher - the best tracker - swings limbs out to 0.69 m WHILE SUCCEEDING, and nothing either of them does is cut
+/// from 0.7 m up. 0.8 leaves 11 cm over that largest good swing and still catches a limb that is truly lost.
+///
+/// And UNEXPECTED CONTACT (plan T3, Sep 27): a body on the floor that the reference holds higher than 0.3 m - chosen
+/// on the geometry, not measured: Geno's knee end stands at ~0.45 m and its hands and hips at 0.7-0.9 m, so each
+/// touching down while the reference stands reads well over 0.3; a get-up's hands and knees read 0 (the
+/// reference's are down too); and a hand lagging the reference's lift off the floor (~0.5-1 m/s) is tolerated for
+/// ~0.3-0.6 s. The feet are exempt (`tracking_task.contact_exempt`). A crouch deeper than a 0.3 m knee is its
+/// blind spot - nearly kneeling anyway. If it ever ends good runs, the overnight rehearsal (ON) shows it.
+///
+/// BOTH EVENT LIMITS ARE OFF FOR NOW (Sep 27, T3 revisit) - the worst body and unexpected contact above are kept as
+/// mechanism, not used. Judged silently, they would have ended ALL THREE of the teacher's good rises from the floor
+/// within 0.8 s (head reaching 0.77 / 0.90 / 1.12 m): from 509 the worst body (0.83 > 0.8), from 530 the chest down
+/// while the reference's is 0.30 m up, from 554 the right arm still pushing the floor while the reference's has
+/// lifted 0.6 m. A rise that LAGS the reference - as every learner's first rises will - is ended before it can
+/// succeed, so the night could never learn to get up. T3's own bar was "no false failures, or rejected with the
+/// numbers recorded": rejected, in this frame-by-frame form. A lag-tolerant form (unexpected only if the reference
+/// has not had that body down within the last ~0.5 s) is in the plan for later.
+///
+/// SUPERTRACK'S RULE, ADOPTED (Sep 27, plan F3b): the HEAD's height more than 25 cm off the reference head's, plus the
+/// root held within 1 m / 90 degrees (the paper's drift variant, and Simon's root-motion requirement) - every other
+/// limit OFF, our old pose defaults (mean 0.35 m / 1.2 rad) included. Judged side by side the two were equally
+/// strict: servo alone on the 10-second dance MTTF 1.53 s (ours 1.61), on the get-up 2.75 s (ours 2.89); the teacher
+/// on the dance 1.66 s (ours 1.56). The servo and the teacher fail by FALLING, and the head's height says so as soon
+/// as five limits did. So the simpler rule - one clip-agnostic limit plus the root, the one SuperTrack's published
+/// results were measured under - wins. (The paper's minimum episode length, 48 frames, is our training grace -
+/// a learner's aid, set where the learner's windows are; the judge keeps none.)
+pub const task_termination: robot_track.Termination = .{
+    .pose_position = 1.0e30,
+    .pose_rotation = 1.0e30,
+    .root_position = 1.0,
+    .root_rotation = 1.57,
+    .head_height = 0.25,
+};
+
+/// Geno's REWARD: DReCon's terms, GATED by gravity - the body's heights and its tilt against gravity must match
+/// the reference's, or the whole reward sinks. Ungated, a body lying on the floor with the right joint angles
+/// scored 0.80 while its reference stood (robot_track's "gravity gate" test); the teacher, whose cost had the
+/// same blind spot, never rose from the floor until gravity was in it (ON.2.1d). 5 cm of mean height error keeps
+/// 78% of the reward, lying 0.8 m low keeps 2%; an 11-degree tilt keeps 67%, lying flat 6%.
+pub const task_weights: robot_track.RewardWeights = .{ .height_scale = 0.2, .up_scale = 0.5 };
+
+/// The bodies Geno stands on - never an UNEXPECTED floor contact: a foot is down through every stance while the
+/// reference lifts it into each swing, and a character a few frames behind still has it down. Everything else
+/// that touches while the reference holds it up is a fall starting: a knee (the thigh's lowest point is its knee
+/// end), a hand, the hips. (The shins need no exemption: their lowest point is the ankle end, a few centimetres up
+/// even standing, so they can never be "held up" by the reference.)
+pub const foot_bodies = [_][]const u8{ "LeftFoot", "LeftToeBase", "RightFoot", "RightToeBase" };
+
+/// Geno's task. What every fleet and trainer that trains or judges Geno must see.
+pub const tracking_task: robot_track.Task = .{
+    .gains = servo_gains,
+    .floor_friction = floor_friction,
+    .rest_on_floor = true,
+    .weights = task_weights,
+    .termination = task_termination,
+    .contact_exempt = &foot_bodies,
+    // The head, for the head-height term (SuperTrack's failure rule - plan F3b).
+    .head_body = "Head",
+};
+
+/// ONE FAILURE CRITERION (ON.0b, Sep 26) - used by the teacher's fall penalty, every survival loop, the recorder,
+/// every test and the page: has a character lost the clean reference at clip frame `f`? The task's own rule -
+/// `robot_track.terminated` with `termination` (Geno's `task_termination`: tracking error, and the bodies' height
+/// RELATIVE to the reference's, so lying is no failure while the reference lies) - through the very functions
+/// training and judging use. It replaced a hips-35-cm rule that the teacher, the tests and the page each applied
+/// their own way: with ~100 clips and get-ups hidden in some, a teacher avoiding one kind of failure while the
+/// learner is punished for another is exactly where a night would go wrong.
+pub const FailureCheck = struct {
+    termination: robot_track.Termination = task_termination,
+    /// The clean reference, posed at the frame asked about.
+    judge: rbt.Data,
+    /// Both characters as the task sees them, and the root they are measured from.
+    sim_state: robot_track.State,
+    ref_state: robot_track.State,
+    root: usize,
+    /// The error behind the latest verdict - which limit it crossed, for anyone asking why.
+    last: robot_track.TrackingError = undefined,
+    /// Per body: exempt from unexpected contact - the task's feet (`tracking_task.contact_exempt`), resolved by
+    /// name exactly as the fleet resolves them, so the two judge contact identically.
+    contact_exempt: []bool,
+    /// The head (`tracking_task.head_body`), resolved the same way - for the head-height term.
+    head: ?usize,
+
+    pub fn init(
+        gpa: Allocator,
+        m: *const rbt.Model,
+        model_body_names: []const []const u8,
+    ) !FailureCheck {
+        var judge: rbt.Data = try .init(gpa, m);
+        errdefer judge.deinit();
+        var sim_state: robot_track.State = try .init(gpa, m.nbody);
+        errdefer sim_state.deinit(gpa);
+        var ref_state: robot_track.State = try .init(gpa, m.nbody);
+        errdefer ref_state.deinit(gpa);
+        const exempt_names: []const []const u8 = tracking_task.contact_exempt;
+        const exempt: []bool = try robot_track.contactExemptMask(gpa, m.nbody, exempt_names, model_body_names);
+        errdefer gpa.free(exempt);
+        const head: ?usize = try robot_track.headBody(tracking_task.head_body, model_body_names);
+        return .{
+            .judge = judge,
+            .sim_state = sim_state,
+            .ref_state = ref_state,
+            .root = robot_track.rootBody(m),
+            .contact_exempt = exempt,
+            .head = head,
+        };
+    }
+
+    pub fn deinit(self: *FailureCheck, gpa: Allocator) void {
+        gpa.free(self.contact_exempt);
+        self.ref_state.deinit(gpa);
+        self.sim_state.deinit(gpa);
+        self.judge.deinit();
+    }
+
+    pub fn lost(
+        self: *FailureCheck,
+        m: *const rbt.Model,
+        data: *const rbt.Data,
+        clip: *const dance.Clip,
+        f: usize,
+    ) bool {
+        return self.within(m, data, clip, f, 1.0);
+    }
+
+    /// The same criterion with every limit scaled by `fraction` - an EARLY WARNING for anyone who must steer
+    /// away before the end: the one rule, with a margin.
+    pub fn within(
+        self: *FailureCheck,
+        m: *const rbt.Model,
+        data: *const rbt.Data,
+        clip: *const dance.Clip,
+        f: usize,
+        fraction: f32,
+    ) bool {
+        return self.withinLimits(m, data, clip, f, self.termination.scaled(fraction));
+    }
+
+    /// The criterion against `limits` instead of the check's own - for an early warning built from the task's rule
+    /// with some limits left out (`teacher_warning`, plan T4b). The error is measured exactly as always; only the
+    /// verdict's limits change.
+    pub fn withinLimits(
+        self: *FailureCheck,
+        m: *const rbt.Model,
+        data: *const rbt.Data,
+        clip: *const dance.Clip,
+        f: usize,
+        limits: robot_track.Termination,
+    ) bool {
+        // Posed EXACTLY as the fleet poses its reference (`Fleet.referenceStateInto`) - positions, and velocities
+        // by differencing from the frame before - so the error is the task's to the last field. (Until Sep 26 only
+        // positions were posed: the velocity terms read whatever the judge last held.)
+        const at: usize = @min(f, clip.frame_count - 1);
+        const previous: usize = if (at == 0) 0 else at - 1;
+        const skip: usize = clip.nq - m.nq;
+        @memcpy(self.judge.pos, clip.pose(at)[skip..]);
+        rbt.differentiatePos(m, self.judge.vel, clip.pose(previous)[skip..], clip.pose(at)[skip..], clip.frame_time);
+        self.judge.stage = .stale;
+        rbt.forward(m, &self.judge);
+        robot_track.stateOf(m, data, &self.sim_state);
+        robot_track.exemptFromContact(&self.sim_state, self.contact_exempt);
+        robot_track.stateOf(m, &self.judge, &self.ref_state);
+        self.last = robot_track.trackingErrorWithHead(self.sim_state, self.ref_state, self.root, self.head);
+        return robot_track.terminated(self.last, limits);
+    }
+};
 
 /// Geno on a floor, driven through a clip by the tracking task's servo alone - the loop the `geno_track`
 /// page runs, here where a test can run it headless. It owns the collision world, the bridge and the
@@ -2214,10 +2426,10 @@ pub const ServoRun = struct {
         self.gpa = gpa;
         self.model = m;
         self.hips = imported.bodyIndex("Hips") orelse return error.NoHips;
-        self.reflex = try .init(imported, self.hips);
+        self.reflex = try Reflex.init(imported, self.hips);
         self.data = try rbt.Data.init(gpa, m);
         self.reference = try rbt.Data.init(gpa, m);
-        self.check = try .init(gpa, m, imported.names);
+        self.check = try FailureCheck.init(gpa, m, imported.names);
         @memcpy(self.data.pos, m.qpos0);
         @memset(self.data.vel, 0);
         self.data.stage = .stale;
@@ -2228,7 +2440,7 @@ pub const ServoRun = struct {
         self.full = try gpa.alloc(f32, nv);
         self.torque = try gpa.alloc(f32, nv);
         self.wrench = try gpa.alloc(f32, nv);
-        self.contact = try .init(gpa, nv);
+        self.contact = try dance.ContactScratch.init(gpa, nv);
         self.law = .floating;
         self.gains = servo_gains;
         self.friction = friction;
@@ -2244,7 +2456,7 @@ pub const ServoRun = struct {
     /// The collision world - a floor, a static box whose top face is the engine's z = 0 - and the bridge
     /// that joins it to the robot. Built once; `start` only makes it forget.
     fn buildWorld(self: *ServoRun) !void {
-        self.world = try .init(self.gpa, 64);
+        self.world = try zimrphysics.World.init(self.gpa, 64);
         const floor_shape: zimrphysics.ShapeId = try self.world.shapes.add(self.gpa, .{
             .box = .{ .half_extent = vec(50, 50, 0.5), .convex_radius = 0.001 },
         });
@@ -2255,7 +2467,7 @@ pub const ServoRun = struct {
             .motion_type = .static,
             .friction = self.friction,
         });
-        self.bridge = try .init(self.gpa, &self.world, self.model, &self.data, 256);
+        self.bridge = try robot_physics.Bridge.init(self.gpa, &self.world, self.model, &self.data, 256);
         self.bridge.listen(&self.world);
     }
 
@@ -2517,7 +2729,7 @@ pub const Planner = struct {
     target: []f32,
     probe: rbt.Data,
     moment: ServoRun.Snapshot,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     /// CANDIDATE RECORDING (D3): when set, every step of every candidate rollout - the rejected ones too - is
     /// appended to `candidates` (environment `candidate_env`, one segment per rollout), every
     /// `candidate_every`-th control step. The teacher's CHOSEN actions are a function of its state, so a world
@@ -2652,7 +2864,7 @@ pub const Planner = struct {
             dof.* = m.jnt_dof_adr[joint] - robot_track.rootDofs(m);
         }
         // The height term's bodies: the names this robot has (a skeleton's name may be merged into a neighbour).
-        var height_set: std.ArrayList(u32) = .empty;
+        var height_set: ArrayList(u32) = .empty;
         errdefer height_set.deinit(gpa);
         for (options.height_bodies) |name| {
             if (imported.bodyIndex(name)) |body| {
@@ -2677,7 +2889,7 @@ pub const Planner = struct {
         errdefer gpa.free(best);
         const target: []f32 = try gpa.alloc(f32, m.nq);
         errdefer gpa.free(target);
-        var probe: rbt.Data = try rbt.Data.init(gpa, m);
+        var probe: rbt.Data = try .init(gpa, m);
         errdefer probe.deinit();
         // The posture gate's body, and its standing height: the bind pose's, above the bind pose's own lowest point.
         var posture_body: u32 = 0;
@@ -2702,8 +2914,8 @@ pub const Planner = struct {
             .best = best,
             .target = target,
             .probe = probe,
-            .moment = try .init(gpa, m),
-            .rng = .init(options.seed),
+            .moment = try ServoRun.Snapshot.init(gpa, m),
+            .rng = Random.DefaultPrng.init(options.seed),
             .height_set = try height_set.toOwnedSlice(gpa),
             .posture_body = posture_body,
             .stand_height = stand_height,
@@ -2885,7 +3097,7 @@ pub const Planner = struct {
                 _ = self.actionFor(plan, float(h), self.candidate_scale, action);
                 if (self.candidate_jitter > 0.0) {
                     const reach: f32 = self.options.limit / self.candidate_scale;
-                    const random: std.Random = self.rng.random();
+                    const random: Random = self.rng.random();
                     for (self.joint_dof) |dof| {
                         for (action[dof..][0..3]) |*a| {
                             a.* = clamp(a.* + self.candidate_jitter * random.floatNorm(f32), -reach, reach);
@@ -2951,7 +3163,7 @@ pub const Planner = struct {
             }
         }
         var best_cost: f32 = 1.0e30;
-        const random: std.Random = self.rng.random();
+        const random: Random = self.rng.random();
         var iteration: u32 = 0;
         while (iteration < @max(self.options.iterations, 1)) : (iteration += 1) {
             if (iteration > 0) {
@@ -2971,7 +3183,7 @@ pub const Planner = struct {
         self: *Planner,
         clip: *const dance.Clip,
         f: usize,
-        random: std.Random,
+        random: Random,
         best_cost: *f32,
     ) !void {
         for (0..self.options.samples) |k| {
@@ -3234,11 +3446,7 @@ const expect = std.testing.expect;
 const bind_bvh: []const u8 = @embedFile("tests/fixtures/robot/geno_bind.bvh");
 const stance_bvh: []const u8 = @embedFile("tests/fixtures/robot/geno_stance.bvh");
 const mesh_bin: []const u8 = @embedFile("tests/fixtures/robot/geno.bin");
-const rbt = @import("robot.zig");
 const mjcf = @import("mjcf.zig");
-const robot_mjcf = @import("robot_mjcf.zig");
-const robot_physics = @import("robot_physics.zig");
-const zimrphysics = @import("zimrphysics.zig");
 
 /// How far apart two rotations are, in degrees (0 = the same rotation, whichever sign each carries).
 ///
@@ -3256,7 +3464,7 @@ test "robot_geno: R1 - Geno's measurements, as our own code reads them" {
     // are the numbers every later step depends on, so they are asserted here rather than trusted:
     // a silent change in the parser, the codec or the file would otherwise show up much later as a
     // robot that no longer matches its captures.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var bind: Posed = try readPose(gpa, bind_bvh);
     defer bind.deinit(gpa);
     var stance: Posed = try readPose(gpa, stance_bvh);
@@ -3306,7 +3514,7 @@ test "robot_geno: R1 - Geno's measurements, as our own code reads them" {
     try expect(bind.bones.len == stance.bones.len);
     var worst: f32 = 0.0;
     for (bind.bones, stance.bones) |a, b| {
-        try expect(std.mem.eql(u8, a.name, b.name));
+        try expect(eql(u8, a.name, b.name));
         try expect(a.parent == b.parent);
         if (a.parent >= 0) {
             worst = @max(worst, length3(a.offset - b.offset));
@@ -3320,7 +3528,7 @@ test "robot_geno: R1 - Geno's measurements, as our own code reads them" {
 }
 
 test "robot_geno: R2 - the robot's zero pose is Geno's bind pose, and a pose is a copy" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var bind: Posed = try readPose(gpa, bind_bvh);
     defer bind.deinit(gpa);
     var stance: Posed = try readPose(gpa, stance_bvh);
@@ -3406,7 +3614,7 @@ test "robot_geno: R2 - the robot's zero pose is Geno's bind pose, and a pose is 
 }
 
 test "robot_geno: R3 - the sole plane, derived from Geno's own mesh" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var mesh: Mesh = try readMesh(gpa, mesh_bin);
     defer mesh.deinit(gpa);
     var bind: Posed = try readPose(gpa, bind_bvh);
@@ -3455,7 +3663,7 @@ test "robot_geno: R5 - the volume sampler, on a box whose answer is known" {
     // THE METHOD FIRST, on something with an exact answer: a 0.3 x 0.5 x 0.2 m box, deliberately NOT at
     // the origin, so that a mistake in moving the moments to the centre cannot hide. Uniform density:
     // volume abc, mass density * abc, and about its centre I_xx = m (b^2 + c^2) / 12 and so on.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const size: [3]f32 = .{ 0.3, 0.5, 0.2 };
     const middle: Vec = vec(0.1, 0.4, -0.05);
     var corners: [8]Vec = undefined;
@@ -3638,7 +3846,7 @@ fn compareWithTables(mesh: Mesh, body: BodyVolume, total: f32) ![anthropometry.l
 }
 
 test "robot_geno: R5 - Geno's mass and inertia, from its own volume" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var mesh: Mesh = try readMesh(gpa, mesh_bin);
     defer mesh.deinit(gpa);
     var body: BodyVolume = try measureVolume(gpa, mesh, volume_step, .skin_weights);
@@ -3674,13 +3882,13 @@ test "robot_geno: R5 - Geno's mass and inertia, from its own volume" {
     // the tables' own way, they weigh the same. It is Geno's build. Pinned here exactly, so a NEW
     // deviation fails this test.
     for (anthropometry, beyond) |segment, off| {
-        const expected_off: bool = std.mem.eql(u8, segment.name, "upper arm") or std.mem.eql(u8, segment.name, "foot");
+        const expected_off: bool = eql(u8, segment.name, "upper arm") or eql(u8, segment.name, "foot");
         try expect(off == expected_off);
     }
 }
 
 test "robot_geno: R5b - cut the tables' way, and what it shows about Geno's build" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var mesh: Mesh = try readMesh(gpa, mesh_bin);
     defer mesh.deinit(gpa);
     var by_skin: BodyVolume = try measureVolume(gpa, mesh, volume_step, .skin_weights);
@@ -3706,11 +3914,11 @@ test "robot_geno: R5b - cut the tables' way, and what it shows about Geno's buil
     // upper arms and feet ARE heavier, as a share of the body, than the adults the tables measured - a
     // stylised character's build - and the robot keeps Geno's body, because the robot is meant to BE Geno.
     for (anthropometry, beyond) |segment, off| {
-        const expected_off: bool = std.mem.eql(u8, segment.name, "upper arm") or std.mem.eql(u8, segment.name, "foot");
+        const expected_off: bool = eql(u8, segment.name, "upper arm") or eql(u8, segment.name, "foot");
         try expect(off == expected_off);
     }
     for (anthropometry) |segment| {
-        const heavy: bool = std.mem.eql(u8, segment.name, "upper arm") or std.mem.eql(u8, segment.name, "foot");
+        const heavy: bool = eql(u8, segment.name, "upper arm") or eql(u8, segment.name, "foot");
         if (!heavy) {
             continue;
         }
@@ -3727,10 +3935,10 @@ test "robot_geno: R5b - cut the tables' way, and what it shows about Geno's buil
 
 /// Read a whole file under the working directory - for the tests that use the tracking set in `assets/`,
 /// which `@embedFile` cannot reach from here.
-fn readAsset(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
-    var file: std.Io.File = try std.Io.Dir.cwd().openFile(io, path, .{});
+fn readAsset(gpa: Allocator, io: Io, path: []const u8) ![]u8 {
+    var file: Io.File = try Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
-    const info: std.Io.File.Stat = try file.stat(io);
+    const info: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, info.size);
     errdefer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -3738,8 +3946,8 @@ fn readAsset(gpa: Allocator, io: std.Io, path: []const u8) ![]u8 {
 }
 
 test "robot_geno: R6 - joint ranges, from the tracking set's four clips" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     // The library: every capture we have on Geno's own skeleton. (The stumble exists only on LaFAN's
     // ORIGINAL 22-joint skeleton, whose rotations mean something else, so it cannot join.)
@@ -3790,8 +3998,8 @@ test "robot_geno: R6 - joint ranges, from the tracking set's four clips" {
     // squatting) and no human knee folds past about 165 degrees; an elbow bends past 60 degrees in a
     // dance and a run, and stops short of 165 too. If the swing were not the bend, these would say so.
     for (ranges) |range| {
-        const knee: bool = std.mem.eql(u8, range.name, "LeftLeg") or std.mem.eql(u8, range.name, "RightLeg");
-        const elbow: bool = std.mem.eql(u8, range.name, "LeftForeArm") or std.mem.eql(u8, range.name, "RightForeArm");
+        const knee: bool = eql(u8, range.name, "LeftLeg") or eql(u8, range.name, "RightLeg");
+        const elbow: bool = eql(u8, range.name, "LeftForeArm") or eql(u8, range.name, "RightForeArm");
         if (knee) {
             try expect(range.swing_max > 90.0 and range.swing_max < 165.0);
         }
@@ -3802,8 +4010,12 @@ test "robot_geno: R6 - joint ranges, from the tracking set's four clips" {
 }
 
 test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing on a floor, copying a capture" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const paths = [_][]const u8{
         "assets/lafan1/walk1_subject2.bvh",
@@ -3836,9 +4048,9 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     // or stale, it is rewritten here and the test fails once - so a changed model always arrives as a diff.
     const stored: ?[]u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch null;
     defer if (stored) |bytes| gpa.free(bytes);
-    const current: bool = if (stored) |bytes| std.mem.eql(u8, bytes, xml) else false;
+    const current: bool = if (stored) |bytes| eql(u8, bytes, xml) else false;
     if (!current) {
-        const file: std.Io.File = try std.Io.Dir.cwd().createFile(threaded.io(), model_fixture_path, .{});
+        const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), model_fixture_path, .{});
         defer file.close(threaded.io());
         try file.writeStreamingAll(threaded.io(), xml);
         report.print("\n  R8a: {s} was {s} - rewritten from writeModel; review the diff and run again\n", .{
@@ -3859,7 +4071,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
         .max_contacts = 256,
     });
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
     @memcpy(data.pos, imported.model.qpos0);
     @memset(data.vel, 0);
@@ -4017,7 +4229,7 @@ test "robot_geno: R6b, R6c, R7 - the model: assembled in the bind pose, standing
     // frame's tilt is how far that normal has turned from up. It is read on the walk's first frame - a
     // quiet stance before the first step. (The get-up's final frame is not one: its feet are turned 90
     // degrees from their rest, so it does not end flat-footed.)
-    var rest: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var rest: rbt.Data = try .init(gpa, &imported.model);
     defer rest.deinit();
     @memcpy(rest.pos, imported.model.qpos0);
     @memset(rest.vel, 0);
@@ -4182,8 +4394,8 @@ test "robot_geno: R8a part 3 - the task's servo drives all 23 of Geno's ball joi
     // loaded from its fixture, as the task will load it, with gravity and contacts away so that only the
     // servo acts. From the bind pose toward the walk's first frame, copied, every joint must close in on
     // its target within half a second.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -4202,7 +4414,7 @@ test "robot_geno: R8a part 3 - the task's servo drives all 23 of Geno's ball joi
     });
     defer imported.deinit();
     const m: *const rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, m);
+    var data: rbt.Data = try .init(gpa, m);
     defer data.deinit();
     @memcpy(data.pos, m.qpos0);
     @memset(data.vel, 0);
@@ -4266,8 +4478,8 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -4411,9 +4623,15 @@ test "robot_geno: R9 and R10, measured early - Geno held and servoed on a floor,
 }
 
 test "robot_geno: S1 tuning sweep - which settings keep the get-up up longest" {
-    // A slow test - a minute of simulation - run when the tuning is revisited (`-Dslow-tests`).
+    // A slow test - a minute of simulation - run when the tuning is revisited (`-Dslow-tests -Dtest-report`).
     const options = @import("build_options");
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
         return error.SkipZigTest;
     }
     // Each setting judged by the get-up's mean time to failure over 17 starts through the clip. Last run:
@@ -4422,8 +4640,8 @@ test "robot_geno: S1 tuning sweep - which settings keep the get-up up longest" {
     // stiffer servo follows the reference harder where it cannot be followed.
     // The model's knobs are set on the parsed model in memory, so the search
     // leaves the fixture alone; the winner is then written into `writeModel` and `servo_gains`.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -4497,8 +4715,8 @@ test "robot_geno: a restart is a clean start - the same start ends the same way,
     // Determinism, the known answer: run a stretch of the walk, restart at the same frame, run it again -
     // every body must end exactly where it did. Anything carried across the restart (a warm start, a cached
     // contact) shows up here as a difference.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -4663,14 +4881,18 @@ const TrialSource = struct {
     armature: ?f32 = null,
 };
 
-fn holdTrial(
-    gpa: Allocator,
-    model_text: []const u8,
-    recipe: HoldRecipe,
-    seed: u64,
-) !HoldResult {
-    return trackTrial(gpa, model_text, recipe, seed, .{});
-}
+/// Geno's servo, floor and floor rest WITHOUT the gated reward and the task's failure rule - the default reward
+/// and limits. The condition the D-phase experiments (D3, D4, D5, S2b) were run and recorded under: their tests
+/// keep it, so the numbers in the journal still reproduce, and the difference from `tracking_task` is visible by NAME
+/// rather than by a missing line. Moving them to `tracking_task` means re-measuring them; that is its own step.
+pub const servo_task: robot_track.Task = .{
+    .gains = servo_gains,
+    .floor_friction = floor_friction,
+    .rest_on_floor = true,
+};
+
+/// How long each controller is judged in the real simulator, in frames (20 s).
+const judge_steps: usize = 1200;
 
 fn trackTrial(
     gpa: Allocator,
@@ -4707,15 +4929,15 @@ fn trackTrial(
         if (skip > 0) {
             const nq: usize = copied.nq;
             const keep: usize = copied.frame_count - skip;
-            std.mem.copyForwards(f32, copied.targets[0 .. keep * nq], copied.targets[skip * nq ..][0 .. keep * nq]);
-            std.mem.copyForwards(f32, copied.residual[0..keep], copied.residual[skip..][0..keep]);
-            std.mem.copyForwards(u32, copied.residual_body[0..keep], copied.residual_body[skip..][0..keep]);
+            copyForwards(f32, copied.targets[0 .. keep * nq], copied.targets[skip * nq ..][0 .. keep * nq]);
+            copyForwards(f32, copied.residual[0..keep], copied.residual[skip..][0..keep]);
+            copyForwards(u32, copied.residual_body[0..keep], copied.residual_body[skip..][0..keep]);
             copied.frame_count = keep;
         }
         copied.frame_count = @min(copied.frame_count, int(usize, source.seconds / copied.frame_time));
         // Every frame resting ON the floor, not in it (R8a part 5): the fleet's reward and observations use
         // the reference's absolute root height, and a reference sunk into the floor punishes standing on it.
-        var probe: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var probe: rbt.Data = try .init(gpa, &imported.model);
         defer probe.deinit();
         _ = restClipOnFloor(&imported.model, &probe, &copied, 0.001);
         break :blk copied;
@@ -4734,7 +4956,7 @@ fn trackTrial(
     defer fleet.deinit();
     const noise: []f32 = try gpa.alloc(f32, envs * robot_track.actionSize(&imported.model));
     defer gpa.free(noise);
-    var rng: std.Random.DefaultPrng = .init(seed +% 4);
+    var rng: Random.DefaultPrng = .init(seed +% 4);
     for (0..recipe.prefill_steps) |_| {
         for (noise) |*a| {
             a.* = recipe.prefill_noise * rng.random().floatNorm(f32);
@@ -4796,8 +5018,14 @@ fn trackTrial(
     };
 }
 
-/// How long each controller is judged in the real simulator, in frames (20 s).
-const judge_steps: usize = 1200;
+fn holdTrial(
+    gpa: Allocator,
+    model_text: []const u8,
+    recipe: HoldRecipe,
+    seed: u64,
+) !HoldResult {
+    return trackTrial(gpa, model_text, recipe, seed, .{});
+}
 
 /// The recipe first tried (Sep 23): unstable across seeds - seed 1 held 2.67 s, seed 2 0.43.
 const first_recipe: HoldRecipe = .{
@@ -4827,6 +5055,28 @@ const steady_recipe: HoldRecipe = .{
     .explore = 0.3,
 };
 
+const hold_seeds = [_]u64{1};
+
+/// The stable world again, and a policy that can SEE its correction pay off: a 32-frame window (half a
+/// second, the SuperTrack paper's) instead of 8 - within 0.13 s no correction to a topple pays, so a stable
+/// model rightly taught the policy to do nothing - and the learner's default action penalty (0.01).
+const farsighted_recipe: HoldRecipe = .{
+    .prefill_steps = 400,
+    .prefill_noise = 0.3,
+    .world_rate = 3.0e-4,
+    .world_pretrain = 600,
+    .rounds = 20,
+    .world_per_round = 16,
+    .policy_per_round = 8,
+    .policy_rate = 3.0e-4,
+    .explore = 0.3,
+    .window = 32,
+    .w_action = 0.01,
+};
+
+/// Which recipe the T-pose test runs, and over which seeds. (`first_recipe` stays as the baseline row.)
+const hold_recipe: HoldRecipe = farsighted_recipe;
+
 test "robot_geno: S0 - SuperTrack learns to hold Geno's T-pose, headless" {
     // The first SuperTrack test on Geno: the CPU learner and the task's fleet, both unchanged - the fleet
     // takes any model and any clip - holding the T-pose, which the servo alone cannot (it tips over). A
@@ -4836,8 +5086,14 @@ test "robot_geno: S0 - SuperTrack learns to hold Geno's T-pose, headless" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -4877,31 +5133,14 @@ const committed_recipe: HoldRecipe = .{
     .explore = 0.3,
 };
 
-/// The stable world again, and a policy that can SEE its correction pay off: a 32-frame window (half a
-/// second, the SuperTrack paper's) instead of 8 - within 0.13 s no correction to a topple pays, so a stable
-/// model rightly taught the policy to do nothing - and the learner's default action penalty (0.01).
-const farsighted_recipe: HoldRecipe = .{
-    .prefill_steps = 400,
-    .prefill_noise = 0.3,
-    .world_rate = 3.0e-4,
-    .world_pretrain = 600,
-    .rounds = 20,
-    .world_per_round = 16,
-    .policy_per_round = 8,
-    .policy_rate = 3.0e-4,
-    .explore = 0.3,
-    .window = 32,
-    .w_action = 0.01,
-};
-
-/// Which recipe the T-pose test runs, and over which seeds. (`first_recipe` stays as the baseline row.)
-const hold_recipe: HoldRecipe = farsighted_recipe;
 comptime {
     _ = first_recipe;
     _ = steady_recipe;
     _ = committed_recipe;
 }
-const hold_seeds = [_]u64{1};
+
+/// The SAC trial's training time, in milliseconds.
+const sac_budget_ms: i96 = 110_000;
 
 test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
     // The critic-based model-free baseline: robot_gym's SAC agent, unchanged, acting in DReCon's layer on
@@ -4913,10 +5152,16 @@ test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const model_text: []u8 = readAsset(gpa, io, model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, model_text, null);
@@ -4992,10 +5237,10 @@ test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
         }
     };
     Observer.all(m, fleet, subset, &controller, &sim_state, &views, obs, n_obs);
-    const started: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const started: Io.Timestamp = Io.Clock.now(.awake, io);
     var transitions: usize = 0;
     while (true) {
-        const elapsed: i96 = std.Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
+        const elapsed: i96 = Io.Clock.now(.awake, io).nanoseconds - started.nanoseconds;
         if (@divTrunc(elapsed, 1_000_000) > sac_budget_ms) {
             break;
         }
@@ -5055,17 +5300,18 @@ test "robot_geno: S2b - SAC holds Geno's T-pose, model-free" {
     try expect(lengths[0] == lengths[0]);
 }
 
-/// The SAC trial's training time, in milliseconds.
-const sac_budget_ms: i96 = 110_000;
-
 test "robot_geno: S2c - the T-pose HOLDS: standing armature and the capture-point reflex" {
     // The standing result, guarded. In this servo a joint's strength is its free-flight inertia (torque =
     // inertia x the spring's acceleration), so `standing_armature` on every joint makes each as strong as the
     // load it carries standing; the reflex leans the body back through the ankles when its capture point
     // drifts ahead of the feet. Neither alone holds (armature alone ~1.2 s, the reflex alone ~1.0 s). The
     // reflex has a window: 2-4 holds, 8 over-corrects into a wobble. Known answer: gain 3 holds all 10 s.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5115,8 +5361,8 @@ test "robot_geno: the dance's first 5 s - the servo alone, with light joints and
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5171,14 +5417,24 @@ test "robot_geno: the dance's first 5 s - the servo alone, with light joints and
     }
 }
 
+/// The armature the dance trial's robot gets - chosen by the servo-alone comparison above: armature 2 costs
+/// the dance nothing (1.26 s against 1.24) and lets the robot stand.
+const dance_armature: ?f32 = 2.0;
+
 test "robot_geno: S0 dance - SuperTrack on the dance's first 5 s" {
     // Back to SuperTrack, on the dance - the first 5 s only (Simon) - with the stable recipe, judged over 20 s.
     const options = @import("build_options");
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5211,16 +5467,12 @@ test "robot_geno: S0 dance - SuperTrack on the dance's first 5 s" {
     try expect(result.world_loss == result.world_loss);
 }
 
-/// The armature the dance trial's robot gets - chosen by the servo-alone comparison above: armature 2 costs
-/// the dance nothing (1.26 s against 1.24) and lets the robot stand.
-const dance_armature: ?f32 = 2.0;
-
 test "robot_geno: D1 - save and restore: two rollouts from one moment are identical" {
     // The sampling planner's foundation: every candidate plan must start from the SAME moment. Known answers:
     // two 20-step rollouts from one restore are bit-identical; and the drift from the run that never stopped
     // (restore forgets warm starts and cached contacts) is measured, to know what the planner's rollouts cost.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5287,8 +5539,8 @@ test "robot_geno: a restart rests on the floor - no jump, no spin" {
     // and the contact solver throws the overlap out in one step. Known answers, on the walk's first frame:
     // the penetration before the lift; the lowest point after it exactly 1 mm clear; and the first ten
     // steps' largest vertical speed and spin rate without and with the lift.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5346,8 +5598,8 @@ test "robot_geno: a launch at a random dance frame - every body onto the next fr
     // precision, since the velocity IS the engine's tangent difference of the two frames. Then the physical
     // launch - one real step, gravity, contacts and servo - against the same next frame, and the same launched
     // at rest: a moving body launched still lags by its own speed times a frame.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5374,13 +5626,13 @@ test "robot_geno: a launch at a random dance frame - every body onto the next fr
     try run.init(gpa, &imported, floor_friction);
     defer run.deinit();
     const m: *const rbt.Model = run.model;
-    var probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
-    var next: rbt.Data = try rbt.Data.init(gpa, m);
+    var next: rbt.Data = try .init(gpa, m);
     defer next.deinit();
-    var before_frame: rbt.Data = try rbt.Data.init(gpa, m);
+    var before_frame: rbt.Data = try .init(gpa, m);
     defer before_frame.deinit();
-    var rng: std.Random.DefaultPrng = .init(7);
+    var rng: Random.DefaultPrng = .init(7);
     var worst_kinematic: f32 = 0.0;
     for (0..5) |_| {
         const f: usize = 1 + rng.random().uintLessThan(usize, clip.frame_count - 3);
@@ -5469,8 +5721,8 @@ test "robot_geno: the whole 30 s dance - the servo alone, strong joints, with an
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5536,8 +5788,8 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
     if (!report.requested()) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5589,8 +5841,8 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
             const b: usize = event.other_body;
             if (b == rbt.world_body) {
                 const name: []const u8 = imported.names[a];
-                const foot: bool = std.mem.indexOf(u8, name, "Foot") != null or
-                    std.mem.indexOf(u8, name, "Toe") != null;
+                const foot: bool = indexOf(u8, name, "Foot") != null or
+                    indexOf(u8, name, "Toe") != null;
                 if (!foot) {
                     floor_touch[a] += 1;
                 }
@@ -5626,7 +5878,7 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
     }
     // What excluding them buys: the servo alone over the whole dance, with the model's exclusions (pairs
     // overlapping at rest) and with every pair found above added (pairs the REFERENCE makes overlap).
-    var found: std.ArrayList([2]u32) = .empty;
+    var found: ArrayList([2]u32) = .empty;
     defer found.deinit(gpa);
     try found.appendSlice(gpa, imported.model.exclude_pairs);
     for (0..nbody) |lo| {
@@ -5661,8 +5913,12 @@ test "robot_geno: the dance's contacts - which pairs collide, beyond the feet on
 test "robot_geno: the clip's per-frame lift - frames resting on the floor, not in it" {
     // R8a part 5. Known answers: after the lift no frame of the dance pierces the floor; and what it buys - the
     // servo alone over the whole dance (standing armature, clean starts), raw copy against lifted.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5689,7 +5945,7 @@ test "robot_geno: the clip's per-frame lift - frames resting on the floor, not i
     defer bind.deinit(gpa);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, dance_bytes, null);
     defer capture.deinit();
-    var probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
     var run: ServoRun = undefined;
     try run.init(gpa, &imported, floor_friction);
@@ -5730,6 +5986,72 @@ test "robot_geno: the clip's per-frame lift - frames resting on the floor, not i
     }
 }
 
+/// The planners swept: the offset limit (radians per degree of freedom) and whether MPPI averages the candidates.
+/// Measured before (predictive sampling): unlimited 4.74 s, 0.6 rad 4.45 s, 0.3 rad 2.46 s.
+/// MPPI at temperature 0.1 (Sep 25): 3.19 s against predictive sampling's 4.67 - averaging 16 DIFFERENT good
+/// plans blurs them. The temperature is the dial toward the argmax: at 0.03 MPPI is the best controller yet,
+/// 4.88 s - the few best candidates averaged, the lone sample's noise gone.
+/// With DReCon's filter (0.2) at the same raw sigma and reach, both halve (Sep 25): predictive sampling 2.05 s,
+/// MPPI 2.31 - the filter passes a fifth of each change, so candidates barely differ in what the body receives.
+/// A planner acting through the filter must push its RAW offsets harder, as a DReCon policy learns to.
+const PlannerVariant = struct {
+    limit: f32,
+    mppi: bool,
+    temperature: f32 = 0.1,
+    filter: f32 = 1.0,
+    sigma: f32 = 0.3,
+    decimation: u32 = 1,
+    markov: bool = false,
+    iterations: u32 = 1,
+    height_weight: f32 = 0.0,
+    up_weight: f32 = 0.0,
+    height_tolerance: f32 = 0.0,
+    up_tolerance: f32 = 0.0,
+    root_height_weight: f32 = 0.0,
+    axis: bool = false,
+    posture: bool = false,
+};
+
+/// Pushed twice as hard (raw sigma 0.6, reach 1.2): **5.01 s - the best controller measured**, smooth AND strong;
+/// at sigma 1.0 / reach 2.0: 4.12 s. The teacher from here on.
+/// On DReCon's clock (a decision every 2 steps): 3.48 s at reach 1.2 - its raw offsets 0.34 rad on average, 56%
+/// past 0.2, 21% past 0.6. Simon (Sep 25): the student's scale goes to 0.6 rad a unit (actions in [-1, 1]); so
+/// the teacher is capped at 0.6 too, every label expressible.
+/// Capped at 0.6 it collapses: 1.34 s (sigma 0.6), 1.46 s (0.4) - through a 0.2 filter at 30 Hz a strong
+/// correction NEEDS a large raw command. So the student's raw reach is 1.2 rad (scale 1.2, actions in [-1, 1]).
+/// The MEMORYLESS teacher (plans from the filter's state, not a carried plan), 1 and 2 MPPI iterations a decision -
+/// against the carried-plan teacher's 3.48 s. Measured (Sep 25): 1 iteration 1.52 s; **2 iterations 3.65 s** - the
+/// best teacher on DReCon's clock, and every label a function of what the student observes. D5's teacher.
+/// ONE teacher for every clip (Simon, Sep 26): gravity on the body's AXIS only - hips, spine, neck, head - at full
+/// weight, unhinged, the task's own model (standing armature). Every body's height halved the dance (1.87 s).
+const planner_variants = [_]PlannerVariant{
+    .{
+        .limit = 1.2,
+        .mppi = true,
+        .temperature = 0.03,
+        .filter = 0.2,
+        .sigma = 0.6,
+        .decimation = 2,
+        .markov = true,
+        .iterations = 2,
+        .height_weight = 1.0,
+        .up_weight = 0.3,
+        .axis = true,
+        .posture = true,
+    },
+};
+
+const planner_options: Planner.Options = .{ .samples = 16, .horizon = 15, .knots = 3, .sigma = 0.3 };
+
+/// Geno's AXIS: the chain from the hips to the head (names this robot lacks are skipped where they are used).
+pub const axis_bodies = [_][]const u8{ "Hips", "Spine", "Spine1", "Spine2", "Spine3", "Neck", "Neck1", "Head" };
+
+/// D1's trial: where in the dance it starts (where the servo alone falls - the first 5 s it already keeps up
+/// with), how long a run may last, and the planner's budget.
+const planner_starts = [_]usize{ 360, 720, 1080, 1440 };
+
+const planner_cap: usize = 300;
+
 test "robot_geno: D1 - predictive sampling over the true simulator, against the servo alone" {
     // The teacher that cannot exploit: every candidate played out in the real physics. Known answer to beat:
     // the servo alone, from the same starts in the dance, each run capped at `planner_cap` frames.
@@ -5742,8 +6064,14 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5771,7 +6099,7 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
     defer capture.deinit();
     var clip: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer clip.deinit();
-    var lift_probe: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var lift_probe: rbt.Data = try .init(gpa, &imported.model);
     defer lift_probe.deinit();
     _ = restClipOnFloor(&imported.model, &lift_probe, &clip, 0.001);
     var run: ServoRun = undefined;
@@ -5884,73 +6212,14 @@ test "robot_geno: D1 - predictive sampling over the true simulator, against the 
                 planner.raw_sum / n,
                 planner.raw_largest,
                 planner.applied_sum / n,
-                100.0 * @as(f64, @floatFromInt(planner.raw_past[0])) / n,
-                100.0 * @as(f64, @floatFromInt(planner.raw_past[1])) / n,
-                100.0 * @as(f64, @floatFromInt(planner.raw_past[2])) / n,
+                100.0 * float64(planner.raw_past[0]) / n,
+                100.0 * float64(planner.raw_past[1]) / n,
+                100.0 * float64(planner.raw_past[2]) / n,
             });
         }
         try expect(planned_total == planned_total);
     }
 }
-
-/// D1's trial: where in the dance it starts (where the servo alone falls - the first 5 s it already keeps up
-/// with), how long a run may last, and the planner's budget.
-const planner_starts = [_]usize{ 360, 720, 1080, 1440 };
-const planner_cap: usize = 300;
-const planner_options: Planner.Options = .{ .samples = 16, .horizon = 15, .knots = 3, .sigma = 0.3 };
-/// The planners swept: the offset limit (radians per degree of freedom) and whether MPPI averages the candidates.
-/// Measured before (predictive sampling): unlimited 4.74 s, 0.6 rad 4.45 s, 0.3 rad 2.46 s.
-/// MPPI at temperature 0.1 (Sep 25): 3.19 s against predictive sampling's 4.67 - averaging 16 DIFFERENT good
-/// plans blurs them. The temperature is the dial toward the argmax: at 0.03 MPPI is the best controller yet,
-/// 4.88 s - the few best candidates averaged, the lone sample's noise gone.
-/// With DReCon's filter (0.2) at the same raw sigma and reach, both halve (Sep 25): predictive sampling 2.05 s,
-/// MPPI 2.31 - the filter passes a fifth of each change, so candidates barely differ in what the body receives.
-/// A planner acting through the filter must push its RAW offsets harder, as a DReCon policy learns to.
-const PlannerVariant = struct {
-    limit: f32,
-    mppi: bool,
-    temperature: f32 = 0.1,
-    filter: f32 = 1.0,
-    sigma: f32 = 0.3,
-    decimation: u32 = 1,
-    markov: bool = false,
-    iterations: u32 = 1,
-    height_weight: f32 = 0.0,
-    up_weight: f32 = 0.0,
-    height_tolerance: f32 = 0.0,
-    up_tolerance: f32 = 0.0,
-    root_height_weight: f32 = 0.0,
-    axis: bool = false,
-    posture: bool = false,
-};
-/// Pushed twice as hard (raw sigma 0.6, reach 1.2): **5.01 s - the best controller measured**, smooth AND strong;
-/// at sigma 1.0 / reach 2.0: 4.12 s. The teacher from here on.
-/// On DReCon's clock (a decision every 2 steps): 3.48 s at reach 1.2 - its raw offsets 0.34 rad on average, 56%
-/// past 0.2, 21% past 0.6. Simon (Sep 25): the student's scale goes to 0.6 rad a unit (actions in [-1, 1]); so
-/// the teacher is capped at 0.6 too, every label expressible.
-/// Capped at 0.6 it collapses: 1.34 s (sigma 0.6), 1.46 s (0.4) - through a 0.2 filter at 30 Hz a strong
-/// correction NEEDS a large raw command. So the student's raw reach is 1.2 rad (scale 1.2, actions in [-1, 1]).
-/// The MEMORYLESS teacher (plans from the filter's state, not a carried plan), 1 and 2 MPPI iterations a decision -
-/// against the carried-plan teacher's 3.48 s. Measured (Sep 25): 1 iteration 1.52 s; **2 iterations 3.65 s** - the
-/// best teacher on DReCon's clock, and every label a function of what the student observes. D5's teacher.
-/// ONE teacher for every clip (Simon, Sep 26): gravity on the body's AXIS only - hips, spine, neck, head - at full
-/// weight, unhinged, the task's own model (standing armature). Every body's height halved the dance (1.87 s).
-const planner_variants = [_]PlannerVariant{
-    .{
-        .limit = 1.2,
-        .mppi = true,
-        .temperature = 0.03,
-        .filter = 0.2,
-        .sigma = 0.6,
-        .decimation = 2,
-        .markov = true,
-        .iterations = 2,
-        .height_weight = 1.0,
-        .up_weight = 0.3,
-        .axis = true,
-        .posture = true,
-    },
-};
 
 test "robot_geno: D3 data - the planner's steps, recorded in the task's own format" {
     // The planner's real steps into a `robot_track.Replay`, as the fleet records its own. Known answer: a
@@ -5960,8 +6229,8 @@ test "robot_geno: D3 data - the planner's steps, recorded in the task's own form
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -5990,7 +6259,7 @@ test "robot_geno: D3 data - the planner's steps, recorded in the task's own form
     defer capture.deinit();
     var clip: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer clip.deinit();
-    var probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
     _ = restClipOnFloor(m, &probe, &clip, 0.001);
     var run: ServoRun = undefined;
@@ -6037,6 +6306,14 @@ test "robot_geno: D3 data - the planner's steps, recorded in the task's own form
     try expect(worst < 1.0e-4);
 }
 
+/// D3's teacher: the policy's measured reach (0.6 rad a freedom holds 94% of the planner's unlimited result),
+/// how long each recording may run, and how long each world model trains.
+const teacher_scale: f32 = 0.6;
+
+const teacher_cap: usize = 100;
+
+const world_checkpoints = [_]usize{ 400, 800, 1600 };
+
 test "robot_geno: D3 - does a world model trained on the teacher's data know what actions do?" {
     // D3's claim, tested: a world model trained on the TEACHER's trajectories (the planner - deliberate actions
     // where balance is decided, nothing exploited) knows what an action does better than one trained on the
@@ -6055,8 +6332,14 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -6083,7 +6366,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
     defer capture.deinit();
     var clip: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer clip.deinit();
-    var lift_probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var lift_probe: rbt.Data = try .init(gpa, m);
     defer lift_probe.deinit();
     _ = restClipOnFloor(m, &lift_probe, &clip, 0.001);
 
@@ -6096,21 +6379,21 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
         .task = servo_task,
     };
     const size: usize = robot_track.actionSize(m);
-    const io: std.Io = threaded.io();
-    const began: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const io: Io = threaded.io();
+    const began: Io.Timestamp = Io.Clock.now(.awake, io);
     // The servo's data: the servo with noise on its actions, as the SuperTrack trials were fed.
     const servo_fleet: *robot_track.Fleet = try .init(gpa, m, &.{&clip}, fleet_options);
     defer servo_fleet.deinit();
     const noise: []f32 = try gpa.alloc(f32, fleet_options.envs * size);
     defer gpa.free(noise);
-    var rng: std.Random.DefaultPrng = .init(5);
+    var rng: Random.DefaultPrng = .init(5);
     for (0..400) |_| {
         for (noise) |*a| {
             a.* = 0.5 * rng.random().floatNorm(f32);
         }
         _ = servo_fleet.step(noise);
     }
-    const servo_done: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const servo_done: Io.Timestamp = Io.Clock.now(.awake, io);
     // The teacher's data: the planner, limited to the policy's reach, recorded from starts across the dance.
     const teacher_fleet: *robot_track.Fleet = try .init(gpa, m, &.{&clip}, fleet_options);
     defer teacher_fleet.deinit();
@@ -6148,7 +6431,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
         );
         recorded += recording.frames;
     }
-    const teacher_done: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const teacher_done: Io.Timestamp = Io.Clock.now(.awake, io);
     // Two world models, the same in everything but their data.
     const world_options: latent.WorldOptions = .{ .hidden = 64, .steps = 8, .batch = 16, .rate = 3.0e-4 };
     const servo_world: *latent.LatentWorld = try .init(gpa, servo_fleet, world_options);
@@ -6158,7 +6441,7 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
     const candidate_world: *latent.LatentWorld = try .init(gpa, candidate_fleet, world_options);
     defer candidate_world.deinit(gpa);
 
-    const trained: std.Io.Timestamp = std.Io.Clock.now(.awake, io);
+    const trained: Io.Timestamp = Io.Clock.now(.awake, io);
     report.print("\n  D3 timing: servo data {d} ms, teacher data {d} ms, training {d} ms\n", .{
         @divTrunc(servo_done.nanoseconds - began.nanoseconds, 1_000_000),
         @divTrunc(teacher_done.nanoseconds - servo_done.nanoseconds, 1_000_000),
@@ -6280,19 +6563,20 @@ test "robot_geno: D3 - does a world model trained on the teacher's data know wha
     });
 }
 
-/// D3's teacher: the policy's measured reach (0.6 rad a freedom holds 94% of the planner's unlimited result),
-/// how long each recording may run, and how long each world model trains.
-const teacher_scale: f32 = 0.6;
-const teacher_cap: usize = 100;
-const world_checkpoints = [_]usize{ 400, 800, 1600 };
+/// The GPU page's clip: the dance from 5 s, for 10 s.
+const train_clip_first: usize = 300;
+
+const train_clip_frames: usize = 600;
+
+const train_clip_path: []const u8 = "examples/geno_train/dance.zclip";
 
 test "robot_geno: geno_train's clip - the dance from 5 s to 15 s, lifted onto the floor, baked" {
     // The GPU page trains SuperTrack on Geno over the stretch where the servo alone falls within a second or so
     // (its first 5 s it already keeps up with) - so learning has room to show. Copied, cut, lifted onto the
     // floor frame by frame, and baked as the page embeds it. Held byte-equal like the model fixture: when
     // missing or stale it is rewritten here and the test fails once, so a changed clip arrives as a diff.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -6336,16 +6620,16 @@ test "robot_geno: geno_train's clip - the dance from 5 s to 15 s, lifted onto th
         .residual_body = residual_body,
     };
     defer cut.deinit();
-    var probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var probe: rbt.Data = try .init(gpa, m);
     defer probe.deinit();
     _ = restClipOnFloor(m, &probe, &cut, 0.001);
     const baked: []u8 = try cut.toBytes(gpa);
     defer gpa.free(baked);
     const stored: ?[]u8 = readAsset(gpa, threaded.io(), train_clip_path) catch null;
     defer if (stored) |bytes| gpa.free(bytes);
-    const current: bool = if (stored) |bytes| std.mem.eql(u8, bytes, baked) else false;
+    const current: bool = if (stored) |bytes| eql(u8, bytes, baked) else false;
     if (!current) {
-        const file: std.Io.File = try std.Io.Dir.cwd().createFile(threaded.io(), train_clip_path, .{});
+        const file: Io.File = try Io.Dir.cwd().createFile(threaded.io(), train_clip_path, .{});
         defer file.close(threaded.io());
         try file.writeStreamingAll(threaded.io(), baked);
         report.print("\n  {s} was {s} - rebaked ({d} bytes); review the diff and run again\n", .{
@@ -6357,10 +6641,26 @@ test "robot_geno: geno_train's clip - the dance from 5 s to 15 s, lifted onto th
     try expect(current);
 }
 
-/// The GPU page's clip: the dance from 5 s, for 10 s.
-const train_clip_first: usize = 300;
-const train_clip_frames: usize = 600;
-const train_clip_path: []const u8 = "examples/geno_train/dance.zclip";
+/// The page's learner, as a recipe: its window, its small networks, SuperTrack's own collection.
+const page_recipe: HoldRecipe = .{
+    .prefill_steps = 200,
+    .prefill_noise = 0.1,
+    .world_rate = 1.0e-3,
+    .world_pretrain = 400,
+    .rounds = 40,
+    .world_per_round = 8,
+    .policy_per_round = 8,
+    .policy_rate = 3.0e-4,
+    .explore = 1.0,
+    .window = 8,
+    .w_action = 0.01,
+};
+
+/// SuperTrack's action scale on Geno (radians per unit): the value `geno_train` has always used. Half the DReCon
+/// student's - and 0.6 is exactly where the teacher "barely beat the servo" (see `student_scale`), measured through
+/// DReCon's filter, which SuperTrack's training has too now (F6a). Named here so it exists ONCE; the recipe below
+/// carries it, and the bench's C1 weighs it against the paper's 2.09 (120 degrees a unit).
+pub const supertrack_action_scale: f32 = 0.6;
 
 test "robot_geno: the GPU page's SuperTrack, on its CPU twin - how jittery is the policy?" {
     // Simon, on the phone: `geno_train`'s policy "looks like it is exploding - extremely jittery and broken".
@@ -6371,8 +6671,14 @@ test "robot_geno: the GPU page's SuperTrack, on its CPU twin - how jittery is th
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but that its numbers are numbers, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -6409,20 +6715,20 @@ test "robot_geno: the GPU page's SuperTrack, on its CPU twin - how jittery is th
     }
 }
 
-/// The page's learner, as a recipe: its window, its small networks, SuperTrack's own collection.
-const page_recipe: HoldRecipe = .{
-    .prefill_steps = 200,
-    .prefill_noise = 0.1,
-    .world_rate = 1.0e-3,
-    .world_pretrain = 400,
-    .rounds = 40,
-    .world_per_round = 8,
-    .policy_per_round = 8,
-    .policy_rate = 3.0e-4,
-    .explore = 1.0,
-    .window = 8,
-    .w_action = 0.01,
-};
+/// D4's student: the fleet's action scale (radians a unit - geno_ppo's), how long each teacher recording may
+/// run, and how many cloning updates.
+const clone_scale: f32 = 0.2;
+
+const clone_record_cap: usize = 120;
+
+const clone_updates: usize = 3000;
+
+/// DAgger: rounds, the student's driving steps a round (x 8 characters), and the states the teacher labels.
+const dagger_rounds: usize = 3;
+
+const dagger_drive: usize = 150;
+
+const dagger_labels: usize = 300;
 
 test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simulator" {
     // RESULT (Sep 25, 401 s): servo 98 falls / reward 0.781; cloned 118 / 0.644; DAgger rounds 1-3: 126 / 0.619,
@@ -6438,8 +6744,8 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -6471,12 +6777,12 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
         const skip: usize = train_clip_first;
         const nq: usize = clip.nq;
         const keep: usize = train_clip_frames;
-        std.mem.copyForwards(f32, clip.targets[0 .. keep * nq], clip.targets[skip * nq ..][0 .. keep * nq]);
-        std.mem.copyForwards(f32, clip.residual[0..keep], clip.residual[skip..][0..keep]);
-        std.mem.copyForwards(u32, clip.residual_body[0..keep], clip.residual_body[skip..][0..keep]);
+        copyForwards(f32, clip.targets[0 .. keep * nq], clip.targets[skip * nq ..][0 .. keep * nq]);
+        copyForwards(f32, clip.residual[0..keep], clip.residual[skip..][0..keep]);
+        copyForwards(u32, clip.residual_body[0..keep], clip.residual_body[skip..][0..keep]);
         clip.frame_count = keep;
     }
-    var lift_probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var lift_probe: rbt.Data = try .init(gpa, m);
     defer lift_probe.deinit();
     _ = restClipOnFloor(m, &lift_probe, &clip, 0.001);
 
@@ -6535,7 +6841,7 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
     });
     defer learner.deinit();
     // The dataset, as steps: every teacher record with a successor in its recording...
-    var dataset: std.ArrayList(latent.Learner.Step) = .empty;
+    var dataset: ArrayList(latent.Learner.Step) = .empty;
     defer dataset.deinit(gpa);
     for (0..envs) |env| {
         const written: u64 = fleet.replay.written[env];
@@ -6547,7 +6853,7 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
         }
     }
     var steps: [32]latent.Learner.Step = undefined;
-    var rng: std.Random.DefaultPrng = .init(11);
+    var rng: Random.DefaultPrng = .init(11);
     var first_loss: f32 = 0.0;
     var last_loss: f32 = 0.0;
     for (0..clone_updates) |u| {
@@ -6653,16 +6959,6 @@ test "robot_geno: D4 - a policy cloned from the teacher, judged in the real simu
     }
 }
 
-/// D4's student: the fleet's action scale (radians a unit - geno_ppo's), how long each teacher recording may
-/// run, and how many cloning updates.
-const clone_scale: f32 = 0.2;
-const clone_record_cap: usize = 120;
-const clone_updates: usize = 3000;
-/// DAgger: rounds, the student's driving steps a round (x 8 characters), and the states the teacher labels.
-const dagger_rounds: usize = 3;
-const dagger_drive: usize = 150;
-const dagger_labels: usize = 300;
-
 /// Which motion a task tracks, and which stretch of it.
 pub const Motion = enum {
     /// The dance from 5 s to 15 s - the stretch `geno_train` and D5's first trials used.
@@ -6704,7 +7000,7 @@ pub const GenoTask = struct {
     clip: dance.Clip,
 
     /// Null when the model or the motion's capture is not on disk (the tests skip then).
-    pub fn init(gpa: Allocator, io: std.Io, motion: Motion) !?*GenoTask {
+    pub fn init(gpa: Allocator, io: Io, motion: Motion) !?*GenoTask {
         const model_text: []u8 = readAsset(gpa, io, model_fixture_path) catch return null;
         errdefer gpa.free(model_text);
         const capture_bytes: []u8 = readAsset(gpa, io, motion.capturePath()) catch return null;
@@ -6747,12 +7043,12 @@ pub const GenoTask = struct {
             const from: usize = kept.first;
             const keep: usize = kept.frames;
             const targets: []f32 = self.clip.targets;
-            std.mem.copyForwards(f32, targets[0 .. keep * nq], targets[from * nq ..][0 .. keep * nq]);
-            std.mem.copyForwards(f32, self.clip.residual[0..keep], self.clip.residual[from..][0..keep]);
-            std.mem.copyForwards(u32, self.clip.residual_body[0..keep], self.clip.residual_body[from..][0..keep]);
+            copyForwards(f32, targets[0 .. keep * nq], targets[from * nq ..][0 .. keep * nq]);
+            copyForwards(f32, self.clip.residual[0..keep], self.clip.residual[from..][0..keep]);
+            copyForwards(u32, self.clip.residual_body[0..keep], self.clip.residual_body[from..][0..keep]);
             self.clip.frame_count = keep;
         }
-        var probe: rbt.Data = try rbt.Data.init(gpa, m);
+        var probe: rbt.Data = try .init(gpa, m);
         defer probe.deinit();
         _ = restClipOnFloor(m, &probe, &self.clip, 0.001);
         return self;
@@ -6767,6 +7063,27 @@ pub const GenoTask = struct {
         gpa.free(self.model_text);
         gpa.destroy(self);
     }
+};
+
+/// How early the teacher's fall penalty warns: a rollout pays it within this fraction of its warning limits
+/// (`Planner.Options.danger`, `teacher_warning`). Named once because `teacher_warning` is built around it.
+pub const teacher_danger: f32 = 0.6;
+
+/// The TEACHER's early warning (plan T4b): a MARGIN on the task's gradual limits, NONE on its event limits.
+///
+/// The teacher pays its fall penalty within `teacher_danger` (0.6) of every limit it is given. For the GRADUAL limits
+/// - drift, heading, height, tilt - that margin is the point: steer away before the end. For the EVENT limits - the
+/// worst body (T2), unexpected contact (T3) - a margin forbids the teacher's own good moves: 0.6 x 0.8 put the worst
+/// body's warning at 0.48 m, under the 0.69 m balance swings T2 measured it making while SUCCEEDING, and 0.6 x 0.3
+/// put contact's at 0.18 m, where a hand pushing the floor in a rise already is - the lift regressed (T4). Leaving
+/// them OUT of the warning brought the lift back but let the teacher walk straight into them, and the task - which
+/// judges with its whole rule - ended its dances (T4b: 1.13 s, the servo's). So the event limits are here divided by
+/// the margin: scaled by it they land exactly ON the task's values - warned AT the event, never before it.
+pub const teacher_warning: robot_track.Termination = blk: {
+    var limits: robot_track.Termination = task_termination;
+    limits.worst_body = task_termination.worst_body / teacher_danger;
+    limits.unexpected_contact = task_termination.unexpected_contact / teacher_danger;
+    break :blk limits;
 };
 
 /// D5's teacher, in one place: sharp MPPI on DReCon's clock and filter, allowed the student's full raw reach
@@ -6810,207 +7127,10 @@ pub const d5_teacher: Planner.Options = blk: {
     o.posture_gate = true;
     break :blk o;
 };
-/// ONE FAILURE CRITERION (ON.0b, Sep 26) - used by the teacher's fall penalty, every survival loop, the recorder,
-/// every test and the page: has a character lost the clean reference at clip frame `f`? The task's own rule -
-/// `robot_track.terminated` with `termination` (Geno's `task_termination`: tracking error, and the bodies' height
-/// RELATIVE to the reference's, so lying is no failure while the reference lies) - through the very functions
-/// training and judging use. It replaced a hips-35-cm rule that the teacher, the tests and the page each applied
-/// their own way: with ~100 clips and get-ups hidden in some, a teacher avoiding one kind of failure while the
-/// learner is punished for another is exactly where a night would go wrong.
-pub const FailureCheck = struct {
-    termination: robot_track.Termination = task_termination,
-    /// The clean reference, posed at the frame asked about.
-    judge: rbt.Data,
-    /// Both characters as the task sees them, and the root they are measured from.
-    sim_state: robot_track.State,
-    ref_state: robot_track.State,
-    root: usize,
-    /// The error behind the latest verdict - which limit it crossed, for anyone asking why.
-    last: robot_track.TrackingError = undefined,
-    /// Per body: exempt from unexpected contact - the task's feet (`tracking_task.contact_exempt`), resolved by
-    /// name exactly as the fleet resolves them, so the two judge contact identically.
-    contact_exempt: []bool,
-    /// The head (`tracking_task.head_body`), resolved the same way - for the head-height term.
-    head: ?usize,
-
-    pub fn init(
-        gpa: Allocator,
-        m: *const rbt.Model,
-        model_body_names: []const []const u8,
-    ) !FailureCheck {
-        var judge: rbt.Data = try .init(gpa, m);
-        errdefer judge.deinit();
-        var sim_state: robot_track.State = try .init(gpa, m.nbody);
-        errdefer sim_state.deinit(gpa);
-        var ref_state: robot_track.State = try .init(gpa, m.nbody);
-        errdefer ref_state.deinit(gpa);
-        const exempt_names: []const []const u8 = tracking_task.contact_exempt;
-        const exempt: []bool = try robot_track.contactExemptMask(gpa, m.nbody, exempt_names, model_body_names);
-        errdefer gpa.free(exempt);
-        const head: ?usize = try robot_track.headBody(tracking_task.head_body, model_body_names);
-        return .{
-            .judge = judge,
-            .sim_state = sim_state,
-            .ref_state = ref_state,
-            .root = robot_track.rootBody(m),
-            .contact_exempt = exempt,
-            .head = head,
-        };
-    }
-
-    pub fn deinit(self: *FailureCheck, gpa: Allocator) void {
-        gpa.free(self.contact_exempt);
-        self.ref_state.deinit(gpa);
-        self.sim_state.deinit(gpa);
-        self.judge.deinit();
-    }
-
-    pub fn lost(
-        self: *FailureCheck,
-        m: *const rbt.Model,
-        data: *const rbt.Data,
-        clip: *const dance.Clip,
-        f: usize,
-    ) bool {
-        return self.within(m, data, clip, f, 1.0);
-    }
-
-    /// The same criterion with every limit scaled by `fraction` - an EARLY WARNING for anyone who must steer
-    /// away before the end: the one rule, with a margin.
-    pub fn within(
-        self: *FailureCheck,
-        m: *const rbt.Model,
-        data: *const rbt.Data,
-        clip: *const dance.Clip,
-        f: usize,
-        fraction: f32,
-    ) bool {
-        return self.withinLimits(m, data, clip, f, self.termination.scaled(fraction));
-    }
-
-    /// The criterion against `limits` instead of the check's own - for an early warning built from the task's rule
-    /// with some limits left out (`teacher_warning`, plan T4b). The error is measured exactly as always; only the
-    /// verdict's limits change.
-    pub fn withinLimits(
-        self: *FailureCheck,
-        m: *const rbt.Model,
-        data: *const rbt.Data,
-        clip: *const dance.Clip,
-        f: usize,
-        limits: robot_track.Termination,
-    ) bool {
-        // Posed EXACTLY as the fleet poses its reference (`Fleet.referenceStateInto`) - positions, and velocities
-        // by differencing from the frame before - so the error is the task's to the last field. (Until Sep 26 only
-        // positions were posed: the velocity terms read whatever the judge last held.)
-        const at: usize = @min(f, clip.frame_count - 1);
-        const previous: usize = if (at == 0) 0 else at - 1;
-        const skip: usize = clip.nq - m.nq;
-        @memcpy(self.judge.pos, clip.pose(at)[skip..]);
-        rbt.differentiatePos(m, self.judge.vel, clip.pose(previous)[skip..], clip.pose(at)[skip..], clip.frame_time);
-        self.judge.stage = .stale;
-        rbt.forward(m, &self.judge);
-        robot_track.stateOf(m, data, &self.sim_state);
-        robot_track.exemptFromContact(&self.sim_state, self.contact_exempt);
-        robot_track.stateOf(m, &self.judge, &self.ref_state);
-        self.last = robot_track.trackingErrorWithHead(self.sim_state, self.ref_state, self.root, self.head);
-        return robot_track.terminated(self.last, limits);
-    }
-};
-
-/// Geno's REWARD: DReCon's terms, GATED by gravity - the body's heights and its tilt against gravity must match
-/// the reference's, or the whole reward sinks. Ungated, a body lying on the floor with the right joint angles
-/// scored 0.80 while its reference stood (robot_track's "gravity gate" test); the teacher, whose cost had the
-/// same blind spot, never rose from the floor until gravity was in it (ON.2.1d). 5 cm of mean height error keeps
-/// 78% of the reward, lying 0.8 m low keeps 2%; an 11-degree tilt keeps 67%, lying flat 6%.
-pub const task_weights: robot_track.RewardWeights = .{ .height_scale = 0.2, .up_scale = 0.5 };
-/// Geno's TERMINATION: the reference lost by tracking error as before, and by HEIGHT - the bodies' mean height off
-/// the reference's (relative, so lying is fine while the reference lies too). The limit is set by what it must
-/// tell apart, not by any clip (Sep 26): lying while the reference stands is a ~0.8 m gap; a dancer dropping to
-/// recover balance, 0.2-0.3 m. At 0.2 m (first try) it cut those recoveries - the servo's failures crossed it at
-/// 0.17-0.19 m mean with the pose itself near perfect (0.01 m, 0.05 rad), and the teacher's dance fell from
-/// 3.43 s to 1.24 s. At 0.4 m a crouch survives and staying down fails once the reference is halfway up.
-///
-/// And NOT by drifting or turning (Sep 26). With the root's world limits in (0.6 m, 1.5 rad) the teacher's dance
-/// collapsed to 1.0-1.6 s: at every "loss" its hips were 0.44-0.58 m off ACROSS THE FLOOR and its heading
-/// 5-144 degrees off, while its pose, seen from its own root, was 55-120 mm off - it had wandered, not fallen.
-/// On flat ground SuperTrack terminates on the head's height only (root limits only for rough terrain, where the
-/// reference's place matters). So the rule is "fallen, or lost the pose": the pose limits, the height relative to
-/// the reference's, and the TILT against gravity (~47 degrees) - no root position, no heading. The reward keeps
-/// its root terms: staying on the reference's path is encouraged, just not fatal.
-///
-/// CORRECTED the same day (Simon: "we want the robot to follow the reference root motion, or else it can never
-/// learn to really turn on the spot and go somewhere reliably"). MimicKit's DeepMimic humanoid DOES hold the
-/// root to the reference's - `track_root` with `global_obs`: the reward's root term is the GLOBAL position and
-/// rotation, its observation places the targets relative to the character, and its termination fails once the
-/// root is 1 m from the reference's (it was SuperTrack's FLAT-ground rule that ignores drift - its rough-terrain
-/// one adds 1 m / 90 degrees). The teacher's wandering was the teacher's to fix (its cost barely weighs drift), not
-/// the task's to forgive. So: 1 m for the root's place, 90 degrees for its rotation (relative to the reference's,
-/// so lying is fine while the reference lies) - and the observation now SHOWS the policy where the reference is.
-///
-/// And the WORST BODY (plan T2, Sep 27): the pose limits are means over the bodies, which forgive one limb far off -
-/// an arm pinned under the body barely moves the mean. MimicKit fails on the worst body instead; here it is 0.8 m,
-/// measured: the servo alone never bends a limb over 0.16 m from the reference's shape (it fails whole), the
-/// teacher - the best tracker - swings limbs out to 0.69 m WHILE SUCCEEDING, and nothing either of them does is cut
-/// from 0.7 m up. 0.8 leaves 11 cm over that largest good swing and still catches a limb that is truly lost.
-///
-/// And UNEXPECTED CONTACT (plan T3, Sep 27): a body on the floor that the reference holds higher than 0.3 m - chosen
-/// on the geometry, not measured: Geno's knee end stands at ~0.45 m and its hands and hips at 0.7-0.9 m, so each
-/// touching down while the reference stands reads well over 0.3; a get-up's hands and knees read 0 (the
-/// reference's are down too); and a hand lagging the reference's lift off the floor (~0.5-1 m/s) is tolerated for
-/// ~0.3-0.6 s. The feet are exempt (`tracking_task.contact_exempt`). A crouch deeper than a 0.3 m knee is its
-/// blind spot - nearly kneeling anyway. If it ever ends good runs, the overnight rehearsal (ON) shows it.
-///
-/// BOTH EVENT LIMITS ARE OFF FOR NOW (Sep 27, T3 revisit) - the worst body and unexpected contact above are kept as
-/// mechanism, not used. Judged silently, they would have ended ALL THREE of the teacher's good rises from the floor
-/// within 0.8 s (head reaching 0.77 / 0.90 / 1.12 m): from 509 the worst body (0.83 > 0.8), from 530 the chest down
-/// while the reference's is 0.30 m up, from 554 the right arm still pushing the floor while the reference's has
-/// lifted 0.6 m. A rise that LAGS the reference - as every learner's first rises will - is ended before it can
-/// succeed, so the night could never learn to get up. T3's own bar was "no false failures, or rejected with the
-/// numbers recorded": rejected, in this frame-by-frame form. A lag-tolerant form (unexpected only if the reference
-/// has not had that body down within the last ~0.5 s) is in the plan for later.
-///
-/// SUPERTRACK'S RULE, ADOPTED (Sep 27, plan F3b): the HEAD's height more than 25 cm off the reference head's, plus the
-/// root held within 1 m / 90 degrees (the paper's drift variant, and Simon's root-motion requirement) - every other
-/// limit OFF, our old pose defaults (mean 0.35 m / 1.2 rad) included. Judged side by side the two were equally
-/// strict: servo alone on the 10-second dance MTTF 1.53 s (ours 1.61), on the get-up 2.75 s (ours 2.89); the teacher
-/// on the dance 1.66 s (ours 1.56). The servo and the teacher fail by FALLING, and the head's height says so as soon
-/// as five limits did. So the simpler rule - one clip-agnostic limit plus the root, the one SuperTrack's published
-/// results were measured under - wins. (The paper's minimum episode length, 48 frames, is our training grace -
-/// a learner's aid, set where the learner's windows are; the judge keeps none.)
-pub const task_termination: robot_track.Termination = .{
-    .pose_position = 1.0e30,
-    .pose_rotation = 1.0e30,
-    .root_position = 1.0,
-    .root_rotation = 1.57,
-    .head_height = 0.25,
-};
-
-/// How early the teacher's fall penalty warns: a rollout pays it within this fraction of its warning limits
-/// (`Planner.Options.danger`, `teacher_warning`). Named once because `teacher_warning` is built around it.
-pub const teacher_danger: f32 = 0.6;
-
-/// The TEACHER's early warning (plan T4b): a MARGIN on the task's gradual limits, NONE on its event limits.
-///
-/// The teacher pays its fall penalty within `teacher_danger` (0.6) of every limit it is given. For the GRADUAL limits
-/// - drift, heading, height, tilt - that margin is the point: steer away before the end. For the EVENT limits - the
-/// worst body (T2), unexpected contact (T3) - a margin forbids the teacher's own good moves: 0.6 x 0.8 put the worst
-/// body's warning at 0.48 m, under the 0.69 m balance swings T2 measured it making while SUCCEEDING, and 0.6 x 0.3
-/// put contact's at 0.18 m, where a hand pushing the floor in a rise already is - the lift regressed (T4). Leaving
-/// them OUT of the warning brought the lift back but let the teacher walk straight into them, and the task - which
-/// judges with its whole rule - ended its dances (T4b: 1.13 s, the servo's). So the event limits are here divided by
-/// the margin: scaled by it they land exactly ON the task's values - warned AT the event, never before it.
-pub const teacher_warning: robot_track.Termination = blk: {
-    var limits: robot_track.Termination = task_termination;
-    limits.worst_body = task_termination.worst_body / teacher_danger;
-    limits.unexpected_contact = task_termination.unexpected_contact / teacher_danger;
-    break :blk limits;
-};
 
 /// D5.5's calibrated start perturbation (Sep 25): where the SERVO ALONE lasts 1 s from about half of the starts
 /// (13 of 30 across the task's dance; unperturbed 21 of 30; twice this, 5 of 30) - hard, but recoverable.
 pub const d5_start_noise: robot_track.StartNoise = .{ .pose = 0.05, .velocity = 0.25 };
-/// Geno's AXIS: the chain from the hips to the head (names this robot lacks are skipped where they are used).
-pub const axis_bodies = [_][]const u8{ "Hips", "Spine", "Spine1", "Spine2", "Spine3", "Neck", "Neck1", "Head" };
 
 /// The DReCon student's action scale: radians of raw pose offset per unit, actions in [-1, 1] (D5.0).
 ///
@@ -7023,11 +7143,131 @@ pub const axis_bodies = [_][]const u8{ "Hips", "Spine", "Spine1", "Spine2", "Spi
 /// filter. Set as `.action_scale = student_scale` beside `.task = tracking_task` - the learner's, not the task's.
 pub const student_scale: f32 = 1.2;
 
-/// SuperTrack's action scale on Geno (radians per unit): the value `geno_train` has always used. Half the DReCon
-/// student's - and 0.6 is exactly where the teacher "barely beat the servo" (see `student_scale`), though that was
-/// measured THROUGH DReCon's filter, which SuperTrack does not have yet (plan S8). Named here so it exists ONCE;
-/// Phase S re-measures it with the rest of the learner's settings.
-pub const supertrack_action_scale: f32 = 0.6;
+/// SuperTrack's RECIPE on Geno (plan A2): every setting the bench, the pages and the night train with that is not
+/// the TASK (that's `tracking_task`) and not a run's sizes. One value, handed over whole and never rebuilt field by
+/// field at a call site - which is exactly how the task's settings drifted apart before T1 made them one value. An
+/// A/B copies it and changes ONE field; the copy's name then says what the experiment is.
+///
+/// Why a struct and not a bare `LearnerOptions`: the action scale belongs to the FLEET (it turns a unit of action
+/// into a joint offset before the learner ever sees it), so no learner option can hold it. And a recipe without it
+/// is a trap: a bench that builds its fleet from the recipe's learner half gets the fleet's default 0.2 rad, and
+/// trains a quietly different policy with every other setting right.
+pub const SuperTrackRecipe = struct {
+    /// Radians of joint offset per unit of action - the fleet's `action_scale`.
+    action_scale: f32,
+    /// The shortest episode training allows, in physics steps: the task's rule is not applied before it
+    /// (`Termination.grace_steps`). The paper's 48 frames (0.8 s at 60 Hz), and never less than the policy's window,
+    /// so every episode - however bad the policy - still yields a window to train on. A LEARNER's aid only: the
+    /// judge never has it (`robot_track.judgeOptions` zeroes it).
+    training_grace_steps: u32,
+    /// Everything the learner is told. Its SIZES (widths, window, batch) stay at `LearnerOptions`' defaults in the
+    /// recipe: the bench picks them for the CPU and the night's start-up probe for the desktop GPU.
+    learner: latent.LearnerOptions,
+
+    /// The task the recipe TRAINS on: Geno's own (`tracking_task`), changed only by the training grace - long
+    /// enough for the paper's minimum episode and for one of this recipe's windows, whichever is longer.
+    pub fn trainingTask(self: SuperTrackRecipe) robot_track.Task {
+        var task: robot_track.Task = tracking_task;
+        const window: u32 = @intCast(self.learner.window);
+        task.termination.grace_steps = @max(self.training_grace_steps, window);
+        return task;
+    }
+};
+
+/// The recipe today. Each field is a decision the plan recorded (`src/notes/rl_track_plan.md`), and the tests right
+/// below hold each one against its REASON rather than against its number:
+///   * 0.6 rad a unit (`supertrack_action_scale`) - C1 weighs it against the paper's 2.09;
+///   * exploration noise of 0.1 of a unit - C1 again (the paper's sigma, in its units);
+///   * a decision every 2 physics steps: 30 Hz over Geno's 60 Hz physics (Simon; F4e) - DReCon's clock;
+///   * Simon's filter at 0.2, inside training too (F6a) - DReCon's filter;
+///   * the policy sees what it is applying (A1) - with a filter, the filter's state is half of the control state;
+///   * the world model's normaliser from the reference clips (F4a) - the paper's way, fixed before the first step;
+///   * a training grace of 48 steps - the paper's minimum episode (F3b), a window when that is longer.
+pub const supertrack_recipe: SuperTrackRecipe = .{
+    .action_scale = supertrack_action_scale,
+    .training_grace_steps = 48,
+    .learner = .{
+        .sigma = 0.1,
+        .decide_every = 2,
+        .filter = 0.2,
+        .sees_applied = true,
+        .world = .{ .normalize_from_clips = true },
+    },
+};
+
+test "robot_geno: A2 - the SuperTrack recipe holds the plan's decisions, each against its reason" {
+    // Plan A2's first known answer. Not the numbers restated - the REASONS, checked against things the recipe did
+    // not write:
+    //   * the clock and the filter are DReCon's (P5: Simon's filter and clock wherever a policy acts), so they must
+    //     agree with `robot_policy.Controller`'s own defaults;
+    //   * seeing the applied action is what makes a filter's state visible (A1), so a filtered recipe must see it;
+    //   * the scale is the one `geno_train` trains with (the page reads `supertrack_action_scale` until Stage G moves
+    //     it onto the recipe), so the two cannot part company unnoticed;
+    //   * and NOTHING ELSE is overridden: every other field is `LearnerOptions`' default, so a stray size, rate or
+    //     price cannot hide inside the one value. The expected value below is the plan's list, written out again.
+    const recipe: SuperTrackRecipe = supertrack_recipe;
+    const drecon: robot_policy.Controller.Options = .{};
+    try expect(recipe.learner.filter == drecon.beta);
+    try expect(recipe.learner.decide_every == drecon.decimation);
+    const filtered: bool = recipe.learner.filter < 1.0;
+    try expect(!filtered or recipe.learner.sees_applied);
+    try expect(recipe.action_scale == supertrack_action_scale);
+    var expected: latent.LearnerOptions = .{};
+    expected.sigma = 0.1;
+    expected.decide_every = 2;
+    expected.filter = 0.2;
+    expected.sees_applied = true;
+    expected.world.normalize_from_clips = true;
+    try expect(std.meta.eql(recipe.learner, expected));
+    // The task it trains on is Geno's own, changed ONLY by the grace - and the grace never shorter than a window.
+    var trained: robot_track.Task = recipe.trainingTask();
+    try expect(trained.termination.grace_steps >= recipe.learner.window);
+    try expect(trained.termination.grace_steps >= recipe.training_grace_steps);
+    trained.termination.grace_steps = tracking_task.termination.grace_steps;
+    try expect(std.meta.eql(trained, tracking_task));
+}
+
+test "robot_geno: A2 - a learner built from the recipe IS the recipe, on Geno's own model" {
+    // Plan A2's second known answer: the decisions read back where they act, not where they are written (a knob is
+    // only worth something if it reaches). Geno on the 10-second dance, a fleet at the recipe's scale, and a learner
+    // from the recipe with ONLY its sizes shrunk - the very override a bench makes. Then: 30 decisions a second on
+    // the model's OWN timestep, the block that reads the applied action exists, and the world model's normaliser is
+    // the reference clip's, bit for bit (the replay is empty here, so a replay-measured one could not match it).
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
+    defer task.deinit();
+    const m: *rbt.Model = &task.imported.model;
+    const clips = [_]*const dance.Clip{&task.clip};
+    const fleet: *robot_track.Fleet = try .init(gpa, m, &clips, .{
+        .envs = 2,
+        .capacity = 64,
+        .action_scale = supertrack_recipe.action_scale,
+        .task = tracking_task,
+        .body_names = task.imported.names,
+    });
+    defer fleet.deinit();
+    var options: latent.LearnerOptions = supertrack_recipe.learner;
+    options.hidden = 16;
+    options.window = 4;
+    options.batch = 2;
+    options.world.hidden = 16;
+    options.world.steps = 4;
+    options.world.batch = 2;
+    const learner: *latent.Learner = try .init(gpa, fleet, options);
+    defer learner.deinit();
+
+    // Geno's physics at 60 Hz and a decision every second step: 30 decisions a second.
+    const decisions_per_second: f32 = 1.0 / (m.opt.timestep * float(learner.options.decide_every));
+    try expect(@abs(decisions_per_second - 30.0) < 1.0e-3);
+    try expect(learner.applied_block != null);
+    const from_clip: latent.Normalizer = try latent.measureClipNormalizer(gpa, m, &clips);
+    defer gpa.free(from_clip.mean);
+    defer gpa.free(from_clip.spread);
+    try expect(eql(f32, learner.world.norm.mean, from_clip.mean));
+    try expect(eql(f32, learner.world.norm.spread, from_clip.spread));
+}
 
 // ==== ONE DEFINITION OF GENO'S TASK (plan T1) ====
 //
@@ -7039,35 +7279,6 @@ pub const supertrack_action_scale: f32 = 0.6;
 //
 // Not part of it (see `robot_track.Task`): the action scale, which is each learner's (`student_scale`,
 // `supertrack_action_scale`), and a run's sizes, episode cap and seed.
-
-/// Geno's task. What every fleet and trainer that trains or judges Geno must see.
-pub const tracking_task: robot_track.Task = .{
-    .gains = servo_gains,
-    .floor_friction = floor_friction,
-    .rest_on_floor = true,
-    .weights = task_weights,
-    .termination = task_termination,
-    .contact_exempt = &foot_bodies,
-    // The head, for the head-height term (SuperTrack's failure rule - plan F3b).
-    .head_body = "Head",
-};
-
-/// The bodies Geno stands on - never an UNEXPECTED floor contact: a foot is down through every stance while the
-/// reference lifts it into each swing, and a character a few frames behind still has it down. Everything else
-/// that touches while the reference holds it up is a fall starting: a knee (the thigh's lowest point is its knee
-/// end), a hand, the hips. (The shins need no exemption: their lowest point is the ankle end, a few centimetres up
-/// even standing, so they can never be "held up" by the reference.)
-pub const foot_bodies = [_][]const u8{ "LeftFoot", "LeftToeBase", "RightFoot", "RightToeBase" };
-
-/// Geno's servo, floor and floor rest WITHOUT the gated reward and the task's failure rule - the default reward
-/// and limits. The condition the D-phase experiments (D3, D4, D5, S2b) were run and recorded under: their tests
-/// keep it, so the numbers in the journal still reproduce, and the difference from `tracking_task` is visible by NAME
-/// rather than by a missing line. Moving them to `tracking_task` means re-measuring them; that is its own step.
-pub const servo_task: robot_track.Task = .{
-    .gains = servo_gains,
-    .floor_friction = floor_friction,
-    .rest_on_floor = true,
-};
 
 /// Geno's DReCon bodies: the ones its policy watches and the ones it actuates, as one value
 /// (`.bodies = geno.drecon_bodies` on a PPO trainer).
@@ -7082,8 +7293,8 @@ pub const drecon_bodies: robot_policy.Bodies = .{
 pub const Demo = struct {
     width: usize,
     dofs: usize,
-    observations: std.ArrayList(f32) = .empty,
-    labels: std.ArrayList(f32) = .empty,
+    observations: ArrayList(f32) = .empty,
+    labels: ArrayList(f32) = .empty,
 
     pub fn deinit(self: *Demo, gpa: Allocator) void {
         self.observations.deinit(gpa);
@@ -7191,7 +7402,7 @@ pub const DemoRecorder = struct {
         const gpa: Allocator = self.gpa;
         try planner.run.start(clip, from);
         // D5.5: the teacher may start PERTURBED - its demonstrations then include recoveries.
-        var rng: std.Random.DefaultPrng = .init(seed);
+        var rng: Random.DefaultPrng = .init(seed);
         robot_track.perturbStart(m, &planner.run.data, noise, rng.random(), self.scratch);
         @memset(planner.applied, 0.0);
         planner.phase = 0;
@@ -7238,8 +7449,8 @@ test "robot_geno: D5 recorder - each observation's last action is what DReCon's 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -7266,7 +7477,7 @@ test "robot_geno: D5 recorder - each observation's last action is what DReCon's 
     defer capture.deinit();
     var clip: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer clip.deinit();
-    var lift_probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var lift_probe: rbt.Data = try .init(gpa, m);
     defer lift_probe.deinit();
     _ = restClipOnFloor(m, &lift_probe, &clip, 0.001);
     const fleet: *robot_track.Fleet = try .init(gpa, m, &.{&clip}, .{
@@ -7317,7 +7528,7 @@ test "robot_geno: D5 recorder - each observation's last action is what DReCon's 
     });
     try expect(demo.width == robot_policy.observationSize(recorder.subset));
     // One row a decision, a decision every 2nd frame from the first: exactly ceil(kept / 2).
-    try expect(demo.rows() == (kept + 1) / 2);
+    try expect(demo.rows() == @divCeil(kept, 2));
     try expect(worst < 1.0e-6);
     try expect(largest_label <= 1.0 + 1.0e-5);
 }
@@ -7333,8 +7544,8 @@ test "robot_geno: D5 step 2 - the teacher's decisions replayed through DReCon's 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const model_text: []u8 = readAsset(gpa, threaded.io(), model_fixture_path) catch return error.SkipZigTest;
     defer gpa.free(model_text);
@@ -7361,7 +7572,7 @@ test "robot_geno: D5 step 2 - the teacher's decisions replayed through DReCon's 
     defer capture.deinit();
     var clip: dance.Clip = try copyClip(gpa, &imported, bind, capture);
     defer clip.deinit();
-    var lift_probe: rbt.Data = try rbt.Data.init(gpa, m);
+    var lift_probe: rbt.Data = try .init(gpa, m);
     defer lift_probe.deinit();
     _ = restClipOnFloor(m, &lift_probe, &clip, 0.001);
 
@@ -7460,8 +7671,8 @@ test "robot_geno: D5 (i) - the teacher's decisions replayed in the trainer's fle
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -7571,8 +7782,8 @@ test "robot_geno: D5 (ii) - the teacher's label at a state: how much is signal, 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -7612,7 +7823,7 @@ test "robot_geno: D5 (ii) - the teacher's label at a state: how much is signal, 
                 run.restore(&moment);
                 @memcpy(planner.nominal, nominal);
                 @memcpy(planner.applied, applied);
-                planner.rng = .init(7000 + 31 * decided + k);
+                planner.rng = Random.DefaultPrng.init(7000 + 31 * decided + k);
                 try planner.choose(&task.clip, f);
                 const label: []f32 = labels[(decided * seeds + k) * dofs ..][0..dofs];
                 for (recorder.to_planner, 0..) |j, i| {
@@ -7695,8 +7906,8 @@ test "robot_geno: D5 (ii-b) - how much does the teacher's label depend on the pl
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -7740,7 +7951,7 @@ test "robot_geno: D5 (ii-b) - how much does the teacher's label depend on the pl
                     @memset(planner.nominal, 0.0);
                 }
                 @memcpy(planner.applied, applied);
-                planner.rng = .init(9000 + decided);
+                planner.rng = Random.DefaultPrng.init(9000 + decided);
                 try planner.choose(&task.clip, f);
                 const label: []f32 = into[decided * dofs ..][0..dofs];
                 for (recorder.to_planner, 0..) |j, i| {
@@ -7802,8 +8013,14 @@ test "robot_geno: D5.5 - calibrating perturbed starts: how often the servo alone
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -7822,7 +8039,7 @@ test "robot_geno: D5.5 - calibrating perturbed starts: how often the servo alone
     const starts: usize = 30;
     const cap: usize = 60;
     for (levels) |noise| {
-        var rng: std.Random.DefaultPrng = .init(77);
+        var rng: Random.DefaultPrng = .init(77);
         var lasted: usize = 0;
         var frames_kept: usize = 0;
         for (0..starts) |s| {
@@ -7864,8 +8081,14 @@ test "robot_geno: ON.2.1 - feasibility: can the servo alone, or the teacher, tra
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const cap: usize = 240;
     for ([_]Motion{ .getup, .dance }) |motion| {
@@ -7959,8 +8182,14 @@ test "robot_geno: ON.2.1b - the floor-to-crouch lift: a search problem or a phys
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .getup)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -8099,7 +8328,7 @@ const LiftVariant = struct {
 /// same frames, and how far below the reference's head it runs on average.
 fn floorLift(
     gpa: Allocator,
-    io: std.Io,
+    io: Io,
     label: []const u8,
     variants: []const LiftVariant,
 ) !void {
@@ -8124,7 +8353,7 @@ fn floorLift(
         height.* = probe.body_xpos[head][2];
     }
     // Every ball joint, for the variants that plan them all.
-    var every: std.ArrayList([]const u8) = .empty;
+    var every: ArrayList([]const u8) = .empty;
     defer every.deinit(gpa);
     for (m.jnt_type, m.jnt_body) |kind, body| {
         if (kind == .ball) {
@@ -8203,9 +8432,15 @@ test "robot_geno: ON.2.1c - the floor lift with EVERY joint in the plan" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    var threaded: Io.Threaded = .init(testing_allocator, .{});
     defer threaded.deinit();
-    try floorLift(std.testing.allocator, threaded.io(), "ON.2.1c", &.{
+    try floorLift(testing_allocator, threaded.io(), "ON.2.1c", &.{
         .{ .name = "E every joint", .every_joint = true, .armature = standing_armature },
         .{ .name = "F every joint + armature 0.5", .every_joint = true, .armature = 0.5 },
     });
@@ -8224,9 +8459,15 @@ test "robot_geno: ON.2.1d - the floor lift with GRAVITY in the teacher's cost" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    var threaded: Io.Threaded = .init(testing_allocator, .{});
     defer threaded.deinit();
-    try floorLift(std.testing.allocator, threaded.io(), "ON.2.1d", &.{
+    try floorLift(testing_allocator, threaded.io(), "ON.2.1d", &.{
         .{
             .name = "G DReCon's joints + gravity",
             .every_joint = false,
@@ -8252,9 +8493,15 @@ test "robot_geno: ON.2.1e - the floor lift with gravity HINGED (as the teacher n
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    var threaded: Io.Threaded = .init(testing_allocator, .{});
     defer threaded.deinit();
-    try floorLift(std.testing.allocator, threaded.io(), "ON.2.1e", &.{
+    try floorLift(testing_allocator, threaded.io(), "ON.2.1e", &.{
         .{
             .name = "G' DReCon's joints + hinged gravity",
             .every_joint = false,
@@ -8286,9 +8533,15 @@ test "robot_geno: ON.2.1f - the floor lift with gravity only where the shape is 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    var threaded: Io.Threaded = .init(testing_allocator, .{});
     defer threaded.deinit();
-    try floorLift(std.testing.allocator, threaded.io(), "ON.2.1f", &.{
+    try floorLift(testing_allocator, threaded.io(), "ON.2.1f", &.{
         .{
             .name = "G'' DReCon's joints + the root's height and tilt",
             .every_joint = false,
@@ -8314,9 +8567,15 @@ test "robot_geno: ON.2.1g - the floor lift with gravity on the body's AXIS (one 
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    var threaded: Io.Threaded = .init(testing_allocator, .{});
     defer threaded.deinit();
-    try floorLift(std.testing.allocator, threaded.io(), "ON.2.1g", &.{
+    try floorLift(testing_allocator, threaded.io(), "ON.2.1g", &.{
         .{
             .name = "DReCon's joints + axis gravity",
             .every_joint = false,
@@ -8346,9 +8605,15 @@ test "robot_geno: ON.2.1h - the floor lift with axis gravity GATED by the refere
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    var threaded: Io.Threaded = .init(testing_allocator, .{});
     defer threaded.deinit();
-    try floorLift(std.testing.allocator, threaded.io(), "ON.2.1h", &.{
+    try floorLift(testing_allocator, threaded.io(), "ON.2.1h", &.{
         .{
             .name = "DReCon's joints + axis gravity, posture-gated",
             .every_joint = false,
@@ -8371,8 +8636,14 @@ test "robot_geno: ON.0b - which limit of the one failure criterion ends the serv
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     for ([_]Motion{ .dance, .getup }) |motion| {
         const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), motion)) orelse return error.SkipZigTest;
@@ -8431,8 +8702,14 @@ test "robot_geno: ON.0b - which limit ends the TEACHER's dance runs?" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -8487,8 +8764,14 @@ test "robot_geno: T2 - where would a worst-body limit end the servo's and the te
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const candidates = [_]f32{ 0.4, 0.5, 0.6, 0.7, 0.8, 1.0 };
     const low_root: f32 = 0.5; // metres: the reference's root below this is "lying low"
@@ -8602,8 +8885,14 @@ test "robot_geno: T4 - how much should the teacher weigh the root's drift?" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const weights = [_]f32{ 0.3, 1.0, 2.0 };
     const names = [_][]const u8{ "drift weight 0.3", "drift weight 1.0", "drift weight 2.0" };
@@ -8670,8 +8959,12 @@ test "robot_geno: T4 - how much should the teacher weigh the root's drift?" {
 test "robot_geno: F1 - the judge's servo baseline on the 10-second dance" {
     // Plan F1: the number every later foundation step is compared with - the servo alone on `dance_5_15`, from 20
     // starts every 0.5 s, judged by the task's rule. Printed with -Dtest-report.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -8704,8 +8997,14 @@ test "robot_geno: F3b - the paper's failure rule against ours, servo and teacher
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const paper_rule: robot_track.Termination = .{
         .pose_position = 1.0e30,
@@ -8782,8 +9081,18 @@ test "robot_geno: F3 - the servo alone, with and without velocity feedforward" {
     // zero? Sep 24 said no on survival (1.74 vs 1.73 s, the old rule) though each step's lag fell 14.3 -> 4.8 mm at
     // the fastest frame - "the limit is balance". Asked again with F1's judge and the task's rule as it is now:
     // mean time to failure, the share reaching the end, and the gated reward, which lag costs directly.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const options = @import("build_options");
+    if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
+        return error.SkipZigTest;
+    }
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -8819,8 +9128,14 @@ test "robot_geno: T3 revisit - what would end the teacher's rise from the floor?
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing (a crash aside), so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .getup)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -8902,8 +9217,14 @@ test "robot_geno: T4b - the teacher's early warning without the event limits" {
     if (!(comptime @hasDecl(options, "slow_tests") and options.slow_tests)) {
         return error.SkipZigTest;
     }
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    // A MEASUREMENT: it asserts nothing but its own setup, so it runs when its table is asked for -
+    // `-Dslow-tests -Dtest-report` - and not on every slow run, which would print nothing. See
+    // `report.requested`.
+    if (!report.requested()) {
+        return error.SkipZigTest;
+    }
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -8939,8 +9260,8 @@ test "robot_geno: FailureCheck's error IS the fleet's - every field, velocities 
     // measures. A fleet character stepped a few frames; the error computed as the fleet computes it (its state,
     // its reference at the state's frame) and through FailureCheck must agree in EVERY field. Until Sep 26 the
     // check posed only the reference's positions, so its velocity terms read whatever the judge last held.
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
     const task: *GenoTask = (try GenoTask.init(gpa, threaded.io(), .dance_5_15)) orelse return error.SkipZigTest;
     defer task.deinit();
@@ -9001,8 +9322,8 @@ test "teacher_warning: a margin on the gradual limits, none on the event limits"
         if (field_type != f32) {
             continue;
         }
-        const is_event_limit: bool = comptime std.mem.eql(u8, name, "worst_body") or
-            std.mem.eql(u8, name, "unexpected_contact");
+        const is_event_limit: bool = comptime eql(u8, name, "worst_body") or
+            eql(u8, name, "unexpected_contact");
         const want: f32 = if (is_event_limit)
             @field(task_termination, name)
         else

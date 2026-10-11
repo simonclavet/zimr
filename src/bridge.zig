@@ -53,48 +53,58 @@ fn structDecls(comptime T: type) [@typeInfo(T).@"struct".decl_names.len]DeclRef 
 // ===========================================================================
 // The interop kernel (provided by the transpiler's baked-in JavaScript).
 // ===========================================================================
+
 pub const Handle = u32;
 
 extern fn js_global() Handle;
+
 extern fn js_get(
     o: Handle,
     p: [*]const u8,
     l: u32,
 ) Handle;
+
 extern fn js_get_index(o: Handle, i: u32) Handle;
+
 extern fn js_get_num(
     o: Handle,
     p: [*]const u8,
     l: u32,
 ) f64;
+
 extern fn js_set(
     o: Handle,
     p: [*]const u8,
     l: u32,
     v: Handle,
 ) void;
+
 extern fn js_set_num(
     o: Handle,
     p: [*]const u8,
     l: u32,
     x: f64,
 ) void;
+
 extern fn js_set_index(
     o: Handle,
     i: u32,
     v: Handle,
 ) void;
+
 extern fn js_call0(
     o: Handle,
     p: [*]const u8,
     l: u32,
 ) Handle;
+
 extern fn js_call1(
     o: Handle,
     p: [*]const u8,
     l: u32,
     a: Handle,
 ) Handle;
+
 extern fn js_call2(
     o: Handle,
     p: [*]const u8,
@@ -102,6 +112,7 @@ extern fn js_call2(
     a: Handle,
     b: Handle,
 ) Handle;
+
 extern fn js_call3(
     o: Handle,
     p: [*]const u8,
@@ -110,6 +121,7 @@ extern fn js_call3(
     b: Handle,
     c: Handle,
 ) Handle;
+
 extern fn js_call4(
     o: Handle,
     p: [*]const u8,
@@ -119,6 +131,7 @@ extern fn js_call4(
     c: Handle,
     d: Handle,
 ) Handle;
+
 extern fn js_call5(
     o: Handle,
     p: [*]const u8,
@@ -129,6 +142,7 @@ extern fn js_call5(
     d: Handle,
     e: Handle,
 ) Handle;
+
 extern fn js_call6(
     o: Handle,
     p: [*]const u8,
@@ -140,6 +154,7 @@ extern fn js_call6(
     e: Handle,
     sixth: Handle,
 ) Handle;
+
 extern fn js_call_n(
     o: Handle,
     p: [*]const u8,
@@ -147,60 +162,86 @@ extern fn js_call_n(
     argp: u32,
     n: u32,
 ) Handle;
+
 extern fn js_new0(c: Handle) Handle;
+
 extern fn js_new1(c: Handle, a: Handle) Handle;
+
 /// Like `js_new1`, but returns the null handle instead of letting the constructor's
 /// exception escape into wasm. `new Worker(blobUrl)` throws in a sandboxed iframe, and
 /// zimr must survive that rather than take the page down with it.
 extern fn js_try_new1(c: Handle, a: Handle) Handle;
+
 extern fn js_new2(
     c: Handle,
     a: Handle,
     b: Handle,
 ) Handle;
+
 extern fn js_new3(
     c: Handle,
     a: Handle,
     b: Handle,
     d: Handle,
 ) Handle;
+
 extern fn js_str(p: [*]const u8, l: u32) Handle;
+
 /// Copy `l` bytes of the bridge's own memory at `p` into a fresh, standalone JS
 /// Uint8Array (binary-safe, unlike js_str's UTF-8 decode). Used to lift `@embedFile`
 /// asset bytes into a JS value that outlives the call.
 extern fn js_bytes(p: [*]const u8, l: u32) Handle;
+
 extern fn js_num(x: f64) Handle;
+
 extern fn js_to_num(v: Handle) f64;
+
 extern fn js_truthy(v: Handle) u32;
+
 extern fn js_is_null(v: Handle) u32;
+
 extern fn js_strict_eq(a: Handle, b: Handle) u32;
+
 extern fn js_typeof(v: Handle) Handle;
+
 extern fn js_func(f: *const anyopaque) Handle;
+
 extern fn js_fn_num(f: *const anyopaque) Handle;
+
 extern fn js_func_ctx(f: *const anyopaque, ctx: u32) Handle;
+
 extern fn js_array() Handle;
+
 extern fn js_push(arr: Handle, v: Handle) Handle;
+
 extern fn js_len(v: Handle) u32;
+
 extern fn js_free(v: Handle) void;
+
 // Handle-table frame scope: js_mark() snapshots the table length; js_reset(m)
 // reclaims every handle interned since the mark. wz.Site brackets each frame so
 // per-frame transients (fmt strings, call args/returns, looked-up elements) are
 // auto-freed, while handles created in onReady (below the first mark) persist.
 extern fn js_mark() Handle;
+
 extern fn js_reset(m: Handle) void;
+
 // object literal + void-call (no return handle) + module->bridge bulk copy.
 extern fn js_obj() Handle;
+
 extern fn js_call0v(
     o: Handle,
     p: [*]const u8,
     l: u32,
 ) void;
+
 extern fn js_call1v(
     o: Handle,
     p: [*]const u8,
     l: u32,
     a: Handle,
 ) void;
+
 extern fn js_call2v(
     o: Handle,
     p: [*]const u8,
@@ -208,6 +249,7 @@ extern fn js_call2v(
     a: Handle,
     b: Handle,
 ) void;
+
 extern fn js_call3v(
     o: Handle,
     p: [*]const u8,
@@ -216,6 +258,7 @@ extern fn js_call3v(
     b: Handle,
     c: Handle,
 ) void;
+
 extern fn js_call4v(
     o: Handle,
     p: [*]const u8,
@@ -225,6 +268,7 @@ extern fn js_call4v(
     c: Handle,
     d: Handle,
 ) void;
+
 extern fn js_call5v(
     o: Handle,
     p: [*]const u8,
@@ -235,12 +279,14 @@ extern fn js_call5v(
     d: Handle,
     e: Handle,
 ) void;
+
 extern fn js_read_into(
     dst: u32,
     src_mem: Handle,
     src_off: u32,
     len: u32,
 ) void;
+
 // numeric-arg fast path: args passed as raw f64, no per-arg handle minted.
 extern fn js_calln1(
     o: Handle,
@@ -248,6 +294,7 @@ extern fn js_calln1(
     l: u32,
     a: f64,
 ) Handle;
+
 extern fn js_calln2(
     o: Handle,
     p: [*]const u8,
@@ -255,6 +302,7 @@ extern fn js_calln2(
     a: f64,
     b: f64,
 ) Handle;
+
 extern fn js_calln3(
     o: Handle,
     p: [*]const u8,
@@ -263,6 +311,7 @@ extern fn js_calln3(
     b: f64,
     c: f64,
 ) Handle;
+
 extern fn js_calln4(
     o: Handle,
     p: [*]const u8,
@@ -272,6 +321,7 @@ extern fn js_calln4(
     c: f64,
     d: f64,
 ) Handle;
+
 extern fn js_calln5(
     o: Handle,
     p: [*]const u8,
@@ -282,6 +332,7 @@ extern fn js_calln5(
     d: f64,
     e: f64,
 ) Handle;
+
 extern fn js_calln6(
     o: Handle,
     p: [*]const u8,
@@ -293,12 +344,14 @@ extern fn js_calln6(
     e: f64,
     sixth: f64,
 ) Handle;
+
 extern fn js_calln1v(
     o: Handle,
     p: [*]const u8,
     l: u32,
     a: f64,
 ) void;
+
 extern fn js_calln2v(
     o: Handle,
     p: [*]const u8,
@@ -306,6 +359,7 @@ extern fn js_calln2v(
     a: f64,
     b: f64,
 ) void;
+
 extern fn js_calln3v(
     o: Handle,
     p: [*]const u8,
@@ -314,6 +368,7 @@ extern fn js_calln3v(
     b: f64,
     c: f64,
 ) void;
+
 extern fn js_calln4v(
     o: Handle,
     p: [*]const u8,
@@ -323,6 +378,7 @@ extern fn js_calln4v(
     c: f64,
     d: f64,
 ) void;
+
 extern fn js_calln5v(
     o: Handle,
     p: [*]const u8,
@@ -333,6 +389,7 @@ extern fn js_calln5v(
     d: f64,
     e: f64,
 ) void;
+
 extern fn js_calln6v(
     o: Handle,
     p: [*]const u8,
@@ -350,6 +407,7 @@ extern fn js_calln6v(
 // Resolved at comptime by type, so it compiles to a direct js_num / js_str /
 // passthrough with no branching.
 // ===========================================================================
+
 inline fn f64of(x: anytype) f64 {
     return switch (@typeInfo(@TypeOf(x))) {
         .float, .comptime_float => x,
@@ -396,11 +454,7 @@ fn snakeToCamel(comptime s: []const u8) []const u8 {
 
 fn objToH(fields: anytype) Handle {
     const o: Handle = js_obj();
-    // Value is the base JS-handle wrapper used pervasively from the top of this file,
-    // but its own methods reference the `g` page singleton (handle table + scratch)
-    // defined far below with the other globals - a Value<->g dependency, so Value can't
-    // precede all its users without dragging the whole globals cluster above it.
-    // lint:off decl-order: Value<->g cycle (base wrapper uses the page-globals singleton)
+    // lint:off decl-order: Value's methods marshal through toH / objToH, which build Values - a cycle
     const v = Value{ .h = o };
     inline for (structFields(@TypeOf(fields))) |f| {
         v.set(comptime snakeToCamel(f.name), @field(fields, f.name));
@@ -431,6 +485,360 @@ inline fn toH(arg: anytype) Handle {
     };
 }
 
+// ===========================================================================
+// Value - a handle to any JS value.
+// ===========================================================================
+
+pub const Value = extern struct {
+    h: Handle,
+
+    /// obj.prop  (returns the property as a Value)
+    pub fn get(self: Value, comptime name: []const u8) Value {
+        return .{ .h = js_get(self.h, name.ptr, @intCast(name.len)) };
+    }
+    /// obj.prop as a number, read directly with no intermediate handle - for the hot
+    /// numeric reads (event.offsetX every move, canvas.width, element.scrollTop, ...).
+    /// `getNum` returns f64; `getU32`/`getF32` are typed conveniences.
+    pub fn getNum(self: Value, comptime name: []const u8) f64 {
+        return js_get_num(self.h, name.ptr, @intCast(name.len));
+    }
+    pub fn getU32(self: Value, comptime name: []const u8) u32 {
+        return @trunc(self.getNum(name));
+    }
+    pub fn getF32(self: Value, comptime name: []const u8) f32 {
+        return @floatCast(self.getNum(name));
+    }
+    /// obj.prop = value   (value is marshalled: number, string, bool, or Value)
+    pub fn set(
+        self: Value,
+        comptime name: []const u8,
+        value: anytype,
+    ) void {
+        // A number or bool goes straight to the slot via js_set_num, so no handle is
+        // minted for the value. Strings, Values and nested structs go through toH,
+        // which builds the JS string / object the property needs.
+        switch (@typeInfo(@TypeOf(value))) {
+            .int, .comptime_int, .float, .comptime_float => js_set_num(
+                self.h,
+                name.ptr,
+                @intCast(name.len),
+                f64of(value),
+            ),
+            .bool => js_set_num(self.h, name.ptr, @intCast(name.len), if (value) 1 else 0),
+            else => js_set(self.h, name.ptr, @intCast(name.len), toH(value)),
+        }
+    }
+    /// obj[i]
+    pub fn at(self: Value, i: u32) Value {
+        return .{ .h = js_get_index(self.h, i) };
+    }
+    /// obj[i] = value
+    pub fn setAt(
+        self: Value,
+        i: u32,
+        value: anytype,
+    ) void {
+        js_set_index(self.h, i, toH(value));
+    }
+
+    /// obj.method(...args) - args is a tuple of mixed types, each marshalled.
+    /// Dispatches by comptime arity to the fixed-arity kernel calls (no buffer)
+    /// for up to 6 args; falls back to a heap arg-buffer for more.
+    pub fn call(
+        self: Value,
+        comptime name: []const u8,
+        args: anytype,
+    ) Value {
+        const n: usize = args.len; // comptime
+        const p: [*]const u8 = name.ptr;
+        const l: u32 = @intCast(name.len);
+        // numeric-arg fast path: a call whose args are all ints/floats skips minting a
+        // handle per argument (js_num + a handle-table slot each) and passes raw f64s to
+        // the js_callnN kernels. Hot graphics/WebGPU calls - fillRect, draw, setViewport,
+        // dispatchWorkgroups - are all-numeric, and this brings them to parity with a
+        // hand-written `obj.method(x, y, ...)`. Detected at comptime, so non-numeric calls
+        // compile to the handle path with no runtime branch.
+        if (comptime args.len >= 1 and args.len <= 6 and allNumeric(@TypeOf(args))) {
+            return .{ .h = switch (n) {
+                1 => js_calln1(self.h, p, l, f64of(args[0])),
+                2 => js_calln2(self.h, p, l, f64of(args[0]), f64of(args[1])),
+                3 => js_calln3(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2])),
+                4 => js_calln4(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(args[3])),
+                5 => js_calln5(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
+                    args[3],
+                ), f64of(args[4])),
+                6 => js_calln6(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
+                    args[3],
+                ), f64of(args[4]), f64of(args[5])),
+                else => unreachable,
+            } };
+        }
+        if (n == 0) {
+            return .{ .h = js_call0(self.h, p, l) };
+        }
+        if (n == 1) {
+            return .{ .h = js_call1(self.h, p, l, toH(args[0])) };
+        }
+        if (n == 2) {
+            return .{ .h = js_call2(self.h, p, l, toH(args[0]), toH(args[1])) };
+        }
+        if (n == 3) {
+            return .{ .h = js_call3(
+                self.h,
+                p,
+                l,
+                toH(args[0]),
+                toH(args[1]),
+                toH(args[2]),
+            ) };
+        }
+        if (n == 4) {
+            return .{ .h = js_call4(
+                self.h,
+                p,
+                l,
+                toH(args[0]),
+                toH(args[1]),
+                toH(args[2]),
+                toH(args[3]),
+            ) };
+        }
+        if (n == 5) {
+            return .{ .h = js_call5(
+                self.h,
+                p,
+                l,
+                toH(args[0]),
+                toH(args[1]),
+                toH(args[2]),
+                toH(args[3]),
+                toH(args[4]),
+            ) };
+        }
+        if (n == 6) {
+            return .{ .h = js_call6(
+                self.h,
+                p,
+                l,
+                toH(args[0]),
+                toH(args[1]),
+                toH(args[2]),
+                toH(args[3]),
+                toH(args[4]),
+                toH(args[5]),
+            ) };
+        }
+        // >6 args: marshal into a buffer on this call's own stack, then js_call_n. JS reads it during the
+        // synchronous call, so the stack's lifetime is exactly right - and a call that re-enters Zig and makes
+        // another call gets its own buffer, instead of overwriting a shared one mid-call.
+        var call_args: [n]Handle = undefined;
+        comptime var i: usize = 0;
+        inline while (i < n) : (i += 1) {
+            call_args[i] = toH(args[i]);
+        }
+        return .{ .h = js_call_n(self.h, p, l, @intCast(@intFromPtr(&call_args[0])), n) };
+    }
+
+    /// obj.method(...args) for a VOID method: no result handle is minted (the hot
+    /// render-loop calls - setPipeline/setBindGroup/draw/end - are all void, and the
+    /// discarded return-handle is pure overhead + handle-table churn otherwise).
+    pub fn callVoid(
+        self: Value,
+        comptime name: []const u8,
+        args: anytype,
+    ) void {
+        const n: usize = args.len;
+        const p: [*]const u8 = name.ptr;
+        const l: u32 = @intCast(name.len);
+        if (comptime args.len >= 1 and args.len <= 6 and allNumeric(@TypeOf(args))) {
+            switch (n) {
+                1 => js_calln1v(self.h, p, l, f64of(args[0])),
+                2 => js_calln2v(self.h, p, l, f64of(args[0]), f64of(args[1])),
+                3 => js_calln3v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2])),
+                4 => js_calln4v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(args[3])),
+                5 => js_calln5v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
+                    args[3],
+                ), f64of(args[4])),
+                6 => js_calln6v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
+                    args[3],
+                ), f64of(args[4]), f64of(args[5])),
+                else => unreachable,
+            }
+            return;
+        }
+        switch (n) {
+            0 => js_call0v(self.h, p, l),
+            1 => js_call1v(self.h, p, l, toH(args[0])),
+            2 => js_call2v(self.h, p, l, toH(args[0]), toH(args[1])),
+            3 => js_call3v(self.h, p, l, toH(args[0]), toH(args[1]), toH(args[2])),
+            4 => js_call4v(self.h, p, l, toH(args[0]), toH(args[1]), toH(args[2]), toH(args[3])),
+            5 => js_call5v(self.h, p, l, toH(args[0]), toH(args[1]), toH(args[2]), toH(args[3]), toH(args[4])),
+            else => {
+                _ = self.call(name, args); // rare high-arity void: fall back (mints a handle)
+            },
+        }
+    }
+
+    /// new Ctor(...args)
+    pub fn new(self: Value, args: anytype) Value {
+        const n: usize = args.len;
+        if (n == 0) {
+            return .{ .h = js_new0(self.h) };
+        }
+        if (n == 1) {
+            return .{ .h = js_new1(self.h, toH(args[0])) };
+        }
+        if (n == 2) {
+            return .{ .h = js_new2(self.h, toH(args[0]), toH(args[1])) };
+        }
+        if (n == 3) {
+            return .{ .h = js_new3(self.h, toH(args[0]), toH(args[1]), toH(args[2])) };
+        }
+        @compileError("js: new with more than 3 args not supported");
+    }
+
+    /// Coerce this JS value to a concrete Zig type. `to(f64)`, `to(i32)`, `to(bool)`.
+    pub fn to(self: Value, comptime T: type) T {
+        return switch (@typeInfo(T)) {
+            .float => @floatCast(js_to_num(self.h)),
+            .int => @trunc(js_to_num(self.h)),
+            .bool => js_truthy(self.h) != 0,
+            else => @compileError("js: cannot convert JS value to " ++ @typeName(T)),
+        };
+    }
+
+    pub fn truthy(self: Value) bool {
+        return js_truthy(self.h) != 0;
+    }
+    /// (number).toFixed(digits) -> a string Value, e.g. for prices: `price.toFixed(2)`.
+    pub fn toFixed(self: Value, digits: u32) Value {
+        return self.call("toFixed", .{digits});
+    }
+    pub fn isNull(self: Value) bool {
+        return js_is_null(self.h) != 0;
+    }
+    pub fn eql(self: Value, other: Value) bool {
+        return js_strict_eq(self.h, other.h) != 0;
+    }
+    pub fn typeOf(self: Value) Value {
+        return .{ .h = js_typeof(self.h) };
+    }
+    /// Release the handle so its slot is reclaimed (a free-list reuses freed
+    /// indices). Usually unnecessary inside a wz.Site frame: each frame is
+    /// bracketed by js_mark/js_reset, so handles minted during onFrame (and the
+    /// callbacks WASM invokes) are freed automatically. Free explicitly only for
+    /// long-lived transients you mint OUTSIDE the frame loop.
+    pub fn free(self: Value) void {
+        js_free(self.h);
+    }
+
+    // --- typed views (zero-cost reinterpretations) ---
+    // lint:off decl-order: Element wraps a Value, and a Value offers to view itself as one - a cycle
+    pub fn asElement(self: Value) Element {
+        return .{ .j = self };
+    }
+    // lint:off decl-order: Ctx2D wraps a Value, and a Value offers to view itself as one - a cycle
+    pub fn asCtx2D(self: Value) Ctx2D {
+        return .{ .j = self };
+    }
+    // lint:off decl-order: Event wraps a Value, and a Value offers to view itself as one - a cycle
+    pub fn asEvent(self: Value) Event {
+        return .{ .j = self };
+    }
+    // lint:off decl-order: Promise wraps a Value, and a Value offers to view itself as one - a cycle
+    pub fn asPromise(self: Value) Promise {
+        return .{ .j = self };
+    }
+    // lint:off decl-order: Response wraps a Value, and a Value offers to view itself as one - a cycle
+    pub fn asResponse(self: Value) Response {
+        return .{ .j = self };
+    }
+};
+
+// snake_case (Zig field convention) -> camelCase (JS/WebGPU key convention).
+/// Build a JS object from a Zig anonymous struct: `wz.obj(.{ .size = 256, .label = "x" })`.
+/// Fields are marshalled by type (numbers/strings/bools/Values, nested objects, and
+/// tuples-as-arrays) and snake_case keys become camelCase. The descriptor-building win.
+pub fn obj(fields: anytype) Value {
+    return .{ .h = objToH(fields) };
+}
+
+/// Compile-time guard for a struct read straight out of module memory: it must be a
+/// fixed-layout `extern struct` with no host pointers (a module address is not a host
+/// pointer) and no optionals. Misuse is a compile error, not a silent wrong read.
+pub fn Wire(comptime T: type) type {
+    comptime {
+        const info = @typeInfo(T);
+        if (info != .@"struct" or info.@"struct".layout != .@"extern") {
+            @compileError("wz.Wire: " ++ @typeName(T) ++ " must be an `extern struct` (fixed, shared layout)");
+        }
+        for (structFields(T)) |f| {
+            switch (@typeInfo(f.type)) {
+                .pointer => @compileError("wz.Wire: field '" ++ f.name ++
+                    "' is a pointer; a module address is not a host pointer."),
+                .optional => @compileError("wz.Wire: field '" ++ f.name ++
+                    "' is optional; optionals have no fixed wire layout."),
+                else => {},
+            }
+        }
+        return T;
+    }
+}
+
+/// A handle table for bridges: maps 1-based ids (0 = none/invalid) to live values,
+/// reusing released ids via a free list. One per resource kind - the table every
+/// bridge needs to hand the module small integer handles for GPU/DOM objects while
+/// keeping the real JS values (wz.Value) host-side. Fixed capacity, no allocator;
+/// overflowing it traps rather than silently overwriting, since a too-small cap or a
+/// handle leak is a bug you want to hear about. `get` returns null for 0 or any id
+/// that was never issued or has been released.
+pub fn Table(comptime T: type, comptime capacity: usize) type {
+    return struct {
+        slots: [capacity]?T = undefined, // every id in [1,next) is written before read
+        free: [capacity]u32 = undefined,
+        free_n: usize = 0,
+        next: u32 = 1, // 0 reserved for "invalid"
+        const Self = @This();
+
+        /// Store a value, return its id (never 0).
+        pub fn insert(self: *Self, value: T) u32 {
+            const id: u32 = if (self.free_n > 0) blk: {
+                self.free_n -= 1;
+                break :blk self.free[self.free_n];
+            } else blk: {
+                const i = self.next;
+                if (i >= capacity) {
+                    unreachable;
+                } // table full - raise the capacity
+                self.next += 1;
+                break :blk i;
+            };
+            self.slots[id] = value;
+            return id;
+        }
+        /// The value for `id`, or null if 0 / never issued / released.
+        pub fn get(self: *const Self, id: u32) ?T {
+            if (id == 0 or id >= self.next) {
+                return null;
+            }
+            return self.slots[id];
+        }
+        /// Release `id` so its slot is reused by a later insert. No-op on invalid ids.
+        pub fn remove(self: *Self, id: u32) void {
+            if (id == 0 or id >= self.next or self.slots[id] == null) {
+                return;
+            }
+            self.slots[id] = null;
+            self.free[self.free_n] = id;
+            self.free_n += 1;
+        }
+    };
+}
+
+// ===========================================================================
+// Free helpers - the JS globals.
+// ===========================================================================
+
 pub fn global() Value {
     return .{ .h = js_global() };
 }
@@ -446,155 +854,330 @@ pub fn func(f: *const anyopaque) Value {
     return .{ .h = js_func(f) };
 }
 
-/// CanvasRenderingContext2D - the common 2D drawing API, typed.
-pub const Ctx2D = extern struct {
-    j: Value,
+/// An explicit JS number Value.
+pub fn num(x: f64) Value {
+    return .{ .h = js_num(x) };
+}
 
-    // properties (set)
-    pub fn fillStyle(self: Ctx2D, v: anytype) void {
-        self.j.set("fillStyle", v);
-    }
-    pub fn strokeStyle(self: Ctx2D, v: anytype) void {
-        self.j.set("strokeStyle", v);
-    }
-    pub fn lineWidth(self: Ctx2D, w: f32) void {
-        self.j.set("lineWidth", w);
-    }
-    pub fn font(self: Ctx2D, comptime f: []const u8) void {
-        self.j.set("font", str(f));
-    }
-    pub fn textAlign(self: Ctx2D, comptime a: []const u8) void {
-        self.j.set("textAlign", str(a));
-    }
-    pub fn globalAlpha(self: Ctx2D, a: f32) void {
-        self.j.set("globalAlpha", a);
-    }
+/// Wrap a raw handle (e.g. a callback parameter from JS) as a Value.
+pub fn wrap(h: Handle) Value {
+    return .{ .h = h };
+}
 
-    // rectangles
-    pub fn fillRect(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    ) void {
-        _ = self.j.call("fillRect", .{ x, y, w, h });
-    }
-    pub fn strokeRect(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    ) void {
-        _ = self.j.call("strokeRect", .{ x, y, w, h });
-    }
-    pub fn clearRect(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    ) void {
-        _ = self.j.call("clearRect", .{ x, y, w, h });
-    }
+/// A new empty JS array.
+pub fn array() Value {
+    return .{ .h = js_array() };
+}
 
-    // paths
-    pub fn beginPath(self: Ctx2D) void {
-        _ = self.j.call("beginPath", .{});
-    }
-    pub fn closePath(self: Ctx2D) void {
-        _ = self.j.call("closePath", .{});
-    }
-    pub fn moveTo(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-    ) void {
-        _ = self.j.call("moveTo", .{ x, y });
-    }
-    pub fn lineTo(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-    ) void {
-        _ = self.j.call("lineTo", .{ x, y });
-    }
-    pub fn arc(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-        r: f32,
-        start_angle: f32,
-        end_angle: f32,
-    ) void {
-        _ = self.j.call("arc", .{ x, y, r, start_angle, end_angle });
-    }
-    pub fn rect(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-    ) void {
-        _ = self.j.call("rect", .{ x, y, w, h });
-    }
-    pub fn fill(self: Ctx2D) void {
-        _ = self.j.call("fill", .{});
-    }
-    pub fn stroke(self: Ctx2D) void {
-        _ = self.j.call("stroke", .{});
-    }
+pub fn window() Value {
+    return global();
+}
 
-    // text
-    pub fn fillText(
-        self: Ctx2D,
-        text: anytype,
-        x: f32,
-        y: f32,
-    ) void {
-        _ = self.j.call("fillText", .{ text, x, y });
-    }
-    pub fn strokeText(
-        self: Ctx2D,
-        text: anytype,
-        x: f32,
-        y: f32,
-    ) void {
-        _ = self.j.call("strokeText", .{ text, x, y });
-    }
+pub fn console() Value {
+    return global().get("console");
+}
 
-    // transforms / state
-    pub fn save(self: Ctx2D) void {
-        _ = self.j.call("save", .{});
+pub fn math() Value {
+    return global().get("Math");
+}
+
+// ---- timers --------------------------------------------------------------
+// Each takes a Zig fn address (`&tick`) just like `Element.on`, and returns the
+// timer id as a Value so you can cancel it. `setInterval(&tick, 1000)`.
+
+/// setInterval(handler, ms) -> id
+pub fn setInterval(handler: *const anyopaque, ms: u32) Value {
+    return global().call("setInterval", .{ func(handler), ms });
+}
+
+/// setTimeout(handler, ms) -> id
+pub fn setTimeout(handler: *const anyopaque, ms: u32) Value {
+    return global().call("setTimeout", .{ func(handler), ms });
+}
+
+/// clearInterval(id) - id is the Value returned by setInterval.
+pub fn clearInterval(id: Value) void {
+    _ = global().call("clearInterval", .{id});
+}
+
+/// clearTimeout(id)
+pub fn clearTimeout(id: Value) void {
+    _ = global().call("clearTimeout", .{id});
+}
+
+// ---- ubiquitous built-ins ------------------------------------------------
+
+/// Math.random() - a float in [0, 1). (For seeded/repeatable randomness use Zig's
+/// std.Random instead; this is the quick JS one.)
+pub fn random() f64 {
+    return math().call("random", .{}).to(f64);
+}
+
+/// Date.now() - milliseconds since the epoch.
+pub fn now() f64 {
+    return global().get("Date").call("now", .{}).to(f64);
+}
+
+/// JSON.stringify / JSON.parse. `stringify` takes any JS Value; `parse` takes a
+/// string (literal or Value) and returns the parsed Value.
+pub const json = struct {
+    pub fn stringify(v: Value) Value {
+        return global().get("JSON").call("stringify", .{v});
     }
-    pub fn restore(self: Ctx2D) void {
-        _ = self.j.call("restore", .{});
-    }
-    pub fn translate(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-    ) void {
-        _ = self.j.call("translate", .{ x, y });
-    }
-    pub fn rotate(self: Ctx2D, a: f32) void {
-        _ = self.j.call("rotate", .{a});
-    }
-    pub fn scale(
-        self: Ctx2D,
-        x: f32,
-        y: f32,
-    ) void {
-        _ = self.j.call("scale", .{ x, y });
+    pub fn parse(s: anytype) Value {
+        return global().get("JSON").call("parse", .{s});
     }
 };
 
+/// localStorage - string key/value persistence. `get` returns a Value that is
+/// `null` when the key is absent (check with `.isNull()`); `set` stores any value
+/// (numbers/strings coerce). Keys are comptime (they are part of your app, not data).
+pub const storage = struct {
+    fn ls() Value {
+        return global().get("localStorage");
+    }
+    pub fn get(comptime key: []const u8) Value {
+        return ls().call("getItem", .{str(key)});
+    }
+    pub fn set(comptime key: []const u8, v: anytype) void {
+        _ = ls().call("setItem", .{ str(key), v });
+    }
+    pub fn remove(comptime key: []const u8) void {
+        _ = ls().call("removeItem", .{str(key)});
+    }
+    pub fn clear() void {
+        _ = ls().call("clear", .{});
+    }
+};
+
+/// Wrap a Zig fn as a JS callback with the RAW NUMERIC ABI: arguments arrive
+/// as plain numbers (BigInt i64s coerced via Number), no per-arg handle is
+/// minted or freed. The wgpu/wasi import namespaces use this - they are the
+/// per-frame hot path and traffic exclusively in numbers and (ptr,len) pairs.
+pub fn funcNum(f: *const anyopaque) Value {
+    return .{ .h = js_fn_num(f) };
+}
+
+// ===========================================================================
+// THE ONE GLOBAL - every page-lifetime mutable in the bridge, in one place.
+//
+// The transpiled JS is single-threaded and has no init-order machinery, so
+// page singletons are unavoidable; what IS avoidable is scattering them.
+// Sub-structs group by domain; sizes are the working minimum:
+//   * scratch.read_staging: descriptor readSlice staging. Phase 3 reads
+//     bind-group/pipeline descriptor arrays through it - 64 KiB is the
+//     contract ceiling (asserted at the read site).
+//   * scratch.fmt: the sequential UI fmt builder (documented non-reentrant).
+//   * scratch.dom_code: a key event's `code`, as long as the longest code
+//     that names a raylib key (dom_input.longest_dom_code_length).
+// ===========================================================================
+
+/// One DOM event queued for the app: `code` is the number the app attached to the listener
+/// (`domListen` - kept on the element as `data-zbcode`), and `a` / `b` are the event's
+/// offsetX / offsetY, where on the element it happened. The app drains the ring through
+/// `domPollEvent`, which writes a record into module memory as three little-endian words.
+const EventRecord = extern struct { code: u32, a: f32, b: f32 };
+
+/// Drag-and-drop + file-picker state. See `web.zig`'s `userfile` namespace for the protocol
+/// and for why the picker must be a real DOM element rather than a wasm-drawn button.
+const UserFile = struct {
+    /// JS array of `{ name, bytes }`, oldest first. Files land here only once their
+    /// `arrayBuffer()` has resolved, so anything in the queue is complete and readable.
+    queue: Value = .{ .h = 0 },
+    /// The transparent `<input type="file">` parked over the caller's Load button.
+    input: Value = .{ .h = 0 },
+    /// The transparent `<a download>` parked over the caller's Save button, and the object URL
+    /// it currently points at - revoked whenever a newer file replaces it, so offering a fresh
+    /// file every few seconds does not leak the old ones.
+    save: Value = .{ .h = 0 },
+    save_url: Value = .{ .h = 0 },
+    /// Drop listeners are attached once, lazily - attaching them at boot would mean every
+    /// page paid for a feature almost none of them use.
+    listening: bool = false,
+    /// The name of the file whose `arrayBuffer()` is currently in flight.
+    pending_name: Value = .{ .h = 0 },
+};
+
+const BridgeGlobals = struct {
+    const Boot = struct {
+        stage: u32 = 0, // 0 idle, 1 adapter, 2 device, 3 instantiate, 4 run
+        pending_promise: u32 = 0,
+        gpu_adapter: Value = undefined,
+        gpu_device: Value = undefined,
+        gpu_queue: Value = undefined,
+        timestamp_supported: bool = false, // adapter exposes 'timestamp-query' (GPU timing)
+        module_exports: Value = undefined,
+        utf8_decoder: Value = undefined,
+        canvas_contexts: Value = undefined, // elem handle -> GPUCanvasContext
+        tick_callback: Value = undefined,
+        event_ring: [64]EventRecord = undefined,
+        event_count: u32 = 0,
+        // Which app contract the instantiated module speaks (detected from
+        // its exports at stage 3): bridge-native `zimr_page_main` +
+        // `zimr_frame(ms)`, or classic zimr `_initialize` + `update(frame_ms)`.
+        classic_contract: bool = false,
+    };
+    const Input = struct {
+        ready: bool = false,
+        held_key_codes: Value = undefined, // a JS Set of held KeyboardEvent.code strings
+        mouse_x_css: f32 = 0,
+        mouse_y_css: f32 = 0,
+        mouse_button_bits: u32 = 0,
+        dragging: bool = false, // classic pointer-capture gate
+    };
+    const Assets = struct {
+        ready: bool = false,
+        registered_assets: Value = undefined, // a JS Map: name -> Uint8Array
+    };
+    const Module = struct {
+        mem: Value = undefined, // the wasm module's memory Value, set at instantiation
+        mem_ready: bool = false,
+    };
+    const Scratch = struct {
+        /// The bulk module-memory reader copies into this before reinterpreting (see
+        /// Wasm.readSlice): it bounds descriptor reads, and one copy replaces N per-field crossings.
+        read_staging: [1 << 16]u8 align(16) = undefined,
+        fmt: [512]u8 = undefined,
+        fmt_len: u32 = 0,
+        /// A key event's `KeyboardEvent.code`, read in for `dom_input` to look up.
+        dom_code: [dom_input.longest_dom_code_length]u8 = undefined,
+    };
+    const Wgpu = struct {
+        // ONE table for every wgpu resource. Ids are unique ACROSS types
+        // (a single counter), which is strictly safer than per-type tables:
+        // passing a buffer id where a texture id belongs can never alias.
+        // Id 1 is reserved: device == queue == surface == 1, matching the
+        // classic TS bridge's singleton convention.
+        objects: Value = undefined, // a JS Map: id -> GPU object
+        next_id: u32 = 2,
+        // The transitional primary canvas for the classic (single-surface)
+        // zimr contract - lazily created by js_get_surface. Apps written
+        // against the D9 doctrine create their own canvases via dom verbs.
+        canvas: Value = undefined,
+        context: Value = undefined,
+        format_index: u32 = 0,
+        have_canvas: bool = false,
+        // Backing-store sync for the primary canvas (see ZimrWgpu.syncCanvasBacking).
+        // The ResizeObserver stores the canvas's EXACT device-pixel content size
+        // here. 0 = no exact report (no observer yet, or a browser without
+        // 'device-pixel-content-box' - Safari), and the sync falls back to
+        // round(clientWidth x devicePixelRatio) every frame.
+        observed_device_w: f64 = 0,
+        observed_device_h: f64 = 0,
+        has_device_pixel_box: bool = false,
+        resize_observer: Value = .{ .h = 0 },
+        // device.limits.maxTextureDimension2D: a canvas larger than this cannot
+        // be rendered into, so the backing store is clamped to it.
+        max_backing_dim: f64 = 8192,
+        format_list: Value = .{ .h = 0 }, // lazily-built JS array of format names
+        text_encoder: Value = .{ .h = 0 }, // lazily-built TextEncoder (adapter_info)
+        // GPU timing (profiler): a timestamp query set + a QUERY_RESOLVE|COPY_SRC
+        // resolve buffer + a COPY_DST|MAP_READ readback buffer. Created once at
+        // device init when 'timestamp-query' is supported; inert otherwise.
+        ts_query_set: Value = .{ .h = 0 },
+        ts_resolve_buf: Value = .{ .h = 0 },
+        ts_read_buf: Value = .{ .h = 0 },
+        ts_ready: bool = false, // infra created and usable
+        ts_cursor: u32 = 0, // timestamp slots written on the current encoder
+        ts_resolve_pairs: u32 = 0, // pass pairs queued for resolve at finish
+        ts_pending: bool = false, // a mapAsync readback is in flight (read buf busy)
+        ts_pid: u32 = 0, // promise id of the in-flight mapAsync
+        ts_pairs_inflight: u32 = 0, // pass count of the in-flight readback
+        gpu_ms_last: f64 = 0, // most recent summed GPU pass time (ms)
+    };
+    /// Text-input overlay state (the DOM <input> shared across show/poll/hide).
+    const Overlay = struct {
+        el: Value = .{ .h = 0 }, // the <input> or <textarea>; .h == 0 = not created yet
+        visible: bool = false,
+        escape_clears: bool = false,
+        allow_tab: bool = false,
+        char_filters: u32 = 0,
+        ctrl_enter_for_newline: bool = false, // textarea-only; the <input> ignores it
+    };
+    /// WebAudio host state. Same doctrine as `Wgpu`: ONE Map and ONE counter, so
+    /// ids are unique ACROSS types (context / buffer / source / decode) and
+    /// handing a buffer id where a source id belongs can never alias silently.
+    /// Id 0 is reserved for "invalid" - what every `js_audio_*` returns on
+    /// failure, matching the Zig declarations in `src/web.zig`.
+    const Audio = struct {
+        objects: Value = undefined, // JS Map: id -> AudioContext rec / AudioBuffer / source rec / decode rec
+        next_id: u32 = 1,
+    };
+
+    /// The Web Worker pool that backs `zimr.jobs`.
+    ///
+    /// A Web Worker is a SECOND JavaScript thread. It shares NOTHING with the page:
+    /// no variables, no DOM, no canvas, no WebGPU. The only way to talk to it is to
+    /// `postMessage` a value, which is COPIED across (or, for an ArrayBuffer, handed
+    /// over wholesale and detached from the sender - a "transfer", which costs nothing
+    /// however large it is).
+    ///
+    /// That isolation is exactly why a kernel must be a pure function, and why each
+    /// worker runs its own copy of a small, separately-compiled kernel wasm rather
+    /// than sharing the app's. There is no shared memory to share: `SharedArrayBuffer`
+    /// needs cross-origin isolation headers we do not have, which was measured, not
+    /// assumed.
+    const Jobs = struct {
+        spawned: bool = false, // have we tried to create the workers yet?
+        usable: bool = false, // ...and did it work? (a sandboxed iframe says no)
+        workers: Value = undefined, // JS Array of Worker
+        busy_with: Value = undefined, // JS Array: worker index -> job handle it is running (0 = idle)
+        /// JS Array: worker index -> 1 once that worker has INSTANTIATED its kernel wasm.
+        ///
+        /// The worker's `onmessage` is ASYNC: the `init` handler `await`s
+        /// `WebAssembly.instantiate` and YIELDS. A job that arrives during that window finds
+        /// `ex` still undefined, throws inside the worker, and is never heard from again.
+        ///
+        /// The worker has always posted `{t:'ready'}` when it finished instantiating. The
+        /// host has always THROWN IT AWAY - the handshake carries no handle, so it fell
+        /// through the `handle >= 1` guard and vanished. So `pump()` would dispatch to a
+        /// worker that could not yet run anything.
+        ///
+        /// `worker_png` never hit it: one job, submitted many frames after the pool came up.
+        /// `rt_workers` submits SIXTEEN on the first frame - the same frame `spawn()` runs -
+        /// and every one of them raced the instantiation. Sixteen tiles, none ever landed,
+        /// and not one error anywhere.
+        ready: Value = undefined,
+        queue: Value = undefined, // JS Array of job records waiting for a free worker
+        results: Value = undefined, // JS Map: handle -> Uint8Array (done) or -2 (failed)
+        /// JS Map: handle -> the failed kernel's error NAME, as a string.
+        ///
+        /// The worker has always SENT this ("ShortPayload", "OutOfMemory", ...). The host used
+        /// to print it to `console.error` and then throw it away, so Zig only ever saw -2 and
+        /// every failure surfaced as a bare `error.KernelFailed`. On a phone, where there is no
+        /// console to read, that is indistinguishable from no diagnosis at all.
+        kernel_errors: Value = undefined,
+        abandoned: Value = undefined, // JS Set of handles whose owner gave up; late replies are dropped
+        next_handle: u32 = 1,
+    };
+
+    boot: Boot = .{},
+    wgpu: Wgpu = .{},
+    audio: Audio = .{},
+    jobs: Jobs = .{},
+    input: Input = .{},
+    assets: Assets = .{},
+    module: Module = .{},
+    scratch: Scratch = .{},
+    default_sheet: ?Value = null, // the page's default CSSStyleSheet, created on first use (css.defaultSheet)
+    overlay: Overlay = .{},
+    overlay_ta: Overlay = .{}, // multiline sibling of `overlay`; its own <textarea>
+    userfile: UserFile = .{},
+};
+
+// lint:off module-var: THE one page singleton - see BridgeGlobals doc above
+var g: BridgeGlobals = .{};
+
+// ===========================================================================
+// String building - the way JS uses template literals, with std.fmt-style `{}`.
+//   fmt("{} + {} = {}", .{a, b, a + b})   ~=   `${a} + ${b} = ${a + b}`
+// Placeholders accept integers, floats (truncated to integer), and string
+// literals. Returns a JS string Value ready to assign.
+//
+// Uses one shared buffer, so it is for sequential UI code (not reentrant).
+// ===========================================================================
+
 inline fn putc(c: u8) void {
-    // `g` is THE page singleton (var g: BridgeGlobals); BridgeGlobals aggregates the
-    // handle table + scratch buffers that wrap Value and the DOM types, so it lives at
-    // the bottom after the cluster it owns, yet is used pervasively from here upward.
-    // lint:off decl-order: page singleton g defined after the wrapper cluster it aggregates
     g.scratch.fmt[g.scratch.fmt_len] = c;
     g.scratch.fmt_len += 1;
 }
@@ -651,6 +1234,160 @@ pub fn fmt(comptime spec: []const u8, args: anytype) Value {
     }
     return .{ .h = js_str(&g.scratch.fmt, g.scratch.fmt_len) };
 }
+
+// ---- console (format-aware, like the rest of webzig) ---------------------
+// `log("count = {}", .{n})` reads like console.log with a template literal, but
+// the formatting is the std.fmt `{}` you already use everywhere else.
+
+/// console.log(fmt(spec, args))
+pub fn log(comptime spec: []const u8, args: anytype) void {
+    _ = console().call("log", .{fmt(spec, args)});
+}
+
+/// console.warn(fmt(spec, args))
+pub fn warn(comptime spec: []const u8, args: anytype) void {
+    _ = console().call("warn", .{fmt(spec, args)});
+}
+
+/// console.error(fmt(spec, args))  (named `err` - `error` is a Zig keyword)
+pub fn err(comptime spec: []const u8, args: anytype) void {
+    _ = console().call("error", .{fmt(spec, args)});
+}
+
+// ---- UI building helpers -------------------------------------------------
+// Convenience on top of the DOM facade so a Zig "page" reads declaratively
+// instead of repeating create/setClass/setAttr/append by hand. All take
+// comptime strings (the slice-by-value constraint), which suits static layout.
+
+/// A `<button>` labelled `label_text`, wired to `handler` (a `&fn` pointer) on
+/// click, appended to `parent`.
+pub fn button(
+    parent: Element,
+    comptime label_text: []const u8,
+    handler: *const anyopaque,
+) Element {
+    const b: Element = parent.textChild("button", "", label_text);
+    b.on("click", handler);
+    return b;
+}
+
+/// A `.out` result line (id `id`) that a handler writes into. Starts as a dash.
+pub fn output(parent: Element, comptime id: []const u8) Element {
+    const o: Element = parent.child("div", "out");
+    o.setId(id);
+    o.setText(str("\u{2014}"));
+    return o;
+}
+
+/// Build a JS string from a runtime byte buffer - the dynamic-length escape
+/// hatch that `str` (comptime) and `fmt` (numbers only) don't cover.
+pub fn strBuf(ptr: [*]const u8, len: u32) Value {
+    return .{ .h = js_str(ptr, len) };
+}
+
+// ===========================================================================
+// Typed facades - thin wrappers so common code reads exactly like JS.
+// Each is just a Value plus typed methods; reach `.j` for anything not wrapped.
+// ===========================================================================
+
+/// A JS Promise, handled with CALLBACKS (no Asyncify, no blocking). `.then(&onOk)`
+/// registers a Zig fn that JS calls with the resolved value (a Handle - `wz.wrap` it);
+/// `.catch_(&onErr)` handles rejection. Both return the next Promise, so you can chain
+/// `wz.fetch(u).then(&ok).catch_(&err)`. Callbacks are `fn(wz.Handle) void` - do the next
+/// async step (e.g. `res.json().then(&onData)`) inside the callback.
+pub const Promise = extern struct {
+    j: Value,
+    /// .then(onResolve) - onResolve is a `&fn(wz.Value) void`.
+    pub fn then(self: Promise, on_resolve: *const anyopaque) Promise {
+        return .{ .j = self.j.call("then", .{func(on_resolve)}) };
+    }
+    /// .then with a typed context: `p.thenCtx(rec, onMapped)` where rec is a pointer
+    /// and `onMapped: fn(@TypeOf(rec), wz.Value) void`. The context is threaded to the
+    /// callback so per-operation state needn't live in a global - closures-with-state
+    /// without Asyncify. (The resolved Value is valid only inside the callback.)
+    pub fn thenCtx(
+        self: Promise,
+        ctx: anytype,
+        comptime cb: fn (@TypeOf(ctx), Value) void,
+    ) Promise {
+        const Ctx = @TypeOf(ctx);
+        const Tramp = struct {
+            fn entry(c: u32, v: Handle) void {
+                cb(@as(Ctx, @ptrFromInt(c)), .{ .h = v });
+            }
+        };
+        const h = js_func_ctx(&Tramp.entry, @intCast(@intFromPtr(ctx)));
+        return .{ .j = self.j.call("then", .{Value{ .h = h }}) };
+    }
+    /// .catch with a typed context (see thenCtx).
+    pub fn catchCtx(
+        self: Promise,
+        ctx: anytype,
+        comptime cb: fn (@TypeOf(ctx), Value) void,
+    ) Promise {
+        const Ctx = @TypeOf(ctx);
+        const Tramp = struct {
+            fn entry(c: u32, v: Handle) void {
+                cb(@as(Ctx, @ptrFromInt(c)), .{ .h = v });
+            }
+        };
+        const h = js_func_ctx(&Tramp.entry, @intCast(@intFromPtr(ctx)));
+        return .{ .j = self.j.call("catch", .{Value{ .h = h }}) };
+    }
+    /// .catch(onReject) - named `catch_` because `catch` is a Zig keyword.
+    pub fn catch_(self: Promise, on_reject: *const anyopaque) Promise {
+        return .{ .j = self.j.call("catch", .{func(on_reject)}) };
+    }
+    /// .finally(onDone) - runs on settle (resolve OR reject); onDone takes no args.
+    pub fn finally(self: Promise, on_done: *const anyopaque) Promise {
+        return .{ .j = self.j.call("finally", .{func(on_done)}) };
+    }
+};
+
+/// A fetch Response. `.json()`/`.text()` return Promises (the body is async); `.ok()`
+/// and `.status()` are immediate. (For most calls, prefer `wz.fetchJson`/`fetchText`,
+/// which skip straight to the parsed body.)
+pub const Response = extern struct {
+    j: Value,
+    /// response.json() -> Promise of the parsed value.
+    pub fn json(self: Response) Promise {
+        return .{ .j = self.j.call("json", .{}) };
+    }
+    /// response.text() -> Promise of the body string.
+    pub fn text(self: Response) Promise {
+        return .{ .j = self.j.call("text", .{}) };
+    }
+    /// response.ok - true for a 2xx status.
+    pub fn ok(self: Response) bool {
+        return self.j.get("ok").truthy();
+    }
+    /// response.status - the HTTP status code.
+    pub fn status(self: Response) f64 {
+        return self.j.get("status").to(f64);
+    }
+};
+
+/// A JS Date - `wz.date()` gives you `new Date()` (now). Methods return the same
+/// strings JS does; reach `.j` for anything not wrapped.
+pub const Date = extern struct {
+    j: Value,
+    /// toLocaleTimeString() -> "3:04:11 PM"
+    pub fn localeTime(self: Date) Value {
+        return self.j.call("toLocaleTimeString", .{});
+    }
+    /// toLocaleDateString() -> "6/9/2026"
+    pub fn localeDate(self: Date) Value {
+        return self.j.call("toLocaleDateString", .{});
+    }
+    /// toISOString() -> "2026-06-09T15:04:11.000Z"
+    pub fn iso(self: Date) Value {
+        return self.j.call("toISOString", .{});
+    }
+    /// getTime() -> ms since the epoch
+    pub fn getTime(self: Date) f64 {
+        return self.j.call("getTime", .{}).to(f64);
+    }
+};
 
 pub const Element = extern struct {
     j: Value,
@@ -830,6 +1567,184 @@ pub const Document = extern struct {
     }
 };
 
+/// CanvasRenderingContext2D - the common 2D drawing API, typed.
+pub const Ctx2D = extern struct {
+    j: Value,
+
+    // properties (set)
+    pub fn fillStyle(self: Ctx2D, v: anytype) void {
+        self.j.set("fillStyle", v);
+    }
+    pub fn strokeStyle(self: Ctx2D, v: anytype) void {
+        self.j.set("strokeStyle", v);
+    }
+    pub fn lineWidth(self: Ctx2D, w: f32) void {
+        self.j.set("lineWidth", w);
+    }
+    pub fn font(self: Ctx2D, comptime f: []const u8) void {
+        self.j.set("font", str(f));
+    }
+    pub fn textAlign(self: Ctx2D, comptime a: []const u8) void {
+        self.j.set("textAlign", str(a));
+    }
+    pub fn globalAlpha(self: Ctx2D, a: f32) void {
+        self.j.set("globalAlpha", a);
+    }
+
+    // rectangles
+    pub fn fillRect(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) void {
+        _ = self.j.call("fillRect", .{ x, y, w, h });
+    }
+    pub fn strokeRect(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) void {
+        _ = self.j.call("strokeRect", .{ x, y, w, h });
+    }
+    pub fn clearRect(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) void {
+        _ = self.j.call("clearRect", .{ x, y, w, h });
+    }
+
+    // paths
+    pub fn beginPath(self: Ctx2D) void {
+        _ = self.j.call("beginPath", .{});
+    }
+    pub fn closePath(self: Ctx2D) void {
+        _ = self.j.call("closePath", .{});
+    }
+    pub fn moveTo(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+    ) void {
+        _ = self.j.call("moveTo", .{ x, y });
+    }
+    pub fn lineTo(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+    ) void {
+        _ = self.j.call("lineTo", .{ x, y });
+    }
+    pub fn arc(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+        r: f32,
+        start_angle: f32,
+        end_angle: f32,
+    ) void {
+        _ = self.j.call("arc", .{ x, y, r, start_angle, end_angle });
+    }
+    pub fn rect(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+    ) void {
+        _ = self.j.call("rect", .{ x, y, w, h });
+    }
+    pub fn fill(self: Ctx2D) void {
+        _ = self.j.call("fill", .{});
+    }
+    pub fn stroke(self: Ctx2D) void {
+        _ = self.j.call("stroke", .{});
+    }
+
+    // text
+    pub fn fillText(
+        self: Ctx2D,
+        text: anytype,
+        x: f32,
+        y: f32,
+    ) void {
+        _ = self.j.call("fillText", .{ text, x, y });
+    }
+    pub fn strokeText(
+        self: Ctx2D,
+        text: anytype,
+        x: f32,
+        y: f32,
+    ) void {
+        _ = self.j.call("strokeText", .{ text, x, y });
+    }
+
+    // transforms / state
+    pub fn save(self: Ctx2D) void {
+        _ = self.j.call("save", .{});
+    }
+    pub fn restore(self: Ctx2D) void {
+        _ = self.j.call("restore", .{});
+    }
+    pub fn translate(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+    ) void {
+        _ = self.j.call("translate", .{ x, y });
+    }
+    pub fn rotate(self: Ctx2D, a: f32) void {
+        _ = self.j.call("rotate", .{a});
+    }
+    pub fn scale(
+        self: Ctx2D,
+        x: f32,
+        y: f32,
+    ) void {
+        _ = self.j.call("scale", .{ x, y });
+    }
+};
+
+pub const Event = extern struct {
+    j: Value,
+
+    pub fn offsetX(self: Event) f32 {
+        return self.j.get("offsetX").to(f32);
+    }
+    pub fn offsetY(self: Event) f32 {
+        return self.j.get("offsetY").to(f32);
+    }
+    pub fn clientX(self: Event) f32 {
+        return self.j.get("clientX").to(f32);
+    }
+    pub fn clientY(self: Event) f32 {
+        return self.j.get("clientY").to(f32);
+    }
+    pub fn key(self: Event) Value {
+        return self.j.get("key");
+    }
+    /// KeyboardEvent.code - the physical key ("ArrowLeft", "KeyW"), layout-independent.
+    pub fn code(self: Event) Value {
+        return self.j.get("code");
+    }
+    /// event.target, as an Element.
+    pub fn target(self: Event) Element {
+        return .{ .j = self.j.get("target") };
+    }
+    pub fn preventDefault(self: Event) void {
+        _ = self.j.call("preventDefault", .{});
+    }
+    pub fn stopPropagation(self: Event) void {
+        _ = self.j.call("stopPropagation", .{});
+    }
+};
+
 pub fn document() Document {
     return .{ .j = global().get("document") };
 }
@@ -839,12 +1754,76 @@ pub fn requestAnimationFrame(cb: Value) void {
     _ = global().call("requestAnimationFrame", .{cb});
 }
 
-/// Wrap a Zig fn as a JS callback with the RAW NUMERIC ABI: arguments arrive
-/// as plain numbers (BigInt i64s coerced via Number), no per-arg handle is
-/// minted or freed. The wgpu/wasi import namespaces use this - they are the
-/// per-frame hot path and traffic exclusively in numbers and (ptr,len) pairs.
-pub fn funcNum(f: *const anyopaque) Value {
-    return .{ .h = js_fn_num(f) };
+/// new Date() - the current moment, as a typed Date facade.
+pub fn date() Date {
+    return .{ .j = global().get("Date").new(.{}) };
+}
+
+// ---- fetch (async, callback-based - no Asyncify, no blocking) ------------
+// `fetch` resolves to a Response; `fetchJson`/`fetchText` skip straight to the
+// parsed body. Handle the result with `.then(&onData)` (and `.catch_(&onErr)`):
+// your callback is `fn(wz.Handle) void`, called with the resolved value.
+//
+//   fn load() void { _ = wz.fetchJson("/api/user").then(&onUser); }
+//   fn onUser(h: wz.Handle) void {
+//       const u = wz.wrap(h);
+//       name_el.setText(u.get("name"));
+//   }
+
+/// fetch(url) -> Promise that resolves to a Response (use `.json()`/`.text()` for
+/// the body). `url` is a string literal or a Value.
+pub fn fetch(url: anytype) Promise {
+    return .{ .j = global().call("fetch", .{url}) };
+}
+
+/// fetch(url) then r.json() -> Promise resolving DIRECTLY to the parsed JSON value.
+pub fn fetchJson(url: anytype) Promise {
+    return .{ .j = .{ .h = js_fetch_json(toH(url)) } };
+}
+
+/// fetch(url) then r.text() -> Promise resolving DIRECTLY to the body as a string.
+pub fn fetchText(url: anytype) Promise {
+    return .{ .j = .{ .h = js_fetch_text(toH(url)) } };
+}
+
+// ===========================================================================
+// PHASE 3a - the classic zimr wgpu contract (ZIG_BRIDGE_PLAN Phase 3)
+//
+// Mirrors src/bridge.zig verb-for-verb: u32 handles in one table,
+// singleton ids (device == queue == surface == 1), packed (w<<16)|h sizes,
+// texture formats as indices into the shared list below, and binary
+// descriptor blobs (3c) read from module memory. All verbs use the raw
+// numeric ABI (funcNum): params arrive as plain f64 numbers.
+// ===========================================================================
+
+/// The wasm module's exports, which the bridge calls into on DOM events.
+fn ex() Value {
+    return g.boot.module_exports;
+}
+
+/// Calls the wasm export `name` with `args`, when the module has it: a page built without some feature leaves its
+/// exports out, and the bridge's handlers stay the same for every page.
+fn callIfPresent(comptime name: []const u8, args: anytype) void {
+    if (!ex().get(name).isNull()) {
+        _ = ex().call(name, args);
+    }
+}
+
+/// Gives `result`, when it is a promise, a rejection handler that does nothing. A browser refuses some requests by
+/// rejecting their promise - a permissions policy (the Claude app's page viewer blocks the Clipboard API), a request
+/// outside a click, a closed audio context - and an unhandled rejection takes the whole page down. With the handler,
+/// a refused request simply has no effect, as every such request's contract allows. Old browsers that answer nothing
+/// rather than a promise are left alone.
+fn ignoreRejection(result: Value) void {
+    if (!result.truthy() or !result.get("catch").truthy()) {
+        return;
+    }
+    _ = result.call("catch", .{global().get("Function").new(.{})});
+}
+
+/// A number as a JavaScript value, for an export's arguments.
+fn numArg(x: f64) Value {
+    return .{ .h = js_num(x) };
 }
 
 const ZimrWgpu = struct {
@@ -988,6 +1967,11 @@ const ZimrWgpu = struct {
         size.free();
         sizes.free();
         entry.free();
+        // The engine's resize event, in CSS pixels and the device pixel ratio, before the frame that applies it.
+        const pixel_ratio: f64 = global().getNum("devicePixelRatio");
+        const css_width: f64 = g.wgpu.observed_device_w / pixel_ratio;
+        const css_height: f64 = g.wgpu.observed_device_h / pixel_ratio;
+        callIfPresent("input_push_resized", .{ numArg(css_width), numArg(css_height), numArg(pixel_ratio) });
     }
 
     /// Make `canvas.width/height` match the CSS box in device pixels. Runs at
@@ -1107,12 +2091,16 @@ const ZimrWgpu = struct {
     fn jsOpenUrl(ptr: f64, len: f64) void {
         _ = global().call("open", .{ modString(ptr, len), str("_blank"), str("noopener,noreferrer") });
     }
+    // The engine's `setTitle` on the web (platform/web.zig -> `dom.set_title`): the page's document.title.
+    fn jsSetTitle(ptr: f64, len: f64) void {
+        global().get("document").set("title", modString(ptr, len));
+    }
     // navigator.clipboard is undefined in insecure (file://, plain-http) contexts,
     // so guard with truthy() to avoid throwing during a copy.
     fn jsSetClipboardText(ptr: f64, len: f64) void {
         const clipboard: Value = global().get("navigator").get("clipboard");
         if (clipboard.truthy()) {
-            _ = clipboard.call("writeText", .{modString(ptr, len)});
+            ignoreRejection(clipboard.call("writeText", .{modString(ptr, len)}));
         }
     }
     fn jsRequestPointerLock() void {
@@ -1130,6 +2118,77 @@ const ZimrWgpu = struct {
             });
             _ = swallow.call("call", .{ global(), g.wgpu.canvas });
         }
+    }
+    /// The Screen Wake Lock API: `navigator.wakeLock.request("screen")` answers with a promise of a sentinel, whose
+    /// `release()` ends the lock. The browser releases it itself whenever the page is hidden, so the wish is kept and
+    /// the lock asked for again when the page is shown.
+    fn jsKeepAwake(on: f64) void {
+        const keep: Value = global().get("Function").new(.{
+            str("on"),
+            str("var w=globalThis.__zimrWakeLock||" ++
+                "(globalThis.__zimrWakeLock={wanted:false,sentinel:null,listening:false});" ++
+                "w.wanted=!!on;" ++
+                "var ask=function(){" ++
+                "if(w.wanted&&!w.sentinel&&navigator.wakeLock&&document.visibilityState==='visible'){" ++
+                "navigator.wakeLock.request('screen').then(function(s){w.sentinel=s;" ++
+                "s.addEventListener('release',function(){w.sentinel=null;});}).catch(function(){});}};" ++
+                "if(!w.listening){w.listening=true;document.addEventListener('visibilitychange',ask);}" ++
+                "if(w.wanted){ask();}else if(w.sentinel){w.sentinel.release();w.sentinel=null;}"),
+        });
+        _ = keep.call("call", .{ global(), Value{ .h = js_num(on) } });
+    }
+    /// Whether the page is fullscreen: the document has a fullscreen element.
+    fn jsIsFullscreen() f64 {
+        const element: Value = global().get("document").get("fullscreenElement");
+        return if (element.isNull()) 0 else 1;
+    }
+    /// Takes the canvas fullscreen, or leaves fullscreen. Browsers grant it only during a click or a key press, and
+    /// reject the request's promise otherwise; the rejection is swallowed, as the pointer lock's is, and
+    /// `fullscreenchange` reports what holds.
+    fn jsToggleFullscreen() void {
+        const toggle: Value = global().get("Function").new(.{
+            str("c"),
+            str("try{if(document.fullscreenElement){Promise.resolve(document.exitFullscreen()).catch(function(){});}" ++
+                "else{Promise.resolve(c.requestFullscreen()).catch(function(){});}}catch(e){}"),
+        });
+        _ = toggle.call("call", .{ global(), g.wgpu.canvas });
+    }
+    /// Writes `text`, a JavaScript string, into the engine's paste buffer as UTF-8 and reports it. `encodeInto` stops
+    /// at a character boundary when the buffer is full, so a long text keeps its first part, whole.
+    fn deliverPaste(text: Value) void {
+        if (ex().get("input_paste_buffer").isNull() or !text.truthy()) {
+            return;
+        }
+        const buffer: f64 = js_to_num(ex().call("input_paste_buffer", .{}).h);
+        const capacity: f64 = js_to_num(ex().call("input_paste_capacity", .{}).h);
+        if (g.wgpu.text_encoder.isNull()) {
+            g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
+        }
+        const paste_view: Value = modBytes(buffer, capacity);
+        const written: Value = g.wgpu.text_encoder.call("encodeInto", .{ text, paste_view }).get("written");
+        callIfPresent("input_push_paste", .{numArg(js_to_num(written.h))});
+    }
+    /// The page's paste: the browser's own paste command (Ctrl+V, a menu's Paste) carries the text in the event,
+    /// readable without the Clipboard API's permission.
+    fn onPaste(ev: Handle) void {
+        const data: Value = (Value{ .h = ev }).get("clipboardData");
+        if (!data.truthy()) {
+            return;
+        }
+        deliverPaste(data.call("getData", .{str("text")}));
+    }
+    /// The answer to `requestPaste`: the clipboard's text.
+    fn onClipboardText(text: Handle) void {
+        deliverPaste(.{ .h = text });
+    }
+    /// Reads the clipboard (`navigator.clipboard.readText`) for `requestPaste`. The browser may ask the user, or
+    /// refuse outright under a permissions policy; a refusal pastes nothing.
+    fn jsRequestPaste() void {
+        const clipboard: Value = global().get("navigator").get("clipboard");
+        if (!clipboard.truthy() or !clipboard.get("readText").truthy()) {
+            return;
+        }
+        ignoreRejection(clipboard.call("readText", .{}).call("then", .{func(&onClipboardText)}));
     }
     fn jsExitPointerLock() void {
         _ = global().get("document").call("exitPointerLock", .{});
@@ -1164,8 +2223,15 @@ const ZimrWgpu = struct {
     fn lsKey(key_ptr: f64, key_len: f64) Value {
         return str("zimr_").call("concat", .{modString(key_ptr, key_len)});
     }
+    /// The page's `localStorage`, or null where it cannot be read. In a sandboxed frame without same-origin access -
+    /// the Claude app's page viewer is one - the read itself throws a SecurityError, and so can storage the user
+    /// turned off; the read is tried, and a refusal answers null. Callers treat null as storage unavailable: values
+    /// are not kept, and nothing fails.
     fn localStorage() Value {
-        return global().get("localStorage");
+        const read: Value = global().get("Function").new(.{
+            str("try{return globalThis.localStorage;}catch(e){return null;}"),
+        });
+        return read.call("call", .{global()});
     }
     fn jsPersistenceSave(
         key_ptr: f64,
@@ -1177,8 +2243,17 @@ const ZimrWgpu = struct {
         if (ls.isNull()) {
             return 2;
         }
-        _ = ls.call("setItem", .{ lsKey(key_ptr, key_len), modString(val_ptr, val_len) });
-        return 0;
+        // A full store throws (QuotaExceededError): status 1, the value not kept. The key and the value travel as one
+        // object's properties.
+        const item: Value = global().get("Object").new(.{});
+        item.set("k", lsKey(key_ptr, key_len));
+        item.set("v", modString(val_ptr, val_len));
+        const store: Value = global().get("Function").new(.{
+            str("s"),
+            str("p"),
+            str("try{s.setItem(p.k,p.v);return 0;}catch(e){return 1;}"),
+        });
+        return js_to_num(store.call("call", .{ global(), ls, item }).h);
     }
     fn jsPersistenceSize(key_ptr: f64, key_len: f64) f64 {
         const ls: Value = localStorage();
@@ -1516,6 +2591,664 @@ const ZimrWgpu = struct {
         return total;
     }
 
+    /// The device pixel ratio: physical pixels per CSS pixel.
+    fn jsGetDpiScale() f64 {
+        return global().getNum("devicePixelRatio");
+    }
+
+    /// The screen's width and height in CSS pixels (`screen.width`, `screen.height`): the monitor a page sees.
+    fn jsScreenWidth() f64 {
+        return global().get("screen").getNum("width");
+    }
+
+    fn jsScreenHeight() f64 {
+        return global().get("screen").getNum("height");
+    }
+
+    // ---- Sound output: the contract's four audio requests, played by an AudioWorklet ----
+    //
+    // A page's own code has no audio thread, but the browser runs a small processor of ours on its audio thread: an
+    // AudioWorklet. The engine's mixer queues a block of samples each frame (`queueAudio`); the main thread copies it
+    // out of the module's memory and posts it to the processor, which plays the blocks in order, one 128-frame
+    // render quantum at a time, and silence when none waits. Every 256 frames it plays - and whenever it runs dry -
+    // it posts back how many it played, so the main thread knows how many still wait (`queuedAudioFrames`): those
+    // posted minus those played. Counting the processor's own reports, rather than reading the audio context's clock,
+    // keeps the count exact after an underrun, when the clock runs on while nothing plays.
+    //
+    // The processor's module is loaded from a Blob URL. A page whose origin is opaque - a file opened from disk or
+    // from a phone's downloads, a sandboxed frame - makes `blob:null/...` URLs, which a worklet may not load; the
+    // module then loads from a `data:` URL instead. Should both fail, or the browser have no AudioWorklet, the blocks
+    // play through a ScriptProcessorNode: deprecated, and run on the main thread, but available in every origin - its
+    // callback copies from the same queue, by the same function (`playBlocks`), and counts what it played itself.
+    //
+    // A sound started this frame need not wait behind what is queued: `mixIntoQueued` adds its first frames onto the
+    // queued ones, aligned to the queue's end, by the same function wherever the queue lives (`mixIntoQueue`) - in
+    // the worklet, by a message, which arrives after every block posted before it.
+    //
+    // Until the output can play - its module loads asynchronously, and browsers keep a page's audio suspended until
+    // the person first clicks, taps or presses a key - blocks are held on the main thread and drained at the real rate,
+    // as
+    // if played to nowhere. The mixer therefore sees a steady queue, not a dry one (which it would count as underruns
+    // and answer with a wider margin), and when the sound begins, at most one margin of held sound plays: a sound
+    // never plays late. The first pointer press or key press anywhere resumes the context.
+    //
+    // The program below is JavaScript, run once on the main thread (`audioOutput`), keeping its state on
+    // `globalThis.__zimrAudioOutput`. The processor's source is a function within it, `processorMain`, made into the
+    // worklet module's text by `toString()` - with `playBlocks`'s text as its argument - so that it is written as
+    // ordinary code, never quoted, and never run on the main thread.
+    const audio_output_program: []const u8 =
+        \\var output = globalThis.__zimrAudioOutput;
+        \\if (output) {
+        \\    return output;
+        \\}
+        \\// Copies queued blocks into one callback's channels, in order, then silence after the last; returns
+        \\// how many frames it copied. `queue` holds the blocks and how far into the first one playing has reached.
+        \\var playBlocks = function (queue, channelOutputs, channelCount) {
+        \\    var callbackFrameCount = channelOutputs[0].length;
+        \\    var framesWritten = 0;
+        \\    while (framesWritten < callbackFrameCount && queue.blocks.length > 0) {
+        \\        var block = queue.blocks[0];
+        \\        var blockFrameCount = block.length / channelCount;
+        \\        var framesLeftInBlock = blockFrameCount - queue.framesTakenFromFirstBlock;
+        \\        var framesToCopy = Math.min(framesLeftInBlock, callbackFrameCount - framesWritten);
+        \\        for (var frame = 0; frame < framesToCopy; frame++) {
+        \\            var firstSample = (queue.framesTakenFromFirstBlock + frame) * channelCount;
+        \\            for (var channel = 0; channel < channelOutputs.length; channel++) {
+        \\                var sourceChannel = Math.min(channel, channelCount - 1);
+        \\                channelOutputs[channel][framesWritten + frame] = block[firstSample + sourceChannel];
+        \\            }
+        \\        }
+        \\        framesWritten += framesToCopy;
+        \\        queue.framesTakenFromFirstBlock += framesToCopy;
+        \\        if (queue.framesTakenFromFirstBlock >= blockFrameCount) {
+        \\            queue.blocks.shift();
+        \\            queue.framesTakenFromFirstBlock = 0;
+        \\        }
+        \\    }
+        \\    for (var channelIndex = 0; channelIndex < channelOutputs.length; channelIndex++) {
+        \\        channelOutputs[channelIndex].fill(0, framesWritten);
+        \\    }
+        \\    return framesWritten;
+        \\};
+        \\// Adds `samples` onto the frames of `queue` not yet played, aligned to its end - the last sample onto the
+        \\// last one queued, and back from there - each sum held to -1..1; samples reaching back past the first
+        \\// unplayed frame, onto frames already played, are dropped. Mixing is addition, so a sound started now can
+        \\// begin inside the queue.
+        \\var mixIntoQueue = function (queue, samples, channelCount) {
+        \\    var sampleIndex = samples.length;
+        \\    for (var blockIndex = queue.blocks.length - 1; blockIndex >= 0 && sampleIndex > 0; blockIndex--) {
+        \\        var block = queue.blocks[blockIndex];
+        \\        var firstUnplayedSample = blockIndex === 0 ? queue.framesTakenFromFirstBlock * channelCount : 0;
+        \\        var blockSampleIndex = block.length;
+        \\        while (blockSampleIndex > firstUnplayedSample && sampleIndex > 0) {
+        \\            blockSampleIndex -= 1;
+        \\            sampleIndex -= 1;
+        \\            var sum = block[blockSampleIndex] + samples[sampleIndex];
+        \\            block[blockSampleIndex] = sum > 1 ? 1 : (sum < -1 ? -1 : sum);
+        \\        }
+        \\    }
+        \\};
+        \\// The processor, run in the worklet's scope: plays the blocks posted to it, and reports how many it played.
+        \\var processorMain = function (playBlocks, mixIntoQueue) {
+        \\    class ZimrOutputProcessor extends AudioWorkletProcessor {
+        \\        constructor(options) {
+        \\            super();
+        \\            this.channelCount = options.processorOptions.channels;
+        \\            this.queue = { blocks: [], framesTakenFromFirstBlock: 0 };
+        \\            this.framesPlayedUnreported = 0;
+        \\            // Frames of silence played for want of blocks once playing began, and how many times it ran
+        \\            // dry: each a gap heard. Reported with the frames played.
+        \\            this.hasPlayedAny = false;
+        \\            this.wasDry = false;
+        \\            this.dryFramesUnreported = 0;
+        \\            this.dryEventsUnreported = 0;
+        \\            this.port.onmessage = (event) => {
+        \\                if (event.data instanceof Float32Array) {
+        \\                    this.queue.blocks.push(event.data);
+        \\                } else {
+        \\                    mixIntoQueue(this.queue, event.data.mixIntoQueued, this.channelCount);
+        \\                }
+        \\            };
+        \\        }
+        \\        process(inputs, outputs) {
+        \\            var channelOutputs = outputs[0];
+        \\            var framesWritten = playBlocks(this.queue, channelOutputs, this.channelCount);
+        \\            var dryFrames = channelOutputs[0].length - framesWritten;
+        \\            if (framesWritten > 0) {
+        \\                this.hasPlayedAny = true;
+        \\            }
+        \\            if (dryFrames > 0 && this.hasPlayedAny) {
+        \\                this.dryFramesUnreported += dryFrames;
+        \\                if (!this.wasDry) {
+        \\                    this.dryEventsUnreported += 1;
+        \\                }
+        \\            }
+        \\            this.wasDry = dryFrames > 0;
+        \\            this.framesPlayedUnreported += framesWritten;
+        \\            var hasSomethingToReport = this.framesPlayedUnreported > 0 || this.dryFramesUnreported > 0;
+        \\            // Reported every 1 024 frames, and when it runs dry: each report says the context's frame it
+        \\            // describes, so that the main thread counts the frames since by the context's clock. Seldom
+        \\            // reports leave this thread little garbage to collect, on a thread that must never wait.
+        \\            if (this.framesPlayedUnreported >= 1024 || (dryFrames > 0 && hasSomethingToReport)) {
+        \\                var frameAtQuantumStart = typeof currentFrame === 'number' ? currentFrame : 0;
+        \\                this.port.postMessage({
+        \\                    played: this.framesPlayedUnreported,
+        \\                    dryFrames: this.dryFramesUnreported,
+        \\                    dryEvents: this.dryEventsUnreported,
+        \\                    atFrame: frameAtQuantumStart + channelOutputs[0].length,
+        \\                });
+        \\                this.framesPlayedUnreported = 0;
+        \\                this.dryFramesUnreported = 0;
+        \\                this.dryEventsUnreported = 0;
+        \\            }
+        \\            return true;
+        \\        }
+        \\    }
+        \\    registerProcessor('zimr-output', ZimrOutputProcessor);
+        \\};
+        \\output = {
+        \\    context: null,
+        \\    node: null,
+        \\    // 'worklet' or 'script processor': how the blocks reach the speaker.
+        \\    sink: '',
+        \\    sampleRate: 0,
+        \\    channelCount: 2,
+        \\    // Frames posted to the sink, and frames it played as last reported: their difference waits in it. The
+        \\    // worklet's reports say the context frame they describe (`estimateFramesPlayed`); -1 before the first.
+        \\    framesPosted: 0,
+        \\    framesPlayed: 0,
+        \\    reportedAtContextFrame: -1,
+        \\    // Silence the sink played for want of blocks, once playing, and how many times it ran dry - each a gap
+        \\    // heard; the mixer counts only the dry spells a report shows it.
+        \\    sinkDryFrames: 0,
+        \\    sinkDryEvents: 0,
+        \\    sinkHasPlayed: false,
+        \\    sinkWasDry: false,
+        \\    // The diagnostics panel at the top of the page, when shown (`showDiagnostics`); the mixer's latest state,
+        \\    // as it reports it each frame (`noteMixer`); and the newest warnings.
+        \\    diagnosticsPanel: null,
+        \\    mixerReport: null,
+        \\    recentWarnings: [],
+        \\    // The script processor's queue, on the main thread; the worklet keeps its own.
+        \\    mainThreadQueue: { blocks: [], framesTakenFromFirstBlock: 0 },
+        \\    // Blocks held while the output cannot play, drained at the real rate from heldDrainedAtMs on: a queue
+        \\    // of the same shape as the sinks', so that `mixIntoQueue` works on it too.
+        \\    heldQueue: { blocks: [], framesTakenFromFirstBlock: 0 },
+        \\    heldFrameCount: 0,
+        \\    heldDrainedAtMs: 0,
+        \\    isListeningForGesture: false,
+        \\};
+        \\output.canPlay = function () {
+        \\    return output.node !== null && output.context.state === 'running';
+        \\};
+        \\// Drops the held frames that would have played since the last drain - the oldest first.
+        \\output.drainHeld = function () {
+        \\    var nowMs = performance.now();
+        \\    var framesDue = Math.floor((nowMs - output.heldDrainedAtMs) * output.sampleRate / 1000);
+        \\    if (framesDue <= 0) {
+        \\        return;
+        \\    }
+        \\    output.heldDrainedAtMs += framesDue * 1000 / output.sampleRate;
+        \\    var held = output.heldQueue;
+        \\    while (framesDue > 0 && held.blocks.length > 0) {
+        \\        var blockFrameCount = held.blocks[0].length / output.channelCount;
+        \\        var framesLeftInBlock = blockFrameCount - held.framesTakenFromFirstBlock;
+        \\        var framesDrained = Math.min(framesLeftInBlock, framesDue);
+        \\        held.framesTakenFromFirstBlock += framesDrained;
+        \\        output.heldFrameCount -= framesDrained;
+        \\        framesDue -= framesDrained;
+        \\        if (framesDrained === framesLeftInBlock) {
+        \\            held.blocks.shift();
+        \\            held.framesTakenFromFirstBlock = 0;
+        \\        }
+        \\    }
+        \\};
+        \\// Hands a block to the sink: posted to the worklet, its buffer transferred rather than copied, or
+        \\// queued for the script processor. Its frames are counted first: a transferred buffer is detached on this
+        \\// side, and the block's length reads 0 once posted.
+        \\output.post = function (block) {
+        \\    var blockFrameCount = block.length / output.channelCount;
+        \\    if (output.sink === 'worklet') {
+        \\        output.node.port.postMessage(block, [block.buffer]);
+        \\    } else {
+        \\        output.mainThreadQueue.blocks.push(block);
+        \\    }
+        \\    output.framesPosted += blockFrameCount;
+        \\};
+        \\// Once the output can play: what is still held goes to the sink, without its drained part.
+        \\output.postHeld = function () {
+        \\    var held = output.heldQueue;
+        \\    while (held.blocks.length > 0) {
+        \\        var block = held.blocks.shift();
+        \\        var drainedSampleCount = held.framesTakenFromFirstBlock * output.channelCount;
+        \\        held.framesTakenFromFirstBlock = 0;
+        \\        output.post(drainedSampleCount > 0 ? block.slice(drainedSampleCount) : block);
+        \\    }
+        \\    output.heldFrameCount = 0;
+        \\};
+        \\output.useWorklet = function (context, channelCount) {
+        \\    var node = new AudioWorkletNode(context, 'zimr-output', {
+        \\        numberOfInputs: 0,
+        \\        outputChannelCount: [channelCount],
+        \\        processorOptions: { channels: channelCount },
+        \\    });
+        \\    node.port.onmessage = function (event) {
+        \\        output.framesPlayed += event.data.played;
+        \\        output.sinkDryFrames += event.data.dryFrames;
+        \\        output.sinkDryEvents += event.data.dryEvents;
+        \\        output.reportedAtContextFrame = event.data.atFrame;
+        \\    };
+        \\    node.connect(context.destination);
+        \\    output.node = node;
+        \\    output.sink = 'worklet';
+        \\};
+        \\// The fallback: 2 048 frames per callback, about 43 ms at 48 kHz - the main thread answers later than the
+        \\// audio thread, so its callbacks ask for more at a time.
+        \\output.useScriptProcessor = function (context, channelCount) {
+        \\    if (!context.createScriptProcessor) {
+        \\        console.warn('zimr: this browser has neither an AudioWorklet nor a script processor here; ' +
+        \\            'the sound is not played');
+        \\        return;
+        \\    }
+        \\    var node = context.createScriptProcessor(2048, 0, channelCount);
+        \\    node.onaudioprocess = function (event) {
+        \\        var channelOutputs = [];
+        \\        for (var channel = 0; channel < event.outputBuffer.numberOfChannels; channel++) {
+        \\            channelOutputs.push(event.outputBuffer.getChannelData(channel));
+        \\        }
+        \\        var framesWritten = playBlocks(output.mainThreadQueue, channelOutputs, output.channelCount);
+        \\        output.framesPlayed += framesWritten;
+        \\        output.noteSinkPlayed(framesWritten, channelOutputs[0].length);
+        \\    };
+        \\    node.connect(context.destination);
+        \\    output.node = node;
+        \\    output.sink = 'script processor';
+        \\};
+        \\// The script processor's count of its dry spells, as the worklet keeps its own.
+        \\output.noteSinkPlayed = function (framesWritten, framesWanted) {
+        \\    var dryFrames = framesWanted - framesWritten;
+        \\    if (framesWritten > 0) {
+        \\        output.sinkHasPlayed = true;
+        \\    }
+        \\    if (dryFrames > 0 && output.sinkHasPlayed) {
+        \\        output.sinkDryFrames += dryFrames;
+        \\        if (!output.sinkWasDry) {
+        \\            output.sinkDryEvents += 1;
+        \\        }
+        \\    }
+        \\    output.sinkWasDry = dryFrames > 0;
+        \\};
+        \\// A panel at the top of the page - where neither a viewer's chrome nor the page's log strip at the bottom
+        \\// covers it - with the sound's state, four times a second: the path to the speaker, the context, what
+        \\// waits, how often the sink ran dry, the mixer's margin, and the newest warnings.
+        \\output.showDiagnostics = function () {
+        \\    if (output.diagnosticsPanel || typeof document === 'undefined' || !document.createElement) {
+        \\        return;
+        \\    }
+        \\    var panel = document.createElement('pre');
+        \\    panel.style.cssText = 'position:fixed;left:0;top:0;width:100%;box-sizing:border-box;margin:0;' +
+        \\        'padding:4px 8px;background:rgba(0,0,0,0.78);color:#cfe;font:11px/1.35 monospace;' +
+        \\        'white-space:pre-wrap;z-index:99998;pointer-events:none';
+        \\    (document.body || document.documentElement).appendChild(panel);
+        \\    output.diagnosticsPanel = panel;
+        \\    ['warn', 'error'].forEach(function (method) {
+        \\        var original = console[method].bind(console);
+        \\        console[method] = function () {
+        \\            var text = Array.prototype.join.call(arguments, ' ');
+        \\            output.recentWarnings.push(text.slice(0, 200));
+        \\            if (output.recentWarnings.length > 3) {
+        \\                output.recentWarnings.shift();
+        \\            }
+        \\            return original.apply(console, arguments);
+        \\        };
+        \\    });
+        \\    panel.textContent = output.describe();
+        \\    setInterval(function () {
+        \\        panel.textContent = output.describe();
+        \\    }, 250);
+        \\};
+        \\output.noteMixer = function (marginFrames, underrunCount, voiceCount) {
+        \\    output.mixerReport = { marginFrames: marginFrames, underrunCount: underrunCount, voiceCount: voiceCount };
+        \\};
+        \\output.describe = function () {
+        \\    var context = output.context;
+        \\    var rate = output.sampleRate || 48000;
+        \\    var inMilliseconds = function (frames) {
+        \\        return (frames * 1000 / rate).toFixed(0) + ' ms';
+        \\    };
+        \\    var latency = function (seconds) {
+        \\        return typeof seconds === 'number' ? (seconds * 1000).toFixed(0) + ' ms' : '-';
+        \\    };
+        \\    var path = output.sink === '' ? 'no sink' : output.sink;
+        \\    if (!output.canPlay()) {
+        \\        path += ', held (' + (context ? context.state : 'no context') + ')';
+        \\    }
+        \\    var lines = [
+        \\        'audio: ' + path + ' | ' + (context ? context.sampleRate + ' Hz' : '-') + ' | latency ' +
+        \\            latency(context && context.baseLatency) + ' + ' + latency(context && context.outputLatency),
+        \\        'sink: queued ' + inMilliseconds(output.queuedFrames()) + ' | played ' +
+        \\            (output.framesPlayed / rate).toFixed(1) + ' s | ran dry ' + output.sinkDryEvents + 'x, ' +
+        \\            inMilliseconds(output.sinkDryFrames),
+        \\    ];
+        \\    var mixer = output.mixerReport;
+        \\    if (mixer) {
+        \\        lines.push('mixer: margin ' + inMilliseconds(mixer.marginFrames) + ' | underruns ' +
+        \\            mixer.underrunCount + ' | voices ' + mixer.voiceCount);
+        \\    }
+        \\    for (var index = 0; index < output.recentWarnings.length; index++) {
+        \\        lines.push(output.recentWarnings[index]);
+        \\    }
+        \\    return lines.join('\n');
+        \\};
+        \\output.start = function (sampleRate, channelCount) {
+        \\    output.stop();
+        \\    var AudioContextClass = globalThis.AudioContext || globalThis.webkitAudioContext;
+        \\    if (!AudioContextClass) {
+        \\        console.warn('zimr: this browser has no Web Audio; the sound is not played');
+        \\        return 0;
+        \\    }
+        \\    var context;
+        \\    try {
+        \\        context = new AudioContextClass({ sampleRate: sampleRate });
+        \\    } catch (error) {
+        \\        context = new AudioContextClass();
+        \\    }
+        \\    output.context = context;
+        \\    output.sampleRate = context.sampleRate;
+        \\    output.channelCount = channelCount;
+        \\    output.heldDrainedAtMs = performance.now();
+        \\    var moduleSource = '(' + processorMain.toString() + ')(' + playBlocks.toString() + ', ' +
+        \\        mixIntoQueue.toString() + ');';
+        \\    var blobUrl = URL.createObjectURL(new Blob([moduleSource], { type: 'application/javascript' }));
+        \\    var dataUrl = 'data:application/javascript,' + encodeURIComponent(moduleSource);
+        \\    var loadModule = function (url) {
+        \\        if (!context.audioWorklet || !globalThis.AudioWorkletNode) {
+        \\            return Promise.reject(new Error('this browser has no AudioWorklet here'));
+        \\        }
+        \\        return context.audioWorklet.addModule(url);
+        \\    };
+        \\    loadModule(blobUrl).catch(function () {
+        \\        return loadModule(dataUrl);
+        \\    }).then(function () {
+        \\        URL.revokeObjectURL(blobUrl);
+        \\        if (output.context === context) {
+        \\            output.useWorklet(context, channelCount);
+        \\        }
+        \\    }).catch(function (error) {
+        \\        URL.revokeObjectURL(blobUrl);
+        \\        if (output.context !== context) {
+        \\            return;
+        \\        }
+        \\        console.warn('zimr: the sound plays through a script processor, on the main thread - ' +
+        \\            'the audio worklet could not load: ' + error.message);
+        \\        output.useScriptProcessor(context, channelCount);
+        \\    });
+        \\    if (!output.isListeningForGesture) {
+        \\        output.isListeningForGesture = true;
+        \\        var resumeOnGesture = function () {
+        \\            if (output.context !== null && output.context.state !== 'running') {
+        \\                output.context.resume().catch(function () {});
+        \\            }
+        \\        };
+        \\        // The events that grant a page user activation, which resuming audio needs: a key, a mouse button
+        \\        // going down - and for touch and pen, the press ending (`pointerup`, `touchend`), not starting.
+        \\        var activationEvents = ['keydown', 'pointerdown', 'pointerup', 'touchend', 'click'];
+        \\        for (var eventIndex = 0; eventIndex < activationEvents.length; eventIndex++) {
+        \\            document.addEventListener(activationEvents[eventIndex], resumeOnGesture, true);
+        \\        }
+        \\    }
+        \\    return output.sampleRate;
+        \\};
+        \\output.queue = function (block) {
+        \\    if (output.context === null) {
+        \\        return;
+        \\    }
+        \\    if (output.canPlay()) {
+        \\        output.postHeld();
+        \\        output.post(block);
+        \\        return;
+        \\    }
+        \\    if (output.heldQueue.blocks.length === 0) {
+        \\        output.heldDrainedAtMs = performance.now();
+        \\    } else {
+        \\        output.drainHeld();
+        \\    }
+        \\    output.heldQueue.blocks.push(block);
+        \\    output.heldFrameCount += block.length / output.channelCount;
+        \\};
+        \\// The frames the sink has played by now. The worklet's reports arrive late - after a stall on this thread,
+        \\// several wait unread, and the next frame may run before them - so each report says the context frame it
+        \\// describes, and the frames since are counted by the context's own clock, which runs on whatever this
+        \\// thread does: the worklet plays one frame for each the context renders, while it has any. Run dry, the
+        \\// count passes what was posted, and the queue reads empty, as it is. A count too high only makes the next
+        \\// top-up larger and a new sound start later; a stale one, too low, would leave the queue short and start a
+        \\// sound on frames already played. The script processor's count needs none of this: it is of frames
+        \\// handed to the browser, which are out of reach the moment they are counted.
+        \\output.estimateFramesPlayed = function () {
+        \\    var context = output.context;
+        \\    var hasClock = context !== null && typeof context.currentTime === 'number';
+        \\    if (output.sink !== 'worklet' || output.reportedAtContextFrame < 0 || !hasClock) {
+        \\        return output.framesPlayed;
+        \\    }
+        \\    var contextFrame = Math.round(context.currentTime * output.sampleRate);
+        \\    return output.framesPlayed + Math.max(0, contextFrame - output.reportedAtContextFrame);
+        \\};
+        \\output.queuedFrames = function () {
+        \\    if (output.context === null) {
+        \\        return 0;
+        \\    }
+        \\    if (output.canPlay()) {
+        \\        output.postHeld();
+        \\        return Math.max(0, output.framesPosted - output.estimateFramesPlayed());
+        \\    }
+        \\    if (output.heldQueue.blocks.length > 0) {
+        \\        output.drainHeld();
+        \\    }
+        \\    return output.heldFrameCount;
+        \\};
+        \\// Adds samples onto the frames queued and not yet played, aligned to the queue's end (`mixIntoQueue`): in
+        \\// the worklet, by a message it applies on the audio thread - messages arrive in order, so the queue it sees
+        \\// ends where this one's did - or on this thread, for the script processor and for blocks still held.
+        \\output.mixIntoQueued = function (samples) {
+        \\    if (output.context === null) {
+        \\        return;
+        \\    }
+        \\    if (output.canPlay()) {
+        \\        output.postHeld();
+        \\        if (output.sink === 'worklet') {
+        \\            output.node.port.postMessage({ mixIntoQueued: samples }, [samples.buffer]);
+        \\        } else {
+        \\            mixIntoQueue(output.mainThreadQueue, samples, output.channelCount);
+        \\        }
+        \\        return;
+        \\    }
+        \\    if (output.heldQueue.blocks.length > 0) {
+        \\        output.drainHeld();
+        \\    }
+        \\    mixIntoQueue(output.heldQueue, samples, output.channelCount);
+        \\};
+        \\output.stop = function () {
+        \\    if (output.node !== null) {
+        \\        if (output.sink === 'worklet') {
+        \\            output.node.port.onmessage = null;
+        \\        } else {
+        \\            output.node.onaudioprocess = null;
+        \\        }
+        \\        output.node.disconnect();
+        \\    }
+        \\    if (output.context !== null) {
+        \\        output.context.close().catch(function () {});
+        \\    }
+        \\    output.context = null;
+        \\    output.node = null;
+        \\    output.sink = '';
+        \\    output.framesPosted = 0;
+        \\    output.framesPlayed = 0;
+        \\    output.reportedAtContextFrame = -1;
+        \\    output.mainThreadQueue = { blocks: [], framesTakenFromFirstBlock: 0 };
+        \\    output.heldQueue = { blocks: [], framesTakenFromFirstBlock: 0 };
+        \\    output.heldFrameCount = 0;
+        \\};
+        \\globalThis.__zimrAudioOutput = output;
+        \\return output;
+    ;
+
+    /// The page's sound output (`audio_output_program`), made on first use.
+    fn audioOutput() Value {
+        const existing_output: Value = global().get("__zimrAudioOutput");
+        if (existing_output.truthy()) {
+            return existing_output;
+        }
+        const make_output: Value = global().get("Function").new(.{str(audio_output_program)});
+        return make_output.call("call", .{global()});
+    }
+
+    /// Opens the output at `sample_rate` frames a second and `channel_count` channels; returns the rate the audio
+    /// context took - the one asked for, which browsers resample from - or 0 without an AudioWorklet.
+    fn jsAudioOutputStart(sample_rate: f64, channel_count: f64) f64 {
+        const granted_rate: Value = audioOutput().call("start", .{ num(sample_rate), num(channel_count) });
+        return granted_rate.to(f64);
+    }
+
+    /// Queues `sample_count` interleaved samples at `samples_address` in the module's memory: copied out (`slice`), so
+    /// that the mixer may reuse its block at once, and posted to the processor.
+    fn jsAudioOutputQueue(samples_address: f64, sample_count: f64) void {
+        const module_memory: Value = g.boot.module_exports.get("memory").get("buffer");
+        const float32_array_class: Value = global().get("Float32Array");
+        const samples_view: Value = float32_array_class.new(.{
+            module_memory,
+            num(samples_address),
+            num(sample_count),
+        });
+        const samples_copy: Value = samples_view.call("slice", .{});
+        _ = audioOutput().call("queue", .{samples_copy});
+    }
+
+    /// Adds `sample_count` interleaved samples at `samples_address` onto the frames queued and not yet played, aligned
+    /// to the queue's end: copied out, as for `jsAudioOutputQueue`, then handed to the program's `mixIntoQueued`.
+    fn jsAudioOutputMixIntoQueued(samples_address: f64, sample_count: f64) void {
+        const module_memory: Value = g.boot.module_exports.get("memory").get("buffer");
+        const float32_array_class: Value = global().get("Float32Array");
+        const samples_view: Value = float32_array_class.new(.{
+            module_memory,
+            num(samples_address),
+            num(sample_count),
+        });
+        const samples_copy: Value = samples_view.call("slice", .{});
+        _ = audioOutput().call("mixIntoQueued", .{samples_copy});
+    }
+
+    /// Frames queued and not yet played.
+    fn jsAudioOutputQueuedFrames() f64 {
+        return audioOutput().call("queuedFrames", .{}).to(f64);
+    }
+
+    /// Shows the sound's diagnostics panel at the top of the page (`showDiagnostics` in the output's program).
+    fn jsAudioOutputShowDiagnostics() void {
+        _ = audioOutput().call("showDiagnostics", .{});
+    }
+
+    /// Hands the diagnostics panel the mixer's margin, underrun count and voice count, for its next refresh.
+    fn jsAudioOutputNoteMixer(
+        margin_frames: f64,
+        underrun_count: f64,
+        voice_count: f64,
+    ) void {
+        _ = audioOutput().call("noteMixer", .{ num(margin_frames), num(underrun_count), num(voice_count) });
+    }
+
+    /// Closes the output, dropping what waits.
+    fn jsAudioOutputStop() void {
+        _ = audioOutput().call("stop", .{});
+    }
+
+    /// Reads the page's gamepads, `navigator.getGamepads()`, or null when the page may not. A browser without the
+    /// Gamepad API has no `getGamepads`. A page in a frame whose permissions policy does not allow the "gamepad"
+    /// feature - an embedding viewer's sandboxed frame, say - gets a SecurityError from it instead: such a page has no
+    /// gamepads to read, so it sees none, and the console says why, once.
+    const gamepad_reader_program: []const u8 =
+        \\if (!navigator.getGamepads) {
+        \\    return null;
+        \\}
+        \\try {
+        \\    return navigator.getGamepads();
+        \\} catch (error) {
+        \\    if (!globalThis.__zimrGamepadsRefusalReported) {
+        \\        globalThis.__zimrGamepadsRefusalReported = true;
+        \\        console.warn('zimr: no gamepads - this page may not read them: ' + error.message);
+        \\    }
+        \\    return null;
+        \\}
+    ;
+
+    /// The page's gamepads as a list (`gamepad_reader_program`), or null when it has none to read. The reader is made
+    /// once and kept on `globalThis`.
+    fn gamepadList() Value {
+        var reader: Value = global().get("__zimrReadGamepads");
+        if (!reader.truthy()) {
+            reader = global().get("Function").new(.{str(gamepad_reader_program)});
+            global().set("__zimrReadGamepads", reader);
+        }
+        return reader.call("call", .{global()});
+    }
+
+    /// The gamepad in a slot (`navigator.getGamepads()[slot]`), written into the module's memory at `out`: its 17
+    /// buttons' values - the standard gamepad's order - then its 4 axes, as floats; 1 when there is one, 0 for an
+    /// empty slot. The list can be shorter than the slot, or hold null there.
+    fn jsGamepadState(slot: f64, out: f64) f64 {
+        const pads: Value = gamepadList();
+        if (pads.isNull() or slot >= pads.getNum("length")) {
+            return 0;
+        }
+        const pad: Value = pads.at(@trunc(slot));
+        if (pad.isNull() or js_to_num(pad.get("connected").h) == 0) {
+            return 0;
+        }
+        const memory: Value = g.boot.module_exports.get("memory").get("buffer");
+        const values: Value = global().get("Float32Array").new(.{ memory, num(out), num(21) });
+        const buttons: Value = pad.get("buttons");
+        const button_count: f64 = buttons.getNum("length");
+        var index: u32 = 0;
+        while (index < 17) : (index += 1) {
+            const position: f64 = @floatFromInt(index);
+            const value: f64 = if (position < button_count) buttons.at(index).getNum("value") else 0;
+            _ = values.call("fill", .{ num(value), num(position), num(position + 1) });
+        }
+        const axes: Value = pad.get("axes");
+        const axis_count: f64 = axes.getNum("length");
+        index = 0;
+        while (index < 4) : (index += 1) {
+            const position: f64 = @floatFromInt(index);
+            const value: f64 = if (position < axis_count) js_to_num(axes.at(index).h) else 0;
+            _ = values.call("fill", .{ num(value), num(17 + position), num(18 + position) });
+        }
+        return 1;
+    }
+
+    /// A dual rumble on the gamepad in a slot (`vibrationActuator.playEffect("dual-rumble", ...)`): the heavy motor at
+    /// `strong`, the light one at `weak`, for `milliseconds`. Nothing happens without a gamepad there, or one without
+    /// haptics.
+    fn jsGamepadVibrate(slot: f64, strong: f64, weak: f64, milliseconds: f64) f64 {
+        const pads: Value = gamepadList();
+        if (pads.isNull() or slot >= pads.getNum("length")) {
+            return 0;
+        }
+        const pad: Value = pads.at(@trunc(slot));
+        if (pad.isNull()) {
+            return 0;
+        }
+        const actuator: Value = pad.get("vibrationActuator");
+        if (actuator.isNull()) {
+            return 0;
+        }
+        const effect: Value = global().get("Object").new(.{});
+        effect.set("duration", num(milliseconds));
+        effect.set("strongMagnitude", num(strong));
+        effect.set("weakMagnitude", num(weak));
+        _ = actuator.call("playEffect", .{ str("dual-rumble"), effect });
+        return 1;
+    }
+
     fn jsRtcClose(handle: f64) void {
         const holder: Value = tblGet(handle);
         if (holder.isNull()) {
@@ -1830,7 +3563,7 @@ const ZimrWgpu = struct {
             return 0;
         }
         const atts: Value = global().get("Array").new(.{});
-        var c: Cursor = Cursor.make(views_ptr, views_len * 4);
+        var c: Cursor = .make(views_ptr, views_len * 4);
         var i: u32 = 0;
         const n: u32 = @trunc(views_len);
         while (i < n) : (i += 1) {
@@ -2098,6 +3831,18 @@ const ZimrWgpu = struct {
         desc.set("arrayLayerCount", Value{ .h = js_num(layer_count) });
         return @floatFromInt(tblInsert(tex.call("createView", .{desc})));
     }
+    fn jsTextureCreateViewLayer(texture: f64, layer: f64) f64 {
+        const tex: Value = tblGet(texture);
+        if (tex.isNull()) {
+            return 0;
+        }
+        const desc: Value = global().get("Object").new(.{});
+        desc.set("dimension", str("2d"));
+        desc.set("baseArrayLayer", Value{ .h = js_num(layer) });
+        desc.set("arrayLayerCount", Value{ .h = js_num(1) });
+        desc.set("mipLevelCount", Value{ .h = js_num(1) });
+        return @floatFromInt(tblInsert(tex.call("createView", .{desc})));
+    }
     fn jsTextureDestroy(texture: f64) void {
         const tex: Value = tblGet(texture);
         if (!tex.isNull()) {
@@ -2257,7 +4002,7 @@ const ZimrWgpu = struct {
         if (len == 0) {
             return out;
         }
-        var c: Cursor = Cursor.make(ptr, len);
+        var c: Cursor = .make(ptr, len);
         const count: u32 = c.u32At();
         var i: u32 = 0;
         while (i < count) : (i += 1) {
@@ -2311,7 +4056,7 @@ const ZimrWgpu = struct {
         if (len == 0) {
             return out;
         }
-        var c: Cursor = Cursor.make(ptr, len);
+        var c: Cursor = .make(ptr, len);
         const count: u32 = c.u32At();
         var i: u32 = 0;
         while (i < count) : (i += 1) {
@@ -2372,7 +4117,7 @@ const ZimrWgpu = struct {
     ) f64 {
         // bgls is a [*]const u32 of bind group layout HANDLES.
         const list: Value = global().get("Array").new(.{});
-        var c: Cursor = Cursor.make(bgls_ptr, bgls_len * 4);
+        var c: Cursor = .make(bgls_ptr, bgls_len * 4);
         var i: u32 = 0;
         const n: u32 = @trunc(bgls_len);
         while (i < n) : (i += 1) {
@@ -2468,7 +4213,7 @@ const ZimrWgpu = struct {
         label_ptr: f64,
         label_len: f64,
     ) f64 {
-        var c: Cursor = Cursor.make(descriptor_ptr, descriptor_len);
+        var c: Cursor = .make(descriptor_ptr, descriptor_len);
         const vertex_buffers: Value = global().get("Array").new(.{});
         const vbl_count: u32 = c.u32At();
         var i: u32 = 0;
@@ -2761,6 +4506,7 @@ const ZimrWgpu = struct {
         ns.set("js_texture_create_view", funcNum(&jsTextureCreateView));
         ns.set("js_texture_create_view_mip", funcNum(&jsTextureCreateViewMip));
         ns.set("js_texture_create_view_array", funcNum(&jsTextureCreateViewArray));
+        ns.set("js_texture_create_view_layer", funcNum(&jsTextureCreateViewLayer));
         ns.set("js_texture_destroy", funcNum(&jsTextureDestroy));
         ns.set("js_bind_group_destroy", funcNum(&jsBindGroupDestroy));
         ns.set("js_bind_group_layout_destroy", funcNum(&jsBindGroupLayoutDestroy));
@@ -2786,6 +4532,13 @@ const ZimrWgpu = struct {
         ns.set("js_adapter_info", funcNum(&jsAdapterInfo));
     }
 };
+
+// ===========================================================================
+// WASI shim - wasm32-wasi REACTOR support for classic zimr apps. Every stub
+// mirrors the per-example pages' minimal shim: 0 for success-ish ops, EBADF
+// (8) for filesystem ops; random_get is real (crypto over a fresh
+// module-memory view); proc_exit paints the self-reporting overlay.
+// ===========================================================================
 
 const ZimrWasi = struct {
     fn ok() f64 {
@@ -2827,15 +4580,20 @@ const ZimrWasi = struct {
     }
 };
 
+// ===========================================================================
+// CLASSIC INPUT WIRING - zimr apps receive input by EXPORTING push
+// functions (input_push_mouse_move, zimr_input_push_touch_down, ...) that
+// the host calls from DOM events. Conventions mirror the shipped pages:
+// coordinates are CSS px relative to the canvas, wheel sends (dx, -dy),
+// pointerdown pushes a move first then the button, window-level move/up
+// only while dragging, touches by identifier, contextmenu suppressed.
+// Keys and mouse buttons go out in raylib's numbering, translated by
+// dom_input.zig: a key by `KeyboardEvent.code` (the physical key, whatever
+// the layout; a key raylib has no name for is not sent), a button with the
+// DOM's 1 (the wheel) and 2 (the right button) swapped.
+// ===========================================================================
+
 const ZimrInput = struct {
-    fn ex() Value {
-        return g.boot.module_exports;
-    }
-    fn callIfPresent(comptime name: []const u8, args: anytype) void {
-        if (!ex().get(name).isNull()) {
-            _ = ex().call(name, args);
-        }
-    }
     fn localXY(event: Value) [2]f64 {
         const canvas: Value = g.wgpu.canvas;
         const rect: Value = canvas.call("getBoundingClientRect", .{});
@@ -2851,28 +4609,48 @@ const ZimrInput = struct {
         const y: f64 = (js_to_num(event.get("clientY").h) - js_to_num(rect.get("top").h)) * sy;
         return .{ x, y };
     }
-    fn numArg(x: f64) Value {
-        return .{ .h = js_num(x) };
-    }
 
+    /// The pointer's own motion since its previous event (`movementX`/`movementY`), in the canvas's CSS pixels -
+    /// scaled as `localXY` scales positions. Browsers report it whether or not the pointer is locked; while it is
+    /// locked, it is the only motion they report, the position standing still. A browser that leaves it undefined
+    /// reports no motion.
+    fn localMovement(event: Value) [2]f64 {
+        const canvas: Value = g.wgpu.canvas;
+        const rect: Value = canvas.call("getBoundingClientRect", .{});
+        const rw: f64 = js_to_num(rect.get("width").h);
+        const rh: f64 = js_to_num(rect.get("height").h);
+        const sx: f64 = if (rw > 0) js_to_num(canvas.get("clientWidth").h) / rw else 1;
+        const sy: f64 = if (rh > 0) js_to_num(canvas.get("clientHeight").h) / rh else 1;
+        const movement_x: f64 = js_to_num(event.get("movementX").h);
+        const movement_y: f64 = js_to_num(event.get("movementY").h);
+        // An undefined property reads as NaN, the one number unequal to itself.
+        const is_reported: bool = movement_x == movement_x and movement_y == movement_y;
+        if (!is_reported) {
+            return .{ 0, 0 };
+        }
+        return .{ movement_x * sx, movement_y * sy };
+    }
+    /// Whether the pointer is locked to the page (`document.pointerLockElement`).
+    fn isPointerLocked() bool {
+        return !global().get("document").get("pointerLockElement").isNull();
+    }
     fn pointerId(e: Value) f64 {
         return js_to_num(e.get("pointerId").h);
     }
-    /// A pointer event's button in raylib's numbering: the DOM calls the wheel 1
-    /// and the right button 2, raylib the other way round (see
-    /// `dom_input.mouseButtonFromDomButton`).
-    fn engineButtonOf(e: Value) i32 {
-        const dom_button: i32 = @trunc(js_to_num(e.get("button").h));
-        return dom_input.mouseButtonFromDomButton(dom_button);
+    /// A pointer event's button in the DOM's numbering (0 left, 1 middle, 2 right, 3 back, 4 forward), as the
+    /// platform contract reports buttons; the engine maps it to its own (`receiveEvent`).
+    fn domButtonOf(e: Value) i32 {
+        return @trunc(js_to_num(e.get("button").h));
     }
     fn onPointerDown(ev: Handle) void {
         const e: Value = .{ .h = ev };
         const p: [2]f64 = localXY(e);
         // Per-pointer -> the touch ring.
         callIfPresent("zimr_input_push_touch_down", .{ numArg(pointerId(e)), numArg(p[0]), numArg(p[1]) });
-        // Mouse channel: move-then-button on every down (the proven TS shape).
-        callIfPresent("input_push_mouse_move", .{ numArg(p[0]), numArg(p[1]) });
-        callIfPresent("input_push_mouse_button_down", .{engineButtonOf(e)});
+        // Mouse channel: move-then-button on every down (the proven TS shape). A press moves nothing.
+        const locked: i32 = @intFromBool(isPointerLocked());
+        callIfPresent("input_push_mouse_move", .{ numArg(p[0]), numArg(p[1]), numArg(0), numArg(0), locked });
+        callIfPresent("input_push_mouse_button_down", .{domButtonOf(e)});
         g.input.dragging = true;
         _ = e.call("preventDefault", .{});
         // preventDefault also cancels the focus change the press would have made,
@@ -2890,13 +4668,45 @@ const ZimrInput = struct {
         // Mouse channel on EVERY move, exactly as the proven TS bridge did
         // (no isPrimary gate - the viewer may report isPrimary falsey for a
         // touch pointer, which would silently drop the drag).
-        callIfPresent("input_push_mouse_move", .{ numArg(p[0]), numArg(p[1]) });
+        const movement: [2]f64 = localMovement(e);
+        const locked: i32 = @intFromBool(isPointerLocked());
+        callIfPresent("input_push_mouse_move", .{
+            numArg(p[0]),
+            numArg(p[1]),
+            numArg(movement[0]),
+            numArg(movement[1]),
+            locked,
+        });
+    }
+    fn onFullscreenChange(_: Handle) void {
+        const is_fullscreen: bool = !global().get("document").get("fullscreenElement").isNull();
+        callIfPresent("input_push_fullscreen", .{@as(i32, @intFromBool(is_fullscreen))});
+    }
+    fn onPointerLockChange(_: Handle) void {
+        callIfPresent("input_push_pointer_lock", .{@as(i32, @intFromBool(isPointerLocked()))});
+    }
+    fn onCanvasMouseEnter(_: Handle) void {
+        callIfPresent("input_push_pointer_presence", .{@as(i32, 1)});
+    }
+    fn onCanvasMouseLeave(_: Handle) void {
+        callIfPresent("input_push_pointer_presence", .{@as(i32, 0)});
+    }
+    fn onWindowBlur(_: Handle) void {
+        callIfPresent("input_push_focus", .{@as(i32, 0)});
+    }
+    fn onWindowFocus(_: Handle) void {
+        callIfPresent("input_push_focus", .{@as(i32, 1)});
+    }
+    fn onVisibilityChange(_: Handle) void {
+        const is_hidden: bool = global().get("document").get("hidden").truthy();
+        callIfPresent("input_push_visibility", .{@as(i32, if (is_hidden) 0 else 1)});
     }
     fn onPointerUp(ev: Handle) void {
         const e: Value = .{ .h = ev };
-        callIfPresent("zimr_input_push_touch_up", .{numArg(pointerId(e))});
+        const p: [2]f64 = localXY(e);
+        callIfPresent("zimr_input_push_touch_up", .{ numArg(pointerId(e)), numArg(p[0]), numArg(p[1]) });
         g.input.dragging = false;
-        callIfPresent("input_push_mouse_button_up", .{engineButtonOf(e)});
+        callIfPresent("input_push_mouse_button_up", .{domButtonOf(e)});
     }
     fn onWheel(ev: Handle) void {
         const e: Value = .{ .h = ev };
@@ -2942,11 +4752,21 @@ const ZimrInput = struct {
         }
         return null;
     }
+    /// What a key types on the current layout, lowercased - `KeyboardEvent.key` when it is a single character - or 0
+    /// when it names something else ("Shift", "ArrowLeft", "Dead"). The engine matches letter shortcuts by it.
+    fn keyLabelOf(key_event: Event) f64 {
+        const lowered: Value = key_event.j.get("key").call("toLowerCase", .{});
+        const code_point: f64 = js_to_num(lowered.call("codePointAt", .{numArg(0)}).h);
+        // One character is one code point: one UTF-16 unit, or two for a character beyond U+FFFF.
+        const unit_count: f64 = js_to_num(lowered.get("length").h);
+        const is_one_character: bool = unit_count == 1 or (unit_count == 2 and code_point > 0xffff);
+        return if (is_one_character) code_point else 0;
+    }
     fn onKeyDown(ev: Handle) void {
         const key_event: Event = .{ .j = .{ .h = ev } };
         const engine_key: i32 = engineKeyOf(key_event) orelse return;
         const repeat: f64 = if (key_event.j.get("repeat").truthy()) 1 else 0;
-        callIfPresent("input_push_key_down", .{ engine_key, numArg(repeat) });
+        callIfPresent("input_push_key_down", .{ engine_key, numArg(repeat), numArg(keyLabelOf(key_event)) });
     }
     fn onKeyUp(ev: Handle) void {
         const key_event: Event = .{ .j = .{ .h = ev } };
@@ -3020,8 +4840,24 @@ const ZimrInput = struct {
         _ = global().call("addEventListener", .{ str("pointerup"), func(&onPointerUp), opts });
         _ = global().call("addEventListener", .{ str("pointercancel"), func(&onPointerUp), opts });
         _ = canvas.call("addEventListener", .{ str("wheel"), func(&onWheel), opts });
+        // The pointer over the canvas or not: `mouseenter` and `mouseleave` fire for a mouse alone, not for a finger.
+        _ = canvas.call("addEventListener", .{ str("mouseenter"), func(&onCanvasMouseEnter) });
+        _ = canvas.call("addEventListener", .{ str("mouseleave"), func(&onCanvasMouseLeave) });
         _ = global().call("addEventListener", .{ str("keydown"), func(&onKeyDown) });
         _ = global().call("addEventListener", .{ str("keyup"), func(&onKeyUp) });
+        // The page losing and regaining the keyboard's focus: the releases of keys held when it leaves go
+        // elsewhere, so the engine releases them itself.
+        _ = global().call("addEventListener", .{ str("blur"), func(&onWindowBlur) });
+        _ = global().call("addEventListener", .{ str("focus"), func(&onWindowFocus) });
+        // The page hidden and shown again: a tab in the background, a minimized browser.
+        _ = global().get("document").call("addEventListener", .{ str("visibilitychange"), func(&onVisibilityChange) });
+        // The browser's own paste command: the text arrives with the event.
+        _ = global().get("document").call("addEventListener", .{ str("paste"), func(&ZimrWgpu.onPaste) });
+        // Fullscreen begun or ended - by the page, or by the user's Escape.
+        _ = global().get("document").call("addEventListener", .{ str("fullscreenchange"), func(&onFullscreenChange) });
+        // The pointer lock granted, or ended - by the page, by focus leaving, or by the user's Escape.
+        const page: Value = global().get("document");
+        _ = page.call("addEventListener", .{ str("pointerlockchange"), func(&onPointerLockChange) });
         // Accelerometer (tilt). Harmless if unused - the handler just routes
         // samples into input state. On Android it fires immediately; iOS would
         // need a tap-gated requestPermission() (deferred - Android-first).
@@ -3031,1246 +4867,980 @@ const ZimrInput = struct {
     }
 };
 
-const ZimrBoot = struct {
-    const EvRec = extern struct { code: u32, a: f32, b: f32 };
+// ===========================================================================
+// ZimrAudio - the "audio" wasm import namespace (WebAudio).
+//
+// The Zig engine has declared `extern "audio" fn js_audio_*` (src/web.zig) since
+// the SFX subsystem landed, and the smoke harness stubs them - but NOTHING ever
+// provided them to a browser. `imports` carried only dom / wgpu / wasi / env, so
+// every audio example died at `WebAssembly.instantiate` with
+// "Import 'audio': module is not an object or function". It was invisible
+// in-sandbox precisely because smoke supplies the import that the browser lacks.
+//
+// This is that host, ported from the pre-wgpu TypeScript bridge (`src/web/zimr.ts`
+// in the old tree) - same object graph, same id discipline, same semantics - but
+// written in Zig and transpiled to JS by c2js, so the page has ONE host language.
+//
+// The object graph per voice mirrors the TS exactly:
+//     BufferSource -> Gain (volume) -> StereoPanner (pan) -> masterGain -> destination
+//
+// Records (context / source / decode) are plain JS objects kept in one Map, so
+// `pause` can rebuild a source later: a stopped AudioBufferSourceNode is NOT
+// restartable - Web Audio makes them one-shot - so `resume` constructs a fresh
+// node and starts it at the saved offset. That single fact is why a source record
+// exists at all.
+// ===========================================================================
 
-    fn note(comptime msg: []const u8) void {
-        // Route to console.log - the page's bottom log overlay mirrors it and
-        // devtools shows it. (The old bare <pre> rendered black-on-black on the
-        // dark page, which is why these diagnostics were invisible.)
-        _ = global().get("console").call("log", .{str(msg)});
-    }
-
-    /// Surface uncaptured WebGPU validation errors (device 'uncapturederror').
-    /// These are otherwise SILENT - a bad pipeline/pass (e.g. a render pipeline
-    /// whose depth-stencil doesn't match the pass's depth attachment) just paints
-    /// black with no clue. Logging the GPU's own message turns "why is it black?"
-    /// into a one-line diagnosis, on-device (the page log mirrors console.error).
-    ///
-    /// ALSO paints it full-screen via `__wzFail`. console.error alone is not
-    /// enough on a phone: the bottom log overlay is `bottom:0` and
-    /// `pointer-events:none`, so inside an embedded viewer (the Claude app's
-    /// HTML preview, an iframe, any chrome that overlaps the bottom strip) it can
-    /// be cropped out of sight - and a webview has no devtools to fall back on.
-    /// A command-buffer rejection paints black anyway, so there is nothing to
-    /// occlude: taking the screen is strictly better than being invisible. The
-    /// panel is selectable, so the GPU's exact wording can be copied off-device.
-    fn onGpuError(ev: Handle) void {
-        const e: Value = .{ .h = ev };
-        const msg: Value = e.get("error").get("message");
-        _ = global().get("console").call("error", .{ str("[zimr GPU] "), msg });
-        const fail: Value = global().get("__wzFail");
-        // __wzFail takes ONE argument, so the message goes through alone; the
-        // panel supplies its own heading.
-        if (fail.h != 0) {
-            _ = fail.call("call", .{ global(), msg });
+const ZimrAudio = struct {
+    /// Local clamp - bridge.zig deliberately has no zimrmath dependency (it is the
+    /// HOST, compiled to JS, not engine code).
+    fn clampF(v: f64, lo: f64, hi: f64) f64 {
+        if (v < lo) {
+            return lo;
         }
-    }
-
-    fn modU8(ptr: u32, len: u32) Value {
-        const buf: Value = g.boot.module_exports.get("memory").get("buffer");
-        return global().get("Uint8Array").new(.{ buf, ptr, len });
-    }
-    fn modStr(ptr: Handle, len: Handle) Value {
-        const p: u32 = @trunc(js_to_num(ptr));
-        const l: u32 = @trunc(js_to_num(len));
-        return g.boot.utf8_decoder.call("decode", .{modU8(p, l)});
-    }
-
-    // ---- the "dom" import namespace (D10) --------------------------------
-    fn domCreate(tp: Handle, tl: Handle) u32 {
-        return (Value{ .h = js_global() }).get("document").call("createElement", .{modStr(tp, tl)}).h;
-    }
-    fn domAttachBody(h: Handle) void {
-        _ = document().body().j.call("appendChild", .{Value{ .h = @trunc(js_to_num(h)) }});
-    }
-    fn domAppend(parent: Handle, child: Handle) void {
-        const p: Value = .{ .h = @trunc(js_to_num(parent)) };
-        _ = p.call("appendChild", .{Value{ .h = @trunc(js_to_num(child)) }});
-    }
-    fn domSetText(
-        h: Handle,
-        p: Handle,
-        l: Handle,
-    ) void {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        e.set("textContent", modStr(p, l));
-    }
-    fn domSetAttr(
-        h: Handle,
-        kp: Handle,
-        kl: Handle,
-        vp: Handle,
-        vl: Handle,
-    ) void {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        _ = e.call("setAttribute", .{ modStr(kp, kl), modStr(vp, vl) });
-    }
-    fn domSetStyle(
-        h: Handle,
-        p: Handle,
-        l: Handle,
-    ) void {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        e.get("style").set("cssText", modStr(p, l));
-    }
-    fn domCss(p: Handle, l: Handle) void {
-        const st: Value = (Value{ .h = js_global() }).get("document").call("createElement", .{str("style")});
-        st.set("textContent", modStr(p, l));
-        _ = document().head().j.call("appendChild", .{st});
-    }
-    fn domRemove(h: Handle) void {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        _ = e.call("remove", .{});
-    }
-    fn onDomEvent(ev: Handle) void {
-        // The event carries our code on the listener target (data-zb attr).
-        const e: Value = .{ .h = ev };
-        const tgt: Value = e.get("currentTarget");
-        const code: u32 = @trunc(js_to_num(tgt.call("getAttribute", .{str("data-zbcode")}).h));
-        if (g.boot.event_count < g.boot.event_ring.len) {
-            g.boot.event_ring[g.boot.event_count] = .{
-                .code = code,
-                .a = @floatCast(js_to_num(e.get("offsetX").h)),
-                .b = @floatCast(js_to_num(e.get("offsetY").h)),
-            };
-            g.boot.event_count += 1;
+        if (v > hi) {
+            return hi;
         }
+        return v;
     }
-    fn domListen(
-        h: Handle,
-        ep: Handle,
-        el: Handle,
-        code: Handle,
-    ) void {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        _ = e.call("setAttribute", .{ str("data-zbcode"), Value{ .h = code } });
-        _ = e.call("addEventListener", .{ modStr(ep, el), func(&onDomEvent) });
+
+    fn insert(v: Value) f64 {
+        const id: u32 = g.audio.next_id;
+        g.audio.next_id += 1;
+        const idf: f64 = @floatFromInt(id);
+        _ = g.audio.objects.call("set", .{ num(idf), v });
+        return idf;
     }
-    fn domPollEvent(out_ptr: Handle) u32 {
-        if (g.boot.event_count == 0) {
+    fn lookup(id: f64) Value {
+        if (id <= 0) {
+            return .{ .h = 0 };
+        }
+        return g.audio.objects.call("get", .{num(id)});
+    }
+    fn drop(id: f64) void {
+        _ = g.audio.objects.call("delete", .{num(id)});
+    }
+
+    // ---- context ----------------------------------------------------------
+
+    fn createContext() f64 {
+        // Safari still only ships the prefixed constructor.
+        var ctor: Value = global().get("AudioContext");
+        if (ctor.isNull()) {
+            ctor = global().get("webkitAudioContext");
+        }
+        if (ctor.isNull()) {
             return 0;
         }
-        g.boot.event_count -= 1;
-        const rec: EvRec = g.boot.event_ring[g.boot.event_count];
-        const p: u32 = @trunc(js_to_num(out_ptr));
-        const dv: Value = global().get("DataView").new(.{g.boot.module_exports.get("memory").get("buffer")});
-        _ = dv.call("setUint32", .{ p, rec.code, true });
-        _ = dv.call("setFloat32", .{ p + 4, rec.a, true });
-        _ = dv.call("setFloat32", .{ p + 8, rec.b, true });
-        return 1;
-    }
-    fn domCanvasConfigure(h: Handle) u32 {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        const ctx: Value = e.call("getContext", .{str("webgpu")});
+        const ctx: Value = ctor.new(.{});
         if (ctx.isNull()) {
             return 0;
         }
-        // Force rgba8unorm rather than getPreferredCanvasFormat() (bgra8unorm on
-        // desktop). The engine is RGBA8 everywhere - render textures are
-        // rgba8unorm - so a BGRA8 canvas makes the cached 2D "shapes" pipeline
-        // (built for the backbuffer format) incompatible with render-texture
-        // passes. One format across the whole engine keeps that pipeline valid
-        // in both the swapchain and RTT passes.
-        const preferred_format: Value = str("rgba8unorm");
-        const cfg: Value = global().get("Object").new(.{});
-        cfg.set("device", g.boot.gpu_device);
-        cfg.set("format", preferred_format);
-        cfg.set("alphaMode", str("opaque"));
-        _ = ctx.call("configure", .{cfg});
-        _ = g.boot.canvas_contexts.call("set", .{ Value{ .h = @trunc(js_to_num(h)) }, ctx });
-        return 1;
-    }
-    fn domCanvasSize(h: Handle, out_ptr: Handle) void {
-        const e: Value = .{ .h = @trunc(js_to_num(h)) };
-        const dpr: f64 = js_to_num(global().get("devicePixelRatio").h);
-        const w: u32 = @trunc(js_to_num(e.get("clientWidth").h) * dpr);
-        const ht: u32 = @trunc(js_to_num(e.get("clientHeight").h) * dpr);
-        e.set("width", Value{ .h = js_num(@floatFromInt(w)) });
-        e.set("height", Value{ .h = js_num(@floatFromInt(ht)) });
-        const p: u32 = @trunc(js_to_num(out_ptr));
-        const dv: Value = global().get("DataView").new(.{g.boot.module_exports.get("memory").get("buffer")});
-        _ = dv.call("setUint32", .{ p, w, true });
-        _ = dv.call("setUint32", .{ p + 4, ht, true });
-    }
+        const master: Value = ctx.call("createGain", .{});
+        master.get("gain").set("value", 1.0);
+        _ = master.call("connect", .{ctx.get("destination")});
 
-    // ---- user-file port (drag-and-drop + the mobile file picker) ---------
-    //
-    // Both entry points feed ONE queue, because a caller should not care whether the bytes
-    // arrived by drag or by picker - see `web.zig`'s `userfile` for the full rationale.
-    //
-    // * `preventDefault` is needed on BOTH `dragover` AND `drop`. Without the first the drop
-    // event never fires; without the second the browser NAVIGATES AWAY to the dropped file,
-    // discarding the whole app. It is the classic first bug in every web drop implementation
-    // and it looks exactly like "the page crashed".
-
-    fn ufEnsureQueue() void {
-        if (g.userfile.queue.h == 0) {
-            g.userfile.queue = global().get("Array").new(.{});
-        }
-    }
-
-    /// A resolved `arrayBuffer()`: push `{ name, bytes }` onto the queue.
-    ///
-    /// The name is carried on the promise itself (`p.__zimr_name`) rather than in a Zig-side
-    /// map, because several reads can be in flight at once and the transpiler forbids closures
-    /// - so the only place to hang per-operation state is the JS object already in hand.
-    fn ufOnBuffer(buf_h: Handle) void {
-        ufEnsureQueue();
-        const buf: Value = .{ .h = buf_h };
         const rec: Value = global().get("Object").new(.{});
-        rec.set("bytes", global().get("Uint8Array").new(.{buf}));
-        rec.set("name", g.userfile.pending_name);
-        _ = g.userfile.queue.call("push", .{rec});
+        rec.set("ctx", ctx);
+        rec.set("master", master);
+        return insert(rec);
     }
 
-    fn ufAcceptFile(file: Value) void {
-        // Remember the name before the read starts; `ufOnBuffer` has no other way to get it.
-        g.userfile.pending_name = file.get("name");
-        _ = file.call("arrayBuffer", .{}).call("then", .{func(&ufOnBuffer)});
-    }
-
-    fn ufOnDragOver(ev: Handle) void {
-        const e: Value = .{ .h = ev };
-        _ = e.call("preventDefault", .{});
-    }
-
-    fn ufOnDrop(ev: Handle) void {
-        const e: Value = .{ .h = ev };
-        _ = e.call("preventDefault", .{});
-        const dt: Value = e.get("dataTransfer");
-        if (dt.isNull()) {
+    fn closeContext(ctx_id: f64) void {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
             return;
         }
-        const files: Value = dt.get("files");
-        if (files.isNull()) {
+        ignoreRejection(rec.get("ctx").call("close", .{}));
+        drop(ctx_id);
+    }
+
+    /// Browsers start an AudioContext SUSPENDED until a user gesture; the engine
+    /// calls this from its input handler, so the first tap unlocks sound.
+    fn resumeContext(ctx_id: f64) void {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
             return;
         }
-        const n: f64 = js_to_num(files.get("length").h);
-        var i: f64 = 0;
-        while (i < n) : (i += 1) {
-            ufAcceptFile(files.call("item", .{num(i)}));
-        }
+        ignoreRejection(rec.get("ctx").call("resume", .{}));
     }
 
-    fn ufOnPicked(ev: Handle) void {
-        const e: Value = .{ .h = ev };
-        const picker: Value = e.get("target");
-        const files: Value = picker.get("files");
-        if (files.isNull()) {
+    fn getSampleRate(ctx_id: f64) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        return rec.get("ctx").getNum("sampleRate");
+    }
+
+    fn getCurrentTime(ctx_id: f64) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        return rec.get("ctx").getNum("currentTime");
+    }
+
+    fn getMasterVolume(ctx_id: f64) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        return rec.get("master").get("gain").getNum("value");
+    }
+
+    fn setMasterVolume(ctx_id: f64, v: f64) void {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
             return;
         }
-        const n: f64 = js_to_num(files.get("length").h);
-        var i: f64 = 0;
-        while (i < n) : (i += 1) {
-            ufAcceptFile(files.call("item", .{num(i)}));
-        }
-        // Clear the value, or picking the SAME file twice fires no second `change` event.
-        picker.set("value", str(""));
+        rec.get("master").get("gain").set("value", v);
     }
 
-    fn ufEnsureListening() void {
-        if (g.userfile.listening) {
-            return;
-        }
-        g.userfile.listening = true;
-        ufEnsureQueue();
-        const target: Value = global().get("window");
-        _ = target.call("addEventListener", .{ str("dragover"), func(&ufOnDragOver) });
-        _ = target.call("addEventListener", .{ str("drop"), func(&ufOnDrop) });
-    }
+    // ---- buffers ----------------------------------------------------------
 
-    fn ufPendingCount() f64 {
-        if (g.userfile.queue.h == 0) {
-            return 0;
-        }
-        return js_to_num(g.userfile.queue.get("length").h);
-    }
-
-    fn ufHead() Value {
-        return g.userfile.queue.call("at", .{num(0)});
-    }
-
-    fn ufNextSize() f64 {
-        if (ufPendingCount() == 0) {
-            return 0;
-        }
-        return js_to_num(ufHead().get("bytes").get("length").h);
-    }
-
-    fn ufNextName(out_ptr: f64, out_cap: f64) f64 {
-        if (ufPendingCount() == 0) {
-            return 0;
-        }
-        if (g.wgpu.text_encoder.isNull()) {
-            g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
-        }
-        const bytes: Value = g.wgpu.text_encoder.call("encode", .{ufHead().get("name")});
-        const n: f64 = js_to_num(bytes.get("length").h);
-        if (n > out_cap) {
-            return 0;
-        }
-        _ = modU8(@trunc(out_ptr), @trunc(n)).call("set", .{bytes});
-        return n;
-    }
-
-    /// Copy the head's bytes out and drop it. A too-small buffer returns 0 and LEAVES the file
-    /// queued, so a caller that mis-sized can size again from `nextSize` and retry rather than
-    /// silently lose the drop.
-    fn ufReadNext(out_ptr: f64, out_cap: f64) f64 {
-        if (ufPendingCount() == 0) {
-            return 0;
-        }
-        const bytes: Value = ufHead().get("bytes");
-        const n: f64 = js_to_num(bytes.get("length").h);
-        if (n > out_cap) {
-            return 0;
-        }
-        _ = modU8(@trunc(out_ptr), @trunc(n)).call("set", .{bytes});
-        _ = g.userfile.queue.call("shift", .{});
-        return n;
-    }
-
-    fn ufDiscardNext() void {
-        if (ufPendingCount() == 0) {
-            return;
-        }
-        _ = g.userfile.queue.call("shift", .{});
-    }
-
-    /// Park the invisible `<input type="file">` over the caller's button rectangle.
+    /// Upload INTERLEAVED f32 PCM from wasm memory as an AudioBuffer.
     ///
-    /// Opacity 0 rather than `display:none` or `visibility:hidden`: a hidden input cannot be
-    /// tapped, and the whole point is that the TAP must land on a real DOM element so the
-    /// browser sees a genuine user gesture. The canvas still draws the visible button.
-    fn ufSetPickerRect(
-        x: f64,
-        y: f64,
-        w: f64,
-        h: f64,
-        accept_ptr: f64,
-        accept_len: f64,
-    ) void {
-        ufEnsureListening();
-        if (g.userfile.input.h == 0) {
-            const el: Value = document().j.call("createElement", .{str("input")});
-            el.set("type", str("file"));
-            const st: Value = el.get("style");
-            st.set("position", str("fixed"));
-            st.set("opacity", str("0"));
-            st.set("zIndex", str("99998"));
-            st.set("cursor", str("pointer"));
-            _ = el.call("addEventListener", .{ str("change"), func(&ufOnPicked) });
-            _ = document().body().j.call("appendChild", .{el});
-            g.userfile.input = el;
+    /// The Float32Array is a VIEW over the wasm heap, so it must be copied before
+    /// it reaches Web Audio: the heap can move when it grows, and `copyToChannel`
+    /// must not alias it. Mono takes a one-call fast path; multi-channel has to be
+    /// de-interleaved, since Web Audio stores planar channels and JS has no
+    /// strided typed-array view.
+    fn loadBuffer(
+        ctx_id: f64,
+        sample_rate: f64,
+        channels: f64,
+        frame_count: f64,
+        data_ptr: f64,
+        data_len: f64,
+    ) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
+            return 0;
         }
-        const el: Value = g.userfile.input;
-        el.set("accept", modStr(js_num(accept_ptr), js_num(accept_len)));
-        const st: Value = el.get("style");
-        st.set("display", str("block"));
-        ovSetPx(st, "left", x);
-        ovSetPx(st, "top", y);
-        ovSetPx(st, "width", w);
-        ovSetPx(st, "height", h);
-    }
-
-    /// The Save overlay: created once, a real `<a>` so a tap on it is a genuine gesture - which a
-    /// mobile browser requires before it will save a file, exactly as it does before opening a
-    /// picker.
-    fn ufEnsureSaveAnchor() void {
-        if (g.userfile.save.h != 0) {
-            return;
+        if (frame_count <= 0 or channels < 1 or channels > 32) {
+            return 0;
         }
-        const el: Value = document().j.call("createElement", .{str("a")});
-        const st: Value = el.get("style");
-        st.set("position", str("fixed"));
-        st.set("opacity", str("0"));
-        st.set("zIndex", str("99998"));
-        st.set("cursor", str("pointer"));
-        st.set("display", str("none"));
-        _ = document().body().j.call("appendChild", .{el});
-        g.userfile.save = el;
-    }
-
-    /// Make `bytes` the file the Save overlay hands over, named `name`. The Blob takes a COPY of
-    /// wasm memory, so the caller may reuse its buffer the moment this returns.
-    fn ufOffer(ptr: f64, len: f64, name_ptr: f64, name_len: f64) void {
-        ufEnsureSaveAnchor();
-        const view: Value = modU8(@trunc(ptr), @trunc(len));
-        const copy: Value = global().get("Uint8Array").new(.{view});
-        const parts: Value = global().get("Array").new(.{});
-        _ = parts.call("push", .{copy});
-        const opts: Value = global().get("Object").new(.{});
-        opts.set("type", str("application/octet-stream"));
-        const blob: Value = global().get("Blob").new(.{ parts, opts });
-        if (g.userfile.save_url.h != 0) {
-            _ = global().get("URL").call("revokeObjectURL", .{g.userfile.save_url});
+        if (data_len != frame_count * channels) {
+            return 0; // the caller's own arithmetic disagrees - refuse rather than read garbage
         }
-        const url: Value = global().get("URL").call("createObjectURL", .{blob});
-        g.userfile.save_url = url;
-        g.userfile.save.set("href", url);
-        g.userfile.save.set("download", modStr(js_num(name_ptr), js_num(name_len)));
-    }
+        const ctx: Value = rec.get("ctx");
 
-    fn ufSetSaveRect(x: f64, y: f64, w: f64, h: f64) void {
-        ufEnsureSaveAnchor();
-        const st: Value = g.userfile.save.get("style");
-        st.set("display", str("block"));
-        ovSetPx(st, "left", x);
-        ovSetPx(st, "top", y);
-        ovSetPx(st, "width", w);
-        ovSetPx(st, "height", h);
-    }
+        const mem: Value = g.boot.module_exports.get("memory").get("buffer");
+        const view: Value = global().get("Float32Array").new(.{ mem, num(data_ptr), num(data_len) });
+        const src: Value = view.call("slice", .{}); // detach from the wasm heap
 
-    fn ufHideSave() void {
-        if (g.userfile.save.h == 0) {
-            return;
+        const buf: Value = ctx.call("createBuffer", .{ num(channels), num(frame_count), num(sample_rate) });
+        if (buf.isNull()) {
+            return 0;
         }
-        g.userfile.save.get("style").set("display", str("none"));
-    }
 
-    fn ufHidePicker() void {
-        if (g.userfile.input.h == 0) {
-            return;
+        const chans: u32 = @trunc(channels);
+        const frames: u32 = @trunc(frame_count);
+        if (chans == 1) {
+            _ = buf.call("copyToChannel", .{ src, num(0), num(0) });
+            return insert(buf);
         }
-        g.userfile.input.get("style").set("display", str("none"));
-    }
-
-    // ---- text-input overlay port (mobile soft-keyboard for editable widgets) ----
-    // Ported from the proven src/web/zimr.ts (turn 302; zhobo63-style VISIBLE
-    // overlay). A real <input> is positioned over the wasm-drawn widget, focused
-    // right after display:block (the trick that pops the mobile keyboard), and
-    // polled each frame for its value. TS closures become named handlers here
-    // (the transpiler forbids closures / indirect calls - callbacks are `func`).
-    // Coords are identity: exact under .responsive (CSS px == wasm px); .fit-mode
-    // letterbox scaling and the char-filter `input` listener are follow-ups.
-    // overlay state lives in g.overlay (the page singleton) - see BridgeGlobals.
-
-    fn ovKeyIs(k: Value, comptime lit: []const u8) bool {
-        return js_to_num(k.call("localeCompare", .{str(lit)}).h) == 0;
-    }
-    fn ovSetPx(s: Value, comptime field: []const u8, v: f64) void {
-        const i: i32 = @trunc(v);
-        s.set(field, fmt("{}px", .{i}));
-    }
-    fn ovRgbCss(rgba_h: Handle) Value {
-        // Alpha treated opaque: fmt truncates floats (no fractional alpha), and
-        // the focus swap reads fine fully-opaque. Full alpha is a follow-up.
-        const rgba: u32 = @trunc(js_to_num(rgba_h));
-        const r: u32 = rgba & 0xFF;
-        const gg: u32 = (rgba >> 8) & 0xFF;
-        const b: u32 = (rgba >> 16) & 0xFF;
-        return fmt("rgb({},{},{})", .{ r, gg, b });
-    }
-    fn overlayOnBlur(_: Handle) void {
-        if (g.overlay.el.h == 0) {
-            return;
-        }
-        g.overlay.el.get("style").set("display", str("none"));
-        g.overlay.visible = false;
-    }
-    fn overlayOnKeydown(ev: Handle) void {
-        if (g.overlay.el.h == 0) {
-            return;
-        }
-        const e: Value = .{ .h = ev };
-        const key: Value = e.get("key");
-        if (ovKeyIs(key, "Enter")) {
-            _ = e.call("preventDefault", .{});
-            _ = g.overlay.el.call("blur", .{});
-        } else if (ovKeyIs(key, "Escape")) {
-            _ = e.call("preventDefault", .{});
-            if (g.overlay.escape_clears) {
-                g.overlay.el.set("value", str(""));
+        var c: u32 = 0;
+        while (c < chans) : (c += 1) {
+            const plane: Value = global().get("Float32Array").new(.{num(frame_count)});
+            var f: u32 = 0;
+            while (f < frames) : (f += 1) {
+                plane.setAt(f, src.at(f * chans + c));
             }
-            _ = g.overlay.el.call("blur", .{});
-        } else if (g.overlay.allow_tab and ovKeyIs(key, "Tab")) {
-            _ = e.call("preventDefault", .{});
-            const a: Value = g.overlay.el.get("selectionStart");
-            const b: Value = g.overlay.el.get("selectionEnd");
-            _ = g.overlay.el.call("setRangeText", .{ str("\t"), a, b, str("end") });
+            _ = buf.call("copyToChannel", .{ plane, num(@floatFromInt(c)), num(0) });
         }
+        return insert(buf);
     }
-    fn ensureOverlayInput() void {
-        if (g.overlay.el.h != 0) {
-            return;
-        }
-        const el: Value = document().j.call("createElement", .{str("input")});
-        el.set("type", str("text"));
-        el.set("autocomplete", str("off"));
-        el.set("autocapitalize", str("off"));
-        el.set("spellcheck", false);
-        el.set("enterKeyHint", str("done"));
-        const s: Value = el.get("style");
-        s.set("position", str("fixed"));
-        s.set("zIndex", str("999"));
-        s.set("boxSizing", str("border-box"));
-        s.set("margin", str("0"));
-        s.set("padding", str("0 4px"));
-        s.set("border", str("none"));
-        s.set("outline", str("none"));
-        s.set("display", str("none"));
-        _ = el.call("addEventListener", .{ str("blur"), func(&overlayOnBlur) });
-        _ = el.call("addEventListener", .{ str("keydown"), func(&overlayOnKeydown) });
-        _ = document().body().j.call("appendChild", .{el});
-        g.overlay.el = el;
+
+    fn unloadBuffer(_: f64, buffer_id: f64) void {
+        drop(buffer_id);
     }
-    fn domShowOverlayInput(
-        x: Handle,
-        y: Handle,
-        w: Handle,
-        h: Handle,
-        text_ptr: Handle,
-        text_len: Handle,
-        font_px: Handle,
-        fg: Handle,
-        bg: Handle,
-    ) void {
-        ensureOverlayInput();
-        if (g.overlay.el.h == 0) {
-            return;
-        }
-        const tlen: u32 = @trunc(js_to_num(text_len));
-        if (tlen > 0) {
-            g.overlay.el.set("value", modStr(text_ptr, text_len));
-        } else {
-            g.overlay.el.set("value", str(""));
-        }
-        const s: Value = g.overlay.el.get("style");
-        s.set("fontFamily", str("ui-monospace, monospace"));
-        ovSetPx(s, "fontSize", js_to_num(font_px));
-        ovSetPx(s, "lineHeight", @max(1.0, js_to_num(h)));
-        s.set("color", ovRgbCss(fg));
-        s.set("backgroundColor", ovRgbCss(bg));
-        ovSetPx(s, "left", js_to_num(x));
-        ovSetPx(s, "top", js_to_num(y));
-        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
-        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
-        s.set("display", str("block"));
-        g.overlay.visible = true;
-        // Focus must come AFTER display:block - focusing a display:none element
-        // is a no-op on mobile, and this focus is what raises the soft keyboard.
-        _ = g.overlay.el.call("focus", .{});
-        const n: u32 = g.overlay.el.get("value").getU32("length");
-        _ = g.overlay.el.call("setSelectionRange", .{ n, n });
-    }
-    fn domHideOverlayInput() void {
-        if (g.overlay.el.h == 0) {
-            return;
-        }
-        _ = g.overlay.el.call("blur", .{});
-        g.overlay.el.get("style").set("display", str("none"));
-        g.overlay.visible = false;
-    }
-    fn domUpdateOverlayInputRect(x: Handle, y: Handle, w: Handle, h: Handle) void {
-        if (g.overlay.el.h == 0 or !g.overlay.visible) {
-            return;
-        }
-        const s: Value = g.overlay.el.get("style");
-        ovSetPx(s, "left", js_to_num(x));
-        ovSetPx(s, "top", js_to_num(y));
-        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
-        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
-    }
-    fn domOverlayInputIsVisible() u32 {
-        return if (g.overlay.visible) 1 else 0;
-    }
-    fn domGetOverlayInputText(out_ptr: Handle, max_len: Handle) usize {
-        if (g.overlay.el.h == 0) {
+
+    // ---- sources ----------------------------------------------------------
+
+    /// Build and start one voice. `when == 0` means "now"; `offset` seeks into the
+    /// buffer (that's what makes `resume` work).
+    fn startSource(
+        ctx_id: f64,
+        buffer_id: f64,
+        volume: f64,
+        pitch: f64,
+        pan: f64,
+        looping: bool,
+        when: f64,
+        offset: f64,
+    ) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
             return 0;
         }
-        const v: Value = g.overlay.el.get("value");
-        if (v.getU32("length") == 0) {
+        const buf: Value = lookup(buffer_id);
+        if (buf.isNull()) {
             return 0;
         }
-        const enc: Value = global().get("TextEncoder").new(.{});
-        const bytes: Value = enc.call("encode", .{v});
-        const blen: u32 = bytes.getU32("length");
-        const max: u32 = @trunc(js_to_num(max_len));
-        const n: u32 = @min(blen, max);
-        const p: u32 = @trunc(js_to_num(out_ptr));
-        _ = modU8(p, n).call("set", .{bytes.call("subarray", .{ @as(u32, 0), n })});
+        const ctx: Value = rec.get("ctx");
+
+        const node: Value = ctx.call("createBufferSource", .{});
+        node.set("buffer", buf);
+        node.get("playbackRate").set("value", pitch);
+        node.set("loop", looping);
+
+        const gain: Value = ctx.call("createGain", .{});
+        gain.get("gain").set("value", volume);
+        const panner: Value = ctx.call("createStereoPanner", .{});
+        panner.get("pan").set("value", pan);
+
+        _ = node.call("connect", .{gain});
+        _ = gain.call("connect", .{panner});
+        _ = panner.call("connect", .{rec.get("master")});
+
+        const dur: f64 = buf.getNum("duration");
+        const off: f64 = clampF(offset, 0.0, dur);
+
+        const src_rec: Value = global().get("Object").new(.{});
+        src_rec.set("ctxId", ctx_id);
+        src_rec.set("node", node);
+        src_rec.set("gain", gain);
+        src_rec.set("buffer", buf);
+        src_rec.set("pitch", pitch);
+        src_rec.set("looping", looping);
+        src_rec.set("startedAt", if (when > 0) when else ctx.getNum("currentTime"));
+        src_rec.set("pausedOffset", off);
+        src_rec.set("playing", 1);
+
+        const id: f64 = insert(src_rec);
+
+        // No closures in Zig->JS: bind the source id into the handler instead.
+        // `onended` also fires on an explicit stop(), so the handler re-checks the
+        // record - a paused voice already cleared `playing` and must SURVIVE, or
+        // resume would have nothing to rebuild from.
+        node.set("onended", func(&onSourceEnded).call("bind", .{ num(0), num(id) }));
+        _ = node.call("start", .{ num(when), num(off) });
+        return id;
+    }
+
+    fn onSourceEnded(id_h: Handle) void {
+        const id: f64 = js_to_num(id_h);
+        const rec: Value = lookup(id);
+        if (rec.isNull()) {
+            return;
+        }
+        if (rec.getNum("playing") == 0) {
+            return; // paused deliberately - keep the record for resume
+        }
+        rec.set("playing", 0);
+        drop(id); // played to its end: the voice is spent
+    }
+
+    fn playBuffer(
+        ctx_id: f64,
+        buffer_id: f64,
+        volume: f64,
+        pitch: f64,
+        pan: f64,
+        looping: f64,
+    ) f64 {
+        return startSource(ctx_id, buffer_id, volume, pitch, pan, looping != 0, 0, 0);
+    }
+
+    fn playBufferAt(
+        ctx_id: f64,
+        buffer_id: f64,
+        volume: f64,
+        pitch: f64,
+        pan: f64,
+        when: f64,
+    ) f64 {
+        return startSource(ctx_id, buffer_id, volume, pitch, pan, false, when, 0);
+    }
+
+    fn playBufferWithOffset(
+        ctx_id: f64,
+        buffer_id: f64,
+        volume: f64,
+        pitch: f64,
+        pan: f64,
+        looping: f64,
+        offset: f64,
+    ) f64 {
+        return startSource(ctx_id, buffer_id, volume, pitch, pan, looping != 0, 0, offset);
+    }
+
+    fn stopBuffer(_: f64, source_id: f64) void {
+        const rec: Value = lookup(source_id);
+        if (rec.isNull()) {
+            return;
+        }
+        const node: Value = rec.get("node");
+        if (!node.isNull()) {
+            _ = node.call("stop", .{});
+            _ = node.call("disconnect", .{});
+        }
+        drop(source_id);
+    }
+
+    /// Web Audio source nodes are ONE-SHOT - a stopped node can never restart. So
+    /// pause banks the play position and throws the node away; `resume` builds a
+    /// new one at that offset. Elapsed time is scaled by pitch, because
+    /// playbackRate stretches wall-clock against buffer-time.
+    fn pauseBuffer(_: f64, source_id: f64) void {
+        const rec: Value = lookup(source_id);
+        if (rec.isNull() or rec.getNum("playing") == 0) {
+            return;
+        }
+        const ctx_rec: Value = lookup(rec.getNum("ctxId"));
+        if (ctx_rec.isNull()) {
+            return;
+        }
+        const t_now: f64 = ctx_rec.get("ctx").getNum("currentTime");
+        const elapsed: f64 = (t_now - rec.getNum("startedAt")) * rec.getNum("pitch");
+        const dur: f64 = rec.get("buffer").getNum("duration");
+        const off: f64 = clampF(rec.getNum("pausedOffset") + elapsed, 0.0, dur);
+        rec.set("pausedOffset", off);
+        rec.set("playing", 0); // set BEFORE stop(), so onended sees a deliberate pause
+
+        const node: Value = rec.get("node");
+        if (!node.isNull()) {
+            _ = node.call("stop", .{});
+            _ = node.call("disconnect", .{});
+        }
+        rec.set("node", 0);
+    }
+
+    fn resumeBuffer(_: f64, source_id: f64) void {
+        const rec: Value = lookup(source_id);
+        if (rec.isNull() or rec.getNum("playing") != 0) {
+            return;
+        }
+        const ctx_rec: Value = lookup(rec.getNum("ctxId"));
+        if (ctx_rec.isNull()) {
+            return;
+        }
+        const ctx: Value = ctx_rec.get("ctx");
+        const node: Value = ctx.call("createBufferSource", .{});
+        node.set("buffer", rec.get("buffer"));
+        node.get("playbackRate").set("value", rec.getNum("pitch"));
+        node.set("loop", rec.getNum("looping") != 0);
+        _ = node.call("connect", .{rec.get("gain")}); // reuse the existing gain->panner->master chain
+        node.set("onended", func(&onSourceEnded).call("bind", .{ num(0), num(source_id) }));
+        _ = node.call("start", .{ num(0), num(rec.getNum("pausedOffset")) });
+
+        rec.set("node", node);
+        rec.set("startedAt", ctx.getNum("currentTime"));
+        rec.set("playing", 1);
+    }
+
+    fn isBufferPlaying(_: f64, source_id: f64) f64 {
+        const rec: Value = lookup(source_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        return rec.getNum("playing");
+    }
+
+    // ---- async decode -----------------------------------------------------
+
+    /// `decodeAudioData` is asynchronous and the wasm cannot block, hence the
+    /// poll triad: kick off a decode, ask `is_decode_ready`, then `take` the
+    /// buffer. The decode record is a JS object BOUND into the callbacks - that's
+    /// how a closure-free Zig->JS host remembers which decode finished.
+    fn decodeOggBytes(ctx_id: f64, data_ptr: f64, data_len: f64) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        // decodeAudioData DETACHES the ArrayBuffer it is given - hand it a private
+        // copy, never a view onto the wasm heap.
+        const src: Value = ZimrWgpu.modBytes(data_ptr, data_len);
+        const copy: Value = global().get("Uint8Array").new(.{num(data_len)});
+        _ = copy.call("set", .{src});
+
+        const pending: Value = global().get("Object").new(.{});
+        pending.set("ready", 0);
+        const id: f64 = insert(pending);
+
+        _ = rec.get("ctx").call("decodeAudioData", .{
+            copy.get("buffer"),
+            func(&onDecodeOk).call("bind", .{ num(0), pending }),
+            func(&onDecodeFail).call("bind", .{ num(0), pending }),
+        });
+        return id;
+    }
+
+    fn onDecodeOk(pending_h: Handle, buf_h: Handle) void {
+        const pending: Value = .{ .h = pending_h };
+        pending.set("result", Value{ .h = buf_h });
+        pending.set("ready", 1);
+    }
+
+    /// A FAILED decode still reports "ready" - otherwise the engine would poll
+    /// forever. `take` then finds no result and returns 0, which is exactly the
+    /// invalid-buffer answer the Zig side already handles.
+    fn onDecodeFail(pending_h: Handle) void {
+        const pending: Value = .{ .h = pending_h };
+        pending.set("ready", 1);
+    }
+
+    fn isDecodeReady(_: f64, decode_id: f64) f64 {
+        const rec: Value = lookup(decode_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        return rec.getNum("ready");
+    }
+
+    fn takeDecodedBuffer(_: f64, decode_id: f64) f64 {
+        const rec: Value = lookup(decode_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        if (rec.getNum("ready") == 0) {
+            return 0; // still decoding - keep the record and let the caller poll again
+        }
+        const result: Value = rec.get("result");
+        drop(decode_id);
+        if (result.isNull()) {
+            return 0; // decode failed
+        }
+        return insert(result); // promote the AudioBuffer to a buffer id
+    }
+
+    fn cancelDecode(_: f64, decode_id: f64) void {
+        // The in-flight decodeAudioData callback still fires; it just writes into a
+        // record nobody will read. Dropping the id is the cancel.
+        drop(decode_id);
+    }
+
+    // ---- analyser (FFT tap) -----------------------------------------------
+
+    /// Attach an AnalyserNode to the master bus. It is a TAP, not a filter: master
+    /// already feeds `destination`, so connecting it additionally to the analyser
+    /// hands the FFT the same signal without changing what you hear. The analyser
+    /// deliberately connects onward to NOTHING.
+    fn createAnalyser(ctx_id: f64, fft_size: f64) f64 {
+        const rec: Value = lookup(ctx_id);
+        if (rec.isNull()) {
+            return 0;
+        }
+        const an: Value = rec.get("ctx").call("createAnalyser", .{});
+        if (an.isNull()) {
+            return 0;
+        }
+        an.set("fftSize", fft_size);
+        _ = rec.get("master").call("connect", .{an});
+        return insert(an);
+    }
+
+    /// Write the current magnitude spectrum into wasm memory, one byte per bin.
+    /// `getByteFrequencyData` fills the typed array IN PLACE - and the array we
+    /// hand it is a view straight onto the wasm heap, so the samples land in the
+    /// caller's slice with no intermediate copy.
+    fn getFrequencyData(_: f64, analyser_id: f64, out_ptr: f64, out_len: f64) f64 {
+        const an: Value = lookup(analyser_id);
+        if (an.isNull()) {
+            return 0;
+        }
+        const bins: f64 = an.getNum("frequencyBinCount");
+        const n: f64 = @min(bins, out_len);
+        if (n <= 0) {
+            return 0;
+        }
+        _ = an.call("getByteFrequencyData", .{ZimrWgpu.modBytes(out_ptr, n)});
         return n;
     }
-    fn domSetInputMode(ptr: Handle, len: Handle) void {
-        if (g.overlay.el.h == 0) {
+
+    fn destroyAnalyser(_: f64, analyser_id: f64) void {
+        const an: Value = lookup(analyser_id);
+        if (an.isNull()) {
             return;
         }
-        const l: u32 = @trunc(js_to_num(len));
-        if (l == 0) {
-            g.overlay.el.set("inputMode", str(""));
-        } else {
-            g.overlay.el.set("inputMode", modStr(ptr, len));
-        }
-    }
-    fn domSetOverlayInputPassword(on: Handle) void {
-        if (g.overlay.el.h == 0) {
-            return;
-        }
-        g.overlay.el.set("type", if (js_to_num(on) != 0) str("password") else str("text"));
-    }
-    fn domSetOverlayInputReadOnly(on: Handle) void {
-        if (g.overlay.el.h == 0) {
-            return;
-        }
-        g.overlay.el.set("readOnly", js_to_num(on) != 0);
-    }
-    fn domSetOverlayInputEscapeClears(on: Handle) void {
-        g.overlay.escape_clears = js_to_num(on) != 0;
-    }
-    fn domSetOverlayInputAllowTab(on: Handle) void {
-        g.overlay.allow_tab = js_to_num(on) != 0;
-    }
-    fn domSetOverlayInputCharFilters(flags: Handle) void {
-        g.overlay.char_filters = @trunc(js_to_num(flags));
+        _ = an.call("disconnect", .{});
+        drop(analyser_id);
     }
 
-    // ---- textarea overlay port (the multiline sibling of the <input> above) ----
-    // Same VISIBLE-overlay doctrine, but its OWN page singleton (g.overlay_ta):
-    // only one widget is focused at a time, yet an <input> and a <textarea> are
-    // different DOM nodes, so caching one handle for both would dangle on a type
-    // switch. Everything mirrors the <input> port except Enter handling - see
-    // domSetOverlayTextareaCtrlEnterForNewline.
-
-    fn overlayTaOnBlur(_: Handle) void {
-        if (g.overlay_ta.el.h == 0) {
-            return;
-        }
-        g.overlay_ta.el.get("style").set("display", str("none"));
-        g.overlay_ta.visible = false;
-    }
-    fn overlayTaOnKeydown(ev: Handle) void {
-        if (g.overlay_ta.el.h == 0) {
-            return;
-        }
-        const e: Value = .{ .h = ev };
-        const key: Value = e.get("key");
-        if (ovKeyIs(key, "Enter")) {
-            // Default (ctrl_enter off): fall through - let the browser insert the
-            // newline as it normally would. When on: plain Enter commits (blur),
-            // and Ctrl/Cmd+Enter inserts the '\n' manually.
-            if (g.overlay_ta.ctrl_enter_for_newline) {
-                _ = e.call("preventDefault", .{});
-                const ctrl: bool = js_to_num(e.get("ctrlKey").h) != 0 or
-                    js_to_num(e.get("metaKey").h) != 0;
-                if (ctrl) {
-                    const a: Value = g.overlay_ta.el.get("selectionStart");
-                    const b: Value = g.overlay_ta.el.get("selectionEnd");
-                    _ = g.overlay_ta.el.call("setRangeText", .{ str("\n"), a, b, str("end") });
-                } else {
-                    _ = g.overlay_ta.el.call("blur", .{});
-                }
-            }
-        } else if (ovKeyIs(key, "Escape")) {
-            _ = e.call("preventDefault", .{});
-            if (g.overlay_ta.escape_clears) {
-                g.overlay_ta.el.set("value", str(""));
-            }
-            _ = g.overlay_ta.el.call("blur", .{});
-        } else if (g.overlay_ta.allow_tab and ovKeyIs(key, "Tab")) {
-            _ = e.call("preventDefault", .{});
-            const a: Value = g.overlay_ta.el.get("selectionStart");
-            const b: Value = g.overlay_ta.el.get("selectionEnd");
-            _ = g.overlay_ta.el.call("setRangeText", .{ str("\t"), a, b, str("end") });
-        }
-    }
-    fn ensureOverlayTextarea() void {
-        if (g.overlay_ta.el.h != 0) {
-            return;
-        }
-        const el: Value = document().j.call("createElement", .{str("textarea")});
-        el.set("autocomplete", str("off"));
-        el.set("autocapitalize", str("off"));
-        el.set("spellcheck", false);
-        const s: Value = el.get("style");
-        s.set("position", str("fixed"));
-        s.set("zIndex", str("999"));
-        s.set("boxSizing", str("border-box"));
-        s.set("margin", str("0"));
-        s.set("padding", str("2px 4px"));
-        s.set("border", str("none"));
-        s.set("outline", str("none"));
-        s.set("resize", str("none"));
-        s.set("overflow", str("auto"));
-        s.set("whiteSpace", str("pre-wrap"));
-        s.set("display", str("none"));
-        _ = el.call("addEventListener", .{ str("blur"), func(&overlayTaOnBlur) });
-        _ = el.call("addEventListener", .{ str("keydown"), func(&overlayTaOnKeydown) });
-        _ = document().body().j.call("appendChild", .{el});
-        g.overlay_ta.el = el;
-    }
-    fn domShowOverlayTextarea(
-        x: Handle,
-        y: Handle,
-        w: Handle,
-        h: Handle,
-        text_ptr: Handle,
-        text_len: Handle,
-        font_px: Handle,
-        fg: Handle,
-        bg: Handle,
-    ) void {
-        ensureOverlayTextarea();
-        if (g.overlay_ta.el.h == 0) {
-            return;
-        }
-        const tlen: u32 = @trunc(js_to_num(text_len));
-        if (tlen > 0) {
-            g.overlay_ta.el.set("value", modStr(text_ptr, text_len));
-        } else {
-            g.overlay_ta.el.set("value", str(""));
-        }
-        const s: Value = g.overlay_ta.el.get("style");
-        s.set("fontFamily", str("ui-monospace, monospace"));
-        ovSetPx(s, "fontSize", js_to_num(font_px));
-        // Multiline: line spacing follows the FONT, not the box height. The
-        // <input> sets lineHeight == h to center its single line; a textarea
-        // wants normal leading so wrapped rows read correctly.
-        ovSetPx(s, "lineHeight", @max(1.0, js_to_num(font_px) * 1.3));
-        s.set("color", ovRgbCss(fg));
-        s.set("backgroundColor", ovRgbCss(bg));
-        ovSetPx(s, "left", js_to_num(x));
-        ovSetPx(s, "top", js_to_num(y));
-        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
-        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
-        s.set("display", str("block"));
-        g.overlay_ta.visible = true;
-        // Focus AFTER display:block - focusing a display:none node is a no-op on
-        // mobile, and this focus is what raises the soft keyboard.
-        _ = g.overlay_ta.el.call("focus", .{});
-        const n: u32 = g.overlay_ta.el.get("value").getU32("length");
-        _ = g.overlay_ta.el.call("setSelectionRange", .{ n, n });
-    }
-    fn domHideOverlayTextarea() void {
-        if (g.overlay_ta.el.h == 0) {
-            return;
-        }
-        _ = g.overlay_ta.el.call("blur", .{});
-        g.overlay_ta.el.get("style").set("display", str("none"));
-        g.overlay_ta.visible = false;
-    }
-    fn domUpdateOverlayTextareaRect(x: Handle, y: Handle, w: Handle, h: Handle) void {
-        if (g.overlay_ta.el.h == 0 or !g.overlay_ta.visible) {
-            return;
-        }
-        const s: Value = g.overlay_ta.el.get("style");
-        ovSetPx(s, "left", js_to_num(x));
-        ovSetPx(s, "top", js_to_num(y));
-        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
-        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
-    }
-    fn domOverlayTextareaIsVisible() u32 {
-        return if (g.overlay_ta.visible) 1 else 0;
-    }
-    fn domGetOverlayTextareaText(out_ptr: Handle, max_len: Handle) usize {
-        if (g.overlay_ta.el.h == 0) {
-            return 0;
-        }
-        const v: Value = g.overlay_ta.el.get("value");
-        if (v.getU32("length") == 0) {
-            return 0;
-        }
-        const enc: Value = global().get("TextEncoder").new(.{});
-        const bytes: Value = enc.call("encode", .{v});
-        const blen: u32 = bytes.getU32("length");
-        const max: u32 = @trunc(js_to_num(max_len));
-        const n: u32 = @min(blen, max);
-        const p: u32 = @trunc(js_to_num(out_ptr));
-        _ = modU8(p, n).call("set", .{bytes.call("subarray", .{ @as(u32, 0), n })});
-        return n;
-    }
-    fn domSetOverlayTextareaReadOnly(on: Handle) void {
-        if (g.overlay_ta.el.h == 0) {
-            return;
-        }
-        g.overlay_ta.el.set("readOnly", js_to_num(on) != 0);
-    }
-    fn domSetOverlayTextareaEscapeClears(on: Handle) void {
-        g.overlay_ta.escape_clears = js_to_num(on) != 0;
-    }
-    fn domSetOverlayTextareaAllowTab(on: Handle) void {
-        g.overlay_ta.allow_tab = js_to_num(on) != 0;
-    }
-    fn domSetOverlayTextareaCharFilters(flags: Handle) void {
-        g.overlay_ta.char_filters = @trunc(js_to_num(flags));
-    }
-    fn domSetOverlayTextareaCtrlEnterForNewline(on: Handle) void {
-        g.overlay_ta.ctrl_enter_for_newline = js_to_num(on) != 0;
-    }
-
-    // Fill a wasm buffer with cryptographically-strong random bytes from the
-    // host's crypto.getRandomValues - the backing for `Config.rng_seed == null`
-    // (a fresh per-launch seed for `Frame.random`). Same idiom as the WASI
-    // random_get shim; a byte view over [ptr, ptr+len) is filled in place.
-    fn domCryptoRandomFill(ptr: Handle, len: Handle) void {
-        const p: u32 = @trunc(js_to_num(ptr));
-        const n: u32 = @trunc(js_to_num(len));
-        _ = global().get("crypto").call("getRandomValues", .{modU8(p, n)});
-    }
-
-    // ---- minimal "wgpu" verbs for the Phase-2 slice ----------------------
-    fn wgpuCurrentView(h: Handle) u32 {
-        const ctx: Value = g.boot.canvas_contexts.call("get", .{Value{ .h = @trunc(js_to_num(h)) }});
-        return ctx.call("getCurrentTexture", .{}).call("createView", .{}).h;
-    }
-    fn wgpuClear(
-        view: Handle,
-        red: Handle,
-        green: Handle,
-        blue: Handle,
-    ) void {
-        const enc: Value = g.boot.gpu_device.call("createCommandEncoder", .{});
-        const att: Value = global().get("Object").new(.{});
-        att.set("view", Value{ .h = @trunc(js_to_num(view)) });
-        const col: Value = global().get("Object").new(.{});
-        col.set("r", Value{ .h = red });
-        col.set("g", Value{ .h = green });
-        col.set("b", Value{ .h = blue });
-        col.set("a", Value{ .h = js_num(1.0) });
-        att.set("clearValue", col);
-        att.set("loadOp", str("clear"));
-        att.set("storeOp", str("store"));
-        const atts: Value = global().get("Array").new(.{});
-        _ = atts.call("push", .{att});
-        const desc: Value = global().get("Object").new(.{});
-        desc.set("colorAttachments", atts);
-        const pass: Value = enc.call("beginRenderPass", .{desc});
-        _ = pass.call("end", .{});
-        const cmd: Value = enc.call("finish", .{});
-        const cmds: Value = global().get("Array").new(.{});
-        _ = cmds.call("push", .{cmd});
-        _ = g.boot.gpu_queue.call("submit", .{cmds});
-    }
-
-    // ---- boot state machine ----------------------------------------------
-    // GPU timing: complete the in-flight timestamp readback if the GPU has
-    // finished. Runs once per frame (top of stage 4). When the map resolves,
-    // sum the per-pass (end-begin) deltas via __zimrGpuMs, stash ms, unmap.
-    fn pollGpuTiming() void {
-        if (!g.wgpu.ts_pending) {
-            return;
-        }
-        const status: u32 = js_promise_status(g.wgpu.ts_pid);
-        if (status == 0) {
-            return; // still mapping
-        }
-        _ = js_promise_take(g.wgpu.ts_pid);
-        if (status == 1) {
-            const bytes: f64 = @floatFromInt(g.wgpu.ts_pairs_inflight * 2 * 8);
-            const zero_v: Value = .{ .h = js_num(0) };
-            const bytes_v: Value = .{ .h = js_num(bytes) };
-            const ab: Value = g.wgpu.ts_read_buf.call("getMappedRange", .{ zero_v, bytes_v });
-            const pairs_f: f64 = @floatFromInt(g.wgpu.ts_pairs_inflight);
-            const ms: f64 = js_to_num(global().call("__zimrGpuMs", .{ ab, Value{ .h = js_num(pairs_f) } }).h);
-            g.wgpu.gpu_ms_last = ms;
-            _ = g.wgpu.ts_read_buf.call("unmap", .{});
-        }
-        g.wgpu.ts_pending = false;
-    }
-
-    /// The one rAF callback that drives everything. While booting (stages 1-3)
-    /// it polls the in-flight promise and hands the result to advance(); once
-    /// running (stage 4) it ticks one frame of the wasm module. It re-arms itself
-    /// every call until stage 0, which means "stopped" (idle or a fatal error).
-    fn tick(_: Handle) void {
-        switch (g.boot.stage) {
-            // Booting: an adapter (1), device (2), or instantiate (3) promise is
-            // pending. Poll it; advance on success, report + halt on rejection.
-            1, 2, 3 => {
-                const promise_resolved: u32 = 1;
-                const promise_rejected: u32 = 2;
-                const status: u32 = js_promise_status(g.boot.pending_promise);
-                if (status == promise_resolved) {
-                    const result: Value = .{ .h = js_promise_take(g.boot.pending_promise) };
-                    advance(result);
-                } else if (status == promise_rejected) {
-                    // Surface the ACTUAL rejection reason: the registry stored the
-                    // rejected promise's error (a LinkError names the exact missing
-                    // host import; a RangeError means OOM). console.error mirrors to
-                    // the on-page log overlay, turning "bad bundle" into a diagnosis.
-                    const reason: Value = .{ .h = js_promise_take(g.boot.pending_promise) };
-                    _ = global().get("console").call("error", .{
-                        str("zimr boot: promise rejected -> "),
-                        reason.get("message"),
-                        reason,
-                    });
-                    switch (g.boot.stage) {
-                        1 => note("zimr boot: stage 1 requestAdapter rejected (no WebGPU adapter available)."),
-                        2 => note("zimr boot: stage 2 requestDevice rejected (close other GPU tabs, then reload)."),
-                        else => note(
-                            "zimr boot: stage 3 WASM instantiate rejected " ++
-                                "(see the error above: a missing host import, OOM, or a malformed bundle).",
-                        ),
-                    }
-                    g.boot.stage = 0;
-                    return;
-                }
-            },
-            // Running: drive exactly one frame of the instantiated module.
-            4 => {
-                // Finish any in-flight GPU-timestamp readback before this frame
-                // records the next one (it reuses the same read buffer).
-                pollGpuTiming();
-                // Backing store = CSS box x DPR, applied BEFORE the module
-                // renders so the whole frame sees one surface size.
-                ZimrWgpu.syncCanvasBacking();
-                const performance: Value = global().get("performance");
-                const now_ms: f64 = js_to_num(performance.call("now", .{}).h);
-                if (g.boot.classic_contract) {
-                    // Classic wasi reactor: the bridge owns timing and passes the
-                    // elapsed seconds since the previous frame to update(dt).
-                    const dt_seconds: f64 = (now_ms - g.boot.last_frame_ms) / 1000.0;
-                    g.boot.last_frame_ms = now_ms;
-                    _ = g.boot.module_exports.call("update", .{Value{ .h = js_num(dt_seconds) }});
-                } else {
-                    // Page contract: zimr_frame(now_ms) owns its own timing.
-                    _ = g.boot.module_exports.call("zimr_frame", .{Value{ .h = js_num(now_ms) }});
-                }
-            },
-            else => {},
-        }
-        // Keep the loop alive unless a fatal error set stage 0 above.
-        if (g.boot.stage != 0) {
-            requestAnimationFrame(g.boot.tick_callback);
-        }
-    }
-    /// The boot state machine's transition handler: given the value a stage's
-    /// promise resolved to (`v`), set up that stage's results and kick off the
-    /// next stage's async work. Walks adapter (1) -> device (2) -> instantiate
-    /// (3) -> run (4). tick() polls the promise between calls.
-    fn advance(v: Value) void {
-        switch (g.boot.stage) {
-            // Stage 1 -> 2: the WebGPU adapter resolved. Decide whether GPU timing
-            // is available, then request the logical device.
-            1 => {
-                const adapter: Value = v;
-                g.boot.gpu_adapter = adapter;
-                // No raised limits needed any more: each compute kernel now binds
-                // ONLY the storage buffers it uses (per-kernel bind groups, see
-                // compute_host.zig), so every kernel stays within WebGPU's
-                // guaranteed 8-storage-buffer floor. We used to raise
-                // maxStorageBuffersPerShaderStage here because the old shared bind
-                // group bound ALL of a module's buffers to every kernel (the
-                // counting-sort fluid has 10), which broke on stock devices and
-                // forced this adapter-dependent request. A plain requestDevice
-                // works everywhere now.
-                //
-                // GPU timing (profiler): the 'timestamp-query' feature lets us
-                // measure GPU-side pass durations. It's optional and absent on
-                // many mobile drivers, so we feature-check the adapter and only
-                // request it when present - requesting an unsupported feature
-                // would REJECT requestDevice and black-screen the boot.
-                const adapter_features: Value = adapter.get("features");
-                const has_timestamp_query: bool = adapter_features.call("has", .{str("timestamp-query")}).truthy();
-                g.boot.timestamp_supported = has_timestamp_query;
-
-                // requestDevice(...) -> a promise of the GPUDevice. Request the
-                // timestamp-query feature only when the adapter advertises it.
-                var device_promise: Value = undefined;
-                if (has_timestamp_query) {
-                    const required_features: Value = global().get("Array").new(.{});
-                    _ = required_features.call("push", .{str("timestamp-query")});
-                    const device_desc: Value = global().get("Object").new(.{});
-                    device_desc.set("requiredFeatures", required_features);
-                    device_promise = adapter.call("requestDevice", .{device_desc});
-                } else {
-                    device_promise = adapter.call("requestDevice", .{});
-                }
-                g.boot.pending_promise = js_promise_register(device_promise.h);
-                g.boot.stage = 2;
-            },
-            // Stage 2 -> 3: the device resolved. Wire error reporting, build the
-            // optional GPU-timing infra and the wasm import object, then start
-            // instantiation of the module itself.
-            2 => {
-                const device: Value = v;
-                g.boot.gpu_device = device;
-                g.boot.gpu_queue = device.get("queue");
-                const max_texture_dim: f64 = device.get("limits").getNum("maxTextureDimension2D");
-                const limit_is_usable: bool = max_texture_dim >= 1; // false for NaN too
-                if (limit_is_usable) {
-                    g.wgpu.max_backing_dim = max_texture_dim;
-                }
-                // Surface GPU validation errors instead of silently going black.
-                _ = device.call("addEventListener", .{ str("uncapturederror"), func(&onGpuError) });
-
-                // ---- GPU-timing infra (only when 'timestamp-query' was granted) ----
-                // Build the timestamp query set + its two staging buffers once,
-                // now that the device exists. 64 slots = up to 32 timed passes per
-                // frame. Left entirely inert (ts_ready stays false) otherwise.
-                if (g.boot.timestamp_supported) {
-                    const slot_count: u32 = 64;
-                    const buffer_bytes: u32 = slot_count * 8; // one u64 timestamp per slot
-
-                    // The query set the render passes write begin/end stamps into.
-                    const query_desc: Value = global().get("Object").new(.{});
-                    query_desc.set("type", str("timestamp"));
-                    query_desc.set("count", Value{ .h = js_num(@floatFromInt(slot_count)) });
-                    g.wgpu.ts_query_set = device.call("createQuerySet", .{query_desc});
-
-                    // GPU-side resolve target: resolveQuerySet writes the raw u64s here.
-                    const resolve_usage: u32 = 0x0200 | 0x0004; // QUERY_RESOLVE | COPY_SRC
-                    const resolve_desc: Value = global().get("Object").new(.{});
-                    resolve_desc.set("size", Value{ .h = js_num(@floatFromInt(buffer_bytes)) });
-                    resolve_desc.set("usage", Value{ .h = js_num(@floatFromInt(resolve_usage)) });
-                    g.wgpu.ts_resolve_buf = device.call("createBuffer", .{resolve_desc});
-
-                    // CPU-mappable readback: we copy the resolved data here, then mapAsync it.
-                    const read_usage: u32 = 0x0008 | 0x0001; // COPY_DST | MAP_READ
-                    const read_desc: Value = global().get("Object").new(.{});
-                    read_desc.set("size", Value{ .h = js_num(@floatFromInt(buffer_bytes)) });
-                    read_desc.set("usage", Value{ .h = js_num(@floatFromInt(read_usage)) });
-                    g.wgpu.ts_read_buf = device.call("createBuffer", .{read_desc});
-
-                    g.wgpu.ts_ready = true;
-
-                    // Summing helper: the mapped buffer holds u64 ns timestamps
-                    // (begin,end per pass). Reconstruct each as hi*2^32+lo in f64
-                    // (ns-since-boot fits < 2^53, so exact) and sum (end-begin) ->
-                    // ms. Built via the Function constructor to avoid a separate
-                    // page-template script; deltas are small so no BigInt needed.
-                    const helper_body: []const u8 =
-                        "const a=new Uint32Array(ab);let s=0;for(let i=0;i<pairs;i++){" ++
-                        "const b=a[i*4+1]*4294967296+a[i*4];" ++
-                        "const e=a[i*4+3]*4294967296+a[i*4+2];s+=e-b;}return s/1e6;";
-                    const function_ctor: Value = global().get("Function");
-                    const ms_helper: Value = function_ctor.new(.{ str("ab"), str("pairs"), str(helper_body) });
-                    global().set("__zimrGpuMs", ms_helper);
-                }
-
-                // ---- the wasm import object ----
-                // The module links against three namespaces of host functions:
-                // `dom`, `wgpu`, and `wasi_snapshot_preview1`. Each is its own
-                // self-contained block that ends by attaching itself to `imports`.
-                const imports: Value = global().get("Object").new(.{});
-                {
-                    // dom: element/canvas verbs, input + pointer-lock, persistence,
-                    // and the text-overlay (a real <input> for the soft keyboard).
-                    const dom: Value = global().get("Object").new(.{});
-                    dom.set("create", func(&domCreate));
-                    dom.set("attach_body", func(&domAttachBody));
-                    dom.set("append", func(&domAppend));
-                    dom.set("set_text", func(&domSetText));
-                    dom.set("set_attr", func(&domSetAttr));
-                    dom.set("set_style", func(&domSetStyle));
-                    dom.set("css", func(&domCss));
-                    dom.set("remove", func(&domRemove));
-                    dom.set("listen", func(&domListen));
-                    dom.set("poll_event", func(&domPollEvent));
-                    dom.set("canvas_configure", func(&domCanvasConfigure));
-                    dom.set("canvas_size", func(&domCanvasSize));
-                    dom.set("js_log", funcNum(&ZimrWgpu.jsLog));
-                    dom.set("js_epoch_ms", funcNum(&ZimrWgpu.jsEpochMs));
-                    dom.set("js_tz_offset_min", funcNum(&ZimrWgpu.jsTzOffsetMin));
-                    dom.set("js_set_cursor_style", funcNum(&ZimrWgpu.jsSetCursorStyle));
-                    dom.set("js_set_mouse_cursor", funcNum(&ZimrWgpu.jsSetMouseCursor));
-                    dom.set("js_open_url", funcNum(&ZimrWgpu.jsOpenUrl));
-                    dom.set("js_set_clipboard_text", funcNum(&ZimrWgpu.jsSetClipboardText));
-                    dom.set("js_request_pointer_lock", funcNum(&ZimrWgpu.jsRequestPointerLock));
-                    dom.set("js_exit_pointer_lock", funcNum(&ZimrWgpu.jsExitPointerLock));
-                    dom.set("js_pointer_lock_active", funcNum(&ZimrWgpu.jsPointerLockActive));
-                    dom.set("js_persistence_save", funcNum(&ZimrWgpu.jsPersistenceSave));
-                    dom.set("js_persistence_size", funcNum(&ZimrWgpu.jsPersistenceSize));
-                    dom.set("js_persistence_read", funcNum(&ZimrWgpu.jsPersistenceRead));
-                    dom.set("js_persistence_remove", funcNum(&ZimrWgpu.jsPersistenceRemove));
-                    // User-supplied files: drag-and-drop plus the mobile file picker.
-                    dom.set("js_userfile_pending_count", funcNum(&ZimrBoot.ufPendingCount));
-                    dom.set("js_userfile_next_size", funcNum(&ZimrBoot.ufNextSize));
-                    dom.set("js_userfile_next_name", funcNum(&ZimrBoot.ufNextName));
-                    dom.set("js_userfile_read_next", funcNum(&ZimrBoot.ufReadNext));
-                    dom.set("js_userfile_discard_next", funcNum(&ZimrBoot.ufDiscardNext));
-                    dom.set("js_userfile_set_picker_rect", funcNum(&ZimrBoot.ufSetPickerRect));
-                    dom.set("js_userfile_hide_picker", funcNum(&ZimrBoot.ufHidePicker));
-                    dom.set("js_userfile_offer", funcNum(&ZimrBoot.ufOffer));
-                    dom.set("js_userfile_set_save_rect", funcNum(&ZimrBoot.ufSetSaveRect));
-                    dom.set("js_userfile_hide_save", funcNum(&ZimrBoot.ufHideSave));
-                    // WebSocket client (P2P signaling - see src/net.zig).
-                    dom.set("js_ws_open", funcNum(&ZimrWgpu.jsWsOpen));
-                    dom.set("js_ws_state", funcNum(&ZimrWgpu.jsWsState));
-                    dom.set("js_ws_send", funcNum(&ZimrWgpu.jsWsSend));
-                    dom.set("js_ws_poll", funcNum(&ZimrWgpu.jsWsPoll));
-                    dom.set("js_ws_close", funcNum(&ZimrWgpu.jsWsClose));
-                    dom.set("js_ws_origin_url", funcNum(&ZimrWgpu.jsWsOriginUrl));
-                    dom.set("js_rtc_create", funcNum(&ZimrWgpu.jsRtcCreate));
-                    dom.set("js_rtc_create_offer", funcNum(&ZimrWgpu.jsRtcCreateOffer));
-                    dom.set("js_rtc_set_remote", funcNum(&ZimrWgpu.jsRtcSetRemote));
-                    dom.set("js_rtc_add_ice", funcNum(&ZimrWgpu.jsRtcAddIce));
-                    dom.set("js_rtc_send", funcNum(&ZimrWgpu.jsRtcSend));
-                    dom.set("js_rtc_poll", funcNum(&ZimrWgpu.jsRtcPoll));
-                    dom.set("js_rtc_close", funcNum(&ZimrWgpu.jsRtcClose));
-                    // Text-input overlay host functions: a real <input> positioned
-                    // over the wasm-drawn widget (ported from src/web/zimr.ts). These
-                    // satisfy the imports editable-widget modules need AND make typing
-                    // + the mobile soft keyboard actually work.
-                    dom.set("js_show_overlay_input", func(&domShowOverlayInput));
-                    dom.set("js_hide_overlay_input", func(&domHideOverlayInput));
-                    dom.set("js_get_overlay_input_text", func(&domGetOverlayInputText));
-                    dom.set("js_overlay_input_is_visible", func(&domOverlayInputIsVisible));
-                    dom.set("js_update_overlay_input_rect", func(&domUpdateOverlayInputRect));
-                    dom.set("js_set_input_mode", func(&domSetInputMode));
-                    dom.set("js_set_overlay_input_allow_tab", func(&domSetOverlayInputAllowTab));
-                    dom.set("js_set_overlay_input_char_filters", func(&domSetOverlayInputCharFilters));
-                    dom.set("js_set_overlay_input_escape_clears", func(&domSetOverlayInputEscapeClears));
-                    dom.set("js_set_overlay_input_password", func(&domSetOverlayInputPassword));
-                    dom.set("js_set_overlay_input_read_only", func(&domSetOverlayInputReadOnly));
-                    // Textarea overlay: the multiline sibling of the <input> port,
-                    // backed by its own <textarea> singleton (g.overlay_ta).
-                    dom.set("js_show_overlay_textarea", func(&domShowOverlayTextarea));
-                    dom.set("js_hide_overlay_textarea", func(&domHideOverlayTextarea));
-                    dom.set("js_get_overlay_textarea_text", func(&domGetOverlayTextareaText));
-                    dom.set("js_overlay_textarea_is_visible", func(&domOverlayTextareaIsVisible));
-                    dom.set("js_update_overlay_textarea_rect", func(&domUpdateOverlayTextareaRect));
-                    dom.set("js_set_overlay_textarea_allow_tab", func(&domSetOverlayTextareaAllowTab));
-                    dom.set("js_set_overlay_textarea_char_filters", func(&domSetOverlayTextareaCharFilters));
-                    dom.set("js_set_overlay_textarea_escape_clears", func(&domSetOverlayTextareaEscapeClears));
-                    dom.set("js_set_overlay_textarea_read_only", func(&domSetOverlayTextareaReadOnly));
-                    dom.set(
-                        "js_set_overlay_textarea_ctrl_enter_for_newline",
-                        func(&domSetOverlayTextareaCtrlEnterForNewline),
-                    );
-                    // Crypto entropy for the null-seed RNG path (Frame.random).
-                    dom.set("js_crypto_random_fill", func(&domCryptoRandomFill));
-                    imports.set("dom", dom);
-                }
-                {
-                    // wgpu: the two clear/view verbs plus the full classic zimr
-                    // WebGPU surface installed by ZimrWgpu (Phase 3).
-                    const wgpu_ns: Value = global().get("Object").new(.{});
-                    wgpu_ns.set("current_view", func(&wgpuCurrentView));
-                    wgpu_ns.set("clear", func(&wgpuClear));
-                    ZimrWgpu.install(wgpu_ns);
-                    imports.set("wgpu", wgpu_ns);
-                }
-                {
-                    // audio: the WebAudio host. Without this the "audio" import is
-                    // undefined and EVERY audio example dies at instantiate.
-                    const audio_ns: Value = global().get("Object").new(.{});
-                    ZimrAudio.install(audio_ns);
-                    imports.set("audio", audio_ns);
-                }
-                {
-                    // jobs: the Web Worker pool behind `zimr.jobs`. The workers are NOT
-                    // spawned here - `available()` brings them up lazily on first use, so
-                    // an app that never submits a job never creates a thread.
-                    const jobs_ns: Value = global().get("Object").new(.{});
-                    ZimrJobs.install(jobs_ns);
-                    imports.set("jobs", jobs_ns);
-                }
-                {
-                    // wasi: the minimal WASI shim the wasm32-wasi target needs.
-                    const wasi: Value = global().get("Object").new(.{});
-                    ZimrWasi.install(wasi);
-                    imports.set("wasi_snapshot_preview1", wasi);
-                }
-
-                // ---- instantiate the module ----
-                // Two delivery paths, both yielding a promise of {module, instance}
-                // that stage 3 unwraps identically:
-                //   * standalone build: the page inlines the wasm as WASM_BYTES, so
-                //     instantiate directly from the bytes.
-                //   * served gallery page: only WASM_URL is set, so stream-compile
-                //     the sibling .wasm as it downloads (instantiateStreaming).
-                const inline_bytes: Value = global().get("WASM_BYTES");
-                const web_assembly: Value = global().get("WebAssembly");
-                var instantiate_promise: Value = undefined;
-                if (inline_bytes.isNull()) {
-                    const wasm_url: Value = global().get("WASM_URL");
-                    const fetch_response: Value = global().call("fetch", .{wasm_url});
-                    instantiate_promise = web_assembly.call("instantiateStreaming", .{ fetch_response, imports });
-                } else {
-                    instantiate_promise = web_assembly.call("instantiate", .{ inline_bytes, imports });
-                }
-                g.boot.pending_promise = js_promise_register(instantiate_promise.h);
-                g.boot.stage = 3;
-            },
-            // Stage 3 -> 4: the module instantiated. Pull its exports, start it
-            // under whichever contract it implements, then enter the run loop.
-            3 => {
-                // `v` is { module, instance }; we only need the instance's exports.
-                const instance: Value = v.get("instance");
-                g.boot.module_exports = instance.get("exports");
-
-                // Two app contracts, distinguished by which entry point is exported.
-                const page_main: Value = g.boot.module_exports.get("zimr_page_main");
-                if (page_main.isNull()) {
-                    // Classic zimr app (wasm32-wasi reactor): run its initializer
-                    // once now; update(dt) then drives from the rAF tick (stage 4).
-                    g.boot.classic_contract = true;
-                    const initialize: Value = g.boot.module_exports.get("_initialize");
-                    if (!initialize.isNull()) {
-                        _ = g.boot.module_exports.call("_initialize", .{});
-                    }
-                    // Wire DOM input only if this app actually owns a canvas.
-                    if (g.wgpu.have_canvas) {
-                        ZimrInput.install();
-                    }
-                    // Seed the frame clock so the first update(dt) gets a sane delta.
-                    const performance: Value = global().get("performance");
-                    g.boot.last_frame_ms = js_to_num(performance.call("now", .{}).h);
-                } else {
-                    // Page contract: zimr_page_main() sets everything up itself.
-                    _ = g.boot.module_exports.call("zimr_page_main", .{});
-                }
-                g.boot.stage = 4;
-            },
-            else => {},
-        }
+    fn install(ns: Value) void {
+        ns.set("js_audio_create_context", funcNum(&createContext));
+        ns.set("js_audio_close_context", funcNum(&closeContext));
+        ns.set("js_audio_resume_context", funcNum(&resumeContext));
+        ns.set("js_audio_get_sample_rate", funcNum(&getSampleRate));
+        ns.set("js_audio_get_current_time", funcNum(&getCurrentTime));
+        ns.set("js_audio_get_master_volume", funcNum(&getMasterVolume));
+        ns.set("js_audio_set_master_volume", funcNum(&setMasterVolume));
+        ns.set("js_audio_load_buffer", funcNum(&loadBuffer));
+        ns.set("js_audio_unload_buffer", funcNum(&unloadBuffer));
+        ns.set("js_audio_play_buffer", funcNum(&playBuffer));
+        ns.set("js_audio_play_buffer_at", funcNum(&playBufferAt));
+        ns.set("js_audio_play_buffer_with_offset", funcNum(&playBufferWithOffset));
+        ns.set("js_audio_stop_buffer", funcNum(&stopBuffer));
+        ns.set("js_audio_pause_buffer", funcNum(&pauseBuffer));
+        ns.set("js_audio_resume_buffer", funcNum(&resumeBuffer));
+        ns.set("js_audio_is_buffer_playing", funcNum(&isBufferPlaying));
+        ns.set("js_audio_decode_ogg_bytes", funcNum(&decodeOggBytes));
+        ns.set("js_audio_is_decode_ready", funcNum(&isDecodeReady));
+        ns.set("js_audio_take_decoded_buffer", funcNum(&takeDecodedBuffer));
+        ns.set("js_audio_cancel_decode", funcNum(&cancelDecode));
+        ns.set("js_audio_create_analyser", funcNum(&createAnalyser));
+        ns.set("js_audio_get_frequency_data", funcNum(&getFrequencyData));
+        ns.set("js_audio_destroy_analyser", funcNum(&destroyAnalyser));
     }
 };
 
-/// The bridge entry point, called once from the page's inline boot script. It
-/// sets up the reused JS singletons, decides whether there's a wasm module to
-/// run at all, and - if so - kicks off the adapter->device->instantiate->run
-/// pipeline by entering stage 1 and starting the rAF loop.
-export fn start() void {
-    // One-time JS singletons the bridge reuses on every frame: a UTF-8 decoder
-    // for reading wasm strings, the id->object maps backing WebGPU handles and
-    // canvas contexts, and the single rAF callback that drives the boot machine.
-    g.boot.utf8_decoder = global().get("TextDecoder").new(.{});
-    g.wgpu.objects = global().get("Map").new(.{});
-    g.audio.objects = global().get("Map").new(.{});
-    g.boot.canvas_contexts = global().get("Map").new(.{});
+// ===========================================================================
+// ZimrJobs - the Web Worker pool behind `zimr.jobs`.
+// ===========================================================================
 
-    // The job pool's containers are minted HERE, at boot, and not lazily inside
-    // `ZimrJobs.spawn` - because spawn() is first reached from inside a frame, and
-    // every handle minted during a frame is reclaimed by that frame's js_reset. A
-    // long-lived handle born inside the bracket is a DANGLING handle one frame later.
-    // (The workers themselves are still created lazily; they are held by these JS
-    // objects, so they need no handle of their own to survive.)
-    g.jobs.workers = global().get("Array").new(.{});
-    g.jobs.busy_with = global().get("Array").new(.{});
-    g.jobs.ready = global().get("Array").new(.{});
-    g.jobs.queue = global().get("Array").new(.{});
-    g.jobs.results = global().get("Map").new(.{});
-    g.jobs.abandoned = global().get("Set").new(.{});
-    g.jobs.kernel_errors = global().get("Map").new(.{});
-    g.boot.tick_callback = func(&ZimrBoot.tick);
-
-    // "bridge-hello" mode: the page loaded the bridge but ships no module to run
-    // (neither inlined WASM_BYTES nor a streamable WASM_URL). Nothing else to do.
-    const have_inline_bytes: bool = !global().get("WASM_BYTES").isNull();
-    const have_wasm_url: bool = !global().get("WASM_URL").isNull();
-    if (!have_inline_bytes and !have_wasm_url) {
-        ZimrBoot.note("zimr bridge: mechanism online; no WASM_BYTES/WASM_URL on this page (bridge-hello mode).");
-        return;
+//
+// WHAT A WEB WORKER IS, for anyone who has not met one.
+//
+// A Web Worker is a second JavaScript thread. It shares NOTHING with the page: not a
+// variable, not the DOM, not the canvas, not WebGPU. The only way to speak to it is
+// `postMessage(value)`, and the value is COPIED across the boundary - except for an
+// ArrayBuffer listed as "transferable", which is handed over wholesale and DETACHED
+// from the sender. A transfer is O(1) no matter how big the buffer is.
+//
+// Two consequences shape everything below:
+//
+//   1. A worker cannot run the app's wasm. It has no WebGPU and no DOM, so 96 of the
+//      app's imports would be missing. Instead each worker instantiates its own copy
+//      of a SEPARATE, freestanding kernel wasm (~19 KB) with ZERO imports - nothing to
+//      stub, and only ~1 MB of linear memory per worker.
+//   2. There is no shared memory. `SharedArrayBuffer` requires cross-origin isolation
+//      headers (COOP/COEP) that a downloaded standalone page does not have - this was
+//      MEASURED on-device (crossOriginIsolated: false), not assumed. So every job's
+//      bytes are copied in, and the result is transferred back.
+//
+// WHY THE APP NEVER BLOCKS. `submit` posts a message and returns a handle immediately.
+// The worker's reply lands in `results` whenever it lands. `poll` just looks in that
+// map. The app never waits on anything: it asks once a frame and gets on with drawing.
+//
+// IF WORKERS ARE UNAVAILABLE - `new Worker()` THROWS inside a sandboxed iframe (the
+// Claude artifact preview is one) - then `available()` reports 0 and `src/jobs.zig`
+// runs the kernel inline on the main thread instead. The app is none the wiser; it
+// just hitches, exactly as it would have if it had never used jobs.
+const ZimrJobs = struct {
+    /// The worker's own program is no longer HERE, and that is the point.
+    ///
+    /// It is `src/jobs_worker.zig` - a Zig program, compiled to JavaScript by the same
+    /// `build-obj -ofmt=c` -> c2js path that produces this file - and the page carries it as
+    /// `window.ZIMR_WORKER_JS`, exactly as it carries `ZIMR_KERNEL_WASM`.
+    ///
+    /// What used to be here was ~40 lines of hand-written JavaScript in a Zig string. It was
+    /// the ONLY hand-written JS in the engine and it produced the two worst bugs in the jobs
+    /// system: an ABI spelled twice with nothing checking the two spellings agreed, and an
+    /// `async` handler whose `await` let a job re-enter before the kernel wasm had finished
+    /// instantiating (sixteen tiles submitted on one frame, none ever returned, no error).
+    ///
+    /// Neither is writable now. The ABI is a `pub const` both sides read, and there is no
+    /// `await` in Zig to reach for.
+    fn workerProgram() Value {
+        return global().get("ZIMR_WORKER_JS");
     }
 
-    // The pipeline needs a WebGPU adapter first. If the browser exposes no
-    // WebGPU at all, stop here with a clear message rather than failing deeper.
-    const navigator: Value = (Value{ .h = js_global() }).get("navigator");
-    const gpu: Value = navigator.get("gpu");
-    if (gpu.isNull()) {
-        ZimrBoot.note("zimr: WebGPU is not available in this browser.");
-        return;
+    /// `new Worker(url)`, but survivable. In a sandboxed iframe (the Claude artifact
+    /// preview is one) the blob: URL has an opaque origin and the constructor throws a
+    /// SecurityError. That is not an error condition for us - it just means no workers,
+    /// so `jobs.zig` runs kernels inline instead. Returns a null Value on refusal.
+    fn tryNewWorker(url: Value) Value {
+        return .{ .h = js_try_new1(global().get("Worker").h, url.h) };
     }
 
-    // Enter stage 1: request the adapter and start the loop. tick() polls this
-    // promise and calls advance() once it resolves.
-    const adapter_promise: Value = gpu.call("requestAdapter", .{});
-    g.boot.pending_promise = js_promise_register(adapter_promise.h);
-    g.boot.stage = 1;
-    requestAnimationFrame(g.boot.tick_callback);
-}
+    /// Bring the pool up on first use. Called from `available()`, so an app that never
+    /// submits a job never spawns a thread.
+    fn spawn() void {
+        if (g.jobs.spawned) {
+            return;
+        }
+        g.jobs.spawned = true; // whatever happens, only try once
+
+        // The kernel wasm is inlined into the page by the build (base64 -> Uint8Array).
+        // No kernels in this example? Then there is nothing to run and no pool.
+        const kernel_wasm: Value = global().get("ZIMR_KERNEL_WASM");
+        if (kernel_wasm.isNull()) {
+            return;
+        }
+
+        // How many? `hardwareConcurrency` is the core count. We take half, and never more
+        // than 4: this pool exists to move work OFF the main thread, not to chase
+        // throughput (measured: 8 workers give only ~3.4x aggregate on a phone, and a hot
+        // CPU throttles the GPU - which for a renderer is a bad trade).
+        //
+        // The clamp is written POSITIVELY. `hardwareConcurrency` is absent on some
+        // browsers, `getNum` reads that back as NaN, and `NaN < 2` is FALSE - so
+        // `if (cores < 2) cores = 2;` would leave NaN in place and `@trunc(NaN / 2)` into
+        // a u32 is illegal behaviour. Asking `>= 2` instead makes the missing case fall
+        // into the default, which is what a default is for.
+        const reported: f64 = global().get("navigator").getNum("hardwareConcurrency");
+        const cores: f64 = if (reported >= 2) reported else 2;
+        var want: u32 = @trunc(cores / 2);
+        if (want < 1) {
+            want = 1;
+        }
+        if (want > 4) {
+            want = 4;
+        }
+
+        // (workers / busy_with / queue / results were minted at boot - see start().)
+
+        // A Worker normally loads its program from a URL. We have no separate .js file
+        // (the whole app is ONE html file), so we wrap the source in a Blob and hand
+        // out an object URL for it. This is also the step that THROWS in a sandboxed
+        // iframe, because a blob: URL there has an opaque origin.
+        // The program is `src/jobs_worker.zig`, compiled to JS by c2js and injected into the
+        // page as `window.ZIMR_WORKER_JS`. Its last line calls its own `start()`, which
+        // registers the message handler - everything after that happens because the browser
+        // delivers a message.
+        const parts: Value = global().get("Array").new(.{});
+        _ = parts.call("push", .{workerProgram()});
+        _ = parts.call("push", .{str("\n;start();\n")});
+        const opts: Value = global().get("Object").new(.{});
+        opts.set("type", str("text/javascript"));
+        const blob: Value = global().get("Blob").new(.{ parts, opts });
+        const url: Value = global().get("URL").call("createObjectURL", .{blob});
+
+        var i: u32 = 0;
+        while (i < want) : (i += 1) {
+            const w: Value = tryNewWorker(url);
+            if (w.isNull()) {
+                // Refused - a sandboxed iframe forbids blob: workers. Any workers we
+                // already started are real OS threads: kill them before giving up, or
+                // they idle forever holding a wasm instance each.
+                var k: u32 = 0;
+                const started: u32 = g.jobs.workers.getU32("length");
+                while (k < started) : (k += 1) {
+                    _ = g.jobs.workers.at(k).call("terminate", .{});
+                }
+                _ = g.jobs.workers.call("splice", .{ num(0), num(@floatFromInt(started)) });
+                _ = g.jobs.busy_with.call("splice", .{ num(0), num(@floatFromInt(started)) });
+                g.jobs.usable = false;
+                return;
+            }
+            w.set("onmessage", func(&onWorkerMessage).call("bind", .{ num(0), num(@floatFromInt(i)) }));
+            _ = g.jobs.workers.call("push", .{w});
+            _ = g.jobs.busy_with.call("push", .{num(0)});
+            _ = g.jobs.ready.call("push", .{num(0)}); // not until it says so
+
+            // Give the worker its program: a private COPY of the kernel wasm bytes.
+            const msg: Value = global().get("Object").new(.{});
+            msg.set("t", str("init"));
+            msg.set("wasm", kernel_wasm);
+            _ = w.call("postMessage", .{msg});
+        }
+        g.jobs.usable = true;
+    }
+
+    /// Is a boolean-ish JS field SET?
+    ///
+    /// This exists because `getNum` on an ABSENT field yields NaN, and NaN fails every
+    /// comparison - so `if (v.getNum("failed") != 0)` is TRUE when the field is missing.
+    /// That is not a hypothetical: it shipped. A successful job sends no `failed` field,
+    /// so every success took the failure branch. The test must be POSITIVE, and asking it
+    /// through a named helper means nobody has to remember why.
+    fn flagSet(v: Value, comptime name: []const u8) bool {
+        return v.getNum(name) >= 1;
+    }
+
+    /// A worker replied. Record the result under its handle and give that worker the next
+    /// queued job.
+    ///
+    /// This runs from a postMessage event, which fires OUTSIDE the frame's
+    /// js_mark/js_reset bracket - so it must open its own handle scope or it leaks one
+    /// handle per job, forever. (`onKeyDown` has the same problem and the same fix.) The
+    /// result survives the reset because the JS Map holds the OBJECT; only the
+    /// handle-table slot is reclaimed.
+    fn onWorkerMessage(worker_idx_h: Handle, event_h: Handle) void {
+        const m: Handle = js_mark();
+        defer js_reset(m);
+
+        const data: Value = (Value{ .h = event_h }).get("data");
+
+        // The 'ready' handshake carries no handle, so `handle` reads back as NaN. NaN
+        // fails EVERY comparison - including `== 0` - so test for a real handle
+        // positively. Same trap as `flagSet` above; same answer.
+        const handle: f64 = data.getNum("handle");
+        if (!(handle >= 1)) {
+            // ...and THIS is the handshake. It used to be dropped on the floor here, which
+            // meant nothing ever knew a worker had finished instantiating, and `pump()`
+            // would post jobs to a worker whose `ex` was still undefined. They threw inside
+            // the worker and were never heard from again.
+            const slot_r: u32 = @trunc(js_to_num(worker_idx_h));
+            g.jobs.ready.setAt(slot_r, num(1));
+            pump(); // anything queued while it was booting can go now
+            return;
+        }
+
+        // Did the owner give up while this was in flight (Job.deinit)? Then throw the
+        // result away instead of parking a multi-megabyte Uint8Array in the Map that
+        // nobody will ever come back for.
+        if (js_to_num(g.jobs.abandoned.call("has", .{num(handle)}).h) != 0) {
+            _ = g.jobs.abandoned.call("delete", .{num(handle)});
+        } else if (flagSet(data, "failed")) {
+            // -2 = "the kernel failed", distinct from -1 = "still running". An error
+            // cannot cross the wasm boundary as a value, so log its NAME here - on the
+            // page overlay, which is the only console a phone has.
+            //
+            // Two ARGUMENTS, not a concatenation: `String.concat` is not a function.
+            // `concat` lives on String.PROTOTYPE, so it exists on a string INSTANCE and
+            // not on the String constructor - and `console.error` takes varargs anyway,
+            // which is both simpler and impossible to get wrong.
+            _ = global().get("console").call("error", .{
+                str("zimr.jobs: kernel failed:"),
+                data.get("err"),
+            });
+            _ = g.jobs.results.call("set", .{ num(handle), num(-2) });
+            // ...and KEEP the name, so `Job.errorName()` can hand it back to the app. It is
+            // the difference between "KernelFailed" and "ShortPayload" on a phone screen.
+            _ = g.jobs.kernel_errors.call("set", .{ num(handle), data.get("err") });
+        } else {
+            const bytes: Value = global().get("Uint8Array").new(.{data.get("result")});
+            _ = g.jobs.results.call("set", .{ num(handle), bytes });
+        }
+
+        const slot: u32 = @trunc(js_to_num(worker_idx_h));
+        g.jobs.busy_with.setAt(slot, num(0)); // this worker is free again
+        pump();
+    }
+
+    /// Hand queued jobs to idle workers until one or the other runs out.
+    fn pump() void {
+        var i: u32 = 0;
+        const n: u32 = g.jobs.workers.getU32("length");
+        while (i < n) : (i += 1) {
+            if (g.jobs.queue.getU32("length") == 0) {
+                return;
+            }
+            // NOT READY = NOT ELIGIBLE. Written positively (`>= 1`), because `getNum` on an
+            // absent element yields NaN and NaN fails every comparison - so `!= 1` would be
+            // TRUE for a missing entry and we would be right back where we started.
+            if (!(js_to_num(g.jobs.ready.at(i).h) >= 1)) {
+                continue;
+            }
+            if (g.jobs.busy_with.at(i).isNull()) {
+                continue;
+            }
+            if (js_to_num(g.jobs.busy_with.at(i).h) != 0) {
+                continue; // busy
+            }
+            const job: Value = g.jobs.queue.call("shift", .{});
+            const handle: f64 = job.getNum("handle");
+            g.jobs.busy_with.setAt(i, num(handle));
+
+            const msg: Value = global().get("Object").new(.{});
+            msg.set("t", str("job"));
+            msg.set("handle", num(handle));
+            msg.set("kernel", job.get("kernel"));
+            msg.set("bytes", job.get("bytes"));
+
+            // TRANSFER the payload rather than let postMessage structured-CLONE it.
+            // A transfer hands the ArrayBuffer over and detaches it here: O(1), however
+            // many megabytes it holds. Cloning a 4 MB image every job would undo much of
+            // the point of moving the work off-thread in the first place.
+            const transfer: Value = global().get("Array").new(.{});
+            _ = transfer.call("push", .{job.get("bytes")});
+            _ = g.jobs.workers.at(i).call("postMessage", .{ msg, transfer });
+        }
+    }
+
+    // ---- the four functions the wasm imports -------------------------------
+
+    /// Is a real pool behind this? `src/jobs.zig` asks BEFORE staging a job, and runs
+    /// the kernel inline if the answer is no.
+    fn available() f64 {
+        spawn();
+        return if (g.jobs.usable) 1 else 0;
+    }
+
+    /// Copy `len` bytes of header++payload out of the APP's wasm memory and queue them.
+    /// Returns a handle, or 0 if we could not take the job.
+    ///
+    /// The copy is not optional: the bytes live in the app's linear memory, which the
+    /// worker cannot see, and which may be resized (and thus detached) at any moment.
+    /// Take a job's HEADER and PAYLOAD SEPARATELY and join them into the single buffer that
+    /// crosses to the worker.
+    ///
+    /// The header and payload used to arrive already joined, because `jobs.zig` allocated a
+    /// `staged` buffer and memcpy'd both into it. That allocation was a MULTI-MEGABYTE
+    /// `gpa.alloc` on every single dispatch, in the frame path - precisely the mistake that
+    /// cost `Job.poll` 154 ms on the landing frame, still live on the input side.
+    ///
+    /// It bought nothing. This function has to allocate a JS-owned buffer anyway (the one it
+    /// transfers to the worker), so it can do the joining while it copies. Two copies of the
+    /// payload became one, and a per-dispatch megabyte allocation became zero.
+    fn submit(
+        name_ptr: f64,
+        name_len: f64,
+        header_ptr: f64,
+        header_len: f64,
+        payload_ptr: f64,
+        payload_len: f64,
+    ) f64 {
+        if (!g.jobs.usable) {
+            return 0;
+        }
+
+        // VIEWS on the app's wasm heap - free, and valid only until the next allocation.
+        const header_view: Value = ZimrWgpu.modBytes(header_ptr, header_len);
+        const payload_view: Value = ZimrWgpu.modBytes(payload_ptr, payload_len);
+
+        // The one buffer that crosses. It is JS-owned because it gets TRANSFERRED to the
+        // worker, which detaches it - we must not hand over a view of our own heap.
+        const total_len: f64 = header_len + payload_len;
+        const joined: Value = global().get("Uint8Array").new(.{num(total_len)});
+        _ = joined.call("set", .{header_view}); // header at offset 0
+        _ = joined.call("set", .{ payload_view, num(header_len) }); // payload right after it
+
+        const handle: u32 = g.jobs.next_handle;
+        g.jobs.next_handle += 1;
+
+        const job: Value = global().get("Object").new(.{});
+        job.set("handle", num(@floatFromInt(handle)));
+        job.set("kernel", ZimrWgpu.modString(name_ptr, name_len)); // the kernel's NAME
+        job.set("bytes", joined.get("buffer"));
+        _ = g.jobs.queue.call("push", .{job});
+
+        pump();
+        return @floatFromInt(handle);
+    }
+
+    /// -1 while it runs, >= 0 = the result's byte length, -2 = the kernel failed.
+    ///
+    /// NEVER COERCE `r` TO A NUMBER HERE. The map holds either the result (a Uint8Array) or
+    /// the number -2 (the kernel failed). Asking `Number(r)` to tell those apart looks free
+    /// and is not: on the success path `r` is the RESULT - 2.7 MB for a 1024x1024 PNG - and
+    /// JS coerces a TypedArray to a number via `toString()`, which builds a string of 2.7
+    /// MILLION comma-separated integers (~10 MB of text), parses it to NaN, and throws it
+    /// away.
+    ///
+    /// Measured on a phone: **95 ms**, every landing frame, to evaluate a failure flag. The
+    /// worker had already given the frame back; this took it away again. It is the reason
+    /// `worker_png` appeared to "hitch anyway" and nearly cost the jobs system its case.
+    ///
+    /// Ask `typeof` instead. A number is the failure marker; anything else is the result, and
+    /// its `.length` is the byte count.
+    fn poll(handle: f64) f64 {
+        if (!g.jobs.usable) {
+            return -1;
+        }
+        const r: Value = g.jobs.results.call("get", .{num(handle)});
+        if (r.isNull()) {
+            return -1; // still queued or still running
+        }
+        // `Number.isFinite` does NOT coerce its argument: it is false for anything that is
+        // not already a number. So it separates the failure marker (-2) from the result
+        // (a Uint8Array) without ever asking the array what it looks like as a string.
+        const is_num: bool = global().get("Number").call("isFinite", .{r}).truthy();
+        if (is_num) {
+            return -2; // the failure marker - the only number we ever store
+        }
+        return r.getNum("length"); // a Uint8Array: O(1), no coercion, no 10 MB string
+    }
+
+    /// Copy the finished result INTO the app's wasm memory at `dst`, and retire it.
+    fn take(handle: f64, dst: f64, cap: f64) f64 {
+        const r: Value = g.jobs.results.call("get", .{num(handle)});
+        if (r.isNull()) {
+            return 0;
+        }
+        var n: f64 = r.getNum("length");
+        if (n > cap) {
+            n = cap;
+        }
+        const view: Value = ZimrWgpu.modBytes(dst, n);
+        _ = view.call("set", .{r.call("subarray", .{ num(0), num(n) })});
+        _ = g.jobs.results.call("delete", .{num(handle)});
+        return n;
+    }
+
+    /// The owner is done with this job and will never collect it - because it failed,
+    /// or because the app dropped the handle (`Job.deinit` on an in-flight job).
+    ///
+    /// Drop any result we are already holding, and remember the handle so that a reply
+    /// still in flight is discarded on arrival rather than retained forever. Without
+    /// this, abandoning a job leaks its entire result buffer for the life of the page.
+    /// The owner gave up on this job (`Job.deinit`, or a `Group` being torn down).
+    ///
+    /// A cancelled job is in exactly one of three places, and each needs different treatment:
+    ///
+    ///   STILL QUEUED, never dispatched.
+    ///       Take it OUT of the queue. This used to be skipped, and it was not merely wasted
+    ///       work - it was wasted work that DELAYED THE LIVE WORK BEHIND IT. `rt_workers`
+    ///       re-renders on every frame the camera moves, cancelling sixteen tiles and
+    ///       submitting sixteen more; the dead ones stayed queued AHEAD of the new ones, so a
+    ///       one-second drag left the pool grinding through hundreds of tiles for camera
+    ///       positions the user had already left. Splicing it out is the whole fix.
+    ///
+    ///   RUNNING on a worker.
+    ///       We cannot stop it - a worker runs one job to completion and there is no way to
+    ///       interrupt wasm mid-call. Mark the handle abandoned so the eventual reply is
+    ///       thrown away instead of parking a multi-megabyte result in the map that nobody
+    ///       will ever collect.
+    ///
+    ///   ALREADY FINISHED, result sitting in the map.
+    ///       Delete it. Same reason.
+    ///
+    /// Note what this buys beyond speed: `abandoned` is now BOUNDED by the number of jobs
+    /// actually in flight. Before, a handle cancelled while queued was added to the set, then
+    /// dispatched anyway, and only removed when its reply arrived - so the set tracked every
+    /// cancellation the page had ever made. Now a queued job leaves no trace at all, because
+    /// no reply will ever come for it.
+    fn cancel(handle: f64) void {
+        if (handle == 0) {
+            return;
+        }
+
+        // Already finished? Drop the result, and the failure name with it.
+        _ = g.jobs.results.call("delete", .{num(handle)});
+        _ = g.jobs.kernel_errors.call("delete", .{num(handle)});
+
+        // Still queued? Remove it, and we are done - no worker will ever touch it, so no
+        // reply will ever arrive, so there is nothing to abandon.
+        const queued_count: u32 = g.jobs.queue.getU32("length");
+        var queue_index: u32 = 0;
+        while (queue_index < queued_count) : (queue_index += 1) {
+            const queued_job: Value = g.jobs.queue.at(queue_index);
+            const queued_handle: f64 = queued_job.getNum("handle");
+            if (queued_handle == handle) {
+                _ = g.jobs.queue.call("splice", .{ num(@floatFromInt(queue_index)), num(1) });
+                return;
+            }
+        }
+
+        // Not queued, so it is either running on a worker right now or its reply is already in
+        // flight. Either way a `done` message is coming for a job nobody wants.
+        _ = g.jobs.abandoned.call("add", .{num(handle)});
+    }
+
+    /// Copy the failed kernel's error NAME into `dst`, and return how many bytes it wrote.
+    /// Zero if this handle has no recorded failure.
+    fn errorName(handle: f64, dst: f64, cap: f64) f64 {
+        const name: Value = g.jobs.kernel_errors.call("get", .{num(handle)});
+        if (name.isNull()) {
+            return 0;
+        }
+
+        // TextEncoder.encodeInto writes UTF-8 straight into our wasm memory and reports how
+        // much fitted - no intermediate array, and no way to overrun `cap`.
+        const encoder: Value = global().get("TextEncoder").new(.{});
+        const view: Value = ZimrWgpu.modBytes(dst, cap);
+        const stats: Value = encoder.call("encodeInto", .{ name, view });
+        return stats.getNum("written");
+    }
+
+    fn install(ns: Value) void {
+        ns.set("js_jobs_available", funcNum(&available));
+        ns.set("js_jobs_error_name", funcNum(&errorName));
+        ns.set("js_jobs_submit", funcNum(&submit));
+        ns.set("js_jobs_poll", funcNum(&poll));
+        ns.set("js_jobs_take", funcNum(&take));
+        ns.set("js_jobs_cancel", funcNum(&cancel));
+    }
+};
+
+// ===========================================================================
+// css - type-safe, runtime-mutable styling authored in Zig. Folded in here so
+// the bridge reaches it as `js.css.rule(...)` with no extra module to wire.
+// (Full design notes are inside the struct.)
+// ===========================================================================
 
 pub const css = struct {
     // css.zig - type-safe, runtime-mutable styling, authored in Zig.
@@ -4752,13 +6322,14 @@ pub const css = struct {
         }
     };
 
-    // Lazily-created default sheet. A `?Sheet` global initializes to null and is
-    // created on first use - the transpiler honours optional/bool static init.
+    // Lazily-created default sheet. The global keeps only the CSSStyleSheet's handle (a `?Value`,
+    // so the page state needs nothing from this namespace); it initializes to null and is created
+    // on first use - the transpiler honours optional/bool static init.
     fn defaultSheet() Sheet {
         if (g.default_sheet == null) {
-            g.default_sheet = Sheet.create();
+            g.default_sheet = Sheet.create().j;
         }
-        return g.default_sheet.?;
+        return .{ .j = g.default_sheet.? };
     }
 
     /// Add a static rule to the default sheet - the common case (define and forget,
@@ -4827,1823 +6398,6 @@ pub const css = struct {
 };
 
 // ===========================================================================
-// ZimrAudio - the "audio" wasm import namespace (WebAudio).
-//
-// The Zig engine has declared `extern "audio" fn js_audio_*` (src/web.zig) since
-// the SFX subsystem landed, and the smoke harness stubs them - but NOTHING ever
-// provided them to a browser. `imports` carried only dom / wgpu / wasi / env, so
-// every audio example died at `WebAssembly.instantiate` with
-// "Import 'audio': module is not an object or function". It was invisible
-// in-sandbox precisely because smoke supplies the import that the browser lacks.
-//
-// This is that host, ported from the pre-wgpu TypeScript bridge (`src/web/zimr.ts`
-// in the old tree) - same object graph, same id discipline, same semantics - but
-// written in Zig and transpiled to JS by c2js, so the page has ONE host language.
-//
-// The object graph per voice mirrors the TS exactly:
-//     BufferSource -> Gain (volume) -> StereoPanner (pan) -> masterGain -> destination
-//
-// Records (context / source / decode) are plain JS objects kept in one Map, so
-// `pause` can rebuild a source later: a stopped AudioBufferSourceNode is NOT
-// restartable - Web Audio makes them one-shot - so `resume` constructs a fresh
-// node and starts it at the saved offset. That single fact is why a source record
-// exists at all.
-// ===========================================================================
-const ZimrAudio = struct {
-    /// Local clamp - bridge.zig deliberately has no zimrmath dependency (it is the
-    /// HOST, compiled to JS, not engine code).
-    fn clampF(v: f64, lo: f64, hi: f64) f64 {
-        if (v < lo) {
-            return lo;
-        }
-        if (v > hi) {
-            return hi;
-        }
-        return v;
-    }
-
-    fn insert(v: Value) f64 {
-        const id: u32 = g.audio.next_id;
-        g.audio.next_id += 1;
-        const idf: f64 = @floatFromInt(id);
-        _ = g.audio.objects.call("set", .{ num(idf), v });
-        return idf;
-    }
-    fn lookup(id: f64) Value {
-        if (id <= 0) {
-            return .{ .h = 0 };
-        }
-        return g.audio.objects.call("get", .{num(id)});
-    }
-    fn drop(id: f64) void {
-        _ = g.audio.objects.call("delete", .{num(id)});
-    }
-
-    // ---- context ----------------------------------------------------------
-
-    fn createContext() f64 {
-        // Safari still only ships the prefixed constructor.
-        var ctor: Value = global().get("AudioContext");
-        if (ctor.isNull()) {
-            ctor = global().get("webkitAudioContext");
-        }
-        if (ctor.isNull()) {
-            return 0;
-        }
-        const ctx: Value = ctor.new(.{});
-        if (ctx.isNull()) {
-            return 0;
-        }
-        const master: Value = ctx.call("createGain", .{});
-        master.get("gain").set("value", 1.0);
-        _ = master.call("connect", .{ctx.get("destination")});
-
-        const rec: Value = global().get("Object").new(.{});
-        rec.set("ctx", ctx);
-        rec.set("master", master);
-        return insert(rec);
-    }
-
-    fn closeContext(ctx_id: f64) void {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return;
-        }
-        _ = rec.get("ctx").call("close", .{});
-        drop(ctx_id);
-    }
-
-    /// Browsers start an AudioContext SUSPENDED until a user gesture; the engine
-    /// calls this from its input handler, so the first tap unlocks sound.
-    fn resumeContext(ctx_id: f64) void {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return;
-        }
-        _ = rec.get("ctx").call("resume", .{});
-    }
-
-    fn getSampleRate(ctx_id: f64) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        return rec.get("ctx").getNum("sampleRate");
-    }
-
-    fn getCurrentTime(ctx_id: f64) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        return rec.get("ctx").getNum("currentTime");
-    }
-
-    fn getMasterVolume(ctx_id: f64) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        return rec.get("master").get("gain").getNum("value");
-    }
-
-    fn setMasterVolume(ctx_id: f64, v: f64) void {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return;
-        }
-        rec.get("master").get("gain").set("value", v);
-    }
-
-    // ---- buffers ----------------------------------------------------------
-
-    /// Upload INTERLEAVED f32 PCM from wasm memory as an AudioBuffer.
-    ///
-    /// The Float32Array is a VIEW over the wasm heap, so it must be copied before
-    /// it reaches Web Audio: the heap can move when it grows, and `copyToChannel`
-    /// must not alias it. Mono takes a one-call fast path; multi-channel has to be
-    /// de-interleaved, since Web Audio stores planar channels and JS has no
-    /// strided typed-array view.
-    fn loadBuffer(
-        ctx_id: f64,
-        sample_rate: f64,
-        channels: f64,
-        frame_count: f64,
-        data_ptr: f64,
-        data_len: f64,
-    ) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        if (frame_count <= 0 or channels < 1 or channels > 32) {
-            return 0;
-        }
-        if (data_len != frame_count * channels) {
-            return 0; // the caller's own arithmetic disagrees - refuse rather than read garbage
-        }
-        const ctx: Value = rec.get("ctx");
-
-        const mem: Value = g.boot.module_exports.get("memory").get("buffer");
-        const view: Value = global().get("Float32Array").new(.{ mem, num(data_ptr), num(data_len) });
-        const src: Value = view.call("slice", .{}); // detach from the wasm heap
-
-        const buf: Value = ctx.call("createBuffer", .{ num(channels), num(frame_count), num(sample_rate) });
-        if (buf.isNull()) {
-            return 0;
-        }
-
-        const chans: u32 = @trunc(channels);
-        const frames: u32 = @trunc(frame_count);
-        if (chans == 1) {
-            _ = buf.call("copyToChannel", .{ src, num(0), num(0) });
-            return insert(buf);
-        }
-        var c: u32 = 0;
-        while (c < chans) : (c += 1) {
-            const plane: Value = global().get("Float32Array").new(.{num(frame_count)});
-            var f: u32 = 0;
-            while (f < frames) : (f += 1) {
-                plane.setAt(f, src.at(f * chans + c));
-            }
-            _ = buf.call("copyToChannel", .{ plane, num(@floatFromInt(c)), num(0) });
-        }
-        return insert(buf);
-    }
-
-    fn unloadBuffer(_: f64, buffer_id: f64) void {
-        drop(buffer_id);
-    }
-
-    // ---- sources ----------------------------------------------------------
-
-    /// Build and start one voice. `when == 0` means "now"; `offset` seeks into the
-    /// buffer (that's what makes `resume` work).
-    fn startSource(
-        ctx_id: f64,
-        buffer_id: f64,
-        volume: f64,
-        pitch: f64,
-        pan: f64,
-        looping: bool,
-        when: f64,
-        offset: f64,
-    ) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        const buf: Value = lookup(buffer_id);
-        if (buf.isNull()) {
-            return 0;
-        }
-        const ctx: Value = rec.get("ctx");
-
-        const node: Value = ctx.call("createBufferSource", .{});
-        node.set("buffer", buf);
-        node.get("playbackRate").set("value", pitch);
-        node.set("loop", looping);
-
-        const gain: Value = ctx.call("createGain", .{});
-        gain.get("gain").set("value", volume);
-        const panner: Value = ctx.call("createStereoPanner", .{});
-        panner.get("pan").set("value", pan);
-
-        _ = node.call("connect", .{gain});
-        _ = gain.call("connect", .{panner});
-        _ = panner.call("connect", .{rec.get("master")});
-
-        const dur: f64 = buf.getNum("duration");
-        const off: f64 = clampF(offset, 0.0, dur);
-
-        const src_rec: Value = global().get("Object").new(.{});
-        src_rec.set("ctxId", ctx_id);
-        src_rec.set("node", node);
-        src_rec.set("gain", gain);
-        src_rec.set("buffer", buf);
-        src_rec.set("pitch", pitch);
-        src_rec.set("looping", looping);
-        src_rec.set("startedAt", if (when > 0) when else ctx.getNum("currentTime"));
-        src_rec.set("pausedOffset", off);
-        src_rec.set("playing", 1);
-
-        const id: f64 = insert(src_rec);
-
-        // No closures in Zig->JS: bind the source id into the handler instead.
-        // `onended` also fires on an explicit stop(), so the handler re-checks the
-        // record - a paused voice already cleared `playing` and must SURVIVE, or
-        // resume would have nothing to rebuild from.
-        node.set("onended", func(&onSourceEnded).call("bind", .{ num(0), num(id) }));
-        _ = node.call("start", .{ num(when), num(off) });
-        return id;
-    }
-
-    fn onSourceEnded(id_h: Handle) void {
-        const id: f64 = js_to_num(id_h);
-        const rec: Value = lookup(id);
-        if (rec.isNull()) {
-            return;
-        }
-        if (rec.getNum("playing") == 0) {
-            return; // paused deliberately - keep the record for resume
-        }
-        rec.set("playing", 0);
-        drop(id); // played to its end: the voice is spent
-    }
-
-    fn playBuffer(
-        ctx_id: f64,
-        buffer_id: f64,
-        volume: f64,
-        pitch: f64,
-        pan: f64,
-        looping: f64,
-    ) f64 {
-        return startSource(ctx_id, buffer_id, volume, pitch, pan, looping != 0, 0, 0);
-    }
-
-    fn playBufferAt(
-        ctx_id: f64,
-        buffer_id: f64,
-        volume: f64,
-        pitch: f64,
-        pan: f64,
-        when: f64,
-    ) f64 {
-        return startSource(ctx_id, buffer_id, volume, pitch, pan, false, when, 0);
-    }
-
-    fn playBufferWithOffset(
-        ctx_id: f64,
-        buffer_id: f64,
-        volume: f64,
-        pitch: f64,
-        pan: f64,
-        looping: f64,
-        offset: f64,
-    ) f64 {
-        return startSource(ctx_id, buffer_id, volume, pitch, pan, looping != 0, 0, offset);
-    }
-
-    fn stopBuffer(_: f64, source_id: f64) void {
-        const rec: Value = lookup(source_id);
-        if (rec.isNull()) {
-            return;
-        }
-        const node: Value = rec.get("node");
-        if (!node.isNull()) {
-            _ = node.call("stop", .{});
-            _ = node.call("disconnect", .{});
-        }
-        drop(source_id);
-    }
-
-    /// Web Audio source nodes are ONE-SHOT - a stopped node can never restart. So
-    /// pause banks the play position and throws the node away; `resume` builds a
-    /// new one at that offset. Elapsed time is scaled by pitch, because
-    /// playbackRate stretches wall-clock against buffer-time.
-    fn pauseBuffer(_: f64, source_id: f64) void {
-        const rec: Value = lookup(source_id);
-        if (rec.isNull() or rec.getNum("playing") == 0) {
-            return;
-        }
-        const ctx_rec: Value = lookup(rec.getNum("ctxId"));
-        if (ctx_rec.isNull()) {
-            return;
-        }
-        const t_now: f64 = ctx_rec.get("ctx").getNum("currentTime");
-        const elapsed: f64 = (t_now - rec.getNum("startedAt")) * rec.getNum("pitch");
-        const dur: f64 = rec.get("buffer").getNum("duration");
-        const off: f64 = clampF(rec.getNum("pausedOffset") + elapsed, 0.0, dur);
-        rec.set("pausedOffset", off);
-        rec.set("playing", 0); // set BEFORE stop(), so onended sees a deliberate pause
-
-        const node: Value = rec.get("node");
-        if (!node.isNull()) {
-            _ = node.call("stop", .{});
-            _ = node.call("disconnect", .{});
-        }
-        rec.set("node", 0);
-    }
-
-    fn resumeBuffer(_: f64, source_id: f64) void {
-        const rec: Value = lookup(source_id);
-        if (rec.isNull() or rec.getNum("playing") != 0) {
-            return;
-        }
-        const ctx_rec: Value = lookup(rec.getNum("ctxId"));
-        if (ctx_rec.isNull()) {
-            return;
-        }
-        const ctx: Value = ctx_rec.get("ctx");
-        const node: Value = ctx.call("createBufferSource", .{});
-        node.set("buffer", rec.get("buffer"));
-        node.get("playbackRate").set("value", rec.getNum("pitch"));
-        node.set("loop", rec.getNum("looping") != 0);
-        _ = node.call("connect", .{rec.get("gain")}); // reuse the existing gain->panner->master chain
-        node.set("onended", func(&onSourceEnded).call("bind", .{ num(0), num(source_id) }));
-        _ = node.call("start", .{ num(0), num(rec.getNum("pausedOffset")) });
-
-        rec.set("node", node);
-        rec.set("startedAt", ctx.getNum("currentTime"));
-        rec.set("playing", 1);
-    }
-
-    fn isBufferPlaying(_: f64, source_id: f64) f64 {
-        const rec: Value = lookup(source_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        return rec.getNum("playing");
-    }
-
-    // ---- async decode -----------------------------------------------------
-
-    /// `decodeAudioData` is asynchronous and the wasm cannot block, hence the
-    /// poll triad: kick off a decode, ask `is_decode_ready`, then `take` the
-    /// buffer. The decode record is a JS object BOUND into the callbacks - that's
-    /// how a closure-free Zig->JS host remembers which decode finished.
-    fn decodeOggBytes(ctx_id: f64, data_ptr: f64, data_len: f64) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        // decodeAudioData DETACHES the ArrayBuffer it is given - hand it a private
-        // copy, never a view onto the wasm heap.
-        const src: Value = ZimrWgpu.modBytes(data_ptr, data_len);
-        const copy: Value = global().get("Uint8Array").new(.{num(data_len)});
-        _ = copy.call("set", .{src});
-
-        const pending: Value = global().get("Object").new(.{});
-        pending.set("ready", 0);
-        const id: f64 = insert(pending);
-
-        _ = rec.get("ctx").call("decodeAudioData", .{
-            copy.get("buffer"),
-            func(&onDecodeOk).call("bind", .{ num(0), pending }),
-            func(&onDecodeFail).call("bind", .{ num(0), pending }),
-        });
-        return id;
-    }
-
-    fn onDecodeOk(pending_h: Handle, buf_h: Handle) void {
-        const pending: Value = .{ .h = pending_h };
-        pending.set("result", Value{ .h = buf_h });
-        pending.set("ready", 1);
-    }
-
-    /// A FAILED decode still reports "ready" - otherwise the engine would poll
-    /// forever. `take` then finds no result and returns 0, which is exactly the
-    /// invalid-buffer answer the Zig side already handles.
-    fn onDecodeFail(pending_h: Handle) void {
-        const pending: Value = .{ .h = pending_h };
-        pending.set("ready", 1);
-    }
-
-    fn isDecodeReady(_: f64, decode_id: f64) f64 {
-        const rec: Value = lookup(decode_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        return rec.getNum("ready");
-    }
-
-    fn takeDecodedBuffer(_: f64, decode_id: f64) f64 {
-        const rec: Value = lookup(decode_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        if (rec.getNum("ready") == 0) {
-            return 0; // still decoding - keep the record and let the caller poll again
-        }
-        const result: Value = rec.get("result");
-        drop(decode_id);
-        if (result.isNull()) {
-            return 0; // decode failed
-        }
-        return insert(result); // promote the AudioBuffer to a buffer id
-    }
-
-    fn cancelDecode(_: f64, decode_id: f64) void {
-        // The in-flight decodeAudioData callback still fires; it just writes into a
-        // record nobody will read. Dropping the id is the cancel.
-        drop(decode_id);
-    }
-
-    // ---- analyser (FFT tap) -----------------------------------------------
-
-    /// Attach an AnalyserNode to the master bus. It is a TAP, not a filter: master
-    /// already feeds `destination`, so connecting it additionally to the analyser
-    /// hands the FFT the same signal without changing what you hear. The analyser
-    /// deliberately connects onward to NOTHING.
-    fn createAnalyser(ctx_id: f64, fft_size: f64) f64 {
-        const rec: Value = lookup(ctx_id);
-        if (rec.isNull()) {
-            return 0;
-        }
-        const an: Value = rec.get("ctx").call("createAnalyser", .{});
-        if (an.isNull()) {
-            return 0;
-        }
-        an.set("fftSize", fft_size);
-        _ = rec.get("master").call("connect", .{an});
-        return insert(an);
-    }
-
-    /// Write the current magnitude spectrum into wasm memory, one byte per bin.
-    /// `getByteFrequencyData` fills the typed array IN PLACE - and the array we
-    /// hand it is a view straight onto the wasm heap, so the samples land in the
-    /// caller's slice with no intermediate copy.
-    fn getFrequencyData(_: f64, analyser_id: f64, out_ptr: f64, out_len: f64) f64 {
-        const an: Value = lookup(analyser_id);
-        if (an.isNull()) {
-            return 0;
-        }
-        const bins: f64 = an.getNum("frequencyBinCount");
-        const n: f64 = @min(bins, out_len);
-        if (n <= 0) {
-            return 0;
-        }
-        _ = an.call("getByteFrequencyData", .{ZimrWgpu.modBytes(out_ptr, n)});
-        return n;
-    }
-
-    fn destroyAnalyser(_: f64, analyser_id: f64) void {
-        const an: Value = lookup(analyser_id);
-        if (an.isNull()) {
-            return;
-        }
-        _ = an.call("disconnect", .{});
-        drop(analyser_id);
-    }
-
-    fn install(ns: Value) void {
-        ns.set("js_audio_create_context", funcNum(&createContext));
-        ns.set("js_audio_close_context", funcNum(&closeContext));
-        ns.set("js_audio_resume_context", funcNum(&resumeContext));
-        ns.set("js_audio_get_sample_rate", funcNum(&getSampleRate));
-        ns.set("js_audio_get_current_time", funcNum(&getCurrentTime));
-        ns.set("js_audio_get_master_volume", funcNum(&getMasterVolume));
-        ns.set("js_audio_set_master_volume", funcNum(&setMasterVolume));
-        ns.set("js_audio_load_buffer", funcNum(&loadBuffer));
-        ns.set("js_audio_unload_buffer", funcNum(&unloadBuffer));
-        ns.set("js_audio_play_buffer", funcNum(&playBuffer));
-        ns.set("js_audio_play_buffer_at", funcNum(&playBufferAt));
-        ns.set("js_audio_play_buffer_with_offset", funcNum(&playBufferWithOffset));
-        ns.set("js_audio_stop_buffer", funcNum(&stopBuffer));
-        ns.set("js_audio_pause_buffer", funcNum(&pauseBuffer));
-        ns.set("js_audio_resume_buffer", funcNum(&resumeBuffer));
-        ns.set("js_audio_is_buffer_playing", funcNum(&isBufferPlaying));
-        ns.set("js_audio_decode_ogg_bytes", funcNum(&decodeOggBytes));
-        ns.set("js_audio_is_decode_ready", funcNum(&isDecodeReady));
-        ns.set("js_audio_take_decoded_buffer", funcNum(&takeDecodedBuffer));
-        ns.set("js_audio_cancel_decode", funcNum(&cancelDecode));
-        ns.set("js_audio_create_analyser", funcNum(&createAnalyser));
-        ns.set("js_audio_get_frequency_data", funcNum(&getFrequencyData));
-        ns.set("js_audio_destroy_analyser", funcNum(&destroyAnalyser));
-    }
-};
-
-// ===========================================================================
-// ZimrJobs - the Web Worker pool behind `zimr.jobs`.
-// ===========================================================================
-//
-// WHAT A WEB WORKER IS, for anyone who has not met one.
-//
-// A Web Worker is a second JavaScript thread. It shares NOTHING with the page: not a
-// variable, not the DOM, not the canvas, not WebGPU. The only way to speak to it is
-// `postMessage(value)`, and the value is COPIED across the boundary - except for an
-// ArrayBuffer listed as "transferable", which is handed over wholesale and DETACHED
-// from the sender. A transfer is O(1) no matter how big the buffer is.
-//
-// Two consequences shape everything below:
-//
-//   1. A worker cannot run the app's wasm. It has no WebGPU and no DOM, so 96 of the
-//      app's imports would be missing. Instead each worker instantiates its own copy
-//      of a SEPARATE, freestanding kernel wasm (~19 KB) with ZERO imports - nothing to
-//      stub, and only ~1 MB of linear memory per worker.
-//   2. There is no shared memory. `SharedArrayBuffer` requires cross-origin isolation
-//      headers (COOP/COEP) that a downloaded standalone page does not have - this was
-//      MEASURED on-device (crossOriginIsolated: false), not assumed. So every job's
-//      bytes are copied in, and the result is transferred back.
-//
-// WHY THE APP NEVER BLOCKS. `submit` posts a message and returns a handle immediately.
-// The worker's reply lands in `results` whenever it lands. `poll` just looks in that
-// map. The app never waits on anything: it asks once a frame and gets on with drawing.
-//
-// IF WORKERS ARE UNAVAILABLE - `new Worker()` THROWS inside a sandboxed iframe (the
-// Claude artifact preview is one) - then `available()` reports 0 and `src/jobs.zig`
-// runs the kernel inline on the main thread instead. The app is none the wiser; it
-// just hitches, exactly as it would have if it had never used jobs.
-const ZimrJobs = struct {
-    /// The worker's own program is no longer HERE, and that is the point.
-    ///
-    /// It is `src/jobs_worker.zig` - a Zig program, compiled to JavaScript by the same
-    /// `build-obj -ofmt=c` -> c2js path that produces this file - and the page carries it as
-    /// `window.ZIMR_WORKER_JS`, exactly as it carries `ZIMR_KERNEL_WASM`.
-    ///
-    /// What used to be here was ~40 lines of hand-written JavaScript in a Zig string. It was
-    /// the ONLY hand-written JS in the engine and it produced the two worst bugs in the jobs
-    /// system: an ABI spelled twice with nothing checking the two spellings agreed, and an
-    /// `async` handler whose `await` let a job re-enter before the kernel wasm had finished
-    /// instantiating (sixteen tiles submitted on one frame, none ever returned, no error).
-    ///
-    /// Neither is writable now. The ABI is a `pub const` both sides read, and there is no
-    /// `await` in Zig to reach for.
-    fn workerProgram() Value {
-        return global().get("ZIMR_WORKER_JS");
-    }
-
-    /// `new Worker(url)`, but survivable. In a sandboxed iframe (the Claude artifact
-    /// preview is one) the blob: URL has an opaque origin and the constructor throws a
-    /// SecurityError. That is not an error condition for us - it just means no workers,
-    /// so `jobs.zig` runs kernels inline instead. Returns a null Value on refusal.
-    fn tryNewWorker(url: Value) Value {
-        return .{ .h = js_try_new1(global().get("Worker").h, url.h) };
-    }
-
-    /// Bring the pool up on first use. Called from `available()`, so an app that never
-    /// submits a job never spawns a thread.
-    fn spawn() void {
-        if (g.jobs.spawned) {
-            return;
-        }
-        g.jobs.spawned = true; // whatever happens, only try once
-
-        // The kernel wasm is inlined into the page by the build (base64 -> Uint8Array).
-        // No kernels in this example? Then there is nothing to run and no pool.
-        const kernel_wasm: Value = global().get("ZIMR_KERNEL_WASM");
-        if (kernel_wasm.isNull()) {
-            return;
-        }
-
-        // How many? `hardwareConcurrency` is the core count. We take half, and never more
-        // than 4: this pool exists to move work OFF the main thread, not to chase
-        // throughput (measured: 8 workers give only ~3.4x aggregate on a phone, and a hot
-        // CPU throttles the GPU - which for a renderer is a bad trade).
-        //
-        // The clamp is written POSITIVELY. `hardwareConcurrency` is absent on some
-        // browsers, `getNum` reads that back as NaN, and `NaN < 2` is FALSE - so
-        // `if (cores < 2) cores = 2;` would leave NaN in place and `@trunc(NaN / 2)` into
-        // a u32 is illegal behaviour. Asking `>= 2` instead makes the missing case fall
-        // into the default, which is what a default is for.
-        const reported: f64 = global().get("navigator").getNum("hardwareConcurrency");
-        const cores: f64 = if (reported >= 2) reported else 2;
-        var want: u32 = @trunc(cores / 2);
-        if (want < 1) {
-            want = 1;
-        }
-        if (want > 4) {
-            want = 4;
-        }
-
-        // (workers / busy_with / queue / results were minted at boot - see start().)
-
-        // A Worker normally loads its program from a URL. We have no separate .js file
-        // (the whole app is ONE html file), so we wrap the source in a Blob and hand
-        // out an object URL for it. This is also the step that THROWS in a sandboxed
-        // iframe, because a blob: URL there has an opaque origin.
-        // The program is `src/jobs_worker.zig`, compiled to JS by c2js and injected into the
-        // page as `window.ZIMR_WORKER_JS`. Its last line calls its own `start()`, which
-        // registers the message handler - everything after that happens because the browser
-        // delivers a message.
-        const parts: Value = global().get("Array").new(.{});
-        _ = parts.call("push", .{workerProgram()});
-        _ = parts.call("push", .{str("\n;start();\n")});
-        const opts: Value = global().get("Object").new(.{});
-        opts.set("type", str("text/javascript"));
-        const blob: Value = global().get("Blob").new(.{ parts, opts });
-        const url: Value = global().get("URL").call("createObjectURL", .{blob});
-
-        var i: u32 = 0;
-        while (i < want) : (i += 1) {
-            const w: Value = tryNewWorker(url);
-            if (w.isNull()) {
-                // Refused - a sandboxed iframe forbids blob: workers. Any workers we
-                // already started are real OS threads: kill them before giving up, or
-                // they idle forever holding a wasm instance each.
-                var k: u32 = 0;
-                const started: u32 = g.jobs.workers.getU32("length");
-                while (k < started) : (k += 1) {
-                    _ = g.jobs.workers.at(k).call("terminate", .{});
-                }
-                _ = g.jobs.workers.call("splice", .{ num(0), num(@floatFromInt(started)) });
-                _ = g.jobs.busy_with.call("splice", .{ num(0), num(@floatFromInt(started)) });
-                g.jobs.usable = false;
-                return;
-            }
-            w.set("onmessage", func(&onWorkerMessage).call("bind", .{ num(0), num(@floatFromInt(i)) }));
-            _ = g.jobs.workers.call("push", .{w});
-            _ = g.jobs.busy_with.call("push", .{num(0)});
-            _ = g.jobs.ready.call("push", .{num(0)}); // not until it says so
-
-            // Give the worker its program: a private COPY of the kernel wasm bytes.
-            const msg: Value = global().get("Object").new(.{});
-            msg.set("t", str("init"));
-            msg.set("wasm", kernel_wasm);
-            _ = w.call("postMessage", .{msg});
-        }
-        g.jobs.usable = true;
-    }
-
-    /// Is a boolean-ish JS field SET?
-    ///
-    /// This exists because `getNum` on an ABSENT field yields NaN, and NaN fails every
-    /// comparison - so `if (v.getNum("failed") != 0)` is TRUE when the field is missing.
-    /// That is not a hypothetical: it shipped. A successful job sends no `failed` field,
-    /// so every success took the failure branch. The test must be POSITIVE, and asking it
-    /// through a named helper means nobody has to remember why.
-    fn flagSet(v: Value, comptime name: []const u8) bool {
-        return v.getNum(name) >= 1;
-    }
-
-    /// A worker replied. Record the result under its handle and give that worker the next
-    /// queued job.
-    ///
-    /// This runs from a postMessage event, which fires OUTSIDE the frame's
-    /// js_mark/js_reset bracket - so it must open its own handle scope or it leaks one
-    /// handle per job, forever. (`onKeyDown` has the same problem and the same fix.) The
-    /// result survives the reset because the JS Map holds the OBJECT; only the
-    /// handle-table slot is reclaimed.
-    fn onWorkerMessage(worker_idx_h: Handle, event_h: Handle) void {
-        const m: Handle = js_mark();
-        defer js_reset(m);
-
-        const data: Value = (Value{ .h = event_h }).get("data");
-
-        // The 'ready' handshake carries no handle, so `handle` reads back as NaN. NaN
-        // fails EVERY comparison - including `== 0` - so test for a real handle
-        // positively. Same trap as `flagSet` above; same answer.
-        const handle: f64 = data.getNum("handle");
-        if (!(handle >= 1)) {
-            // ...and THIS is the handshake. It used to be dropped on the floor here, which
-            // meant nothing ever knew a worker had finished instantiating, and `pump()`
-            // would post jobs to a worker whose `ex` was still undefined. They threw inside
-            // the worker and were never heard from again.
-            const slot_r: u32 = @trunc(js_to_num(worker_idx_h));
-            g.jobs.ready.setAt(slot_r, num(1));
-            pump(); // anything queued while it was booting can go now
-            return;
-        }
-
-        // Did the owner give up while this was in flight (Job.deinit)? Then throw the
-        // result away instead of parking a multi-megabyte Uint8Array in the Map that
-        // nobody will ever come back for.
-        if (js_to_num(g.jobs.abandoned.call("has", .{num(handle)}).h) != 0) {
-            _ = g.jobs.abandoned.call("delete", .{num(handle)});
-        } else if (flagSet(data, "failed")) {
-            // -2 = "the kernel failed", distinct from -1 = "still running". An error
-            // cannot cross the wasm boundary as a value, so log its NAME here - on the
-            // page overlay, which is the only console a phone has.
-            //
-            // Two ARGUMENTS, not a concatenation: `String.concat` is not a function.
-            // `concat` lives on String.PROTOTYPE, so it exists on a string INSTANCE and
-            // not on the String constructor - and `console.error` takes varargs anyway,
-            // which is both simpler and impossible to get wrong.
-            _ = global().get("console").call("error", .{
-                str("zimr.jobs: kernel failed:"),
-                data.get("err"),
-            });
-            _ = g.jobs.results.call("set", .{ num(handle), num(-2) });
-            // ...and KEEP the name, so `Job.errorName()` can hand it back to the app. It is
-            // the difference between "KernelFailed" and "ShortPayload" on a phone screen.
-            _ = g.jobs.kernel_errors.call("set", .{ num(handle), data.get("err") });
-        } else {
-            const bytes: Value = global().get("Uint8Array").new(.{data.get("result")});
-            _ = g.jobs.results.call("set", .{ num(handle), bytes });
-        }
-
-        const slot: u32 = @trunc(js_to_num(worker_idx_h));
-        g.jobs.busy_with.setAt(slot, num(0)); // this worker is free again
-        pump();
-    }
-
-    /// Hand queued jobs to idle workers until one or the other runs out.
-    fn pump() void {
-        var i: u32 = 0;
-        const n: u32 = g.jobs.workers.getU32("length");
-        while (i < n) : (i += 1) {
-            if (g.jobs.queue.getU32("length") == 0) {
-                return;
-            }
-            // NOT READY = NOT ELIGIBLE. Written positively (`>= 1`), because `getNum` on an
-            // absent element yields NaN and NaN fails every comparison - so `!= 1` would be
-            // TRUE for a missing entry and we would be right back where we started.
-            if (!(js_to_num(g.jobs.ready.at(i).h) >= 1)) {
-                continue;
-            }
-            if (g.jobs.busy_with.at(i).isNull()) {
-                continue;
-            }
-            if (js_to_num(g.jobs.busy_with.at(i).h) != 0) {
-                continue; // busy
-            }
-            const job: Value = g.jobs.queue.call("shift", .{});
-            const handle: f64 = job.getNum("handle");
-            g.jobs.busy_with.setAt(i, num(handle));
-
-            const msg: Value = global().get("Object").new(.{});
-            msg.set("t", str("job"));
-            msg.set("handle", num(handle));
-            msg.set("kernel", job.get("kernel"));
-            msg.set("bytes", job.get("bytes"));
-
-            // TRANSFER the payload rather than let postMessage structured-CLONE it.
-            // A transfer hands the ArrayBuffer over and detaches it here: O(1), however
-            // many megabytes it holds. Cloning a 4 MB image every job would undo much of
-            // the point of moving the work off-thread in the first place.
-            const transfer: Value = global().get("Array").new(.{});
-            _ = transfer.call("push", .{job.get("bytes")});
-            _ = g.jobs.workers.at(i).call("postMessage", .{ msg, transfer });
-        }
-    }
-
-    // ---- the four functions the wasm imports -------------------------------
-
-    /// Is a real pool behind this? `src/jobs.zig` asks BEFORE staging a job, and runs
-    /// the kernel inline if the answer is no.
-    fn available() f64 {
-        spawn();
-        return if (g.jobs.usable) 1 else 0;
-    }
-
-    /// Copy `len` bytes of header++payload out of the APP's wasm memory and queue them.
-    /// Returns a handle, or 0 if we could not take the job.
-    ///
-    /// The copy is not optional: the bytes live in the app's linear memory, which the
-    /// worker cannot see, and which may be resized (and thus detached) at any moment.
-    /// Take a job's HEADER and PAYLOAD SEPARATELY and join them into the single buffer that
-    /// crosses to the worker.
-    ///
-    /// The header and payload used to arrive already joined, because `jobs.zig` allocated a
-    /// `staged` buffer and memcpy'd both into it. That allocation was a MULTI-MEGABYTE
-    /// `gpa.alloc` on every single dispatch, in the frame path - precisely the mistake that
-    /// cost `Job.poll` 154 ms on the landing frame, still live on the input side.
-    ///
-    /// It bought nothing. This function has to allocate a JS-owned buffer anyway (the one it
-    /// transfers to the worker), so it can do the joining while it copies. Two copies of the
-    /// payload became one, and a per-dispatch megabyte allocation became zero.
-    fn submit(
-        name_ptr: f64,
-        name_len: f64,
-        header_ptr: f64,
-        header_len: f64,
-        payload_ptr: f64,
-        payload_len: f64,
-    ) f64 {
-        if (!g.jobs.usable) {
-            return 0;
-        }
-
-        // VIEWS on the app's wasm heap - free, and valid only until the next allocation.
-        const header_view: Value = ZimrWgpu.modBytes(header_ptr, header_len);
-        const payload_view: Value = ZimrWgpu.modBytes(payload_ptr, payload_len);
-
-        // The one buffer that crosses. It is JS-owned because it gets TRANSFERRED to the
-        // worker, which detaches it - we must not hand over a view of our own heap.
-        const total_len: f64 = header_len + payload_len;
-        const joined: Value = global().get("Uint8Array").new(.{num(total_len)});
-        _ = joined.call("set", .{header_view}); // header at offset 0
-        _ = joined.call("set", .{ payload_view, num(header_len) }); // payload right after it
-
-        const handle: u32 = g.jobs.next_handle;
-        g.jobs.next_handle += 1;
-
-        const job: Value = global().get("Object").new(.{});
-        job.set("handle", num(@floatFromInt(handle)));
-        job.set("kernel", ZimrWgpu.modString(name_ptr, name_len)); // the kernel's NAME
-        job.set("bytes", joined.get("buffer"));
-        _ = g.jobs.queue.call("push", .{job});
-
-        pump();
-        return @floatFromInt(handle);
-    }
-
-    /// -1 while it runs, >= 0 = the result's byte length, -2 = the kernel failed.
-    ///
-    /// NEVER COERCE `r` TO A NUMBER HERE. The map holds either the result (a Uint8Array) or
-    /// the number -2 (the kernel failed). Asking `Number(r)` to tell those apart looks free
-    /// and is not: on the success path `r` is the RESULT - 2.7 MB for a 1024x1024 PNG - and
-    /// JS coerces a TypedArray to a number via `toString()`, which builds a string of 2.7
-    /// MILLION comma-separated integers (~10 MB of text), parses it to NaN, and throws it
-    /// away.
-    ///
-    /// Measured on a phone: **95 ms**, every landing frame, to evaluate a failure flag. The
-    /// worker had already given the frame back; this took it away again. It is the reason
-    /// `worker_png` appeared to "hitch anyway" and nearly cost the jobs system its case.
-    ///
-    /// Ask `typeof` instead. A number is the failure marker; anything else is the result, and
-    /// its `.length` is the byte count.
-    fn poll(handle: f64) f64 {
-        if (!g.jobs.usable) {
-            return -1;
-        }
-        const r: Value = g.jobs.results.call("get", .{num(handle)});
-        if (r.isNull()) {
-            return -1; // still queued or still running
-        }
-        // `Number.isFinite` does NOT coerce its argument: it is false for anything that is
-        // not already a number. So it separates the failure marker (-2) from the result
-        // (a Uint8Array) without ever asking the array what it looks like as a string.
-        const is_num: bool = global().get("Number").call("isFinite", .{r}).truthy();
-        if (is_num) {
-            return -2; // the failure marker - the only number we ever store
-        }
-        return r.getNum("length"); // a Uint8Array: O(1), no coercion, no 10 MB string
-    }
-
-    /// Copy the finished result INTO the app's wasm memory at `dst`, and retire it.
-    fn take(handle: f64, dst: f64, cap: f64) f64 {
-        const r: Value = g.jobs.results.call("get", .{num(handle)});
-        if (r.isNull()) {
-            return 0;
-        }
-        var n: f64 = r.getNum("length");
-        if (n > cap) {
-            n = cap;
-        }
-        const view: Value = ZimrWgpu.modBytes(dst, n);
-        _ = view.call("set", .{r.call("subarray", .{ num(0), num(n) })});
-        _ = g.jobs.results.call("delete", .{num(handle)});
-        return n;
-    }
-
-    /// The owner is done with this job and will never collect it - because it failed,
-    /// or because the app dropped the handle (`Job.deinit` on an in-flight job).
-    ///
-    /// Drop any result we are already holding, and remember the handle so that a reply
-    /// still in flight is discarded on arrival rather than retained forever. Without
-    /// this, abandoning a job leaks its entire result buffer for the life of the page.
-    /// The owner gave up on this job (`Job.deinit`, or a `Group` being torn down).
-    ///
-    /// A cancelled job is in exactly one of three places, and each needs different treatment:
-    ///
-    ///   STILL QUEUED, never dispatched.
-    ///       Take it OUT of the queue. This used to be skipped, and it was not merely wasted
-    ///       work - it was wasted work that DELAYED THE LIVE WORK BEHIND IT. `rt_workers`
-    ///       re-renders on every frame the camera moves, cancelling sixteen tiles and
-    ///       submitting sixteen more; the dead ones stayed queued AHEAD of the new ones, so a
-    ///       one-second drag left the pool grinding through hundreds of tiles for camera
-    ///       positions the user had already left. Splicing it out is the whole fix.
-    ///
-    ///   RUNNING on a worker.
-    ///       We cannot stop it - a worker runs one job to completion and there is no way to
-    ///       interrupt wasm mid-call. Mark the handle abandoned so the eventual reply is
-    ///       thrown away instead of parking a multi-megabyte result in the map that nobody
-    ///       will ever collect.
-    ///
-    ///   ALREADY FINISHED, result sitting in the map.
-    ///       Delete it. Same reason.
-    ///
-    /// Note what this buys beyond speed: `abandoned` is now BOUNDED by the number of jobs
-    /// actually in flight. Before, a handle cancelled while queued was added to the set, then
-    /// dispatched anyway, and only removed when its reply arrived - so the set tracked every
-    /// cancellation the page had ever made. Now a queued job leaves no trace at all, because
-    /// no reply will ever come for it.
-    fn cancel(handle: f64) void {
-        if (handle == 0) {
-            return;
-        }
-
-        // Already finished? Drop the result, and the failure name with it.
-        _ = g.jobs.results.call("delete", .{num(handle)});
-        _ = g.jobs.kernel_errors.call("delete", .{num(handle)});
-
-        // Still queued? Remove it, and we are done - no worker will ever touch it, so no
-        // reply will ever arrive, so there is nothing to abandon.
-        const queued_count: u32 = g.jobs.queue.getU32("length");
-        var queue_index: u32 = 0;
-        while (queue_index < queued_count) : (queue_index += 1) {
-            const queued_job: Value = g.jobs.queue.at(queue_index);
-            const queued_handle: f64 = queued_job.getNum("handle");
-            if (queued_handle == handle) {
-                _ = g.jobs.queue.call("splice", .{ num(@floatFromInt(queue_index)), num(1) });
-                return;
-            }
-        }
-
-        // Not queued, so it is either running on a worker right now or its reply is already in
-        // flight. Either way a `done` message is coming for a job nobody wants.
-        _ = g.jobs.abandoned.call("add", .{num(handle)});
-    }
-
-    /// Copy the failed kernel's error NAME into `dst`, and return how many bytes it wrote.
-    /// Zero if this handle has no recorded failure.
-    fn errorName(handle: f64, dst: f64, cap: f64) f64 {
-        const name: Value = g.jobs.kernel_errors.call("get", .{num(handle)});
-        if (name.isNull()) {
-            return 0;
-        }
-
-        // TextEncoder.encodeInto writes UTF-8 straight into our wasm memory and reports how
-        // much fitted - no intermediate array, and no way to overrun `cap`.
-        const encoder: Value = global().get("TextEncoder").new(.{});
-        const view: Value = ZimrWgpu.modBytes(dst, cap);
-        const stats: Value = encoder.call("encodeInto", .{ name, view });
-        return stats.getNum("written");
-    }
-
-    fn install(ns: Value) void {
-        ns.set("js_jobs_available", funcNum(&available));
-        ns.set("js_jobs_error_name", funcNum(&errorName));
-        ns.set("js_jobs_submit", funcNum(&submit));
-        ns.set("js_jobs_poll", funcNum(&poll));
-        ns.set("js_jobs_take", funcNum(&take));
-        ns.set("js_jobs_cancel", funcNum(&cancel));
-    }
-};
-
-const BridgeGlobals = struct {
-    const Boot = struct {
-        stage: u32 = 0, // 0 idle, 1 adapter, 2 device, 3 instantiate, 4 run
-        pending_promise: u32 = 0,
-        gpu_adapter: Value = undefined,
-        gpu_device: Value = undefined,
-        gpu_queue: Value = undefined,
-        timestamp_supported: bool = false, // adapter exposes 'timestamp-query' (GPU timing)
-        module_exports: Value = undefined,
-        utf8_decoder: Value = undefined,
-        canvas_contexts: Value = undefined, // elem handle -> GPUCanvasContext
-        tick_callback: Value = undefined,
-        event_ring: [64]ZimrBoot.EvRec = undefined,
-        event_count: u32 = 0,
-        // Which app contract the instantiated module speaks (detected from
-        // its exports at stage 3): bridge-native `zimr_page_main` +
-        // `zimr_frame(ms)`, or classic zimr `_initialize` + `update(dt_s)`.
-        classic_contract: bool = false,
-        last_frame_ms: f64 = 0,
-    };
-    const Input = struct {
-        ready: bool = false,
-        held_key_codes: Value = undefined, // a JS Set of held KeyboardEvent.code strings
-        mouse_x_css: f32 = 0,
-        mouse_y_css: f32 = 0,
-        mouse_button_bits: u32 = 0,
-        dragging: bool = false, // classic pointer-capture gate
-    };
-    const Assets = struct {
-        ready: bool = false,
-        registered_assets: Value = undefined, // a JS Map: name -> Uint8Array
-    };
-    const Module = struct {
-        mem: Value = undefined, // the wasm module's memory Value, set at instantiation
-        mem_ready: bool = false,
-    };
-    const Scratch = struct {
-        read_staging: [1 << 16]u8 align(16) = undefined,
-        call_args: [16]Handle = undefined,
-        fmt: [512]u8 = undefined,
-        fmt_len: u32 = 0,
-        /// A key event's `KeyboardEvent.code`, read in for `dom_input` to look up.
-        dom_code: [dom_input.longest_dom_code_length]u8 = undefined,
-    };
-    const Wgpu = struct {
-        // ONE table for every wgpu resource. Ids are unique ACROSS types
-        // (a single counter), which is strictly safer than per-type tables:
-        // passing a buffer id where a texture id belongs can never alias.
-        // Id 1 is reserved: device == queue == surface == 1, matching the
-        // classic TS bridge's singleton convention.
-        objects: Value = undefined, // a JS Map: id -> GPU object
-        next_id: u32 = 2,
-        // The transitional primary canvas for the classic (single-surface)
-        // zimr contract - lazily created by js_get_surface. Apps written
-        // against the D9 doctrine create their own canvases via dom verbs.
-        canvas: Value = undefined,
-        context: Value = undefined,
-        format_index: u32 = 0,
-        have_canvas: bool = false,
-        // Backing-store sync for the primary canvas (see ZimrWgpu.syncCanvasBacking).
-        // The ResizeObserver stores the canvas's EXACT device-pixel content size
-        // here. 0 = no exact report (no observer yet, or a browser without
-        // 'device-pixel-content-box' - Safari), and the sync falls back to
-        // round(clientWidth x devicePixelRatio) every frame.
-        observed_device_w: f64 = 0,
-        observed_device_h: f64 = 0,
-        has_device_pixel_box: bool = false,
-        resize_observer: Value = .{ .h = 0 },
-        // device.limits.maxTextureDimension2D: a canvas larger than this cannot
-        // be rendered into, so the backing store is clamped to it.
-        max_backing_dim: f64 = 8192,
-        format_list: Value = .{ .h = 0 }, // lazily-built JS array of format names
-        text_encoder: Value = .{ .h = 0 }, // lazily-built TextEncoder (adapter_info)
-        // GPU timing (profiler): a timestamp query set + a QUERY_RESOLVE|COPY_SRC
-        // resolve buffer + a COPY_DST|MAP_READ readback buffer. Created once at
-        // device init when 'timestamp-query' is supported; inert otherwise.
-        ts_query_set: Value = .{ .h = 0 },
-        ts_resolve_buf: Value = .{ .h = 0 },
-        ts_read_buf: Value = .{ .h = 0 },
-        ts_ready: bool = false, // infra created and usable
-        ts_cursor: u32 = 0, // timestamp slots written on the current encoder
-        ts_resolve_pairs: u32 = 0, // pass pairs queued for resolve at finish
-        ts_pending: bool = false, // a mapAsync readback is in flight (read buf busy)
-        ts_pid: u32 = 0, // promise id of the in-flight mapAsync
-        ts_pairs_inflight: u32 = 0, // pass count of the in-flight readback
-        gpu_ms_last: f64 = 0, // most recent summed GPU pass time (ms)
-    };
-    /// Text-input overlay state (the DOM <input> shared across show/poll/hide).
-    const Overlay = struct {
-        el: Value = .{ .h = 0 }, // the <input> or <textarea>; .h == 0 = not created yet
-        visible: bool = false,
-        escape_clears: bool = false,
-        allow_tab: bool = false,
-        char_filters: u32 = 0,
-        ctrl_enter_for_newline: bool = false, // textarea-only; the <input> ignores it
-    };
-    /// WebAudio host state. Same doctrine as `Wgpu`: ONE Map and ONE counter, so
-    /// ids are unique ACROSS types (context / buffer / source / decode) and
-    /// handing a buffer id where a source id belongs can never alias silently.
-    /// Id 0 is reserved for "invalid" - what every `js_audio_*` returns on
-    /// failure, matching the Zig declarations in `src/web.zig`.
-    const Audio = struct {
-        objects: Value = undefined, // JS Map: id -> AudioContext rec / AudioBuffer / source rec / decode rec
-        next_id: u32 = 1,
-    };
-
-    /// The Web Worker pool that backs `zimr.jobs`.
-    ///
-    /// A Web Worker is a SECOND JavaScript thread. It shares NOTHING with the page:
-    /// no variables, no DOM, no canvas, no WebGPU. The only way to talk to it is to
-    /// `postMessage` a value, which is COPIED across (or, for an ArrayBuffer, handed
-    /// over wholesale and detached from the sender - a "transfer", which costs nothing
-    /// however large it is).
-    ///
-    /// That isolation is exactly why a kernel must be a pure function, and why each
-    /// worker runs its own copy of a small, separately-compiled kernel wasm rather
-    /// than sharing the app's. There is no shared memory to share: `SharedArrayBuffer`
-    /// needs cross-origin isolation headers we do not have, which was measured, not
-    /// assumed.
-    const Jobs = struct {
-        spawned: bool = false, // have we tried to create the workers yet?
-        usable: bool = false, // ...and did it work? (a sandboxed iframe says no)
-        workers: Value = undefined, // JS Array of Worker
-        busy_with: Value = undefined, // JS Array: worker index -> job handle it is running (0 = idle)
-        /// JS Array: worker index -> 1 once that worker has INSTANTIATED its kernel wasm.
-        ///
-        /// The worker's `onmessage` is ASYNC: the `init` handler `await`s
-        /// `WebAssembly.instantiate` and YIELDS. A job that arrives during that window finds
-        /// `ex` still undefined, throws inside the worker, and is never heard from again.
-        ///
-        /// The worker has always posted `{t:'ready'}` when it finished instantiating. The
-        /// host has always THROWN IT AWAY - the handshake carries no handle, so it fell
-        /// through the `handle >= 1` guard and vanished. So `pump()` would dispatch to a
-        /// worker that could not yet run anything.
-        ///
-        /// `worker_png` never hit it: one job, submitted many frames after the pool came up.
-        /// `rt_workers` submits SIXTEEN on the first frame - the same frame `spawn()` runs -
-        /// and every one of them raced the instantiation. Sixteen tiles, none ever landed,
-        /// and not one error anywhere.
-        ready: Value = undefined,
-        queue: Value = undefined, // JS Array of job records waiting for a free worker
-        results: Value = undefined, // JS Map: handle -> Uint8Array (done) or -2 (failed)
-        /// JS Map: handle -> the failed kernel's error NAME, as a string.
-        ///
-        /// The worker has always SENT this ("ShortPayload", "OutOfMemory", ...). The host used
-        /// to print it to `console.error` and then throw it away, so Zig only ever saw -2 and
-        /// every failure surfaced as a bare `error.KernelFailed`. On a phone, where there is no
-        /// console to read, that is indistinguishable from no diagnosis at all.
-        kernel_errors: Value = undefined,
-        abandoned: Value = undefined, // JS Set of handles whose owner gave up; late replies are dropped
-        next_handle: u32 = 1,
-    };
-
-    boot: Boot = .{},
-    wgpu: Wgpu = .{},
-    audio: Audio = .{},
-    jobs: Jobs = .{},
-    input: Input = .{},
-    assets: Assets = .{},
-    module: Module = .{},
-    scratch: Scratch = .{},
-    default_sheet: ?css.Sheet = null, // lazily-created default stylesheet
-    overlay: Overlay = .{},
-    overlay_ta: Overlay = .{}, // multiline sibling of `overlay`; its own <textarea>
-    userfile: UserFile = .{},
-};
-
-/// Drag-and-drop + file-picker state. See `web.zig`'s `userfile` namespace for the protocol
-/// and for why the picker must be a real DOM element rather than a wasm-drawn button.
-const UserFile = struct {
-    /// JS array of `{ name, bytes }`, oldest first. Files land here only once their
-    /// `arrayBuffer()` has resolved, so anything in the queue is complete and readable.
-    queue: Value = .{ .h = 0 },
-    /// The transparent `<input type="file">` parked over the caller's Load button.
-    input: Value = .{ .h = 0 },
-    /// The transparent `<a download>` parked over the caller's Save button, and the object URL
-    /// it currently points at - revoked whenever a newer file replaces it, so offering a fresh
-    /// file every few seconds does not leak the old ones.
-    save: Value = .{ .h = 0 },
-    save_url: Value = .{ .h = 0 },
-    /// Drop listeners are attached once, lazily - attaching them at boot would mean every
-    /// page paid for a feature almost none of them use.
-    listening: bool = false,
-    /// The name of the file whose `arrayBuffer()` is currently in flight.
-    pending_name: Value = .{ .h = 0 },
-};
-
-// lint:off module-var: THE one page singleton - see BridgeGlobals doc above
-var g: BridgeGlobals = .{};
-
-pub const Event = extern struct {
-    j: Value,
-
-    pub fn offsetX(self: Event) f32 {
-        return self.j.get("offsetX").to(f32);
-    }
-    pub fn offsetY(self: Event) f32 {
-        return self.j.get("offsetY").to(f32);
-    }
-    pub fn clientX(self: Event) f32 {
-        return self.j.get("clientX").to(f32);
-    }
-    pub fn clientY(self: Event) f32 {
-        return self.j.get("clientY").to(f32);
-    }
-    pub fn key(self: Event) Value {
-        return self.j.get("key");
-    }
-    /// KeyboardEvent.code - the physical key ("ArrowLeft", "KeyW"), layout-independent.
-    pub fn code(self: Event) Value {
-        return self.j.get("code");
-    }
-    /// event.target, as an Element.
-    pub fn target(self: Event) Element {
-        return .{ .j = self.j.get("target") };
-    }
-    pub fn preventDefault(self: Event) void {
-        _ = self.j.call("preventDefault", .{});
-    }
-    pub fn stopPropagation(self: Event) void {
-        _ = self.j.call("stopPropagation", .{});
-    }
-};
-
-/// A JS Promise, handled with CALLBACKS (no Asyncify, no blocking). `.then(&onOk)`
-/// registers a Zig fn that JS calls with the resolved value (a Handle - `wz.wrap` it);
-/// `.catch_(&onErr)` handles rejection. Both return the next Promise, so you can chain
-/// `wz.fetch(u).then(&ok).catch_(&err)`. Callbacks are `fn(wz.Handle) void` - do the next
-/// async step (e.g. `res.json().then(&onData)`) inside the callback.
-pub const Promise = extern struct {
-    j: Value,
-    /// .then(onResolve) - onResolve is a `&fn(wz.Value) void`.
-    pub fn then(self: Promise, on_resolve: *const anyopaque) Promise {
-        return .{ .j = self.j.call("then", .{func(on_resolve)}) };
-    }
-    /// .then with a typed context: `p.thenCtx(rec, onMapped)` where rec is a pointer
-    /// and `onMapped: fn(@TypeOf(rec), wz.Value) void`. The context is threaded to the
-    /// callback so per-operation state needn't live in a global - closures-with-state
-    /// without Asyncify. (The resolved Value is valid only inside the callback.)
-    pub fn thenCtx(
-        self: Promise,
-        ctx: anytype,
-        comptime cb: fn (@TypeOf(ctx), Value) void,
-    ) Promise {
-        const Ctx = @TypeOf(ctx);
-        const Tramp = struct {
-            fn entry(c: u32, v: Handle) void {
-                cb(@as(Ctx, @ptrFromInt(c)), .{ .h = v });
-            }
-        };
-        const h = js_func_ctx(&Tramp.entry, @intCast(@intFromPtr(ctx)));
-        return .{ .j = self.j.call("then", .{Value{ .h = h }}) };
-    }
-    /// .catch with a typed context (see thenCtx).
-    pub fn catchCtx(
-        self: Promise,
-        ctx: anytype,
-        comptime cb: fn (@TypeOf(ctx), Value) void,
-    ) Promise {
-        const Ctx = @TypeOf(ctx);
-        const Tramp = struct {
-            fn entry(c: u32, v: Handle) void {
-                cb(@as(Ctx, @ptrFromInt(c)), .{ .h = v });
-            }
-        };
-        const h = js_func_ctx(&Tramp.entry, @intCast(@intFromPtr(ctx)));
-        return .{ .j = self.j.call("catch", .{Value{ .h = h }}) };
-    }
-    /// .catch(onReject) - named `catch_` because `catch` is a Zig keyword.
-    pub fn catch_(self: Promise, on_reject: *const anyopaque) Promise {
-        return .{ .j = self.j.call("catch", .{func(on_reject)}) };
-    }
-    /// .finally(onDone) - runs on settle (resolve OR reject); onDone takes no args.
-    pub fn finally(self: Promise, on_done: *const anyopaque) Promise {
-        return .{ .j = self.j.call("finally", .{func(on_done)}) };
-    }
-};
-
-/// A fetch Response. `.json()`/`.text()` return Promises (the body is async); `.ok()`
-/// and `.status()` are immediate. (For most calls, prefer `wz.fetchJson`/`fetchText`,
-/// which skip straight to the parsed body.)
-pub const Response = extern struct {
-    j: Value,
-    /// response.json() -> Promise of the parsed value.
-    pub fn json(self: Response) Promise {
-        return .{ .j = self.j.call("json", .{}) };
-    }
-    /// response.text() -> Promise of the body string.
-    pub fn text(self: Response) Promise {
-        return .{ .j = self.j.call("text", .{}) };
-    }
-    /// response.ok - true for a 2xx status.
-    pub fn ok(self: Response) bool {
-        return self.j.get("ok").truthy();
-    }
-    /// response.status - the HTTP status code.
-    pub fn status(self: Response) f64 {
-        return self.j.get("status").to(f64);
-    }
-};
-
-pub const Value = extern struct {
-    h: Handle,
-
-    /// obj.prop  (returns the property as a Value)
-    pub fn get(self: Value, comptime name: []const u8) Value {
-        return .{ .h = js_get(self.h, name.ptr, @intCast(name.len)) };
-    }
-    /// obj.prop as a number, read directly with no intermediate handle - for the hot
-    /// numeric reads (event.offsetX every move, canvas.width, element.scrollTop, ...).
-    /// `getNum` returns f64; `getU32`/`getF32` are typed conveniences.
-    pub fn getNum(self: Value, comptime name: []const u8) f64 {
-        return js_get_num(self.h, name.ptr, @intCast(name.len));
-    }
-    pub fn getU32(self: Value, comptime name: []const u8) u32 {
-        return @trunc(self.getNum(name));
-    }
-    pub fn getF32(self: Value, comptime name: []const u8) f32 {
-        return @floatCast(self.getNum(name));
-    }
-    /// obj.prop = value   (value is marshalled: number, string, bool, or Value)
-    pub fn set(
-        self: Value,
-        comptime name: []const u8,
-        value: anytype,
-    ) void {
-        // A number or bool goes straight to the slot via js_set_num, so no handle is
-        // minted for the value. Strings, Values and nested structs go through toH,
-        // which builds the JS string / object the property needs.
-        switch (@typeInfo(@TypeOf(value))) {
-            .int, .comptime_int, .float, .comptime_float => js_set_num(
-                self.h,
-                name.ptr,
-                @intCast(name.len),
-                f64of(value),
-            ),
-            .bool => js_set_num(self.h, name.ptr, @intCast(name.len), if (value) 1 else 0),
-            else => js_set(self.h, name.ptr, @intCast(name.len), toH(value)),
-        }
-    }
-    /// obj[i]
-    pub fn at(self: Value, i: u32) Value {
-        return .{ .h = js_get_index(self.h, i) };
-    }
-    /// obj[i] = value
-    pub fn setAt(
-        self: Value,
-        i: u32,
-        value: anytype,
-    ) void {
-        js_set_index(self.h, i, toH(value));
-    }
-
-    /// obj.method(...args) - args is a tuple of mixed types, each marshalled.
-    /// Dispatches by comptime arity to the fixed-arity kernel calls (no buffer)
-    /// for up to 6 args; falls back to a heap arg-buffer for more.
-    pub fn call(
-        self: Value,
-        comptime name: []const u8,
-        args: anytype,
-    ) Value {
-        const n: usize = args.len; // comptime
-        const p: [*]const u8 = name.ptr;
-        const l: u32 = @intCast(name.len);
-        if (comptime args.len >= 1 and args.len <= 6 and allNumeric(@TypeOf(args))) {
-            return .{ .h = switch (n) {
-                1 => js_calln1(self.h, p, l, f64of(args[0])),
-                2 => js_calln2(self.h, p, l, f64of(args[0]), f64of(args[1])),
-                3 => js_calln3(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2])),
-                4 => js_calln4(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(args[3])),
-                5 => js_calln5(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
-                    args[3],
-                ), f64of(args[4])),
-                6 => js_calln6(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
-                    args[3],
-                ), f64of(args[4]), f64of(args[5])),
-                else => unreachable,
-            } };
-        }
-        if (n == 0) {
-            return .{ .h = js_call0(self.h, p, l) };
-        }
-        if (n == 1) {
-            return .{ .h = js_call1(self.h, p, l, toH(args[0])) };
-        }
-        if (n == 2) {
-            return .{ .h = js_call2(self.h, p, l, toH(args[0]), toH(args[1])) };
-        }
-        if (n == 3) {
-            return .{ .h = js_call3(
-                self.h,
-                p,
-                l,
-                toH(args[0]),
-                toH(args[1]),
-                toH(args[2]),
-            ) };
-        }
-        if (n == 4) {
-            return .{ .h = js_call4(
-                self.h,
-                p,
-                l,
-                toH(args[0]),
-                toH(args[1]),
-                toH(args[2]),
-                toH(args[3]),
-            ) };
-        }
-        if (n == 5) {
-            return .{ .h = js_call5(
-                self.h,
-                p,
-                l,
-                toH(args[0]),
-                toH(args[1]),
-                toH(args[2]),
-                toH(args[3]),
-                toH(args[4]),
-            ) };
-        }
-        if (n == 6) {
-            return .{ .h = js_call6(
-                self.h,
-                p,
-                l,
-                toH(args[0]),
-                toH(args[1]),
-                toH(args[2]),
-                toH(args[3]),
-                toH(args[4]),
-                toH(args[5]),
-            ) };
-        }
-        // >6 args: marshal into the shared buffer, then js_call_n.
-        comptime var i: usize = 0;
-        inline while (i < n) : (i += 1) {
-            g.scratch.call_args[i] = toH(args[i]);
-        }
-        return .{ .h = js_call_n(self.h, p, l, @intCast(@intFromPtr(&g.scratch.call_args[0])), n) };
-    }
-
-    /// obj.method(...args) for a VOID method: no result handle is minted (the hot
-    /// render-loop calls - setPipeline/setBindGroup/draw/end - are all void, and the
-    /// discarded return-handle is pure overhead + handle-table churn otherwise).
-    pub fn callVoid(
-        self: Value,
-        comptime name: []const u8,
-        args: anytype,
-    ) void {
-        const n: usize = args.len;
-        const p: [*]const u8 = name.ptr;
-        const l: u32 = @intCast(name.len);
-        if (comptime args.len >= 1 and args.len <= 6 and allNumeric(@TypeOf(args))) {
-            switch (n) {
-                1 => js_calln1v(self.h, p, l, f64of(args[0])),
-                2 => js_calln2v(self.h, p, l, f64of(args[0]), f64of(args[1])),
-                3 => js_calln3v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2])),
-                4 => js_calln4v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(args[3])),
-                5 => js_calln5v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
-                    args[3],
-                ), f64of(args[4])),
-                6 => js_calln6v(self.h, p, l, f64of(args[0]), f64of(args[1]), f64of(args[2]), f64of(
-                    args[3],
-                ), f64of(args[4]), f64of(args[5])),
-                else => unreachable,
-            }
-            return;
-        }
-        switch (n) {
-            0 => js_call0v(self.h, p, l),
-            1 => js_call1v(self.h, p, l, toH(args[0])),
-            2 => js_call2v(self.h, p, l, toH(args[0]), toH(args[1])),
-            3 => js_call3v(self.h, p, l, toH(args[0]), toH(args[1]), toH(args[2])),
-            4 => js_call4v(self.h, p, l, toH(args[0]), toH(args[1]), toH(args[2]), toH(args[3])),
-            5 => js_call5v(self.h, p, l, toH(args[0]), toH(args[1]), toH(args[2]), toH(args[3]), toH(args[4])),
-            else => {
-                _ = self.call(name, args); // rare high-arity void: fall back (mints a handle)
-            },
-        }
-    }
-
-    /// new Ctor(...args)
-    pub fn new(self: Value, args: anytype) Value {
-        const n: usize = args.len;
-        if (n == 0) {
-            return .{ .h = js_new0(self.h) };
-        }
-        if (n == 1) {
-            return .{ .h = js_new1(self.h, toH(args[0])) };
-        }
-        if (n == 2) {
-            return .{ .h = js_new2(self.h, toH(args[0]), toH(args[1])) };
-        }
-        if (n == 3) {
-            return .{ .h = js_new3(self.h, toH(args[0]), toH(args[1]), toH(args[2])) };
-        }
-        @compileError("js: new with more than 3 args not supported");
-    }
-
-    /// Coerce this JS value to a concrete Zig type. `to(f64)`, `to(i32)`, `to(bool)`.
-    pub fn to(self: Value, comptime T: type) T {
-        return switch (@typeInfo(T)) {
-            .float => @floatCast(js_to_num(self.h)),
-            .int => @trunc(js_to_num(self.h)),
-            .bool => js_truthy(self.h) != 0,
-            else => @compileError("js: cannot convert JS value to " ++ @typeName(T)),
-        };
-    }
-
-    pub fn truthy(self: Value) bool {
-        return js_truthy(self.h) != 0;
-    }
-    /// (number).toFixed(digits) -> a string Value, e.g. for prices: `price.toFixed(2)`.
-    pub fn toFixed(self: Value, digits: u32) Value {
-        return self.call("toFixed", .{digits});
-    }
-    pub fn isNull(self: Value) bool {
-        return js_is_null(self.h) != 0;
-    }
-    pub fn eql(self: Value, other: Value) bool {
-        return js_strict_eq(self.h, other.h) != 0;
-    }
-    pub fn typeOf(self: Value) Value {
-        return .{ .h = js_typeof(self.h) };
-    }
-    /// Release the handle so its slot is reclaimed (a free-list reuses freed
-    /// indices). Usually unnecessary inside a wz.Site frame: each frame is
-    /// bracketed by js_mark/js_reset, so handles minted during onFrame (and the
-    /// callbacks WASM invokes) are freed automatically. Free explicitly only for
-    /// long-lived transients you mint OUTSIDE the frame loop.
-    pub fn free(self: Value) void {
-        js_free(self.h);
-    }
-
-    // --- typed views (zero-cost reinterpretations) ---
-    pub fn asElement(self: Value) Element {
-        return .{ .j = self };
-    }
-    pub fn asCtx2D(self: Value) Ctx2D {
-        return .{ .j = self };
-    }
-    pub fn asEvent(self: Value) Event {
-        return .{ .j = self };
-    }
-    pub fn asPromise(self: Value) Promise {
-        return .{ .j = self };
-    }
-    pub fn asResponse(self: Value) Response {
-        return .{ .j = self };
-    }
-};
-
-// snake_case (Zig field convention) -> camelCase (JS/WebGPU key convention).
-/// Build a JS object from a Zig anonymous struct: `wz.obj(.{ .size = 256, .label = "x" })`.
-/// Fields are marshalled by type (numbers/strings/bools/Values, nested objects, and
-/// tuples-as-arrays) and snake_case keys become camelCase. The descriptor-building win.
-pub fn obj(fields: anytype) Value {
-    return .{ .h = objToH(fields) };
-}
-
-/// Compile-time guard for a struct read straight out of module memory: it must be a
-/// fixed-layout `extern struct` with no host pointers (a module address is not a host
-/// pointer) and no optionals. Misuse is a compile error, not a silent wrong read.
-pub fn Wire(comptime T: type) type {
-    comptime {
-        const info = @typeInfo(T);
-        if (info != .@"struct" or info.@"struct".layout != .@"extern") {
-            @compileError("wz.Wire: " ++ @typeName(T) ++ " must be an `extern struct` (fixed, shared layout)");
-        }
-        for (structFields(T)) |f| {
-            switch (@typeInfo(f.type)) {
-                .pointer => @compileError("wz.Wire: field '" ++ f.name ++
-                    "' is a pointer; a module address is not a host pointer."),
-                .optional => @compileError("wz.Wire: field '" ++ f.name ++
-                    "' is optional; optionals have no fixed wire layout."),
-                else => {},
-            }
-        }
-        return T;
-    }
-}
-
-// scratch the bulk module-memory reader copies into before reinterpreting (see
-// Wasm.readSlice). Bounds descriptor reads; one copy replaces N per-field crossings.
-
-/// A handle table for bridges: maps 1-based ids (0 = none/invalid) to live values,
-/// reusing released ids via a free list. One per resource kind - the table every
-/// bridge needs to hand the module small integer handles for GPU/DOM objects while
-/// keeping the real JS values (wz.Value) host-side. Fixed capacity, no allocator;
-/// overflowing it traps rather than silently overwriting, since a too-small cap or a
-/// handle leak is a bug you want to hear about. `get` returns null for 0 or any id
-/// that was never issued or has been released.
-pub fn Table(comptime T: type, comptime capacity: usize) type {
-    return struct {
-        slots: [capacity]?T = undefined, // every id in [1,next) is written before read
-        free: [capacity]u32 = undefined,
-        free_n: usize = 0,
-        next: u32 = 1, // 0 reserved for "invalid"
-        const Self = @This();
-
-        /// Store a value, return its id (never 0).
-        pub fn insert(self: *Self, value: T) u32 {
-            const id = if (self.free_n > 0) blk: {
-                self.free_n -= 1;
-                break :blk self.free[self.free_n];
-            } else blk: {
-                const i = self.next;
-                if (i >= capacity) unreachable; // table full - raise the capacity
-                self.next += 1;
-                break :blk i;
-            };
-            self.slots[id] = value;
-            return id;
-        }
-        /// The value for `id`, or null if 0 / never issued / released.
-        pub fn get(self: *const Self, id: u32) ?T {
-            if (id == 0 or id >= self.next) {
-                return null;
-            }
-            return self.slots[id];
-        }
-        /// Release `id` so its slot is reused by a later insert. No-op on invalid ids.
-        pub fn remove(self: *Self, id: u32) void {
-            if (id == 0 or id >= self.next or self.slots[id] == null) {
-                return;
-            }
-            self.slots[id] = null;
-            self.free[self.free_n] = id;
-            self.free_n += 1;
-        }
-    };
-}
-
-// shared scratch for the rare >6-argument call (see Value.call)
-
-// numeric-arg fast path: a call whose args are all ints/floats skips minting a
-// handle per argument (js_num + a handle-table slot each) and passes raw f64s to
-// the js_callnN kernels. Hot graphics/WebGPU calls - fillRect, draw, setViewport,
-// dispatchWorkgroups - are all-numeric, and this brings them to parity with a
-// hand-written `obj.method(x, y, ...)`. Detected at comptime, so non-numeric calls
-// compile to the handle path with no runtime branch.
-
-// ===========================================================================
-// Value - a handle to any JS value.
-// ===========================================================================
-
-// ===========================================================================
-// Free helpers - the JS globals.
-// ===========================================================================
-pub fn window() Value {
-    return global();
-}
-pub fn console() Value {
-    return global().get("console");
-}
-pub fn math() Value {
-    return global().get("Math");
-}
-/// An explicit JS number Value.
-pub fn num(x: f64) Value {
-    return .{ .h = js_num(x) };
-}
-/// Wrap a raw handle (e.g. a callback parameter from JS) as a Value.
-pub fn wrap(h: Handle) Value {
-    return .{ .h = h };
-}
-/// A new empty JS array.
-pub fn array() Value {
-    return .{ .h = js_array() };
-}
-
-// ---- timers --------------------------------------------------------------
-// Each takes a Zig fn address (`&tick`) just like `Element.on`, and returns the
-// timer id as a Value so you can cancel it. `setInterval(&tick, 1000)`.
-
-/// setInterval(handler, ms) -> id
-pub fn setInterval(handler: *const anyopaque, ms: u32) Value {
-    return global().call("setInterval", .{ func(handler), ms });
-}
-/// setTimeout(handler, ms) -> id
-pub fn setTimeout(handler: *const anyopaque, ms: u32) Value {
-    return global().call("setTimeout", .{ func(handler), ms });
-}
-/// clearInterval(id) - id is the Value returned by setInterval.
-pub fn clearInterval(id: Value) void {
-    _ = global().call("clearInterval", .{id});
-}
-/// clearTimeout(id)
-pub fn clearTimeout(id: Value) void {
-    _ = global().call("clearTimeout", .{id});
-}
-
-// ---- ubiquitous built-ins ------------------------------------------------
-
-/// Math.random() - a float in [0, 1). (For seeded/repeatable randomness use Zig's
-/// std.Random instead; this is the quick JS one.)
-pub fn random() f64 {
-    return math().call("random", .{}).to(f64);
-}
-/// Date.now() - milliseconds since the epoch.
-pub fn now() f64 {
-    return global().get("Date").call("now", .{}).to(f64);
-}
-/// A JS Date - `wz.date()` gives you `new Date()` (now). Methods return the same
-/// strings JS does; reach `.j` for anything not wrapped.
-pub const Date = extern struct {
-    j: Value,
-    /// toLocaleTimeString() -> "3:04:11 PM"
-    pub fn localeTime(self: Date) Value {
-        return self.j.call("toLocaleTimeString", .{});
-    }
-    /// toLocaleDateString() -> "6/9/2026"
-    pub fn localeDate(self: Date) Value {
-        return self.j.call("toLocaleDateString", .{});
-    }
-    /// toISOString() -> "2026-06-09T15:04:11.000Z"
-    pub fn iso(self: Date) Value {
-        return self.j.call("toISOString", .{});
-    }
-    /// getTime() -> ms since the epoch
-    pub fn getTime(self: Date) f64 {
-        return self.j.call("getTime", .{}).to(f64);
-    }
-};
-
-/// new Date() - the current moment, as a typed Date facade.
-pub fn date() Date {
-    return .{ .j = global().get("Date").new(.{}) };
-}
-
-// ---- console (format-aware, like the rest of webzig) ---------------------
-// `log("count = {}", .{n})` reads like console.log with a template literal, but
-// the formatting is the std.fmt `{}` you already use everywhere else.
-
-/// console.log(fmt(spec, args))
-pub fn log(comptime spec: []const u8, args: anytype) void {
-    _ = console().call("log", .{fmt(spec, args)});
-}
-/// console.warn(fmt(spec, args))
-pub fn warn(comptime spec: []const u8, args: anytype) void {
-    _ = console().call("warn", .{fmt(spec, args)});
-}
-/// console.error(fmt(spec, args))  (named `err` - `error` is a Zig keyword)
-pub fn err(comptime spec: []const u8, args: anytype) void {
-    _ = console().call("error", .{fmt(spec, args)});
-}
-
-/// JSON.stringify / JSON.parse. `stringify` takes any JS Value; `parse` takes a
-/// string (literal or Value) and returns the parsed Value.
-pub const json = struct {
-    pub fn stringify(v: Value) Value {
-        return global().get("JSON").call("stringify", .{v});
-    }
-    pub fn parse(s: anytype) Value {
-        return global().get("JSON").call("parse", .{s});
-    }
-};
-
-/// localStorage - string key/value persistence. `get` returns a Value that is
-/// `null` when the key is absent (check with `.isNull()`); `set` stores any value
-/// (numbers/strings coerce). Keys are comptime (they are part of your app, not data).
-pub const storage = struct {
-    fn ls() Value {
-        return global().get("localStorage");
-    }
-    pub fn get(comptime key: []const u8) Value {
-        return ls().call("getItem", .{str(key)});
-    }
-    pub fn set(comptime key: []const u8, v: anytype) void {
-        _ = ls().call("setItem", .{ str(key), v });
-    }
-    pub fn remove(comptime key: []const u8) void {
-        _ = ls().call("removeItem", .{str(key)});
-    }
-    pub fn clear() void {
-        _ = ls().call("clear", .{});
-    }
-};
-
-// ---- fetch (async, callback-based - no Asyncify, no blocking) ------------
-// `fetch` resolves to a Response; `fetchJson`/`fetchText` skip straight to the
-// parsed body. Handle the result with `.then(&onData)` (and `.catch_(&onErr)`):
-// your callback is `fn(wz.Handle) void`, called with the resolved value.
-//
-//   fn load() void { _ = wz.fetchJson("/api/user").then(&onUser); }
-//   fn onUser(h: wz.Handle) void {
-//       const u = wz.wrap(h);
-//       name_el.setText(u.get("name"));
-//   }
-
-/// fetch(url) -> Promise that resolves to a Response (use `.json()`/`.text()` for
-/// the body). `url` is a string literal or a Value.
-pub fn fetch(url: anytype) Promise {
-    return .{ .j = global().call("fetch", .{url}) };
-}
-/// fetch(url) then r.json() -> Promise resolving DIRECTLY to the parsed JSON value.
-pub fn fetchJson(url: anytype) Promise {
-    return .{ .j = .{ .h = js_fetch_json(toH(url)) } };
-}
-/// fetch(url) then r.text() -> Promise resolving DIRECTLY to the body as a string.
-pub fn fetchText(url: anytype) Promise {
-    return .{ .j = .{ .h = js_fetch_text(toH(url)) } };
-}
-
-// ===========================================================================
-// Typed facades - thin wrappers so common code reads exactly like JS.
-// Each is just a Value plus typed methods; reach `.j` for anything not wrapped.
-// ===========================================================================
-
-// ===========================================================================
-// String building - the way JS uses template literals, with std.fmt-style `{}`.
-//   fmt("{} + {} = {}", .{a, b, a + b})   ~=   `${a} + ${b} = ${a + b}`
-// Placeholders accept integers, floats (truncated to integer), and string
-// literals. Returns a JS string Value ready to assign.
-//
-// Uses one shared buffer, so it is for sequential UI code (not reentrant).
-// ===========================================================================
-
-// ---- UI building helpers -------------------------------------------------
-// Convenience on top of the DOM facade so a Zig "page" reads declaratively
-// instead of repeating create/setClass/setAttr/append by hand. All take
-// comptime strings (the slice-by-value constraint), which suits static layout.
-
-/// A `<button>` labelled `label_text`, wired to `handler` (a `&fn` pointer) on
-/// click, appended to `parent`.
-pub fn button(
-    parent: Element,
-    comptime label_text: []const u8,
-    handler: *const anyopaque,
-) Element {
-    const b: Element = parent.textChild("button", "", label_text);
-    b.on("click", handler);
-    return b;
-}
-
-/// A `.out` result line (id `id`) that a handler writes into. Starts as a dash.
-pub fn output(parent: Element, comptime id: []const u8) Element {
-    const o: Element = parent.child("div", "out");
-    o.setId(id);
-    o.setText(str("\u{2014}"));
-    return o;
-}
-
-/// Build a JS string from a runtime byte buffer - the dynamic-length escape
-/// hatch that `str` (comptime) and `fmt` (numbers only) don't cover.
-pub fn strBuf(ptr: [*]const u8, len: u32) Value {
-    return .{ .h = js_str(ptr, len) };
-}
-
-// ===========================================================================
 // WASM hosting - load a sibling .wasm module and drive it from Zig.
 //
 // The module lives in ITS OWN linear memory (exported as `memory`); this bridge
@@ -6653,10 +6407,15 @@ pub fn strBuf(ptr: [*]const u8, len: u32) Value {
 // is requestAnimationFrame. Both are hidden behind `Site(...)` below so the
 // bridge reads like synchronous setup + a per-frame function.
 // ===========================================================================
+
 extern fn js_promise_register(ph: Handle) u32;
+
 extern fn js_promise_status(id: u32) u32;
+
 extern fn js_promise_take(id: u32) Handle;
+
 extern fn js_fetch_json(u: Handle) Handle;
+
 extern fn js_fetch_text(u: Handle) Handle;
 
 /// A live WebAssembly instance: its exports object and its (exported) memory.
@@ -7046,12 +6805,6 @@ pub fn Site(
 }
 
 // ===========================================================================
-// css - type-safe, runtime-mutable styling authored in Zig. Folded in here so
-// the bridge reaches it as `js.css.rule(...)` with no extra module to wire.
-// (Full design notes are inside the struct.)
-// ===========================================================================
-
-// ===========================================================================
 // ZIMR BOOT + DOM VERBS (ZIG_BRIDGE_PLAN Phase 2; doctrine D9-D11)
 //
 // Mechanism only - the PAGE IS DEFINED BY THE APP. start() does exactly:
@@ -7062,47 +6815,1274 @@ pub fn Site(
 // shared GPUDevice serves every canvas the app creates (D11).
 // ===========================================================================
 
-// ===========================================================================
-// THE ONE GLOBAL - every page-lifetime mutable in the bridge, in one place.
-//
-// The transpiled JS is single-threaded and has no init-order machinery, so
-// page singletons are unavoidable; what IS avoidable is scattering them.
-// Sub-structs group by domain; sizes are the working minimum:
-//   * scratch.read_staging: descriptor readSlice staging. Phase 3 reads
-//     bind-group/pipeline descriptor arrays through it - 64 KiB is the
-//     contract ceiling (asserted at the read site).
-//   * scratch.fmt: the sequential UI fmt builder (documented non-reentrant).
-//   * scratch.call_args: per-call handle marshalling (max arity 16).
-//   * scratch.dom_code: a key event's `code`, as long as the longest code
-//     that names a raylib key (dom_input.longest_dom_code_length).
-// ===========================================================================
+const ZimrBoot = struct {
+    fn note(comptime msg: []const u8) void {
+        // Route to console.log - the page's bottom log overlay mirrors it and
+        // devtools shows it. (The old bare <pre> rendered black-on-black on the
+        // dark page, which is why these diagnostics were invisible.)
+        _ = global().get("console").call("log", .{str(msg)});
+    }
 
-// ===========================================================================
-// PHASE 3a - the classic zimr wgpu contract (ZIG_BRIDGE_PLAN Phase 3)
-//
-// Mirrors src/bridge.zig verb-for-verb: u32 handles in one table,
-// singleton ids (device == queue == surface == 1), packed (w<<16)|h sizes,
-// texture formats as indices into the shared list below, and binary
-// descriptor blobs (3c) read from module memory. All verbs use the raw
-// numeric ABI (funcNum): params arrive as plain f64 numbers.
-// ===========================================================================
+    /// Surface uncaptured WebGPU validation errors (device 'uncapturederror').
+    /// These are otherwise SILENT - a bad pipeline/pass (e.g. a render pipeline
+    /// whose depth-stencil doesn't match the pass's depth attachment) just paints
+    /// black with no clue. Logging the GPU's own message turns "why is it black?"
+    /// into a one-line diagnosis, on-device (the page log mirrors console.error).
+    ///
+    /// ALSO paints it full-screen via `__wzFail`. console.error alone is not
+    /// enough on a phone: the bottom log overlay is `bottom:0` and
+    /// `pointer-events:none`, so inside an embedded viewer (the Claude app's
+    /// HTML preview, an iframe, any chrome that overlaps the bottom strip) it can
+    /// be cropped out of sight - and a webview has no devtools to fall back on.
+    /// A command-buffer rejection paints black anyway, so there is nothing to
+    /// occlude: taking the screen is strictly better than being invisible. The
+    /// panel is selectable, so the GPU's exact wording can be copied off-device.
+    fn onGpuError(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        const msg: Value = e.get("error").get("message");
+        _ = global().get("console").call("error", .{ str("[zimr GPU] "), msg });
+        const fail: Value = global().get("__wzFail");
+        // __wzFail takes ONE argument, so the message goes through alone; the
+        // panel supplies its own heading.
+        if (fail.h != 0) {
+            _ = fail.call("call", .{ global(), msg });
+        }
+    }
 
-// ===========================================================================
-// WASI shim - wasm32-wasi REACTOR support for classic zimr apps. Every stub
-// mirrors the per-example pages' minimal shim: 0 for success-ish ops, EBADF
-// (8) for filesystem ops; random_get is real (crypto over a fresh
-// module-memory view); proc_exit paints the self-reporting overlay.
-// ===========================================================================
+    fn modU8(ptr: u32, len: u32) Value {
+        const buf: Value = g.boot.module_exports.get("memory").get("buffer");
+        return global().get("Uint8Array").new(.{ buf, ptr, len });
+    }
+    fn modStr(ptr: Handle, len: Handle) Value {
+        const p: u32 = @trunc(js_to_num(ptr));
+        const l: u32 = @trunc(js_to_num(len));
+        return g.boot.utf8_decoder.call("decode", .{modU8(p, l)});
+    }
 
-// ===========================================================================
-// CLASSIC INPUT WIRING - zimr apps receive input by EXPORTING push
-// functions (input_push_mouse_move, zimr_input_push_touch_down, ...) that
-// the host calls from DOM events. Conventions mirror the shipped pages:
-// coordinates are CSS px relative to the canvas, wheel sends (dx, -dy),
-// pointerdown pushes a move first then the button, window-level move/up
-// only while dragging, touches by identifier, contextmenu suppressed.
-// Keys and mouse buttons go out in raylib's numbering, translated by
-// dom_input.zig: a key by `KeyboardEvent.code` (the physical key, whatever
-// the layout; a key raylib has no name for is not sent), a button with the
-// DOM's 1 (the wheel) and 2 (the right button) swapped.
-// ===========================================================================
+    // ---- the "dom" import namespace (D10) --------------------------------
+    fn domCreate(tp: Handle, tl: Handle) u32 {
+        return (Value{ .h = js_global() }).get("document").call("createElement", .{modStr(tp, tl)}).h;
+    }
+    fn domAttachBody(h: Handle) void {
+        _ = document().body().j.call("appendChild", .{Value{ .h = @trunc(js_to_num(h)) }});
+    }
+    fn domAppend(parent: Handle, child: Handle) void {
+        const p: Value = .{ .h = @trunc(js_to_num(parent)) };
+        _ = p.call("appendChild", .{Value{ .h = @trunc(js_to_num(child)) }});
+    }
+    fn domSetText(
+        h: Handle,
+        p: Handle,
+        l: Handle,
+    ) void {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        e.set("textContent", modStr(p, l));
+    }
+    fn domSetAttr(
+        h: Handle,
+        kp: Handle,
+        kl: Handle,
+        vp: Handle,
+        vl: Handle,
+    ) void {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        _ = e.call("setAttribute", .{ modStr(kp, kl), modStr(vp, vl) });
+    }
+    fn domSetStyle(
+        h: Handle,
+        p: Handle,
+        l: Handle,
+    ) void {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        e.get("style").set("cssText", modStr(p, l));
+    }
+    fn domCss(p: Handle, l: Handle) void {
+        const st: Value = (Value{ .h = js_global() }).get("document").call("createElement", .{str("style")});
+        st.set("textContent", modStr(p, l));
+        _ = document().head().j.call("appendChild", .{st});
+    }
+    fn domRemove(h: Handle) void {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        _ = e.call("remove", .{});
+    }
+    fn onDomEvent(ev: Handle) void {
+        // The event carries our code on the listener target (data-zb attr).
+        const e: Value = .{ .h = ev };
+        const tgt: Value = e.get("currentTarget");
+        const code: u32 = @trunc(js_to_num(tgt.call("getAttribute", .{str("data-zbcode")}).h));
+        if (g.boot.event_count < g.boot.event_ring.len) {
+            g.boot.event_ring[g.boot.event_count] = .{
+                .code = code,
+                .a = @floatCast(js_to_num(e.get("offsetX").h)),
+                .b = @floatCast(js_to_num(e.get("offsetY").h)),
+            };
+            g.boot.event_count += 1;
+        }
+    }
+    fn domListen(
+        h: Handle,
+        ep: Handle,
+        el: Handle,
+        code: Handle,
+    ) void {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        _ = e.call("setAttribute", .{ str("data-zbcode"), Value{ .h = code } });
+        _ = e.call("addEventListener", .{ modStr(ep, el), func(&onDomEvent) });
+    }
+    fn domPollEvent(out_ptr: Handle) u32 {
+        if (g.boot.event_count == 0) {
+            return 0;
+        }
+        g.boot.event_count -= 1;
+        const rec: EventRecord = g.boot.event_ring[g.boot.event_count];
+        const p: u32 = @trunc(js_to_num(out_ptr));
+        const dv: Value = global().get("DataView").new(.{g.boot.module_exports.get("memory").get("buffer")});
+        _ = dv.call("setUint32", .{ p, rec.code, true });
+        _ = dv.call("setFloat32", .{ p + 4, rec.a, true });
+        _ = dv.call("setFloat32", .{ p + 8, rec.b, true });
+        return 1;
+    }
+    fn domCanvasConfigure(h: Handle) u32 {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        const ctx: Value = e.call("getContext", .{str("webgpu")});
+        if (ctx.isNull()) {
+            return 0;
+        }
+        // Force rgba8unorm rather than getPreferredCanvasFormat() (bgra8unorm on
+        // desktop). The engine is RGBA8 everywhere - render textures are
+        // rgba8unorm - so a BGRA8 canvas makes the cached 2D "shapes" pipeline
+        // (built for the backbuffer format) incompatible with render-texture
+        // passes. One format across the whole engine keeps that pipeline valid
+        // in both the swapchain and RTT passes.
+        const preferred_format: Value = str("rgba8unorm");
+        const cfg: Value = global().get("Object").new(.{});
+        cfg.set("device", g.boot.gpu_device);
+        cfg.set("format", preferred_format);
+        cfg.set("alphaMode", str("opaque"));
+        _ = ctx.call("configure", .{cfg});
+        _ = g.boot.canvas_contexts.call("set", .{ Value{ .h = @trunc(js_to_num(h)) }, ctx });
+        return 1;
+    }
+    fn domCanvasSize(h: Handle, out_ptr: Handle) void {
+        const e: Value = .{ .h = @trunc(js_to_num(h)) };
+        const dpr: f64 = js_to_num(global().get("devicePixelRatio").h);
+        const w: u32 = @trunc(js_to_num(e.get("clientWidth").h) * dpr);
+        const ht: u32 = @trunc(js_to_num(e.get("clientHeight").h) * dpr);
+        e.set("width", Value{ .h = js_num(@floatFromInt(w)) });
+        e.set("height", Value{ .h = js_num(@floatFromInt(ht)) });
+        const p: u32 = @trunc(js_to_num(out_ptr));
+        const dv: Value = global().get("DataView").new(.{g.boot.module_exports.get("memory").get("buffer")});
+        _ = dv.call("setUint32", .{ p, w, true });
+        _ = dv.call("setUint32", .{ p + 4, ht, true });
+    }
+
+    // ---- user-file port (drag-and-drop + the mobile file picker) ---------
+    //
+    // Both entry points feed ONE queue, because a caller should not care whether the bytes
+    // arrived by drag or by picker - see `web.zig`'s `userfile` for the full rationale.
+    //
+    // * `preventDefault` is needed on BOTH `dragover` AND `drop`. Without the first the drop
+    // event never fires; without the second the browser NAVIGATES AWAY to the dropped file,
+    // discarding the whole app. It is the classic first bug in every web drop implementation
+    // and it looks exactly like "the page crashed".
+
+    fn ufEnsureQueue() void {
+        if (g.userfile.queue.h == 0) {
+            g.userfile.queue = global().get("Array").new(.{});
+        }
+    }
+
+    /// A resolved `arrayBuffer()`: push `{ name, bytes }` onto the queue.
+    ///
+    /// The name is carried on the promise itself (`p.__zimr_name`) rather than in a Zig-side
+    /// map, because several reads can be in flight at once and the transpiler forbids closures
+    /// - so the only place to hang per-operation state is the JS object already in hand.
+    fn ufOnBuffer(buf_h: Handle) void {
+        ufEnsureQueue();
+        const buf: Value = .{ .h = buf_h };
+        const rec: Value = global().get("Object").new(.{});
+        rec.set("bytes", global().get("Uint8Array").new(.{buf}));
+        rec.set("name", g.userfile.pending_name);
+        _ = g.userfile.queue.call("push", .{rec});
+    }
+
+    fn ufAcceptFile(file: Value) void {
+        // Remember the name before the read starts; `ufOnBuffer` has no other way to get it.
+        g.userfile.pending_name = file.get("name");
+        ignoreRejection(file.call("arrayBuffer", .{}).call("then", .{func(&ufOnBuffer)}));
+    }
+
+    fn ufOnDragOver(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        _ = e.call("preventDefault", .{});
+    }
+
+    fn ufOnDrop(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        _ = e.call("preventDefault", .{});
+        const dt: Value = e.get("dataTransfer");
+        if (dt.isNull()) {
+            return;
+        }
+        const files: Value = dt.get("files");
+        if (files.isNull()) {
+            return;
+        }
+        const n: f64 = js_to_num(files.get("length").h);
+        var i: f64 = 0;
+        while (i < n) : (i += 1) {
+            ufAcceptFile(files.call("item", .{num(i)}));
+        }
+    }
+
+    fn ufOnPicked(ev: Handle) void {
+        const e: Value = .{ .h = ev };
+        const picker: Value = e.get("target");
+        const files: Value = picker.get("files");
+        if (files.isNull()) {
+            return;
+        }
+        const n: f64 = js_to_num(files.get("length").h);
+        var i: f64 = 0;
+        while (i < n) : (i += 1) {
+            ufAcceptFile(files.call("item", .{num(i)}));
+        }
+        // Clear the value, or picking the SAME file twice fires no second `change` event.
+        picker.set("value", str(""));
+    }
+
+    fn ufEnsureListening() void {
+        if (g.userfile.listening) {
+            return;
+        }
+        g.userfile.listening = true;
+        ufEnsureQueue();
+        const target: Value = global().get("window");
+        _ = target.call("addEventListener", .{ str("dragover"), func(&ufOnDragOver) });
+        _ = target.call("addEventListener", .{ str("drop"), func(&ufOnDrop) });
+    }
+
+    fn ufPendingCount() f64 {
+        if (g.userfile.queue.h == 0) {
+            return 0;
+        }
+        return js_to_num(g.userfile.queue.get("length").h);
+    }
+
+    fn ufHead() Value {
+        return g.userfile.queue.call("at", .{num(0)});
+    }
+
+    fn ufNextSize() f64 {
+        if (ufPendingCount() == 0) {
+            return 0;
+        }
+        return js_to_num(ufHead().get("bytes").get("length").h);
+    }
+
+    fn ufNextName(out_ptr: f64, out_cap: f64) f64 {
+        if (ufPendingCount() == 0) {
+            return 0;
+        }
+        if (g.wgpu.text_encoder.isNull()) {
+            g.wgpu.text_encoder = global().get("TextEncoder").new(.{});
+        }
+        const bytes: Value = g.wgpu.text_encoder.call("encode", .{ufHead().get("name")});
+        const n: f64 = js_to_num(bytes.get("length").h);
+        if (n > out_cap) {
+            return 0;
+        }
+        _ = modU8(@trunc(out_ptr), @trunc(n)).call("set", .{bytes});
+        return n;
+    }
+
+    /// Copy the head's bytes out and drop it. A too-small buffer returns 0 and LEAVES the file
+    /// queued, so a caller that mis-sized can size again from `nextSize` and retry rather than
+    /// silently lose the drop.
+    fn ufReadNext(out_ptr: f64, out_cap: f64) f64 {
+        if (ufPendingCount() == 0) {
+            return 0;
+        }
+        const bytes: Value = ufHead().get("bytes");
+        const n: f64 = js_to_num(bytes.get("length").h);
+        if (n > out_cap) {
+            return 0;
+        }
+        _ = modU8(@trunc(out_ptr), @trunc(n)).call("set", .{bytes});
+        _ = g.userfile.queue.call("shift", .{});
+        return n;
+    }
+
+    fn ufDiscardNext() void {
+        if (ufPendingCount() == 0) {
+            return;
+        }
+        _ = g.userfile.queue.call("shift", .{});
+    }
+
+    /// Park the invisible `<input type="file">` over the caller's button rectangle.
+    ///
+    /// Opacity 0 rather than `display:none` or `visibility:hidden`: a hidden input cannot be
+    /// tapped, and the whole point is that the TAP must land on a real DOM element so the
+    /// browser sees a genuine user gesture. The canvas still draws the visible button.
+    fn ufSetPickerRect(
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+        accept_ptr: f64,
+        accept_len: f64,
+    ) void {
+        ufEnsureListening();
+        if (g.userfile.input.h == 0) {
+            const el: Value = document().j.call("createElement", .{str("input")});
+            el.set("type", str("file"));
+            const st: Value = el.get("style");
+            st.set("position", str("fixed"));
+            st.set("opacity", str("0"));
+            st.set("zIndex", str("99998"));
+            st.set("cursor", str("pointer"));
+            _ = el.call("addEventListener", .{ str("change"), func(&ufOnPicked) });
+            _ = document().body().j.call("appendChild", .{el});
+            g.userfile.input = el;
+        }
+        const el: Value = g.userfile.input;
+        el.set("accept", modStr(js_num(accept_ptr), js_num(accept_len)));
+        const st: Value = el.get("style");
+        st.set("display", str("block"));
+        ovSetPx(st, "left", x);
+        ovSetPx(st, "top", y);
+        ovSetPx(st, "width", w);
+        ovSetPx(st, "height", h);
+    }
+
+    /// The Save overlay: created once, a real `<a>` so a tap on it is a genuine gesture - which a
+    /// mobile browser requires before it will save a file, exactly as it does before opening a
+    /// picker.
+    fn ufEnsureSaveAnchor() void {
+        if (g.userfile.save.h != 0) {
+            return;
+        }
+        const el: Value = document().j.call("createElement", .{str("a")});
+        const st: Value = el.get("style");
+        st.set("position", str("fixed"));
+        st.set("opacity", str("0"));
+        st.set("zIndex", str("99998"));
+        st.set("cursor", str("pointer"));
+        st.set("display", str("none"));
+        _ = document().body().j.call("appendChild", .{el});
+        g.userfile.save = el;
+    }
+
+    /// Make `bytes` the file the Save overlay hands over, named `name`. The Blob takes a COPY of
+    /// wasm memory, so the caller may reuse its buffer the moment this returns.
+    fn ufOffer(ptr: f64, len: f64, name_ptr: f64, name_len: f64) void {
+        ufEnsureSaveAnchor();
+        const view: Value = modU8(@trunc(ptr), @trunc(len));
+        const copy: Value = global().get("Uint8Array").new(.{view});
+        const parts: Value = global().get("Array").new(.{});
+        _ = parts.call("push", .{copy});
+        const opts: Value = global().get("Object").new(.{});
+        opts.set("type", str("application/octet-stream"));
+        const blob: Value = global().get("Blob").new(.{ parts, opts });
+        if (g.userfile.save_url.h != 0) {
+            _ = global().get("URL").call("revokeObjectURL", .{g.userfile.save_url});
+        }
+        const url: Value = global().get("URL").call("createObjectURL", .{blob});
+        g.userfile.save_url = url;
+        g.userfile.save.set("href", url);
+        g.userfile.save.set("download", modStr(js_num(name_ptr), js_num(name_len)));
+    }
+
+    fn ufSetSaveRect(x: f64, y: f64, w: f64, h: f64) void {
+        ufEnsureSaveAnchor();
+        const st: Value = g.userfile.save.get("style");
+        st.set("display", str("block"));
+        ovSetPx(st, "left", x);
+        ovSetPx(st, "top", y);
+        ovSetPx(st, "width", w);
+        ovSetPx(st, "height", h);
+    }
+
+    fn ufHideSave() void {
+        if (g.userfile.save.h == 0) {
+            return;
+        }
+        g.userfile.save.get("style").set("display", str("none"));
+    }
+
+    fn ufHidePicker() void {
+        if (g.userfile.input.h == 0) {
+            return;
+        }
+        g.userfile.input.get("style").set("display", str("none"));
+    }
+
+    // ---- text-input overlay port (mobile soft-keyboard for editable widgets) ----
+    // Ported from the proven src/web/zimr.ts (turn 302; zhobo63-style VISIBLE
+    // overlay). A real <input> is positioned over the wasm-drawn widget, focused
+    // right after display:block (the trick that pops the mobile keyboard), and
+    // polled each frame for its value. TS closures become named handlers here
+    // (the transpiler forbids closures / indirect calls - callbacks are `func`).
+    // Coords are identity: exact under .responsive (CSS px == wasm px); .fit-mode
+    // letterbox scaling and the char-filter `input` listener are follow-ups.
+    // overlay state lives in g.overlay (the page singleton) - see BridgeGlobals.
+
+    fn ovKeyIs(k: Value, comptime lit: []const u8) bool {
+        return js_to_num(k.call("localeCompare", .{str(lit)}).h) == 0;
+    }
+    fn ovSetPx(s: Value, comptime field: []const u8, v: f64) void {
+        const i: i32 = @trunc(v);
+        s.set(field, fmt("{}px", .{i}));
+    }
+    fn ovRgbCss(rgba_h: Handle) Value {
+        // Alpha treated opaque: fmt truncates floats (no fractional alpha), and
+        // the focus swap reads fine fully-opaque. Full alpha is a follow-up.
+        const rgba: u32 = @trunc(js_to_num(rgba_h));
+        const r: u32 = rgba & 0xFF;
+        const gg: u32 = (rgba >> 8) & 0xFF;
+        const b: u32 = (rgba >> 16) & 0xFF;
+        return fmt("rgb({},{},{})", .{ r, gg, b });
+    }
+    fn overlayOnBlur(_: Handle) void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        g.overlay.el.get("style").set("display", str("none"));
+        g.overlay.visible = false;
+    }
+    fn overlayOnKeydown(ev: Handle) void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        const e: Value = .{ .h = ev };
+        const key: Value = e.get("key");
+        if (ovKeyIs(key, "Enter")) {
+            _ = e.call("preventDefault", .{});
+            _ = g.overlay.el.call("blur", .{});
+        } else if (ovKeyIs(key, "Escape")) {
+            _ = e.call("preventDefault", .{});
+            if (g.overlay.escape_clears) {
+                g.overlay.el.set("value", str(""));
+            }
+            _ = g.overlay.el.call("blur", .{});
+        } else if (g.overlay.allow_tab and ovKeyIs(key, "Tab")) {
+            _ = e.call("preventDefault", .{});
+            const a: Value = g.overlay.el.get("selectionStart");
+            const b: Value = g.overlay.el.get("selectionEnd");
+            _ = g.overlay.el.call("setRangeText", .{ str("\t"), a, b, str("end") });
+        }
+    }
+    fn ensureOverlayInput() void {
+        if (g.overlay.el.h != 0) {
+            return;
+        }
+        const el: Value = document().j.call("createElement", .{str("input")});
+        el.set("type", str("text"));
+        el.set("autocomplete", str("off"));
+        el.set("autocapitalize", str("off"));
+        el.set("spellcheck", false);
+        el.set("enterKeyHint", str("done"));
+        const s: Value = el.get("style");
+        s.set("position", str("fixed"));
+        s.set("zIndex", str("999"));
+        s.set("boxSizing", str("border-box"));
+        s.set("margin", str("0"));
+        s.set("padding", str("0 4px"));
+        s.set("border", str("none"));
+        s.set("outline", str("none"));
+        s.set("display", str("none"));
+        _ = el.call("addEventListener", .{ str("blur"), func(&overlayOnBlur) });
+        _ = el.call("addEventListener", .{ str("keydown"), func(&overlayOnKeydown) });
+        _ = document().body().j.call("appendChild", .{el});
+        g.overlay.el = el;
+    }
+    fn domShowOverlayInput(
+        x: Handle,
+        y: Handle,
+        w: Handle,
+        h: Handle,
+        text_ptr: Handle,
+        text_len: Handle,
+        font_px: Handle,
+        fg: Handle,
+        bg: Handle,
+    ) void {
+        ensureOverlayInput();
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        const tlen: u32 = @trunc(js_to_num(text_len));
+        if (tlen > 0) {
+            g.overlay.el.set("value", modStr(text_ptr, text_len));
+        } else {
+            g.overlay.el.set("value", str(""));
+        }
+        const s: Value = g.overlay.el.get("style");
+        s.set("fontFamily", str("ui-monospace, monospace"));
+        ovSetPx(s, "fontSize", js_to_num(font_px));
+        ovSetPx(s, "lineHeight", @max(1.0, js_to_num(h)));
+        s.set("color", ovRgbCss(fg));
+        s.set("backgroundColor", ovRgbCss(bg));
+        ovSetPx(s, "left", js_to_num(x));
+        ovSetPx(s, "top", js_to_num(y));
+        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
+        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
+        s.set("display", str("block"));
+        g.overlay.visible = true;
+        // Focus must come AFTER display:block - focusing a display:none element
+        // is a no-op on mobile, and this focus is what raises the soft keyboard.
+        _ = g.overlay.el.call("focus", .{});
+        const n: u32 = g.overlay.el.get("value").getU32("length");
+        _ = g.overlay.el.call("setSelectionRange", .{ n, n });
+    }
+    fn domHideOverlayInput() void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        _ = g.overlay.el.call("blur", .{});
+        g.overlay.el.get("style").set("display", str("none"));
+        g.overlay.visible = false;
+    }
+    fn domUpdateOverlayInputRect(x: Handle, y: Handle, w: Handle, h: Handle) void {
+        if (g.overlay.el.h == 0 or !g.overlay.visible) {
+            return;
+        }
+        const s: Value = g.overlay.el.get("style");
+        ovSetPx(s, "left", js_to_num(x));
+        ovSetPx(s, "top", js_to_num(y));
+        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
+        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
+    }
+    fn domOverlayInputIsVisible() u32 {
+        return if (g.overlay.visible) 1 else 0;
+    }
+    fn domGetOverlayInputText(out_ptr: Handle, max_len: Handle) usize {
+        if (g.overlay.el.h == 0) {
+            return 0;
+        }
+        const v: Value = g.overlay.el.get("value");
+        if (v.getU32("length") == 0) {
+            return 0;
+        }
+        const enc: Value = global().get("TextEncoder").new(.{});
+        const bytes: Value = enc.call("encode", .{v});
+        const blen: u32 = bytes.getU32("length");
+        const max: u32 = @trunc(js_to_num(max_len));
+        const n: u32 = @min(blen, max);
+        const p: u32 = @trunc(js_to_num(out_ptr));
+        _ = modU8(p, n).call("set", .{bytes.call("subarray", .{ @as(u32, 0), n })});
+        return n;
+    }
+    /// Sets the overlay input's text - zimr's filtered version of an edit - and puts its caret at byte `caret` of the
+    /// text. The browser counts positions in UTF-16 code units, so the caret's place there is the length of the text
+    /// before it, decoded.
+    fn domSetOverlayInputText(text_ptr: Handle, text_len: Handle, caret: Handle) void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        g.overlay.el.set("value", modStr(text_ptr, text_len));
+        const caret_units: u32 = modStr(text_ptr, caret).getU32("length");
+        _ = g.overlay.el.call("setSelectionRange", .{ caret_units, caret_units });
+    }
+    fn domSetInputMode(ptr: Handle, len: Handle) void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        const l: u32 = @trunc(js_to_num(len));
+        if (l == 0) {
+            g.overlay.el.set("inputMode", str(""));
+        } else {
+            g.overlay.el.set("inputMode", modStr(ptr, len));
+        }
+    }
+    fn domSetOverlayInputPassword(on: Handle) void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        g.overlay.el.set("type", if (js_to_num(on) != 0) str("password") else str("text"));
+    }
+    fn domSetOverlayInputReadOnly(on: Handle) void {
+        if (g.overlay.el.h == 0) {
+            return;
+        }
+        g.overlay.el.set("readOnly", js_to_num(on) != 0);
+    }
+    fn domSetOverlayInputEscapeClears(on: Handle) void {
+        g.overlay.escape_clears = js_to_num(on) != 0;
+    }
+    fn domSetOverlayInputAllowTab(on: Handle) void {
+        g.overlay.allow_tab = js_to_num(on) != 0;
+    }
+    fn domSetOverlayInputCharFilters(flags: Handle) void {
+        g.overlay.char_filters = @trunc(js_to_num(flags));
+    }
+
+    // ---- textarea overlay port (the multiline sibling of the <input> above) ----
+    // Same VISIBLE-overlay doctrine, but its OWN page singleton (g.overlay_ta):
+    // only one widget is focused at a time, yet an <input> and a <textarea> are
+    // different DOM nodes, so caching one handle for both would dangle on a type
+    // switch. Everything mirrors the <input> port except Enter handling - see
+    // domSetOverlayTextareaCtrlEnterForNewline.
+
+    fn overlayTaOnBlur(_: Handle) void {
+        if (g.overlay_ta.el.h == 0) {
+            return;
+        }
+        g.overlay_ta.el.get("style").set("display", str("none"));
+        g.overlay_ta.visible = false;
+    }
+    fn overlayTaOnKeydown(ev: Handle) void {
+        if (g.overlay_ta.el.h == 0) {
+            return;
+        }
+        const e: Value = .{ .h = ev };
+        const key: Value = e.get("key");
+        if (ovKeyIs(key, "Enter")) {
+            // Default (ctrl_enter off): fall through - let the browser insert the
+            // newline as it normally would. When on: plain Enter commits (blur),
+            // and Ctrl/Cmd+Enter inserts the '\n' manually.
+            if (g.overlay_ta.ctrl_enter_for_newline) {
+                _ = e.call("preventDefault", .{});
+                const ctrl: bool = js_to_num(e.get("ctrlKey").h) != 0 or
+                    js_to_num(e.get("metaKey").h) != 0;
+                if (ctrl) {
+                    const a: Value = g.overlay_ta.el.get("selectionStart");
+                    const b: Value = g.overlay_ta.el.get("selectionEnd");
+                    _ = g.overlay_ta.el.call("setRangeText", .{ str("\n"), a, b, str("end") });
+                } else {
+                    _ = g.overlay_ta.el.call("blur", .{});
+                }
+            }
+        } else if (ovKeyIs(key, "Escape")) {
+            _ = e.call("preventDefault", .{});
+            if (g.overlay_ta.escape_clears) {
+                g.overlay_ta.el.set("value", str(""));
+            }
+            _ = g.overlay_ta.el.call("blur", .{});
+        } else if (g.overlay_ta.allow_tab and ovKeyIs(key, "Tab")) {
+            _ = e.call("preventDefault", .{});
+            const a: Value = g.overlay_ta.el.get("selectionStart");
+            const b: Value = g.overlay_ta.el.get("selectionEnd");
+            _ = g.overlay_ta.el.call("setRangeText", .{ str("\t"), a, b, str("end") });
+        }
+    }
+    fn ensureOverlayTextarea() void {
+        if (g.overlay_ta.el.h != 0) {
+            return;
+        }
+        const el: Value = document().j.call("createElement", .{str("textarea")});
+        el.set("autocomplete", str("off"));
+        el.set("autocapitalize", str("off"));
+        el.set("spellcheck", false);
+        const s: Value = el.get("style");
+        s.set("position", str("fixed"));
+        s.set("zIndex", str("999"));
+        s.set("boxSizing", str("border-box"));
+        s.set("margin", str("0"));
+        s.set("padding", str("2px 4px"));
+        s.set("border", str("none"));
+        s.set("outline", str("none"));
+        s.set("resize", str("none"));
+        s.set("overflow", str("auto"));
+        s.set("whiteSpace", str("pre-wrap"));
+        s.set("display", str("none"));
+        _ = el.call("addEventListener", .{ str("blur"), func(&overlayTaOnBlur) });
+        _ = el.call("addEventListener", .{ str("keydown"), func(&overlayTaOnKeydown) });
+        _ = document().body().j.call("appendChild", .{el});
+        g.overlay_ta.el = el;
+    }
+    fn domShowOverlayTextarea(
+        x: Handle,
+        y: Handle,
+        w: Handle,
+        h: Handle,
+        text_ptr: Handle,
+        text_len: Handle,
+        font_px: Handle,
+        fg: Handle,
+        bg: Handle,
+    ) void {
+        ensureOverlayTextarea();
+        if (g.overlay_ta.el.h == 0) {
+            return;
+        }
+        const tlen: u32 = @trunc(js_to_num(text_len));
+        if (tlen > 0) {
+            g.overlay_ta.el.set("value", modStr(text_ptr, text_len));
+        } else {
+            g.overlay_ta.el.set("value", str(""));
+        }
+        const s: Value = g.overlay_ta.el.get("style");
+        s.set("fontFamily", str("ui-monospace, monospace"));
+        ovSetPx(s, "fontSize", js_to_num(font_px));
+        // Multiline: line spacing follows the FONT, not the box height. The
+        // <input> sets lineHeight == h to center its single line; a textarea
+        // wants normal leading so wrapped rows read correctly.
+        ovSetPx(s, "lineHeight", @max(1.0, js_to_num(font_px) * 1.3));
+        s.set("color", ovRgbCss(fg));
+        s.set("backgroundColor", ovRgbCss(bg));
+        ovSetPx(s, "left", js_to_num(x));
+        ovSetPx(s, "top", js_to_num(y));
+        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
+        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
+        s.set("display", str("block"));
+        g.overlay_ta.visible = true;
+        // Focus AFTER display:block - focusing a display:none node is a no-op on
+        // mobile, and this focus is what raises the soft keyboard.
+        _ = g.overlay_ta.el.call("focus", .{});
+        const n: u32 = g.overlay_ta.el.get("value").getU32("length");
+        _ = g.overlay_ta.el.call("setSelectionRange", .{ n, n });
+    }
+    fn domHideOverlayTextarea() void {
+        if (g.overlay_ta.el.h == 0) {
+            return;
+        }
+        _ = g.overlay_ta.el.call("blur", .{});
+        g.overlay_ta.el.get("style").set("display", str("none"));
+        g.overlay_ta.visible = false;
+    }
+    fn domUpdateOverlayTextareaRect(x: Handle, y: Handle, w: Handle, h: Handle) void {
+        if (g.overlay_ta.el.h == 0 or !g.overlay_ta.visible) {
+            return;
+        }
+        const s: Value = g.overlay_ta.el.get("style");
+        ovSetPx(s, "left", js_to_num(x));
+        ovSetPx(s, "top", js_to_num(y));
+        ovSetPx(s, "width", @max(1.0, js_to_num(w)));
+        ovSetPx(s, "height", @max(1.0, js_to_num(h)));
+    }
+    fn domOverlayTextareaIsVisible() u32 {
+        return if (g.overlay_ta.visible) 1 else 0;
+    }
+    /// Sets the overlay text area's text and caret, as `domSetOverlayInputText` does the input's.
+    fn domSetOverlayTextareaText(text_ptr: Handle, text_len: Handle, caret: Handle) void {
+        if (g.overlay_ta.el.h == 0) {
+            return;
+        }
+        g.overlay_ta.el.set("value", modStr(text_ptr, text_len));
+        const caret_units: u32 = modStr(text_ptr, caret).getU32("length");
+        _ = g.overlay_ta.el.call("setSelectionRange", .{ caret_units, caret_units });
+    }
+    fn domGetOverlayTextareaText(out_ptr: Handle, max_len: Handle) usize {
+        if (g.overlay_ta.el.h == 0) {
+            return 0;
+        }
+        const v: Value = g.overlay_ta.el.get("value");
+        if (v.getU32("length") == 0) {
+            return 0;
+        }
+        const enc: Value = global().get("TextEncoder").new(.{});
+        const bytes: Value = enc.call("encode", .{v});
+        const blen: u32 = bytes.getU32("length");
+        const max: u32 = @trunc(js_to_num(max_len));
+        const n: u32 = @min(blen, max);
+        const p: u32 = @trunc(js_to_num(out_ptr));
+        _ = modU8(p, n).call("set", .{bytes.call("subarray", .{ @as(u32, 0), n })});
+        return n;
+    }
+    fn domSetOverlayTextareaReadOnly(on: Handle) void {
+        if (g.overlay_ta.el.h == 0) {
+            return;
+        }
+        g.overlay_ta.el.set("readOnly", js_to_num(on) != 0);
+    }
+    fn domSetOverlayTextareaEscapeClears(on: Handle) void {
+        g.overlay_ta.escape_clears = js_to_num(on) != 0;
+    }
+    fn domSetOverlayTextareaAllowTab(on: Handle) void {
+        g.overlay_ta.allow_tab = js_to_num(on) != 0;
+    }
+    fn domSetOverlayTextareaCharFilters(flags: Handle) void {
+        g.overlay_ta.char_filters = @trunc(js_to_num(flags));
+    }
+    fn domSetOverlayTextareaCtrlEnterForNewline(on: Handle) void {
+        g.overlay_ta.ctrl_enter_for_newline = js_to_num(on) != 0;
+    }
+
+    // Fill a wasm buffer with cryptographically-strong random bytes from the
+    // host's crypto.getRandomValues - the backing for `Config.rng_seed == null`
+    // (a fresh per-launch seed for `Frame.random`). Same idiom as the WASI
+    // random_get shim; a byte view over [ptr, ptr+len) is filled in place.
+    fn domCryptoRandomFill(ptr: Handle, len: Handle) void {
+        const p: u32 = @trunc(js_to_num(ptr));
+        const n: u32 = @trunc(js_to_num(len));
+        _ = global().get("crypto").call("getRandomValues", .{modU8(p, n)});
+    }
+
+    // ---- minimal "wgpu" verbs for the Phase-2 slice ----------------------
+    fn wgpuCurrentView(h: Handle) u32 {
+        const ctx: Value = g.boot.canvas_contexts.call("get", .{Value{ .h = @trunc(js_to_num(h)) }});
+        return ctx.call("getCurrentTexture", .{}).call("createView", .{}).h;
+    }
+    fn wgpuClear(
+        view: Handle,
+        red: Handle,
+        green: Handle,
+        blue: Handle,
+    ) void {
+        const enc: Value = g.boot.gpu_device.call("createCommandEncoder", .{});
+        const att: Value = global().get("Object").new(.{});
+        att.set("view", Value{ .h = @trunc(js_to_num(view)) });
+        const col: Value = global().get("Object").new(.{});
+        col.set("r", Value{ .h = red });
+        col.set("g", Value{ .h = green });
+        col.set("b", Value{ .h = blue });
+        col.set("a", Value{ .h = js_num(1.0) });
+        att.set("clearValue", col);
+        att.set("loadOp", str("clear"));
+        att.set("storeOp", str("store"));
+        const atts: Value = global().get("Array").new(.{});
+        _ = atts.call("push", .{att});
+        const desc: Value = global().get("Object").new(.{});
+        desc.set("colorAttachments", atts);
+        const pass: Value = enc.call("beginRenderPass", .{desc});
+        _ = pass.call("end", .{});
+        const cmd: Value = enc.call("finish", .{});
+        const cmds: Value = global().get("Array").new(.{});
+        _ = cmds.call("push", .{cmd});
+        _ = g.boot.gpu_queue.call("submit", .{cmds});
+    }
+
+    // ---- boot state machine ----------------------------------------------
+    // GPU timing: complete the in-flight timestamp readback if the GPU has
+    // finished. Runs once per frame (top of stage 4). When the map resolves,
+    // sum the per-pass (end-begin) deltas via __zimrGpuMs, stash ms, unmap.
+    fn pollGpuTiming() void {
+        if (!g.wgpu.ts_pending) {
+            return;
+        }
+        const status: u32 = js_promise_status(g.wgpu.ts_pid);
+        if (status == 0) {
+            return; // still mapping
+        }
+        _ = js_promise_take(g.wgpu.ts_pid);
+        if (status == 1) {
+            const bytes: f64 = @floatFromInt(g.wgpu.ts_pairs_inflight * 2 * 8);
+            const zero_v: Value = .{ .h = js_num(0) };
+            const bytes_v: Value = .{ .h = js_num(bytes) };
+            const ab: Value = g.wgpu.ts_read_buf.call("getMappedRange", .{ zero_v, bytes_v });
+            const pairs_f: f64 = @floatFromInt(g.wgpu.ts_pairs_inflight);
+            const ms: f64 = js_to_num(global().call("__zimrGpuMs", .{ ab, Value{ .h = js_num(pairs_f) } }).h);
+            g.wgpu.gpu_ms_last = ms;
+            _ = g.wgpu.ts_read_buf.call("unmap", .{});
+        }
+        g.wgpu.ts_pending = false;
+    }
+
+    /// The one rAF callback that drives everything. While booting (stages 1-3)
+    /// it polls the in-flight promise and hands the result to advance(); once
+    /// running (stage 4) it ticks one frame of the wasm module. It re-arms itself
+    /// every call until stage 0, which means "stopped" (idle or a fatal error).
+    fn tick(_: Handle) void {
+        switch (g.boot.stage) {
+            // Booting: an adapter (1), device (2), or instantiate (3) promise is
+            // pending. Poll it; advance on success, report + halt on rejection.
+            1, 2, 3 => {
+                const promise_resolved: u32 = 1;
+                const promise_rejected: u32 = 2;
+                const status: u32 = js_promise_status(g.boot.pending_promise);
+                if (status == promise_resolved) {
+                    const result: Value = .{ .h = js_promise_take(g.boot.pending_promise) };
+                    advance(result);
+                } else if (status == promise_rejected) {
+                    // Surface the ACTUAL rejection reason: the registry stored the
+                    // rejected promise's error (a LinkError names the exact missing
+                    // host import; a RangeError means OOM). console.error mirrors to
+                    // the on-page log overlay, turning "bad bundle" into a diagnosis.
+                    const reason: Value = .{ .h = js_promise_take(g.boot.pending_promise) };
+                    _ = global().get("console").call("error", .{
+                        str("zimr boot: promise rejected -> "),
+                        reason.get("message"),
+                        reason,
+                    });
+                    switch (g.boot.stage) {
+                        1 => note("zimr boot: stage 1 requestAdapter rejected (no WebGPU adapter available)."),
+                        2 => note("zimr boot: stage 2 requestDevice rejected (close other GPU tabs, then reload)."),
+                        else => note(
+                            "zimr boot: stage 3 WASM instantiate rejected " ++
+                                "(see the error above: a missing host import, OOM, or a malformed bundle).",
+                        ),
+                    }
+                    g.boot.stage = 0;
+                    return;
+                }
+            },
+            // Running: drive exactly one frame of the instantiated module.
+            4 => {
+                // Finish any in-flight GPU-timestamp readback before this frame
+                // records the next one (it reuses the same read buffer).
+                pollGpuTiming();
+                // Backing store = CSS box x DPR, applied BEFORE the module
+                // renders so the whole frame sees one surface size.
+                ZimrWgpu.syncCanvasBacking();
+                const performance: Value = global().get("performance");
+                const now_ms: f64 = js_to_num(performance.call("now", .{}).h);
+                if (g.boot.classic_contract) {
+                    // Classic wasi reactor: update(frame_ms) - the frame's time, which the app's frame clock follows.
+                    _ = g.boot.module_exports.call("update", .{Value{ .h = js_num(now_ms) }});
+                } else {
+                    // Page contract: zimr_frame(now_ms) owns its own timing.
+                    _ = g.boot.module_exports.call("zimr_frame", .{Value{ .h = js_num(now_ms) }});
+                }
+            },
+            else => {},
+        }
+        // Keep the loop alive unless a fatal error set stage 0 above.
+        if (g.boot.stage != 0) {
+            requestAnimationFrame(g.boot.tick_callback);
+        }
+    }
+    /// The boot state machine's transition handler: given the value a stage's
+    /// promise resolved to (`v`), set up that stage's results and kick off the
+    /// next stage's async work. Walks adapter (1) -> device (2) -> instantiate
+    /// (3) -> run (4). tick() polls the promise between calls.
+    fn advance(v: Value) void {
+        switch (g.boot.stage) {
+            // Stage 1 -> 2: the WebGPU adapter resolved. Decide whether GPU timing
+            // is available, then request the logical device.
+            1 => {
+                const adapter: Value = v;
+                g.boot.gpu_adapter = adapter;
+                // No raised limits needed any more: each compute kernel now binds
+                // ONLY the storage buffers it uses (per-kernel bind groups, see
+                // compute_host.zig), so every kernel stays within WebGPU's
+                // guaranteed 8-storage-buffer floor. We used to raise
+                // maxStorageBuffersPerShaderStage here because the old shared bind
+                // group bound ALL of a module's buffers to every kernel (the
+                // counting-sort fluid has 10), which broke on stock devices and
+                // forced this adapter-dependent request. A plain requestDevice
+                // works everywhere now.
+                //
+                // GPU timing (profiler): the 'timestamp-query' feature lets us
+                // measure GPU-side pass durations. It's optional and absent on
+                // many mobile drivers, so we feature-check the adapter and only
+                // request it when present - requesting an unsupported feature
+                // would REJECT requestDevice and black-screen the boot.
+                const adapter_features: Value = adapter.get("features");
+                const has_timestamp_query: bool = adapter_features.call("has", .{str("timestamp-query")}).truthy();
+                g.boot.timestamp_supported = has_timestamp_query;
+
+                // requestDevice(...) -> a promise of the GPUDevice. Request the
+                // timestamp-query feature only when the adapter advertises it.
+                var device_promise: Value = undefined;
+                if (has_timestamp_query) {
+                    const required_features: Value = global().get("Array").new(.{});
+                    _ = required_features.call("push", .{str("timestamp-query")});
+                    const device_desc: Value = global().get("Object").new(.{});
+                    device_desc.set("requiredFeatures", required_features);
+                    device_promise = adapter.call("requestDevice", .{device_desc});
+                } else {
+                    device_promise = adapter.call("requestDevice", .{});
+                }
+                g.boot.pending_promise = js_promise_register(device_promise.h);
+                g.boot.stage = 2;
+            },
+            // Stage 2 -> 3: the device resolved. Wire error reporting, build the
+            // optional GPU-timing infra and the wasm import object, then start
+            // instantiation of the module itself.
+            2 => {
+                const device: Value = v;
+                g.boot.gpu_device = device;
+                g.boot.gpu_queue = device.get("queue");
+                const max_texture_dim: f64 = device.get("limits").getNum("maxTextureDimension2D");
+                const limit_is_usable: bool = max_texture_dim >= 1; // false for NaN too
+                if (limit_is_usable) {
+                    g.wgpu.max_backing_dim = max_texture_dim;
+                }
+                // Surface GPU validation errors instead of silently going black.
+                _ = device.call("addEventListener", .{ str("uncapturederror"), func(&onGpuError) });
+
+                // ---- GPU-timing infra (only when 'timestamp-query' was granted) ----
+                // Build the timestamp query set + its two staging buffers once,
+                // now that the device exists. 64 slots = up to 32 timed passes per
+                // frame. Left entirely inert (ts_ready stays false) otherwise.
+                if (g.boot.timestamp_supported) {
+                    const slot_count: u32 = 64;
+                    const buffer_bytes: u32 = slot_count * 8; // one u64 timestamp per slot
+
+                    // The query set the render passes write begin/end stamps into.
+                    const query_desc: Value = global().get("Object").new(.{});
+                    query_desc.set("type", str("timestamp"));
+                    query_desc.set("count", Value{ .h = js_num(@floatFromInt(slot_count)) });
+                    g.wgpu.ts_query_set = device.call("createQuerySet", .{query_desc});
+
+                    // GPU-side resolve target: resolveQuerySet writes the raw u64s here.
+                    const resolve_usage: u32 = 0x0200 | 0x0004; // QUERY_RESOLVE | COPY_SRC
+                    const resolve_desc: Value = global().get("Object").new(.{});
+                    resolve_desc.set("size", Value{ .h = js_num(@floatFromInt(buffer_bytes)) });
+                    resolve_desc.set("usage", Value{ .h = js_num(@floatFromInt(resolve_usage)) });
+                    g.wgpu.ts_resolve_buf = device.call("createBuffer", .{resolve_desc});
+
+                    // CPU-mappable readback: we copy the resolved data here, then mapAsync it.
+                    const read_usage: u32 = 0x0008 | 0x0001; // COPY_DST | MAP_READ
+                    const read_desc: Value = global().get("Object").new(.{});
+                    read_desc.set("size", Value{ .h = js_num(@floatFromInt(buffer_bytes)) });
+                    read_desc.set("usage", Value{ .h = js_num(@floatFromInt(read_usage)) });
+                    g.wgpu.ts_read_buf = device.call("createBuffer", .{read_desc});
+
+                    g.wgpu.ts_ready = true;
+
+                    // Summing helper: the mapped buffer holds u64 ns timestamps
+                    // (begin,end per pass). Reconstruct each as hi*2^32+lo in f64
+                    // (ns-since-boot fits < 2^53, so exact) and sum (end-begin) ->
+                    // ms. Built via the Function constructor to avoid a separate
+                    // page-template script; deltas are small so no BigInt needed.
+                    const helper_body: []const u8 =
+                        "const a=new Uint32Array(ab);let s=0;for(let i=0;i<pairs;i++){" ++
+                        "const b=a[i*4+1]*4294967296+a[i*4];" ++
+                        "const e=a[i*4+3]*4294967296+a[i*4+2];s+=e-b;}return s/1e6;";
+                    const function_ctor: Value = global().get("Function");
+                    const ms_helper: Value = function_ctor.new(.{ str("ab"), str("pairs"), str(helper_body) });
+                    global().set("__zimrGpuMs", ms_helper);
+                }
+
+                // ---- the wasm import object ----
+                // The module links against three namespaces of host functions:
+                // `dom`, `wgpu`, and `wasi_snapshot_preview1`. Each is its own
+                // self-contained block that ends by attaching itself to `imports`.
+                const imports: Value = global().get("Object").new(.{});
+                {
+                    // dom: element/canvas verbs, input + pointer-lock, persistence,
+                    // and the text-overlay (a real <input> for the soft keyboard).
+                    const dom: Value = global().get("Object").new(.{});
+                    dom.set("create", func(&domCreate));
+                    dom.set("attach_body", func(&domAttachBody));
+                    dom.set("append", func(&domAppend));
+                    dom.set("set_text", func(&domSetText));
+                    dom.set("set_attr", func(&domSetAttr));
+                    dom.set("set_style", func(&domSetStyle));
+                    dom.set("css", func(&domCss));
+                    dom.set("remove", func(&domRemove));
+                    dom.set("listen", func(&domListen));
+                    dom.set("poll_event", func(&domPollEvent));
+                    dom.set("canvas_configure", func(&domCanvasConfigure));
+                    dom.set("canvas_size", func(&domCanvasSize));
+                    dom.set("js_log", funcNum(&ZimrWgpu.jsLog));
+                    dom.set("js_epoch_ms", funcNum(&ZimrWgpu.jsEpochMs));
+                    dom.set("js_get_dpi_scale", funcNum(&ZimrWgpu.jsGetDpiScale));
+                    dom.set("js_screen_width", funcNum(&ZimrWgpu.jsScreenWidth));
+                    dom.set("js_screen_height", funcNum(&ZimrWgpu.jsScreenHeight));
+                    dom.set("js_gamepad_state", funcNum(&ZimrWgpu.jsGamepadState));
+                    dom.set("js_gamepad_vibrate", funcNum(&ZimrWgpu.jsGamepadVibrate));
+                    dom.set("js_audio_output_start", funcNum(&ZimrWgpu.jsAudioOutputStart));
+                    dom.set("js_audio_output_queue", funcNum(&ZimrWgpu.jsAudioOutputQueue));
+                    dom.set("js_audio_output_queued_frames", funcNum(&ZimrWgpu.jsAudioOutputQueuedFrames));
+                    dom.set("js_audio_output_mix_into_queued", funcNum(&ZimrWgpu.jsAudioOutputMixIntoQueued));
+                    dom.set("js_audio_output_stop", funcNum(&ZimrWgpu.jsAudioOutputStop));
+                    dom.set("js_audio_output_show_diagnostics", funcNum(&ZimrWgpu.jsAudioOutputShowDiagnostics));
+                    dom.set("js_audio_output_note_mixer", funcNum(&ZimrWgpu.jsAudioOutputNoteMixer));
+                    dom.set("js_tz_offset_min", funcNum(&ZimrWgpu.jsTzOffsetMin));
+                    dom.set("js_set_cursor_style", funcNum(&ZimrWgpu.jsSetCursorStyle));
+                    dom.set("js_set_mouse_cursor", funcNum(&ZimrWgpu.jsSetMouseCursor));
+                    dom.set("js_open_url", funcNum(&ZimrWgpu.jsOpenUrl));
+                    dom.set("js_set_title", funcNum(&ZimrWgpu.jsSetTitle));
+                    dom.set("js_set_clipboard_text", funcNum(&ZimrWgpu.jsSetClipboardText));
+                    dom.set("js_request_pointer_lock", funcNum(&ZimrWgpu.jsRequestPointerLock));
+                    dom.set("js_exit_pointer_lock", funcNum(&ZimrWgpu.jsExitPointerLock));
+                    dom.set("js_keep_awake", funcNum(&ZimrWgpu.jsKeepAwake));
+                    dom.set("js_is_fullscreen", funcNum(&ZimrWgpu.jsIsFullscreen));
+                    dom.set("js_toggle_fullscreen", funcNum(&ZimrWgpu.jsToggleFullscreen));
+                    dom.set("js_request_paste", funcNum(&ZimrWgpu.jsRequestPaste));
+                    dom.set("js_pointer_lock_active", funcNum(&ZimrWgpu.jsPointerLockActive));
+                    dom.set("js_persistence_save", funcNum(&ZimrWgpu.jsPersistenceSave));
+                    dom.set("js_persistence_size", funcNum(&ZimrWgpu.jsPersistenceSize));
+                    dom.set("js_persistence_read", funcNum(&ZimrWgpu.jsPersistenceRead));
+                    dom.set("js_persistence_remove", funcNum(&ZimrWgpu.jsPersistenceRemove));
+                    // User-supplied files: drag-and-drop plus the mobile file picker.
+                    dom.set("js_userfile_pending_count", funcNum(&ZimrBoot.ufPendingCount));
+                    dom.set("js_userfile_next_size", funcNum(&ZimrBoot.ufNextSize));
+                    dom.set("js_userfile_next_name", funcNum(&ZimrBoot.ufNextName));
+                    dom.set("js_userfile_read_next", funcNum(&ZimrBoot.ufReadNext));
+                    dom.set("js_userfile_discard_next", funcNum(&ZimrBoot.ufDiscardNext));
+                    dom.set("js_userfile_set_picker_rect", funcNum(&ZimrBoot.ufSetPickerRect));
+                    dom.set("js_userfile_hide_picker", funcNum(&ZimrBoot.ufHidePicker));
+                    dom.set("js_userfile_offer", funcNum(&ZimrBoot.ufOffer));
+                    dom.set("js_userfile_set_save_rect", funcNum(&ZimrBoot.ufSetSaveRect));
+                    dom.set("js_userfile_hide_save", funcNum(&ZimrBoot.ufHideSave));
+                    // WebSocket client (P2P signaling - see src/net.zig).
+                    dom.set("js_ws_open", funcNum(&ZimrWgpu.jsWsOpen));
+                    dom.set("js_ws_state", funcNum(&ZimrWgpu.jsWsState));
+                    dom.set("js_ws_send", funcNum(&ZimrWgpu.jsWsSend));
+                    dom.set("js_ws_poll", funcNum(&ZimrWgpu.jsWsPoll));
+                    dom.set("js_ws_close", funcNum(&ZimrWgpu.jsWsClose));
+                    dom.set("js_ws_origin_url", funcNum(&ZimrWgpu.jsWsOriginUrl));
+                    dom.set("js_rtc_create", funcNum(&ZimrWgpu.jsRtcCreate));
+                    dom.set("js_rtc_create_offer", funcNum(&ZimrWgpu.jsRtcCreateOffer));
+                    dom.set("js_rtc_set_remote", funcNum(&ZimrWgpu.jsRtcSetRemote));
+                    dom.set("js_rtc_add_ice", funcNum(&ZimrWgpu.jsRtcAddIce));
+                    dom.set("js_rtc_send", funcNum(&ZimrWgpu.jsRtcSend));
+                    dom.set("js_rtc_poll", funcNum(&ZimrWgpu.jsRtcPoll));
+                    dom.set("js_rtc_close", funcNum(&ZimrWgpu.jsRtcClose));
+                    // Text-input overlay host functions: a real <input> positioned
+                    // over the wasm-drawn widget (ported from src/web/zimr.ts). These
+                    // satisfy the imports editable-widget modules need AND make typing
+                    // + the mobile soft keyboard actually work.
+                    dom.set("js_show_overlay_input", func(&domShowOverlayInput));
+                    dom.set("js_hide_overlay_input", func(&domHideOverlayInput));
+                    dom.set("js_get_overlay_input_text", func(&domGetOverlayInputText));
+                    dom.set("js_overlay_input_is_visible", func(&domOverlayInputIsVisible));
+                    dom.set("js_update_overlay_input_rect", func(&domUpdateOverlayInputRect));
+                    dom.set("js_set_input_mode", func(&domSetInputMode));
+                    dom.set("js_set_overlay_input_allow_tab", func(&domSetOverlayInputAllowTab));
+                    dom.set("js_set_overlay_input_char_filters", func(&domSetOverlayInputCharFilters));
+                    dom.set("js_set_overlay_input_text", func(&domSetOverlayInputText));
+                    dom.set("js_set_overlay_input_escape_clears", func(&domSetOverlayInputEscapeClears));
+                    dom.set("js_set_overlay_input_password", func(&domSetOverlayInputPassword));
+                    dom.set("js_set_overlay_input_read_only", func(&domSetOverlayInputReadOnly));
+                    // Textarea overlay: the multiline sibling of the <input> port,
+                    // backed by its own <textarea> singleton (g.overlay_ta).
+                    dom.set("js_show_overlay_textarea", func(&domShowOverlayTextarea));
+                    dom.set("js_hide_overlay_textarea", func(&domHideOverlayTextarea));
+                    dom.set("js_get_overlay_textarea_text", func(&domGetOverlayTextareaText));
+                    dom.set("js_overlay_textarea_is_visible", func(&domOverlayTextareaIsVisible));
+                    dom.set("js_update_overlay_textarea_rect", func(&domUpdateOverlayTextareaRect));
+                    dom.set("js_set_overlay_textarea_allow_tab", func(&domSetOverlayTextareaAllowTab));
+                    dom.set("js_set_overlay_textarea_char_filters", func(&domSetOverlayTextareaCharFilters));
+                    dom.set("js_set_overlay_textarea_text", func(&domSetOverlayTextareaText));
+                    dom.set("js_set_overlay_textarea_escape_clears", func(&domSetOverlayTextareaEscapeClears));
+                    dom.set("js_set_overlay_textarea_read_only", func(&domSetOverlayTextareaReadOnly));
+                    dom.set(
+                        "js_set_overlay_textarea_ctrl_enter_for_newline",
+                        func(&domSetOverlayTextareaCtrlEnterForNewline),
+                    );
+                    // Crypto entropy for the null-seed RNG path (Frame.random).
+                    dom.set("js_crypto_random_fill", func(&domCryptoRandomFill));
+                    imports.set("dom", dom);
+                }
+                {
+                    // wgpu: the two clear/view verbs plus the full classic zimr
+                    // WebGPU surface installed by ZimrWgpu (Phase 3).
+                    const wgpu_ns: Value = global().get("Object").new(.{});
+                    wgpu_ns.set("current_view", func(&wgpuCurrentView));
+                    wgpu_ns.set("clear", func(&wgpuClear));
+                    ZimrWgpu.install(wgpu_ns);
+                    imports.set("wgpu", wgpu_ns);
+                }
+                {
+                    // audio: the WebAudio host. Without this the "audio" import is
+                    // undefined and EVERY audio example dies at instantiate.
+                    const audio_ns: Value = global().get("Object").new(.{});
+                    ZimrAudio.install(audio_ns);
+                    imports.set("audio", audio_ns);
+                }
+                {
+                    // jobs: the Web Worker pool behind `zimr.jobs`. The workers are NOT
+                    // spawned here - `available()` brings them up lazily on first use, so
+                    // an app that never submits a job never creates a thread.
+                    const jobs_ns: Value = global().get("Object").new(.{});
+                    ZimrJobs.install(jobs_ns);
+                    imports.set("jobs", jobs_ns);
+                }
+                {
+                    // wasi: the minimal WASI shim the wasm32-wasi target needs.
+                    const wasi: Value = global().get("Object").new(.{});
+                    ZimrWasi.install(wasi);
+                    imports.set("wasi_snapshot_preview1", wasi);
+                }
+
+                // ---- instantiate the module ----
+                // Two delivery paths, both yielding a promise of {module, instance}
+                // that stage 3 unwraps identically:
+                //   * standalone build: the page inlines the wasm as WASM_BYTES, so
+                //     instantiate directly from the bytes.
+                //   * served gallery page: only WASM_URL is set, so stream-compile
+                //     the sibling .wasm as it downloads (instantiateStreaming).
+                const inline_bytes: Value = global().get("WASM_BYTES");
+                const web_assembly: Value = global().get("WebAssembly");
+                var instantiate_promise: Value = undefined;
+                if (inline_bytes.isNull()) {
+                    const wasm_url: Value = global().get("WASM_URL");
+                    const fetch_response: Value = global().call("fetch", .{wasm_url});
+                    instantiate_promise = web_assembly.call("instantiateStreaming", .{ fetch_response, imports });
+                } else {
+                    instantiate_promise = web_assembly.call("instantiate", .{ inline_bytes, imports });
+                }
+                g.boot.pending_promise = js_promise_register(instantiate_promise.h);
+                g.boot.stage = 3;
+            },
+            // Stage 3 -> 4: the module instantiated. Pull its exports, start it
+            // under whichever contract it implements, then enter the run loop.
+            3 => {
+                // `v` is { module, instance }; we only need the instance's exports.
+                const instance: Value = v.get("instance");
+                g.boot.module_exports = instance.get("exports");
+
+                // Two app contracts, distinguished by which entry point is exported.
+                const page_main: Value = g.boot.module_exports.get("zimr_page_main");
+                if (page_main.isNull()) {
+                    // Classic zimr app (wasm32-wasi reactor): run its initializer
+                    // once now; update(frame_ms) then drives from the rAF tick (stage 4).
+                    g.boot.classic_contract = true;
+                    const initialize: Value = g.boot.module_exports.get("_initialize");
+                    if (!initialize.isNull()) {
+                        _ = g.boot.module_exports.call("_initialize", .{});
+                    }
+                    // Wire DOM input only if this app actually owns a canvas.
+                    if (g.wgpu.have_canvas) {
+                        ZimrInput.install();
+                    }
+                } else {
+                    // Page contract: zimr_page_main() sets everything up itself.
+                    _ = g.boot.module_exports.call("zimr_page_main", .{});
+                }
+                g.boot.stage = 4;
+            },
+            else => {},
+        }
+    }
+};
+
+/// The bridge entry point, called once from the page's inline boot script. It
+/// sets up the reused JS singletons, decides whether there's a wasm module to
+/// run at all, and - if so - kicks off the adapter->device->instantiate->run
+/// pipeline by entering stage 1 and starting the rAF loop.
+export fn start() void {
+    // One-time JS singletons the bridge reuses on every frame: a UTF-8 decoder
+    // for reading wasm strings, the id->object maps backing WebGPU handles and
+    // canvas contexts, and the single rAF callback that drives the boot machine.
+    g.boot.utf8_decoder = global().get("TextDecoder").new(.{});
+    g.wgpu.objects = global().get("Map").new(.{});
+    g.audio.objects = global().get("Map").new(.{});
+    g.boot.canvas_contexts = global().get("Map").new(.{});
+
+    // The job pool's containers are minted HERE, at boot, and not lazily inside
+    // `ZimrJobs.spawn` - because spawn() is first reached from inside a frame, and
+    // every handle minted during a frame is reclaimed by that frame's js_reset. A
+    // long-lived handle born inside the bracket is a DANGLING handle one frame later.
+    // (The workers themselves are still created lazily; they are held by these JS
+    // objects, so they need no handle of their own to survive.)
+    g.jobs.workers = global().get("Array").new(.{});
+    g.jobs.busy_with = global().get("Array").new(.{});
+    g.jobs.ready = global().get("Array").new(.{});
+    g.jobs.queue = global().get("Array").new(.{});
+    g.jobs.results = global().get("Map").new(.{});
+    g.jobs.abandoned = global().get("Set").new(.{});
+    g.jobs.kernel_errors = global().get("Map").new(.{});
+    g.boot.tick_callback = func(&ZimrBoot.tick);
+
+    // "bridge-hello" mode: the page loaded the bridge but ships no module to run
+    // (neither inlined WASM_BYTES nor a streamable WASM_URL). Nothing else to do.
+    const have_inline_bytes: bool = !global().get("WASM_BYTES").isNull();
+    const have_wasm_url: bool = !global().get("WASM_URL").isNull();
+    if (!have_inline_bytes and !have_wasm_url) {
+        ZimrBoot.note("zimr bridge: mechanism online; no WASM_BYTES/WASM_URL on this page (bridge-hello mode).");
+        return;
+    }
+
+    // The pipeline needs a WebGPU adapter first. If the browser exposes no
+    // WebGPU at all, stop here with a clear message rather than failing deeper.
+    const navigator: Value = (Value{ .h = js_global() }).get("navigator");
+    const gpu: Value = navigator.get("gpu");
+    if (gpu.isNull()) {
+        ZimrBoot.note("zimr: WebGPU is not available in this browser.");
+        return;
+    }
+
+    // Enter stage 1: request the adapter and start the loop. tick() polls this
+    // promise and calls advance() once it resolves.
+    const adapter_promise: Value = gpu.call("requestAdapter", .{});
+    g.boot.pending_promise = js_promise_register(adapter_promise.h);
+    g.boot.stage = 1;
+    requestAnimationFrame(g.boot.tick_callback);
+}

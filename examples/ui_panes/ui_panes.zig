@@ -58,7 +58,7 @@ fn deinit(gpa: Allocator, s: *State) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 28);
-    var host: z.UiHost = z.UiHost.init(gpa, font);
+    var host: z.UiHost = .init(gpa, font);
     host.ctx.style.font_size = 16;
     host.ctx.style.frame_padding = .{ 10, 8 };
     host.ctx.style.item_spacing = .{ 8, 6 };
@@ -77,14 +77,14 @@ fn update(f: *z.Frame, s: *State) void {
         u.text("zimr - panes", .{});
         u.textDisabled("Drag the splitter bars to resize the panes.", .{});
 
-        const SPLIT_BAR_W: f32 = 4;
+        const split_bar_w: f32 = 4;
         const sp_x: f32 = s.ui_host.ctx.style.item_spacing[0];
         const sp_y: f32 = s.ui_host.ctx.style.item_spacing[1];
 
         const avail: Vec2 = u.getContentRegionAvail();
         const total_w: f32 = avail[0];
         const total_h: f32 = avail[1];
-        const usable_w: f32 = total_w - SPLIT_BAR_W - 2 * sp_x;
+        const usable_w: f32 = total_w - split_bar_w - 2 * sp_x;
 
         const min_left: f32 = 20;
         const min_right: f32 = 20;
@@ -121,11 +121,11 @@ fn update(f: *z.Frame, s: *State) void {
 
         u.sameLine(.{});
         _ = u.splitter("h_split", &s.left_w, .x, .{
-            .bar_width = SPLIT_BAR_W,
+            .bar_width = split_bar_w,
             .hit_extend = 16,
             .min1 = min_left,
             .min2 = min_right,
-            .total_along_axis = usable_w + SPLIT_BAR_W,
+            .total_along_axis = usable_w + split_bar_w,
         });
         u.sameLine(.{});
 
@@ -134,7 +134,7 @@ fn update(f: *z.Frame, s: *State) void {
             defer u.endChild();
             const r_avail: Vec2 = u.getContentRegionAvail();
             const r_h: f32 = r_avail[1];
-            const usable_h: f32 = r_h - SPLIT_BAR_W - 2 * sp_y;
+            const usable_h: f32 = r_h - split_bar_w - 2 * sp_y;
             const min_top: f32 = 20;
             const min_bot: f32 = 20;
             const max_top: f32 = usable_h - min_bot;
@@ -154,11 +154,11 @@ fn update(f: *z.Frame, s: *State) void {
             }
 
             _ = u.splitter("v_split", &s.top_h, .y, .{
-                .bar_width = SPLIT_BAR_W,
+                .bar_width = split_bar_w,
                 .hit_extend = 16,
                 .min1 = min_top,
                 .min2 = min_bot,
-                .total_along_axis = usable_h + SPLIT_BAR_W,
+                .total_along_axis = usable_h + split_bar_w,
             });
 
             if (u.beginChild("output", .{ 0, 0 }, .{})) {

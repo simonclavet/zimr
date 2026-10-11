@@ -231,6 +231,61 @@ fn makeArm(gpa: Allocator, model: *const rbt.Model, planned: bool) !Arm {
     };
 }
 
+const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+
+/// Solve the whole loop once, into a table indexed by phase.
+///
+/// * CHAINED FROM THE PREVIOUS ENTRY, so each solve starts beside its answer and converges in a
+/// few iterations - and the table comes out CONTINUOUS, which a fresh solve per entry would not
+/// guarantee on a redundant arm. Two passes, so the last entry meets the first.
+fn buildPoseTable(s: *State) void {
+    const m: *rbt.Model = &s.model;
+    s.loop_period = 2.0 * pi / @max(0.01, s.speed);
+    @memcpy(s.planner.data.pos, s.rest);
+    s.planner.data.stage = .stale;
+    rbt.forward(m, &s.planner.data);
+    var pass: u32 = 0;
+    while (pass < 2) : (pass += 1) {
+        for (0..table_size) |i| {
+            const t: f32 = s.loop_period * float(i) / float(table_size);
+            _ = (ctl.Ik{ .max_iterations = 24, .max_step = 0.35 }).solve(
+                m,
+                &s.planner.data,
+                s.arm_act,
+                .{ .body = s.grip, .offset = vec(0, 0, 0), .goal = targetAt(t, s.speed) },
+                s.ik_scratch,
+            );
+            if (pass == 1) {
+                @memcpy(s.pose_table[i * m.nq ..][0..m.nq], s.planner.data.pos[0..m.nq]);
+            }
+        }
+    }
+}
+
+fn resetArms(s: *State) void {
+    inline for (.{ &s.servo, &s.planner }) |a| {
+        @memcpy(a.data.pos, s.rest);
+        @memset(a.data.vel, 0);
+        @memset(a.data.ctrl, 0);
+        // -- *** AND `applied_force`, WHICH IS THE ONE THAT COST A DAY --
+        //
+        // `PoseHold` writes it and clears it each apply; a planner drives `ctrl` and never
+        // touches it, so it inherits whatever a servo left and `step` adds BOTH. Measured, the
+        // same planner scored 0.096 rad clean and 2.69 rad after a PD had run.
+        @memset(a.data.applied_force, 0);
+        a.data.stage = .stale;
+        rbt.forward(&s.model, &a.data);
+        @memset(a.plan.ctrl, 0);
+        a.error_sum = 0;
+        a.error_count = 0;
+        a.worst = 0;
+        a.tick = 0;
+        a.trail_count = 0;
+        a.trail_next = 0;
+    }
+    s.clock = 0;
+}
+
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     s.gpa = gpa;
     s.doc = try z.codecs.xml.parse(gpa, @embedFile("tracker.xml"), null);
@@ -290,35 +345,6 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     resetArms(s);
 }
 
-/// Solve the whole loop once, into a table indexed by phase.
-///
-/// * CHAINED FROM THE PREVIOUS ENTRY, so each solve starts beside its answer and converges in a
-/// few iterations - and the table comes out CONTINUOUS, which a fresh solve per entry would not
-/// guarantee on a redundant arm. Two passes, so the last entry meets the first.
-fn buildPoseTable(s: *State) void {
-    const m: *rbt.Model = &s.model;
-    s.loop_period = 2.0 * pi / @max(0.01, s.speed);
-    @memcpy(s.planner.data.pos, s.rest);
-    s.planner.data.stage = .stale;
-    rbt.forward(m, &s.planner.data);
-    var pass: u32 = 0;
-    while (pass < 2) : (pass += 1) {
-        for (0..table_size) |i| {
-            const t: f32 = s.loop_period * float(i) / float(table_size);
-            _ = (ctl.Ik{ .max_iterations = 24, .max_step = 0.35 }).solve(
-                m,
-                &s.planner.data,
-                s.arm_act,
-                .{ .body = s.grip, .offset = vec(0, 0, 0), .goal = targetAt(t, s.speed) },
-                s.ik_scratch,
-            );
-            if (pass == 1) {
-                @memcpy(s.pose_table[i * m.nq ..][0..m.nq], s.planner.data.pos[0..m.nq]);
-            }
-        }
-    }
-}
-
 /// The tabulated pose at time `t`, linearly interpolated between neighbours.
 fn poseAt(s: *const State, t: f32, out: []f32) void {
     const nq: u32 = s.model.nq;
@@ -358,30 +384,6 @@ fn deinit(gpa: Allocator, s: *State) void {
     s.imported.deinit();
     s.robot.deinit();
     s.doc.deinit();
-}
-
-fn resetArms(s: *State) void {
-    inline for (.{ &s.servo, &s.planner }) |a| {
-        @memcpy(a.data.pos, s.rest);
-        @memset(a.data.vel, 0);
-        @memset(a.data.ctrl, 0);
-        // -- *** AND `applied_force`, WHICH IS THE ONE THAT COST A DAY --
-        //
-        // `PoseHold` writes it and clears it each apply; a planner drives `ctrl` and never
-        // touches it, so it inherits whatever a servo left and `step` adds BOTH. Measured, the
-        // same planner scored 0.096 rad clean and 2.69 rad after a PD had run.
-        @memset(a.data.applied_force, 0);
-        a.data.stage = .stale;
-        rbt.forward(&s.model, &a.data);
-        @memset(a.plan.ctrl, 0);
-        a.error_sum = 0;
-        a.error_count = 0;
-        a.worst = 0;
-        a.tick = 0;
-        a.trail_count = 0;
-        a.trail_next = 0;
-    }
-    s.clock = 0;
 }
 
 fn advance(s: *State, a: *Arm) void {
@@ -445,90 +447,15 @@ fn advance(s: *State, a: *Arm) void {
     }
 }
 
-fn update(f: *z.Frame, s: *State) void {
-    const gl: *z.WgpuGl = f.gl;
-    const u: ui.Ui = s.ui_host.begin(f);
-    defer s.ui_host.render(f);
-    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
-
-    // * PROFILING OFF ACROSS THE PLANNER: two planners at 75 knots is far more instrumented work
-    // than a frame's worth of timestamps can carry on wasm. The cartpole and the catch both hit
-    // this wall; the smoke runner exhausts Node's heap without it.
-    const was_frozen: bool = profiler.isFrozen();
-    profiler.freeze();
-    defer if (!was_frozen) profiler.unfreeze();
-
-    if (s.running) {
-        // * A FIXED NUMBER OF STEPS PER FRAME. An accumulator chasing wall-clock time spirals
-        // the moment a frame runs long - it asks for more steps, which makes the next frame
-        // longer still. A demo wants smooth motion, not wall-clock-accurate physics.
-        var step: u32 = 0;
-        while (step < steps_per_frame) : (step += 1) {
-            advance(s, &s.servo);
-            advance(s, &s.planner);
-            s.clock += sim_dt;
-        }
-    }
-
-    z.clearViewport(f, background);
-    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 2.5, .max_distance = 14.0 });
-    z.beginMode3D(gl, cam);
-    s.transform[0] = mulMat(translation(0, -0.05, 0), scaling(8, 0.1, 6));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_colour);
-    drawArm(s, gl, &s.servo, -1.1);
-    drawArm(s, gl, &s.planner, 1.1);
-    z.endMode3D(gl);
-}
-
-/// Model space is Z-up; the renderer is Y-up. One swizzle, at the boundary.
-fn toRender(at: Vec, depth: f32) Vec {
-    return vec(at[0], at[2], at[1] + depth);
-}
-
-fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
-    const m: *const rbt.Model = &s.model;
-
-    // The path, so "the target is moving" is something you see rather than read.
-    var previous: Vec = toRender(targetAt(0, s.speed), depth);
-    var step: u32 = 1;
-    while (step <= 96) : (step += 1) {
-        const t: f32 = 2.0 * pi * float(step) / 96.0 / @max(0.01, s.speed);
-        const here: Vec = toRender(targetAt(t, s.speed), depth);
-        z.drawLine3D(gl, previous, here, path_colour);
-        previous = here;
-    }
-
-    for (1..m.nbody) |b| {
-        const at: Vec = toRender(a.data.body_xpos[b], depth);
-        const parent: u32 = m.body_parent[b];
-        if (parent != rbt.world_body) {
-            z.drawLine3D(gl, toRender(a.data.body_xpos[parent], depth), at, link_colour);
-        }
-        const tip: bool = b == s.grip;
-        const size: f32 = if (tip) 0.11 else 0.05;
-        s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(size, size, size));
-        z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (tip) grip_colour else link_colour);
-    }
-
-    // *** THE TRACE THE GRIPPER ACTUALLY DREW, against the path it was asked to follow. The
-    // servo's wanders visibly inside and outside the circle; the planner's sits on it. This is
-    // the whole result, drawn, and it needs no number to read.
-    if (a.trail_count >= 2) {
-        const start: usize = if (a.trail_count < a.trail.len) 0 else a.trail_next;
-        for (1..a.trail_count) |i| {
-            const from: Vec = a.trail[(start + i - 1) % a.trail.len];
-            const to: Vec = a.trail[(start + i) % a.trail.len];
-            z.drawLine3D(gl, toRender(from, depth), toRender(to, depth), if (a.planned) trace_plan else trace_servo);
-        }
-    }
-
-    // ** THE LAG, DRAWN. A line from the gripper to where the target actually is - short on the
-    // planner, long and permanent on the servo. This is the whole demo in one segment, and it is
-    // legible without reading a number.
-    const goal: Vec = toRender(targetAt(s.clock, s.speed), depth);
-    s.transform[0] = mulMat(translation(goal[0], goal[1], goal[2]), scaling(0.06, 0.06, 0.06));
-    z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
-    z.drawLine3D(gl, toRender(a.data.body_xpos[s.grip], depth), goal, lag_colour);
+fn report(u: ui.Ui, label: []const u8, a: *const Arm) void {
+    const mean: f32 = if (a.error_count == 0)
+        0
+    else
+        @floatCast(a.error_sum / float64(a.error_count));
+    // * TWO SHORT LINES RATHER THAN ONE LONG ONE. The single line ran off the panel on a phone
+    // and truncated mid-word at "wors" - a readout you cannot read is not a readout.
+    u.text("{s}  now {d:>5.3}  mean {d:>5.3}", .{ label, a.live, mean });
+    u.text("      worst {d:>5.3} m", .{a.worst});
 }
 
 fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
@@ -583,18 +510,91 @@ fn drawPanel(u: ui.Ui, s: *State, viewport_w: f32, viewport_h: f32) bool {
     return captured;
 }
 
-fn report(u: ui.Ui, label: []const u8, a: *const Arm) void {
-    const mean: f32 = if (a.error_count == 0)
-        0
-    else
-        @floatCast(a.error_sum / float64(a.error_count));
-    // * TWO SHORT LINES RATHER THAN ONE LONG ONE. The single line ran off the panel on a phone
-    // and truncated mid-word at "wors" - a readout you cannot read is not a readout.
-    u.text("{s}  now {d:>5.3}  mean {d:>5.3}", .{ label, a.live, mean });
-    u.text("      worst {d:>5.3} m", .{a.worst});
+/// Model space is Z-up; the renderer is Y-up. One swizzle, at the boundary.
+fn toRender(at: Vec, depth: f32) Vec {
+    return vec(at[0], at[2], at[1] + depth);
 }
 
-const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
+fn drawArm(s: *State, gl: *z.WgpuGl, a: *const Arm, depth: f32) void {
+    const m: *const rbt.Model = &s.model;
+
+    // The path, so "the target is moving" is something you see rather than read.
+    var previous: Vec = toRender(targetAt(0, s.speed), depth);
+    var step: u32 = 1;
+    while (step <= 96) : (step += 1) {
+        const t: f32 = 2.0 * pi * float(step) / 96.0 / @max(0.01, s.speed);
+        const here: Vec = toRender(targetAt(t, s.speed), depth);
+        z.drawLine3D(gl, previous, here, path_colour);
+        previous = here;
+    }
+
+    for (1..m.nbody) |b| {
+        const at: Vec = toRender(a.data.body_xpos[b], depth);
+        const parent: u32 = m.body_parent[b];
+        if (parent != rbt.world_body) {
+            z.drawLine3D(gl, toRender(a.data.body_xpos[parent], depth), at, link_colour);
+        }
+        const tip: bool = b == s.grip;
+        const size: f32 = if (tip) 0.11 else 0.05;
+        s.transform[0] = mulMat(translation(at[0], at[1], at[2]), scaling(size, size, size));
+        z.drawMeshInstanced(gl, &s.sphere, &s.transform, if (tip) grip_colour else link_colour);
+    }
+
+    // *** THE TRACE THE GRIPPER ACTUALLY DREW, against the path it was asked to follow. The
+    // servo's wanders visibly inside and outside the circle; the planner's sits on it. This is
+    // the whole result, drawn, and it needs no number to read.
+    if (a.trail_count >= 2) {
+        const start: usize = if (a.trail_count < a.trail.len) 0 else a.trail_next;
+        for (1..a.trail_count) |i| {
+            const from: Vec = a.trail[(start + i - 1) % a.trail.len];
+            const to: Vec = a.trail[(start + i) % a.trail.len];
+            z.drawLine3D(gl, toRender(from, depth), toRender(to, depth), if (a.planned) trace_plan else trace_servo);
+        }
+    }
+
+    // ** THE LAG, DRAWN. A line from the gripper to where the target actually is - short on the
+    // planner, long and permanent on the servo. This is the whole demo in one segment, and it is
+    // legible without reading a number.
+    const goal: Vec = toRender(targetAt(s.clock, s.speed), depth);
+    s.transform[0] = mulMat(translation(goal[0], goal[1], goal[2]), scaling(0.06, 0.06, 0.06));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, target_colour);
+    z.drawLine3D(gl, toRender(a.data.body_xpos[s.grip], depth), goal, lag_colour);
+}
+
+fn update(f: *z.Frame, s: *State) void {
+    const gl: *z.WgpuGl = f.gl;
+    const u: ui.Ui = s.ui_host.begin(f);
+    defer s.ui_host.render(f);
+    const captured: bool = drawPanel(u, s, f.window.widthf(), f.window.heightf());
+
+    // * PROFILING OFF ACROSS THE PLANNER: two planners at 75 knots is far more instrumented work
+    // than a frame's worth of timestamps can carry on wasm. The cartpole and the catch both hit
+    // this wall; the smoke runner exhausts Node's heap without it.
+    const was_frozen: bool = profiler.isFrozen();
+    profiler.freeze();
+    defer if (!was_frozen) profiler.unfreeze();
+
+    if (s.running) {
+        // * A FIXED NUMBER OF STEPS PER FRAME. An accumulator chasing wall-clock time spirals
+        // the moment a frame runs long - it asks for more steps, which makes the next frame
+        // longer still. A demo wants smooth motion, not wall-clock-accurate physics.
+        var step: u32 = 0;
+        while (step < steps_per_frame) : (step += 1) {
+            advance(s, &s.servo);
+            advance(s, &s.planner);
+            s.clock += sim_dt;
+        }
+    }
+
+    z.clearViewport(f, background);
+    const cam: Camera3D = s.cam.update(f, captured, .{ .min_distance = 2.5, .max_distance = 14.0 });
+    z.beginMode3D(gl, cam);
+    s.transform[0] = mulMat(translation(0, -0.05, 0), scaling(8, 0.1, 6));
+    z.drawMeshInstanced(gl, &s.cube, &s.transform, ground_colour);
+    drawArm(s, gl, &s.servo, -1.1);
+    drawArm(s, gl, &s.planner, 1.1);
+    z.endMode3D(gl);
+}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

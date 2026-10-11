@@ -1,10 +1,11 @@
-//! state_persistence - save an example's state to the browser and get it back
-//! after a page reload. It serializes a plain struct with `z.serialize` (the
-//! versioned protobuf-style serializer) and stashes the bytes in localStorage
-//! through zimr's persistence API. Tweak the colour and sliders, hit "Save to
-//! browser", then refresh the page - your tweaks (and how many times you've
-//! saved) come right back. That whole round-trip is the point: a plain Zig
-//! struct -> bytes -> localStorage -> bytes -> struct.
+//! state_persistence - save an example's state and get it back in the next run:
+//! after a page reload in the browser, or a restart natively. It serializes a
+//! plain struct with `z.serialize` (the versioned protobuf-style serializer) and
+//! keeps the bytes as a saved value (`z.saveValue`): in the browser's storage on
+//! the web, in a file under the user's application data natively. Tweak the
+//! colour and sliders, press Save, then reload the page or restart the program:
+//! the tweaks, and how many times they were saved, come back. The round trip is
+//! the point: a plain Zig struct -> bytes -> saved value -> bytes -> struct.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const z = @import("zimr");
@@ -13,8 +14,9 @@ const ui = z.ui_real;
 
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
+const Vec3 = zm.Vec3;
 
-// where our bytes live in localStorage (zimr adds its own "zimr_" prefix)
+// the key the bytes are saved under
 const storage_key = "state_persistence_demo";
 
 // The state we persist - a plain struct the serializer walks field by field.
@@ -29,7 +31,7 @@ const SavedState = struct {
     save_count: u32 = 0,
     // a zm type persisted alongside the scalars. Added LAST so older saves
     // (without it) still load - the versioned format just fills the default.
-    position: zm.Vec3 = .{ 0, 0, 0 },
+    position: Vec3 = .{ 0, 0, 0 },
 };
 
 const State = struct {
@@ -48,31 +50,24 @@ fn colorByte(v: f32) u8 {
     return @round(v * 255.0);
 }
 
-/// Pull the saved state out of localStorage, or null if there's nothing stored.
-/// Uses the binary-safe (base64-wrapped) persistence, since the serialized
-/// bytes are arbitrary binary that plain text storage would corrupt.
+/// The saved state, or null if there is nothing saved. Saved values are bytes kept
+/// as they went in, so the serialized struct comes back exactly.
 fn loadSaved(gpa: Allocator) ?SavedState {
-    const raw: []u8 = (z.web.dom.persistence_load_bytes(gpa, storage_key) catch null) orelse return null;
-    defer gpa.free(raw);
+    var buffer: [4096]u8 = undefined;
+    const raw: []u8 = z.loadValue(storage_key, &buffer) orelse return null;
     // SavedState is all scalars, so the decode allocates nothing to free
     return z.serialize.decode(SavedState, raw, gpa) catch null;
 }
 
-/// Serialize the state and write the bytes to localStorage (binary-safe, so the
-/// raw serialized bytes survive). Returns a status line describing what happened.
+/// Serialize the state and save the bytes. Returns a status line describing what
+/// happened; a save the platform cannot make is logged by it.
 fn saveToStorage(gpa: Allocator, saved: SavedState) []const u8 {
     const bytes: []u8 = z.serialize.encodeAlloc(saved, gpa) catch {
         return "Save failed: out of memory.";
     };
     defer gpa.free(bytes);
-    const rc: i32 = z.web.dom.persistence_save_bytes(gpa, storage_key, bytes) catch {
-        return "Save failed: out of memory.";
-    };
-    return switch (rc) {
-        0 => "Saved to browser storage.",
-        1 => "Save failed: storage quota exceeded.",
-        else => "Save failed: storage unavailable.",
-    };
+    z.saveValue(storage_key, bytes);
+    return "Saved.";
 }
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
@@ -89,7 +84,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         .saved = restored orelse .{},
         .loaded_from_storage = restored != null,
         .status = if (restored != null)
-            "Restored from browser storage."
+            "Restored from the saved value."
         else
             "No save yet - tweak, then hit Save.",
     };
@@ -111,7 +106,7 @@ fn update(f: *z.Frame, s: *State) void {
     z.clearViewport(f, .{ .r = 16, .g = 18, .b = 24, .a = 255 });
     z.beginMode3D(f.gl, cam);
     z.drawGrid(f.gl, 8, 0.5);
-    const p: zm.Vec3 = s.saved.position;
+    const p: Vec3 = s.saved.position;
     z.drawModel(f.gl, s.cube, pointVec(p[0], p[1], p[2]), s.saved.cube_scale, .{
         .r = colorByte(s.saved.color_r),
         .g = colorByte(s.saved.color_g),
@@ -122,13 +117,13 @@ fn update(f: *z.Frame, s: *State) void {
 
     const u: ui.Ui = s.ui_host.begin(f);
     defer s.ui_host.render(f);
-    if (u.window("State (saved to your browser)", .{
+    if (u.window("State (saved across runs)", .{
         .initial_pos = .{ 12, 12 },
         .initial_size = .{ 340, 320 },
     })) |w| {
         defer w.close();
-        u.text("A struct -> bytes -> localStorage -> back.", .{});
-        u.text("Tweak, Save, then reload the page.", .{});
+        u.text("A struct -> bytes -> saved value -> back.", .{});
+        u.text("Tweak, Save, then reload or restart.", .{});
         u.text("Loaded from storage: {s}", .{if (s.loaded_from_storage) "yes" else "no"});
         u.text("Saved {d} time(s)", .{s.saved.save_count});
         u.text("{s}", .{s.status});
@@ -151,13 +146,13 @@ fn update(f: *z.Frame, s: *State) void {
         _ = u.slider("Pos Z", &pos[2], .{ .min = -3, .max = 3 });
         s.saved.position = .{ pos[0], pos[1], pos[2] };
 
-        if (u.button("Save to browser", .{})) {
+        if (u.button("Save", .{})) {
             s.saved.save_count += 1;
             s.status = saveToStorage(s.gpa, s.saved);
             s.loaded_from_storage = true;
         }
         if (u.button("Clear saved", .{})) {
-            _ = z.web.dom.persistence_remove(storage_key);
+            z.removeValue(storage_key);
             s.saved = .{};
             s.loaded_from_storage = false;
             s.status = "Cleared. Defaults restored.";

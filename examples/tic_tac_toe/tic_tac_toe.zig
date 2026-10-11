@@ -14,6 +14,12 @@ const Vec2 = zm.Vec2;
 const Color = zm.Color;
 const atkinson_mono_ttf = @embedFile("atkinson_mono_ttf");
 
+const bg_col: Color = .{ .r = 20, .g = 24, .b = 34, .a = 255 };
+
+const x_col: Color = .{ .r = 236, .g = 72, .b = 60, .a = 255 };
+
+const o_col: Color = .{ .r = 90, .g = 190, .b = 235, .a = 255 };
+
 /// What one square holds. An enum makes the three states the only three states --
 /// you cannot store a 4 by accident -- and each carries its own draw colour.
 const Cell = enum {
@@ -59,10 +65,7 @@ const Layout = struct {
     }
 };
 
-const bg_col: Color = .{ .r = 20, .g = 24, .b = 34, .a = 255 };
 const grid_col: Color = .{ .r = 90, .g = 100, .b = 120, .a = 255 };
-const x_col: Color = .{ .r = 236, .g = 72, .b = 60, .a = 255 };
-const o_col: Color = .{ .r = 90, .g = 190, .b = 235, .a = 255 };
 const win_col: Color = .{ .r = 250, .g = 204, .b = 60, .a = 255 };
 
 /// The eight ways to make three in a row, as board indices.
@@ -191,7 +194,7 @@ fn drawO(
 }
 
 fn update(f: *z.Frame, s: *State) void {
-    const lay: Layout = Layout.of(f);
+    const lay: Layout = .of(f);
     const thick: f32 = @max(3.0, lay.cell * 0.09);
     const over: bool = s.winner() != null or s.full;
     if (z.isMouseButtonPressed(f.input, .left)) {

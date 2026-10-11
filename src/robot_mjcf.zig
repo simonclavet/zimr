@@ -20,6 +20,13 @@ const splat = zm.splat;
 const vec_zero = zm.vec_zero;
 const length3 = zm.length3;
 const allocPrint = std.fmt.allocPrint;
+const Io = std.Io;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
+const eql = std.mem.eql;
+const endsWith = std.mem.endsWith;
+const startsWith = std.mem.startsWith;
 const pi = zm.pi;
 const normalize3 = zm.normalize3;
 const acosRad = zm.acosRad;
@@ -31,56 +38,79 @@ const quatFromAxisAngle = zm.quatFromAxisAngle;
 
 pub const Error = Allocator.Error;
 
-/// Build a runtime `robot.Model` from a parsed MJCF robot.
+/// A built model, plus the name->index mapping needed to use it.
 ///
-/// -- * NO AXIS CONVERSION, AND THAT IS DELIBERATE --
+/// -- ** WHY THE MAPPING HAS TO COME BACK WITH THE MODEL --
 ///
-/// The URDF path rotates Z-up into Y-up at the root, because URDF files are authored Z-up and
-/// zimr's cameras and demos are Y-up. This path does NOT, and the reason is verification: the
-/// acceptance test for MJCF import is that forward kinematics agrees with MuJoCo body for
-/// body, and a frame conversion in the middle turns any disagreement into two candidate
-/// explanations instead of one.
+/// The runtime `Model` carries no names: a generated model reaches its joints through a
+/// comptime enum and pays nothing for strings. An MJCF model is built at runtime and has no
+/// such enum, so without this an importer hands back a robot whose parts cannot be named -
+/// unusable for a controller, which must say "the front-left knee".
 ///
-/// A caller that wants Y-up applies the same one-line root rotation URDF uses. Doing it here
-/// would bake a display convention into an import path whose job is fidelity.
-pub fn build(gpa: Allocator, robot: *const mjcf.Robot, options: rbt.Options) !Imported {
-    var imported: Imported = try buildScene(gpa, robot, &.{}, options);
-    errdefer imported.deinit();
-    // `<contact><exclude>`: names become body indices, kept in the model's own arena. (Robots built as
-    // scenes - `buildScene`, `buildMultiScene` - do not read exclusions yet.)
-    if (robot.excludes.len > 0) {
-        const pairs: [][2]u32 = try imported.model.arena.allocator().alloc([2]u32, robot.excludes.len);
-        for (robot.excludes, 0..) |exclude, k| {
-            pairs[k] = .{
-                imported.bodyIndex(exclude.body1) orelse return error.UnknownExcludedBody,
-                imported.bodyIndex(exclude.body2) orelse return error.UnknownExcludedBody,
-            };
-        }
-        imported.model.exclude_pairs = pairs;
-    }
-    return imported;
-}
-
-/// Build an imported robot together with loose objects it can interact with.
-///
-/// -- * WHY THE OBJECTS GO IN THE ROBOT'S TREE --
-///
-/// This is section 4k applied to an imported model. A ball simulated in `zimrphysics` alone would be
-/// resolved by a different solver treating the robot as immovable - the exact approximation
-/// that made a 666x mass range change an arm's behaviour by under 1%. As a free-jointed body
-/// in the SAME tree, an impact is one constraint between two inertias: the robot feels the
-/// ball's real mass, the ball feels the robot's, and momentum is conserved by construction.
-///
-/// The objects follow every robot body, so `Imported.bodyIndex` keeps working for robot parts
-/// and `freeBodyIndex` finds the loose ones.
-pub fn buildScene(
+/// The first attempt assumed the model kept the reader's body order and computed the index as
+/// "position in the file, plus one for the world". **It does not.** `buildRuntime` walks the
+/// tree its own way, and for the Go1 it puts FL_hip where the file had FR_hip - so every
+/// left/right pair came out mirrored. The FK test caught it precisely because that model is
+/// symmetric and the pose was not: a symmetric pose would have agreed perfectly while being
+/// wrong.
+pub const Imported = struct {
+    model: rbt.Model,
+    /// Whether each entry of `names` was allocated here and must be freed. Parallel to it.
+    owned_names: []bool,
+    /// Sensor names, indexed as the model indexes sensors. Same reasoning as `names`: the
+    /// runtime model carries no strings, and a sensor you cannot find by name is an
+    /// observation you cannot use.
+    sensor_names: [][]const u8,
+    /// Body names, indexed by TREE index. `names[0]` is the world's, which is empty.
+    names: [][]const u8,
     gpa: Allocator,
-    robot: *const mjcf.Robot,
-    free_bodies: []const scene.FreeBody,
-    options: rbt.Options,
-) !Imported {
-    return buildMultiScene(gpa, &.{.{ .robot = robot }}, free_bodies, options);
-}
+
+    pub fn deinit(self: *Imported) void {
+        self.model.deinit();
+        // * THE PREFIXED NAMES ARE OWNED HERE. A name that came straight from the document is
+        // a slice INTO it and must not be freed; a prefixed one was built for this table and
+        // must be. `owned_names` records which - carrying the flag is cheaper and clearer than
+        // duplicating every name so they can all be freed alike.
+        for (self.names, self.owned_names) |name, owned| {
+            if (owned) {
+                self.gpa.free(name);
+            }
+        }
+        self.gpa.free(self.owned_names);
+        for (self.sensor_names) |name| {
+            self.gpa.free(name);
+        }
+        self.gpa.free(self.sensor_names);
+        self.gpa.free(self.names);
+    }
+
+    /// Tree index of a body, or null.
+    /// Index of a sensor by name, for reading `data.sensor_data[model.sensor_adr[i]]`.
+    pub fn sensorIndex(self: *const Imported, name: []const u8) ?u32 {
+        for (self.sensor_names, 0..) |candidate, i| {
+            if (name.len > 0 and eql(u8, candidate, name)) {
+                return @intCast(i);
+            }
+        }
+        return null;
+    }
+
+    pub fn bodyIndex(self: *const Imported, name: []const u8) ?u32 {
+        // * THE EMPTY NAME MATCHES NOTHING, and refusing it here closes a real footgun.
+        // The world's entry is `""` and so is every anonymous body's, so a caller that
+        // passed through an empty string - a missing attribute, a failed lookup - would
+        // silently get the WORLD and go on to read its pose as though it were a robot part.
+        if (name.len == 0) {
+            return null;
+        }
+        for (self.names, 0..) |candidate, i| {
+            if (eql(u8, candidate, name)) {
+                return @intCast(i);
+            }
+        }
+        return null;
+    }
+};
 
 /// One imported robot in a scene, with the prefix that keeps its names distinct.
 pub const Placed = struct {
@@ -92,6 +122,129 @@ pub const Placed = struct {
     /// Where the robot's root sits in the scene, so several can stand side by side.
     at: Vec = vec_zero,
 };
+
+fn convertJoint(joint: mjcf.Joint) rbt.JointSpec {
+    return .{
+        .name = joint.name,
+        .kind = switch (joint.kind) {
+            .hinge => .hinge,
+            .slide => .slide,
+            .free => .free,
+            // A ball joint is three DOFs the engine models as a `.ball`; if it ever lacks
+            // one, failing loudly beats silently welding the joint shut.
+            .ball => .ball,
+        },
+        .axis = joint.axis,
+        .pos = joint.pos,
+        .range = joint.range,
+        .damping = joint.damping,
+        .armature = joint.armature,
+        .stiffness = joint.stiffness,
+    };
+}
+
+/// Half-extents of a point cloud's axis-aligned box.
+///
+/// The hull's mass properties come from this, which OVERESTIMATES and does so
+/// deliberately: it is consulted only when a body states no `<inertial>`, and a body whose
+/// collision is a mesh almost always states one. Erring heavy is the safe direction for
+/// the case where it is used at all.
+fn boundsHalfExtent(points: []const Vec) Vec {
+    var lo: Vec = points[0];
+    var hi: Vec = points[0];
+    for (points[1..]) |p| {
+        lo = @min(lo, p);
+        hi = @max(hi, p);
+    }
+    return (hi - lo) * splat(@as(f32, 0.5));
+}
+
+/// Reconciles zimr's capsule axis (local **Y**) with MJCF's (local **Z**).
+///
+/// -- * THE DIRECTION IS EASY TO GET BACKWARDS, so here is the derivation --
+///
+/// The shape is defined in the geom's local frame, and only the FRAME changes - the geom
+/// stays where MJCF put it. So the wanted rotation `R` satisfies
+///
+///     rot_mjcf * R * (engine's axis)  ==  rot_mjcf * (MJCF's axis)
+///     R * (0, 1, 0) == (0, 0, 1)
+///
+/// A rotation about X by theta sends `(0,1,0)` to `(0, cos theta, sin theta)`, so theta = **+90 deg**. Applied on
+/// the RIGHT because it re-expresses the shape's own frame, not where that frame sits.
+///
+/// The first attempt used -90 deg, which sends Y to -Z: the capsule then ran along the limb but
+/// pointing the wrong way, which is invisible for a symmetric capsule about its centre and
+/// wrong for anything offset along it.
+const z_to_y: Quat = quatFromAxisAngle(vec(1, 0, 0), 0.5 * pi);
+
+/// MJCF's `size` means something different for every geom type, which is the whole difficulty.
+///
+/// * NULL RATHER THAN AN ERROR for a geom with no engine equivalent, because it is not a
+/// failure - real models are full of visual-only geometry, decorative meshes and a ground
+/// plane that belongs to the world. Refusing the whole robot over one of them would make the
+/// importer useless on exactly the files it exists for. An error type would also invite a
+/// caller to `try` it and inherit that behaviour by accident.
+fn convertGeom(geom: mjcf.Geom) ?rbt.GeomSpec {
+    const shape: rbt.GeomShape = switch (geom.kind) {
+        // One number: the radius.
+        .sphere => .{ .sphere = .{ .radius = geom.size[0] } },
+        // Two: radius, then HALF-length of the cylindrical part. `fromto` has already been
+        // resolved into exactly this pair by the reader.
+        // ** THE AXIS DIFFERS BY 90 deg, and `GeomShape` says so in its own doc comment:
+        // *"Segment along local Y plus a radius - zimr's capsule convention, not MuJoCo's."*
+        // MJCF's capsules and cylinders run along local **Z**; the engine's run along **Y**.
+        //
+        // Copying the numbers across without rotating leaves every capsule crossways to the
+        // limb it belongs to. Nothing catches it: forward kinematics is about BODY poses and
+        // agrees to 1e-4 either way, and the Go1 still stands because its FEET are spheres.
+        // What is wrong is the collision shape of all 24 of its capsules, silently.
+        //
+        // The rotation is folded into the geom's own orientation below, so the shape stays a
+        // plain capsule and nothing downstream needs to know.
+        .capsule => .{ .capsule = .{ .radius = geom.size[0], .half_height = geom.size[1] } },
+        .cylinder => .{ .cylinder = .{ .radius = geom.size[0], .half_height = geom.size[1] } },
+        // Three: half-extents, already.
+        .box => .{ .box = .{ .half_extent = vec(geom.size[0], geom.size[1], geom.size[2]) } },
+        // * A PLANE IS NOT A SHAPE THE ROBOT OWNS. MJCF's ground plane belongs to the world,
+        // and giving a robot body an infinite plane would make its mass properties nonsense.
+        // Skipped, so the caller supplies its own floor.
+        .plane => return null,
+        // * A MESH BECOMES A HULL, once someone has loaded it. `mjcf.resolveMeshes` fills
+        // `geom.hull` with a reduced point cloud; a geom whose mesh was never loaded - a
+        // visual asset a headless caller had no reason to ship - still converts to nothing,
+        // which is the same call made for a plane.
+        .mesh => if (geom.hull.len > 0) .{ .hull = .{
+            .points = geom.hull,
+            .bounds_half_extent = boundsHalfExtent(geom.hull),
+        } } else return null,
+        // An ellipsoid has no engine equivalent; models use them rarely and for visuals.
+        .ellipsoid => return null,
+    };
+    // Fold the Z->Y axis change into the geom's orientation for the shapes that have a length.
+    const rot: Quat = switch (geom.kind) {
+        .capsule, .cylinder => qmul(geom.rot, z_to_y),
+        else => geom.rot,
+    };
+
+    return .{
+        .shape = shape,
+        .pos = geom.pos,
+        .rot = rot,
+        // ** CARRIED THROUGH, AND IT WAS NOT ALWAYS. This read "dropped here rather than
+        // pretended at" for several sessions, and the bridge substituted a hardcoded 0.5 for
+        // every contact in every model. The symptom was nowhere near the cause: a limp humanoid
+        // on the ground crept sideways at an ACCELERATING rate, 0.109 m over 25 s against
+        // MuJoCo's 0.071 and falling. With the model's own value the creep goes steady and
+        // lands within 7% of MuJoCo's.
+        //
+        // * MJCF's `friction` IS THREE NUMBERS - sliding, torsional, rolling. Only the first is
+        // taken, because that is the only one this engine models; the other two would need
+        // extra constraint rows and are not silently folded into the one that exists.
+        .friction = geom.friction,
+        .mass = geom.mass,
+        .density = geom.density,
+    };
+}
 
 /// Build several imported robots and any loose objects into ONE tree.
 ///
@@ -111,12 +264,12 @@ pub fn buildMultiScene(
     free_bodies: []const scene.FreeBody,
     options: rbt.Options,
 ) !Imported {
-    var scratch: std.heap.ArenaAllocator = .init(gpa);
+    var scratch: ArenaAllocator = .init(gpa);
     defer scratch.deinit();
     const a: Allocator = scratch.allocator();
 
-    var bodies: std.ArrayListUnmanaged(rbt.BodySpec) = .empty;
-    var actuators: std.ArrayListUnmanaged(rbt.ActuatorSpec) = .empty;
+    var bodies: ArrayListUnmanaged(rbt.BodySpec) = .empty;
+    var actuators: ArrayListUnmanaged(rbt.ActuatorSpec) = .empty;
 
     for (placed) |entry| {
         const robot: *const mjcf.Robot = entry.robot;
@@ -124,7 +277,7 @@ pub fn buildMultiScene(
             // * SITES BELONG TO THEIR BODY, gathered here rather than in a second pass - the
             // spec nests them under the body they are mounted on, and every frame-relative
             // sensor resolves through one.
-            var body_sites: std.ArrayListUnmanaged(rbt.SiteSpec) = .empty;
+            var body_sites: ArrayListUnmanaged(rbt.SiteSpec) = .empty;
             for (robot.sites) |site| {
                 if (site.body != body_index) {
                     continue;
@@ -149,7 +302,7 @@ pub fn buildMultiScene(
                     joints[k].name = try allocPrint(a, "{s}{s}", .{ entry.prefix, joints[k].name });
                 }
             }
-            var geoms: std.ArrayListUnmanaged(rbt.GeomSpec) = .empty;
+            var geoms: ArrayListUnmanaged(rbt.GeomSpec) = .empty;
             for (0..body.geom_count) |k| {
                 // A geom this engine cannot represent is SKIPPED, not fatal. Real models carry
                 // visual-only geometry and decorative meshes that contribute nothing to dynamics,
@@ -268,7 +421,7 @@ pub fn buildMultiScene(
     // The engine's `SensorKind` and MJCF's element names line up closely because both describe
     // the same instruments; what differs is that MJCF names the target with a different
     // attribute per kind. That was resolved during parsing, so this is a straight mapping.
-    var sensors: std.ArrayListUnmanaged(rbt.SensorSpec) = .empty;
+    var sensors: ArrayListUnmanaged(rbt.SensorSpec) = .empty;
     for (placed) |entry| {
         for (entry.robot.sensors) |sensor| {
             try sensors.append(a, .{
@@ -295,7 +448,7 @@ pub fn buildMultiScene(
     // `<connect anchor="...">`, arrived at from the other direction: MuJoCo derives because
     // the format only offers one anchor, and this derives because stating two is a typo
     // waiting to happen.
-    var equalities: std.ArrayListUnmanaged(rbt.EqualitySpec) = .empty;
+    var equalities: ArrayListUnmanaged(rbt.EqualitySpec) = .empty;
     for (placed) |entry| {
         for (entry.robot.equalities) |closure| {
             // * THE JOINT FORM NAMES JOINTS, NOT BODIES, so it takes a different path - and
@@ -433,127 +586,87 @@ pub fn buildMultiScene(
     };
 }
 
-fn convertJoint(joint: mjcf.Joint) rbt.JointSpec {
-    return .{
-        .name = joint.name,
-        .kind = switch (joint.kind) {
-            .hinge => .hinge,
-            .slide => .slide,
-            .free => .free,
-            // A ball joint is three DOFs the engine models as a `.ball`; if it ever lacks
-            // one, failing loudly beats silently welding the joint shut.
-            .ball => .ball,
-        },
-        .axis = joint.axis,
-        .pos = joint.pos,
-        .range = joint.range,
-        .damping = joint.damping,
-        .armature = joint.armature,
-        .stiffness = joint.stiffness,
-    };
+/// Build an imported robot together with loose objects it can interact with.
+///
+/// -- * WHY THE OBJECTS GO IN THE ROBOT'S TREE --
+///
+/// This is section 4k applied to an imported model. A ball simulated in `zimrphysics` alone would be
+/// resolved by a different solver treating the robot as immovable - the exact approximation
+/// that made a 666x mass range change an arm's behaviour by under 1%. As a free-jointed body
+/// in the SAME tree, an impact is one constraint between two inertias: the robot feels the
+/// ball's real mass, the ball feels the robot's, and momentum is conserved by construction.
+///
+/// The objects follow every robot body, so `Imported.bodyIndex` keeps working for robot parts
+/// and `freeBodyIndex` finds the loose ones.
+pub fn buildScene(
+    gpa: Allocator,
+    robot: *const mjcf.Robot,
+    free_bodies: []const scene.FreeBody,
+    options: rbt.Options,
+) !Imported {
+    return buildMultiScene(gpa, &.{.{ .robot = robot }}, free_bodies, options);
 }
 
-/// Reconciles zimr's capsule axis (local **Y**) with MJCF's (local **Z**).
+/// Build a runtime `robot.Model` from a parsed MJCF robot.
 ///
-/// -- * THE DIRECTION IS EASY TO GET BACKWARDS, so here is the derivation --
+/// -- * NO AXIS CONVERSION, AND THAT IS DELIBERATE --
 ///
-/// The shape is defined in the geom's local frame, and only the FRAME changes - the geom
-/// stays where MJCF put it. So the wanted rotation `R` satisfies
+/// The URDF path rotates Z-up into Y-up at the root, because URDF files are authored Z-up and
+/// zimr's cameras and demos are Y-up. This path does NOT, and the reason is verification: the
+/// acceptance test for MJCF import is that forward kinematics agrees with MuJoCo body for
+/// body, and a frame conversion in the middle turns any disagreement into two candidate
+/// explanations instead of one.
 ///
-///     rot_mjcf * R * (engine's axis)  ==  rot_mjcf * (MJCF's axis)
-///     R * (0, 1, 0) == (0, 0, 1)
-///
-/// A rotation about X by theta sends `(0,1,0)` to `(0, cos theta, sin theta)`, so theta = **+90 deg**. Applied on
-/// the RIGHT because it re-expresses the shape's own frame, not where that frame sits.
-///
-/// The first attempt used -90 deg, which sends Y to -Z: the capsule then ran along the limb but
-/// pointing the wrong way, which is invisible for a symmetric capsule about its centre and
-/// wrong for anything offset along it.
-const z_to_y: Quat = quatFromAxisAngle(vec(1, 0, 0), 0.5 * pi);
-
-/// Half-extents of a point cloud's axis-aligned box.
-///
-/// The hull's mass properties come from this, which OVERESTIMATES and does so
-/// deliberately: it is consulted only when a body states no `<inertial>`, and a body whose
-/// collision is a mesh almost always states one. Erring heavy is the safe direction for
-/// the case where it is used at all.
-fn boundsHalfExtent(points: []const Vec) Vec {
-    var lo: Vec = points[0];
-    var hi: Vec = points[0];
-    for (points[1..]) |p| {
-        lo = @min(lo, p);
-        hi = @max(hi, p);
+/// A caller that wants Y-up applies the same one-line root rotation URDF uses. Doing it here
+/// would bake a display convention into an import path whose job is fidelity.
+pub fn build(gpa: Allocator, robot: *const mjcf.Robot, options: rbt.Options) !Imported {
+    var imported: Imported = try buildScene(gpa, robot, &.{}, options);
+    errdefer imported.deinit();
+    // `<contact><exclude>`: names become body indices, kept in the model's own arena. (Robots built as
+    // scenes - `buildScene`, `buildMultiScene` - do not read exclusions yet.)
+    if (robot.excludes.len > 0) {
+        const pairs: [][2]u32 = try imported.model.arena.allocator().alloc([2]u32, robot.excludes.len);
+        for (robot.excludes, 0..) |exclude, k| {
+            pairs[k] = .{
+                imported.bodyIndex(exclude.body1) orelse return error.UnknownExcludedBody,
+                imported.bodyIndex(exclude.body2) orelse return error.UnknownExcludedBody,
+            };
+        }
+        imported.model.exclude_pairs = pairs;
     }
-    return (hi - lo) * splat(@as(f32, 0.5));
+    return imported;
 }
 
-/// MJCF's `size` means something different for every geom type, which is the whole difficulty.
+/// Whether `length` is exactly the qpos width of some prefix of the model's joints.
 ///
-/// * NULL RATHER THAN AN ERROR for a geom with no engine equivalent, because it is not a
-/// failure - real models are full of visual-only geometry, decorative meshes and a ground
-/// plane that belongs to the world. Refusing the whole robot over one of them would make the
-/// importer useless on exactly the files it exists for. An error type would also invite a
-/// caller to `try` it and inherit that behaviour by accident.
-fn convertGeom(geom: mjcf.Geom) ?rbt.GeomSpec {
-    const shape: rbt.GeomShape = switch (geom.kind) {
-        // One number: the radius.
-        .sphere => .{ .sphere = .{ .radius = geom.size[0] } },
-        // Two: radius, then HALF-length of the cylindrical part. `fromto` has already been
-        // resolved into exactly this pair by the reader.
-        // ** THE AXIS DIFFERS BY 90 deg, and `GeomShape` says so in its own doc comment:
-        // *"Segment along local Y plus a radius - zimr's capsule convention, not MuJoCo's."*
-        // MJCF's capsules and cylinders run along local **Z**; the engine's run along **Y**.
-        //
-        // Copying the numbers across without rotating leaves every capsule crossways to the
-        // limb it belongs to. Nothing catches it: forward kinematics is about BODY poses and
-        // agrees to 1e-4 either way, and the Go1 still stands because its FEET are spheres.
-        // What is wrong is the collision shape of all 24 of its capsules, silently.
-        //
-        // The rotation is folded into the geom's own orientation below, so the shape stays a
-        // plain capsule and nothing downstream needs to know.
-        .capsule => .{ .capsule = .{ .radius = geom.size[0], .half_height = geom.size[1] } },
-        .cylinder => .{ .cylinder = .{ .radius = geom.size[0], .half_height = geom.size[1] } },
-        // Three: half-extents, already.
-        .box => .{ .box = .{ .half_extent = vec(geom.size[0], geom.size[1], geom.size[2]) } },
-        // * A PLANE IS NOT A SHAPE THE ROBOT OWNS. MJCF's ground plane belongs to the world,
-        // and giving a robot body an infinite plane would make its mass properties nonsense.
-        // Skipped, so the caller supplies its own floor.
-        .plane => return null,
-        // * A MESH BECOMES A HULL, once someone has loaded it. `mjcf.resolveMeshes` fills
-        // `geom.hull` with a reduced point cloud; a geom whose mesh was never loaded - a
-        // visual asset a headless caller had no reason to ship - still converts to nothing,
-        // which is the same call made for a plane.
-        .mesh => if (geom.hull.len > 0) .{ .hull = .{
-            .points = geom.hull,
-            .bounds_half_extent = boundsHalfExtent(geom.hull),
-        } } else return null,
-        // An ellipsoid has no engine equivalent; models use them rarely and for visuals.
-        .ellipsoid => return null,
-    };
-    // Fold the Z->Y axis change into the geom's orientation for the shapes that have a length.
-    const rot: Quat = switch (geom.kind) {
-        .capsule, .cylinder => qmul(geom.rot, z_to_y),
-        else => geom.rot,
-    };
+/// Joints are laid out in order, so the valid prefixes are the running sums of their widths -
+/// 7 for a free joint, 4 for a ball, 1 for a hinge or slide. A length between two of those
+/// cuts a joint in half.
+fn isJointBoundary(model: *const rbt.Model, length: usize) bool {
+    if (length == 0) {
+        return false;
+    }
+    var total: usize = 0;
+    for (0..model.njnt) |j| {
+        total += switch (model.jnt_type[j]) {
+            .free => 7,
+            .ball => 4,
+            .hinge, .slide => 1,
+        };
+        if (total == length) {
+            return true;
+        }
+    }
+    return false;
+}
 
-    return .{
-        .shape = shape,
-        .pos = geom.pos,
-        .rot = rot,
-        // ** CARRIED THROUGH, AND IT WAS NOT ALWAYS. This read "dropped here rather than
-        // pretended at" for several sessions, and the bridge substituted a hardcoded 0.5 for
-        // every contact in every model. The symptom was nowhere near the cause: a limp humanoid
-        // on the ground crept sideways at an ACCELERATING rate, 0.109 m over 25 s against
-        // MuJoCo's 0.071 and falling. With the model's own value the creep goes steady and
-        // lands within 7% of MuJoCo's.
-        //
-        // * MJCF's `friction` IS THREE NUMBERS - sliding, torsional, rolling. Only the first is
-        // taken, because that is the only one this engine models; the other two would need
-        // extra constraint rows and are not silently folded into the one that exists.
-        .friction = geom.friction,
-        .mass = geom.mass,
-        .density = geom.density,
-    };
+/// Rewrite a quaternion in place from MuJoCo's (w, x, y, z) into zm's (x, y, z, w).
+fn reorderQuat(q: *[4]f32) void {
+    const w: f32 = q[0];
+    q[0] = q[1];
+    q[1] = q[2];
+    q[2] = q[3];
+    q[3] = w;
 }
 
 /// Write a keyframe's `qpos` into a `Data`.
@@ -627,112 +740,6 @@ pub fn applyKeyframe(model: *const rbt.Model, data: *rbt.Data, key: mjcf.Keyfram
     return true;
 }
 
-/// A built model, plus the name->index mapping needed to use it.
-///
-/// -- ** WHY THE MAPPING HAS TO COME BACK WITH THE MODEL --
-///
-/// The runtime `Model` carries no names: a generated model reaches its joints through a
-/// comptime enum and pays nothing for strings. An MJCF model is built at runtime and has no
-/// such enum, so without this an importer hands back a robot whose parts cannot be named -
-/// unusable for a controller, which must say "the front-left knee".
-///
-/// The first attempt assumed the model kept the reader's body order and computed the index as
-/// "position in the file, plus one for the world". **It does not.** `buildRuntime` walks the
-/// tree its own way, and for the Go1 it puts FL_hip where the file had FR_hip - so every
-/// left/right pair came out mirrored. The FK test caught it precisely because that model is
-/// symmetric and the pose was not: a symmetric pose would have agreed perfectly while being
-/// wrong.
-pub const Imported = struct {
-    model: rbt.Model,
-    /// Whether each entry of `names` was allocated here and must be freed. Parallel to it.
-    owned_names: []bool,
-    /// Sensor names, indexed as the model indexes sensors. Same reasoning as `names`: the
-    /// runtime model carries no strings, and a sensor you cannot find by name is an
-    /// observation you cannot use.
-    sensor_names: [][]const u8,
-    /// Body names, indexed by TREE index. `names[0]` is the world's, which is empty.
-    names: [][]const u8,
-    gpa: Allocator,
-
-    pub fn deinit(self: *Imported) void {
-        self.model.deinit();
-        // * THE PREFIXED NAMES ARE OWNED HERE. A name that came straight from the document is
-        // a slice INTO it and must not be freed; a prefixed one was built for this table and
-        // must be. `owned_names` records which - carrying the flag is cheaper and clearer than
-        // duplicating every name so they can all be freed alike.
-        for (self.names, self.owned_names) |name, owned| {
-            if (owned) {
-                self.gpa.free(name);
-            }
-        }
-        self.gpa.free(self.owned_names);
-        for (self.sensor_names) |name| {
-            self.gpa.free(name);
-        }
-        self.gpa.free(self.sensor_names);
-        self.gpa.free(self.names);
-    }
-
-    /// Tree index of a body, or null.
-    /// Index of a sensor by name, for reading `data.sensor_data[model.sensor_adr[i]]`.
-    pub fn sensorIndex(self: *const Imported, name: []const u8) ?u32 {
-        for (self.sensor_names, 0..) |candidate, i| {
-            if (name.len > 0 and std.mem.eql(u8, candidate, name)) {
-                return @intCast(i);
-            }
-        }
-        return null;
-    }
-
-    pub fn bodyIndex(self: *const Imported, name: []const u8) ?u32 {
-        // * THE EMPTY NAME MATCHES NOTHING, and refusing it here closes a real footgun.
-        // The world's entry is `""` and so is every anonymous body's, so a caller that
-        // passed through an empty string - a missing attribute, a failed lookup - would
-        // silently get the WORLD and go on to read its pose as though it were a robot part.
-        if (name.len == 0) {
-            return null;
-        }
-        for (self.names, 0..) |candidate, i| {
-            if (std.mem.eql(u8, candidate, name)) {
-                return @intCast(i);
-            }
-        }
-        return null;
-    }
-};
-
-/// Whether `length` is exactly the qpos width of some prefix of the model's joints.
-///
-/// Joints are laid out in order, so the valid prefixes are the running sums of their widths -
-/// 7 for a free joint, 4 for a ball, 1 for a hinge or slide. A length between two of those
-/// cuts a joint in half.
-fn isJointBoundary(model: *const rbt.Model, length: usize) bool {
-    if (length == 0) {
-        return false;
-    }
-    var total: usize = 0;
-    for (0..model.njnt) |j| {
-        total += switch (model.jnt_type[j]) {
-            .free => 7,
-            .ball => 4,
-            .hinge, .slide => 1,
-        };
-        if (total == length) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// Rewrite a quaternion in place from MuJoCo's (w, x, y, z) into zm's (x, y, z, w).
-fn reorderQuat(q: *[4]f32) void {
-    const w: f32 = q[0];
-    q[0] = q[1];
-    q[1] = q[2];
-    q[2] = q[3];
-    q[3] = w;
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -757,7 +764,7 @@ test "mjcf import: forward kinematics agrees with MuJoCo, body for body" {
     // resolution, every orientation spelling the file uses, the degrees conversion, the
     // `fromto` capsules, `childclass` inheritance and the tree walk - all at once, against a
     // reference that cannot be argued with.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -767,7 +774,7 @@ test "mjcf import: forward kinematics agrees with MuJoCo, body for body" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 8 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // Same pose MuJoCo was given: every HINGE set, the free joint left at its reference.
@@ -820,7 +827,7 @@ test "mjcf import: forward kinematics agrees with MuJoCo, body for body" {
 }
 
 test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -829,7 +836,7 @@ test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 8 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // `squat` puts the torso at z = 0.596, which MuJoCo confirms after resetting to it.
@@ -844,6 +851,8 @@ test "mjcf import: a keyframe loads, and one of the wrong length is refused" {
     const wrong: mjcf.Keyframe = .{ .name = "bogus", .qpos = &.{ 1, 2, 3 } };
     try expect(!applyKeyframe(model, &data, wrong));
 }
+
+const build_options = @import("build_options");
 
 /// -- *** THE THREE HEAVY RETARGET DIAGNOSTICS, OFF BY DEFAULT --
 ///
@@ -865,7 +874,6 @@ const run_slow_retarget_diagnostics: bool = if (@hasDecl(build_options, "slow_te
     build_options.slow_tests
 else
     false;
-const build_options = @import("build_options");
 
 test "mjcf import: a REAL QUADRUPED - Unitree Go1 from Menagerie, FK against MuJoCo" {
     if (!run_slow_retarget_diagnostics) {
@@ -878,7 +886,7 @@ test "mjcf import: a REAL QUADRUPED - Unitree Go1 from Menagerie, FK against MuJ
     //
     // MuJoCo reports nbody=14, njnt=13, nq=19, nv=18. The positions below are its own
     // forward kinematics for the same asymmetric pose used on the humanoid.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -893,7 +901,7 @@ test "mjcf import: a REAL QUADRUPED - Unitree Go1 from Menagerie, FK against MuJ
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 64 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // Start from `home`, then bend every hinge - the same recipe as the humanoid test.
@@ -943,7 +951,7 @@ test "mjcf import: an unnamed body is anonymous, not an error" {
     // a body must still simulate - it has mass and geometry like any other - it simply cannot
     // be looked up. Refusing the robot over it would be the same mistake as refusing one for
     // carrying a decorative mesh.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 =
         \\<mujoco><worldbody>
         \\  <body name="named" pos="0 0 1">
@@ -981,7 +989,7 @@ test "* mass and inertia match MuJoCo, not the collision geoms" {
     // does not depend on mass** - the verification that existed could not see the error.
     //
     // The robot stood, walked plausibly in principle, and was not a Go1.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1019,7 +1027,7 @@ test "* mass and inertia match MuJoCo, not the collision geoms" {
     for (wanted) |want| {
         const b: u32 = imported.bodyIndex(want.name).?;
         try expectApproxEqAbs(want.mass, model.body_mass[b], 1.0e-4);
-        const diag: zm.Vec = model.body_inertia[b].diag;
+        const diag: Vec = model.body_inertia[b].diag;
         const trace: f32 = diag[0] + diag[1] + diag[2];
         expectApproxEqAbs(want.trace, trace, 1.0e-5) catch |err| {
             std.log.err("{s}: inertia trace {d:.6}, want {d:.6}", .{ want.name, trace, want.trace });
@@ -1044,7 +1052,7 @@ test "mjcf import: a mesh geom becomes a collision hull" {
     // and no disk: what is being checked is the wiring - asset lookup by name, the scale, the
     // hull reduction, and the conversion to a `GeomShape.hull` - not the STL reader, which
     // `codecs.stl` already covers.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 =
         \\<mujoco>
         \\  <asset><mesh file="part.stl" scale="2 1 1"/></asset>
@@ -1065,7 +1073,7 @@ test "mjcf import: a mesh geom becomes a collision hull" {
             -1, -1, 1,  1, -1, 1,  1, 1, 1,  -1, 1, 1,
         };
         fn load(_: *anyopaque, filename: []const u8) ?[]const f32 {
-            if (!std.mem.eql(u8, filename, "part.stl")) {
+            if (!eql(u8, filename, "part.stl")) {
                 return null;
             }
             return &corners;
@@ -1098,7 +1106,7 @@ test "mjcf import: a mesh that cannot be loaded degrades, it does not fail" {
     // Real models refer to visual assets a headless caller has no reason to ship. Refusing the
     // robot over one would make the importer useless on exactly the files it exists for - the
     // same call made for planes and ellipsoids.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 =
         \\<mujoco>
         \\  <asset><mesh file="missing.stl"/></asset>
@@ -1135,7 +1143,7 @@ test "* two robots and a ball in ONE tree" {
     //
     // Composing two INDEPENDENTLY WRITTEN models is where the name collisions live: MJCF files
     // are authored separately and `torso`, `trunk` and `base` are the obvious words.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     const go1_src: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
     var go1_doc: codecs.xml.Document = try codecs.xml.parse(gpa, go1_src, null);
@@ -1172,7 +1180,7 @@ test "* two robots and a ball in ONE tree" {
     const torso: u32 = imported.bodyIndex("man/torso").?;
     try expect(imported.bodyIndex("trunk") == null); // unprefixed no longer resolves
 
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
     rbt.forward(model, &data);
 
@@ -1202,7 +1210,7 @@ test "mjcf: a keyframe applies to a robot inside a larger scene" {
     // the robots, so a 28-number humanoid keyframe meets `nq = 70` once six projectiles are in
     // its tree. An exact-length requirement then refused every one, and the demo discarded the
     // result: four pose buttons that did nothing, with a label claiming they had worked.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1212,7 +1220,7 @@ test "mjcf: a keyframe applies to a robot inside a larger scene" {
     defer imported.deinit();
 
     // The robot alone: the keyframe matches exactly.
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
     try expect(applyKeyframe(&imported.model, &data, robot.keyframes[0]));
 
@@ -1234,7 +1242,7 @@ test "mjcf: a keyframe applies to a robot inside a larger scene" {
 
     // A keyframe LONGER than the model is still refused - that is a keyframe for a different
     // robot, and applying its prefix would be silent nonsense.
-    var scene_data: rbt.Data = try rbt.Data.init(gpa, &scene_model);
+    var scene_data: rbt.Data = try .init(gpa, &scene_model);
     defer scene_data.deinit();
     try expect(!applyKeyframe(&scene_model, &scene_data, robot.keyframes[0]));
 }
@@ -1261,7 +1269,7 @@ test "* mjcf import: sensors read what MuJoCo reads" {
     // the move by luck, and only this fixture's parse grew it to two. Facts that are each
     // correct can compose into a conclusion that is not; what settled it was asking what
     // else could hold 3324 bytes, rather than gathering more support for "not ours".
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
 
     // *** THE OBSERVATION SIDE, WHICH NOTHING HAD EXERCISED. `robot.zig` has had twelve sensor
     // kinds for a long time and MJCF supplied none of them, so an imported robot could be
@@ -1283,7 +1291,7 @@ test "* mjcf import: sensors read what MuJoCo reads" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 4 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // The same state MuJoCo was given.
@@ -1330,7 +1338,7 @@ test "* mjcf import: a closed loop, and the derived anchor matches MuJoCo's" {
     // ** THE TOPOLOGY A TREE CANNOT HOLD. Two arms hanging from the world, tied tip to tip -
     // a ring, which no parent-child structure can express. MuJoCo builds the spanning tree and
     // closes the loop with a constraint; so does this.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/fourbar.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1364,7 +1372,7 @@ test "* mjcf import: a closed loop, and the derived anchor matches MuJoCo's" {
     // * AND THE LOOP HOLDS UNDER SIMULATION. MuJoCo settles this from a 0.35 rad twist to
     // `qpos = (0, 0)`; the property worth pinning is that the tips stay together on the way,
     // which is what makes it a linkage rather than two arms.
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
     data.pos[0] = 0.35;
     data.stage = .stale;
@@ -1390,7 +1398,7 @@ test "* mjcf import: a geared gripper, driven through one motor" {
     // makes the two fingers mirror each other, so one actuator drives both - which is what a
     // parallel gripper physically IS, and modelling it as two joints the controller must keep
     // synchronised is how a gripper ends up gripping crooked.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/gripper.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1413,7 +1421,7 @@ test "* mjcf import: a geared gripper, driven through one motor" {
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
     try expect(model.neq == 1);
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // Drive the left finger; the right must follow, mirrored, through the coupling alone.
@@ -1440,7 +1448,7 @@ test "* mjcf import: a weld carries orientation" {
     // ** THE THIRD EQUALITY SPELLING, and the one that ties a payload to a manipulator. MuJoCo
     // reports `eq_data = [0,0,0, -0.3,0,0, 1,0,0,0, 1]` for this file: two anchors it derived,
     // an IDENTITY relpose it also derived, and torquescale 1.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/weld.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1458,7 +1466,7 @@ test "* mjcf import: a weld carries orientation" {
     });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     // * SIX ROWS - three for position, three for orientation. A `connect` would give three,
@@ -1496,7 +1504,7 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
     // position is seven numbers (three of translation, four of quaternion) and its velocity is
     // six. So `nq = 28, nv = 27`, and the same off-by-one that is invisible on an arm shifts
     // every sensor reading by one slot on anything with legs.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/humanoid.xml");
     var doc: codecs.xml.Document = try codecs.xml.parse(gpa, source, null);
     defer doc.deinit();
@@ -1505,7 +1513,7 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
     var imported: Imported = try build(gpa, &robot, .{ .max_contacts = 16 });
     defer imported.deinit();
     const model: *rbt.Model = &imported.model;
-    var data: rbt.Data = try rbt.Data.init(gpa, model);
+    var data: rbt.Data = try .init(gpa, model);
     defer data.deinit();
 
     try expectEqual(@as(u32, 28), model.nq);
@@ -1538,6 +1546,39 @@ test "* observe: a flat vector, on a robot where nq and nv differ" {
     try expectApproxEqAbs(@as(f32, -27.0), observation[28 + 26], 1.0e-5);
 }
 
+/// Place one contact under every sphere geom that is at or below the z = 0 plane.
+///
+/// A sphere foot on a ground plane needs no broad phase: the contact is directly beneath the
+/// foot and its depth is the sphere's bottom below the plane. Deriving both from where the
+/// geom ACTUALLY is each call is the whole point - a contact pinned once and replayed gets
+/// less true every step, and the solver cannot satisfy a claim that no longer describes the
+/// geometry.
+fn standingContacts(model: *const rbt.Model, data: *rbt.Data) void {
+    data.clearContacts();
+    for (0..model.ngeom) |g| {
+        const radius: f32 = switch (model.geom_shape[g]) {
+            .sphere => |sphere| sphere.radius,
+            else => continue,
+        };
+        const body: u32 = model.geom_body[g];
+        const at: Vec = data.body_xpos[body] + zm.rotate(data.body_xrot[body], model.geom_pos[g]);
+        const gap: f32 = at[2] - radius;
+        if (gap > 0.01) {
+            continue; // clear of the floor
+        }
+        data.pushContact(.{
+            .position = vec(at[0], at[1], 0),
+            .normal = vec(0, 0, 1),
+            .tangent = .{ vec(1, 0, 0), vec(0, 1, 0) },
+            .distance = gap,
+            .friction = .{ 0.8, 0.8 },
+            .body_a = rbt.world_body,
+            .body_b = body,
+            .id = @intCast(g),
+        });
+    }
+}
+
 test "** a standing Go1: PGS stops short of tolerance, Newton reaches it, both stand" {
     // *** THE DEFAULT SOLVER DOES NOT CONVERGE ON THE FLAGSHIP ROBOT, AND THAT IS FINE.
     //
@@ -1558,7 +1599,7 @@ test "** a standing Go1: PGS stops short of tolerance, Newton reaches it, both s
     //     would pass a residual check and fail this one.
     //
     // Measured over 20 000 steps at 500 Hz: pgs 3.0e-6, newton 1.2e-7, tolerance 1e-6.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     const source: []const u8 = @embedFile("tests/fixtures/robot/go1/go1.xml");
 
     var trunk_height: [2]f32 = .{ 0, 0 };
@@ -1577,7 +1618,7 @@ test "** a standing Go1: PGS stops short of tolerance, Newton reaches it, both s
         options.solver.algorithm = algorithm;
         var imported: Imported = try build(gpa, &robot, options);
         defer imported.deinit();
-        var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var data: rbt.Data = try .init(gpa, &imported.model);
         defer data.deinit();
         try expect(applyKeyframe(&imported.model, &data, robot.keyframes[0]));
         rbt.forward(&imported.model, &data);
@@ -1638,52 +1679,19 @@ test "** a standing Go1: PGS stops short of tolerance, Newton reaches it, both s
     try expectApproxEqAbs(trunk_height[0], trunk_height[1], 2.0e-3);
 }
 
-/// Place one contact under every sphere geom that is at or below the z = 0 plane.
-///
-/// A sphere foot on a ground plane needs no broad phase: the contact is directly beneath the
-/// foot and its depth is the sphere's bottom below the plane. Deriving both from where the
-/// geom ACTUALLY is each call is the whole point - a contact pinned once and replayed gets
-/// less true every step, and the solver cannot satisfy a claim that no longer describes the
-/// geometry.
-fn standingContacts(model: *const rbt.Model, data: *rbt.Data) void {
-    data.clearContacts();
-    for (0..model.ngeom) |g| {
-        const radius: f32 = switch (model.geom_shape[g]) {
-            .sphere => |sphere| sphere.radius,
-            else => continue,
-        };
-        const body: u32 = model.geom_body[g];
-        const at: zm.Vec = data.body_xpos[body] + zm.rotate(data.body_xrot[body], model.geom_pos[g]);
-        const gap: f32 = at[2] - radius;
-        if (gap > 0.01) {
-            continue; // clear of the floor
-        }
-        data.pushContact(.{
-            .position = vec(at[0], at[1], 0),
-            .normal = vec(0, 0, 1),
-            .tangent = .{ vec(1, 0, 0), vec(0, 1, 0) },
-            .distance = gap,
-            .friction = .{ 0.8, 0.8 },
-            .body_a = rbt.world_body,
-            .body_b = body,
-            .id = @intCast(g),
-        });
-    }
-}
-
 test "retarget: the LAFAN1 match table resolves against humanoid.xml, and the fit is measurable" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const stat: std.Io.File.Stat = try file.stat(io);
+    const stat: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, stat.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -1750,17 +1758,17 @@ test "retarget: the LAFAN1 match table resolves against humanoid.xml, and the fi
 }
 
 test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee reports its loss" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var file: std.Io.File = std.Io.Dir.cwd().openFile(
+    const io: Io = threaded.io();
+    var file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid.xml",
         .{},
     ) catch return;
     defer file.close(io);
-    const stat: std.Io.File.Stat = try file.stat(io);
+    const stat: Io.File.Stat = try file.stat(io);
     const bytes: []u8 = try gpa.alloc(u8, stat.size);
     defer gpa.free(bytes);
     _ = try file.readPositionalAll(io, bytes, 0);
@@ -1770,7 +1778,7 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
     // * The robot's reference pose comes from its OWN `qpos0` - no extra file, unlike the BVH
@@ -1782,10 +1790,10 @@ test "retarget: humanoid.xml's three-hinge hip fits exactly; its one-hinge knee 
     var thigh_body: usize = 0;
     var shin_body: usize = 0;
     for (imported.names, 0..) |name, index| {
-        if (std.mem.eql(u8, name, "thigh_left")) {
+        if (eql(u8, name, "thigh_left")) {
             thigh_body = index;
         }
-        if (std.mem.eql(u8, name, "shin_left")) {
+        if (eql(u8, name, "shin_left")) {
             shin_body = index;
         }
     }
@@ -1900,19 +1908,19 @@ pub fn tPoseGlobalRotations(
 }
 
 test "retarget: the real dance drives humanoid.xml, and every joint reports what it could not do" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     // ---- the robot ----
-    var xml_file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var xml_file: Io.File = Io.Dir.cwd().openFile(
         io,
         "src/tests/fixtures/robot/humanoid.xml",
         .{},
     ) catch return;
     defer xml_file.close(io);
-    const xml_stat: std.Io.File.Stat = try xml_file.stat(io);
+    const xml_stat: Io.File.Stat = try xml_file.stat(io);
     const xml_bytes: []u8 = try gpa.alloc(u8, xml_stat.size);
     defer gpa.free(xml_bytes);
     _ = try xml_file.readPositionalAll(io, xml_bytes, 0);
@@ -1922,17 +1930,17 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
     // ---- the capture ----
-    var bvh_file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var bvh_file: Io.File = Io.Dir.cwd().openFile(
         io,
         "examples/geno_dance/dance1_20s.bvh",
         .{},
     ) catch return;
     defer bvh_file.close(io);
-    const bvh_stat: std.Io.File.Stat = try bvh_file.stat(io);
+    const bvh_stat: Io.File.Stat = try bvh_file.stat(io);
     const bvh_bytes: []u8 = try gpa.alloc(u8, bvh_stat.size);
     defer gpa.free(bvh_bytes);
     _ = try bvh_file.readPositionalAll(io, bvh_bytes, 0);
@@ -1971,13 +1979,13 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
     //
     // * `Geno_stance.bvh` is that T-pose - the same 75-joint LAFAN1 skeleton the capture uses,
     // which is precisely why GenoView ships it beside the bind.
-    var tpose_file: std.Io.File = std.Io.Dir.cwd().openFile(
+    var tpose_file: Io.File = Io.Dir.cwd().openFile(
         io,
         "assets/Geno_stance.bvh",
         .{},
     ) catch return;
     defer tpose_file.close(io);
-    const tpose_stat: std.Io.File.Stat = try tpose_file.stat(io);
+    const tpose_stat: Io.File.Stat = try tpose_file.stat(io);
     const tpose_bytes: []u8 = try gpa.alloc(u8, tpose_stat.size);
     defer gpa.free(tpose_bytes);
     _ = try tpose_file.readPositionalAll(io, tpose_bytes, 0);
@@ -2114,14 +2122,14 @@ test "retarget: the real dance drives humanoid.xml, and every joint reports what
 }
 
 test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -2131,14 +2139,14 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
     @memcpy(data.pos, imported.model.qpos0);
     rbt.kinematics(&imported.model, &data);
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const ts: std.Io.File.Stat = try tf.stat(io);
+    const ts: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, ts.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -2208,7 +2216,7 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
     for (pairs) |pair| {
         var rb: usize = 0;
         for (imported.names, 0..) |n, i| {
-            if (std.mem.eql(u8, n, pair[0])) {
+            if (eql(u8, n, pair[0])) {
                 rb = i;
             }
         }
@@ -2226,7 +2234,7 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
 
         var hb: usize = 0;
         for (tpose.joints, 0..) |j, i| {
-            if (std.mem.eql(u8, j.name, pair[1])) {
+            if (eql(u8, j.name, pair[1])) {
                 hb = i;
             }
         }
@@ -2241,13 +2249,13 @@ test "humanoid.xml rests its LEGS in a T-pose and its ARMS on a diagonal" {
         // Y-up -> Z-up, the same conversion the positions use.
         const hdir_z: rbt.Vec = vec(hdir_y[0], -hdir_y[2], hdir_y[1]);
         const agreement: f32 = rdir[0] * hdir_z[0] + rdir[1] * hdir_z[1] + rdir[2] * hdir_z[2];
-        const is_leg_or_torso: bool = std.mem.eql(u8, pair[0], "torso") or
-            std.mem.eql(u8, pair[0], "thigh_left") or std.mem.eql(u8, pair[0], "shin_left");
+        const is_leg_or_torso: bool = eql(u8, pair[0], "torso") or
+            eql(u8, pair[0], "thigh_left") or eql(u8, pair[0], "shin_left");
         if (is_leg_or_torso) {
             // * These MATCH, and the test says so rather than leaving it to a comment.
             try expect(agreement > 0.95);
         }
-        if (std.mem.eql(u8, pair[0], "upper_arm_left")) {
+        if (eql(u8, pair[0], "upper_arm_left")) {
             // * And the arm genuinely does NOT - roughly 55 degrees off, which is the whole
             // reason a global correction could never fix both.
             try expect(agreement < 0.75);
@@ -2319,6 +2327,30 @@ const twist_chains = [_][]const []const u8{
     &.{ "pelvis", "thigh_left", "shin_left", "foot_left" },
 };
 
+/// An optional IK refinement pass over the posed robot.
+///
+/// * One optional struct with a meaningful `null`, not five positional parameters - three call
+/// sites each wanting a different subset is the signal for that, and the five-parameter version
+/// built cleanly while measuring a lie.
+const IkPass = struct {
+    steps: usize,
+    /// World-space target per body; only bodies with a positive weight are read.
+    targets: []const rbt.Vec,
+    weights: []const f32,
+    /// Caller-owned scratch, so a per-frame call allocates nothing.
+    tasks: []rbt.IkTask,
+    scratch: []f32,
+};
+
+/// * BOTH bones, because a single forearm number cannot separate a wrong SHOULDER TARGET from a
+/// wrong elbow bend. The upper arm is aimed by the formula; the forearm inherits it and adds the
+/// bend - so upper-arm agreement isolates the formula, and the gap between the two isolates the
+/// bend.
+const ArmDirections = struct {
+    upper_arm: rbt.Vec,
+    forearm: rbt.Vec,
+};
+
 /// Pose the robot for one frame under `mode`, and return the RIGHT FOREARM's world direction.
 ///
 /// * Replicates the example's pipeline closely enough to compare the candidates NUMERICALLY,
@@ -2365,9 +2397,9 @@ fn armDirectionForFrame(
         if (i >= model.nbody) {
             continue;
         }
-        const is_upper_arm: bool = std.mem.eql(u8, n, "upper_arm_left") or
-            std.mem.eql(u8, n, "upper_arm_right");
-        const is_torso: bool = std.mem.eql(u8, n, "torso");
+        const is_upper_arm: bool = eql(u8, n, "upper_arm_left") or
+            eql(u8, n, "upper_arm_right");
+        const is_torso: bool = eql(u8, n, "torso");
         aim_flags[i] = switch (aim_mode) {
             .none => is_upper_arm,
             .torso => is_upper_arm or is_torso,
@@ -2456,13 +2488,13 @@ fn armDirectionForFrame(
     var forearm: usize = 0;
     var hand: usize = 0;
     for (names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             upper_body = i;
         }
-        if (std.mem.eql(u8, n, "lower_arm_right")) {
+        if (eql(u8, n, "lower_arm_right")) {
             forearm = i;
         }
-        if (std.mem.eql(u8, n, "hand_right")) {
+        if (eql(u8, n, "hand_right")) {
             hand = i;
         }
     }
@@ -2471,15 +2503,6 @@ fn armDirectionForFrame(
         .forearm = normalize3(data.body_xpos[hand] - data.body_xpos[forearm]),
     };
 }
-
-/// * BOTH bones, because a single forearm number cannot separate a wrong SHOULDER TARGET from a
-/// wrong elbow bend. The upper arm is aimed by the formula; the forearm inherits it and adds the
-/// bend - so upper-arm agreement isolates the formula, and the gap between the two isolates the
-/// bend.
-const ArmDirections = struct {
-    upper_arm: rbt.Vec,
-    forearm: rbt.Vec,
-};
 
 /// Build `R_twist` per body - via the SHARED library implementation.
 ///
@@ -2525,7 +2548,7 @@ fn computeTwistOffsets(
     var tpose_scratch: [4096]f32 = undefined;
     var anchor_body: usize = 0;
     for (names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "pelvis")) {
+        if (eql(u8, n, "pelvis")) {
             anchor_body = i;
         }
     }
@@ -2563,21 +2586,6 @@ fn computeTwistOffsets(
     );
 }
 
-/// An optional IK refinement pass over the posed robot.
-///
-/// * One optional struct with a meaningful `null`, not five positional parameters - three call
-/// sites each wanting a different subset is the signal for that, and the five-parameter version
-/// built cleanly while measuring a lie.
-const IkPass = struct {
-    steps: usize,
-    /// World-space target per body; only bodies with a positive weight are read.
-    targets: []const rbt.Vec,
-    weights: []const f32,
-    /// Caller-owned scratch, so a per-frame call allocates nothing.
-    tasks: []rbt.IkTask,
-    scratch: []f32,
-};
-
 /// The two upper-arm bodies, when the model has them.
 ///
 /// * Kept though currently unused at the call sites: the option it feeds is wired and measured,
@@ -2586,10 +2594,10 @@ fn findShoulderPair(names: []const []const u8) ?[2]usize {
     var left: ?usize = null;
     var right: ?usize = null;
     for (names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_left")) {
+        if (eql(u8, n, "upper_arm_left")) {
             left = i;
         }
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             right = i;
         }
     }
@@ -2619,15 +2627,68 @@ fn arcBetween(from: rbt.Vec, to: rbt.Vec) rbt.Quat {
     )), acosRad(clamp(d, -1.0, 1.0)));
 }
 
-test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
-    defer threaded.deinit();
-    const io: std.Io = threaded.io();
+/// FK one BVH frame into world positions and rotations.
+/// The first joint whose parent is `joint`, in the capture's hierarchy.
+///
+/// * A foot's TOE is a capture joint the robot's tree does not contain - the robot's foot is a
+/// leaf. Finding it lets a leaf body be aimed like any other bone.
+// * `firstChildJointOf` deleted: `robot.buildPointSamples` owns the leaf construction now.
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+fn poseFromBvhFrame(
+    clip: *const codecs.bvh.Data,
+    frame: usize,
+    out_pos: []rbt.Vec,
+    out_rot: []rbt.Quat,
+) void {
+    const row: []const f32 = clip.motion[frame * clip.channel_count ..][0..clip.channel_count];
+    var cur: usize = 0;
+    for (clip.joints, 0..) |j, i| {
+        const v: []const f32 = row[cur..][0..j.channels.len];
+        cur += j.channels.len;
+        var t: rbt.Vec = vec(j.offset[0], j.offset[1], j.offset[2]);
+        var q: rbt.Quat = zm.quat_identity;
+        for (j.channels, 0..) |c, k| {
+            switch (c) {
+                .x_position => t[0] = v[k],
+                .y_position => t[1] = v[k],
+                .z_position => t[2] = v[k],
+                .x_rotation => q = qmul(q, quatFromAxisAngle(vec(1, 0, 0), radFromDeg(v[k]))),
+                .y_rotation => q = qmul(q, quatFromAxisAngle(vec(0, 1, 0), radFromDeg(v[k]))),
+                .z_rotation => q = qmul(q, quatFromAxisAngle(vec(0, 0, 1), radFromDeg(v[k]))),
+            }
+        }
+        if (j.parent < 0) {
+            out_pos[i] = t;
+            out_rot[i] = q;
+        } else {
+            const p: usize = @intCast(j.parent);
+            out_pos[i] = out_pos[p] + zm.rotate(out_rot[p], t);
+            out_rot[i] = qmul(out_rot[p], q);
+        }
+    }
+}
+
+/// A human bone's direction, in the robot's frame, or null when the bone has no length.
+fn humanBoneDirection(positions: []const rbt.Vec, from: usize, to: usize) ?rbt.Vec {
+    const bone: rbt.Vec = positions[to] - positions[from];
+    const bone_length: f32 = @sqrt(bone[0] * bone[0] + bone[1] * bone[1] + bone[2] * bone[2]);
+    if (bone_length < 1.0e-6) {
+        return null;
+    }
+    const unit: rbt.Vec = bone / @as(rbt.Vec, @splat(bone_length));
+    // The same Y-up -> Z-up conversion the positions use.
+    return vec(unit[0], -unit[2], unit[1]);
+}
+
+test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -2637,21 +2698,21 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, cb, null);
     defer capture.deinit();
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const tsz: std.Io.File.Stat = try tf.stat(io);
+    const tsz: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, tsz.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -2738,13 +2799,13 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
     var forearm_h: usize = 0;
     var hand_h: usize = 0;
     for (capture.joints, 0..) |j, i| {
-        if (std.mem.eql(u8, j.name, "RightArm")) {
+        if (eql(u8, j.name, "RightArm")) {
             upper_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightForeArm")) {
+        if (eql(u8, j.name, "RightForeArm")) {
             forearm_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightHand")) {
+        if (eql(u8, j.name, "RightHand")) {
             hand_h = i;
         }
     }
@@ -2911,67 +2972,14 @@ test "the robot's RIGHT FOREARM follows the capture's, across the clip" {
     try expect(best_agreement > -0.2);
 }
 
-/// A human bone's direction, in the robot's frame, or null when the bone has no length.
-fn humanBoneDirection(positions: []const rbt.Vec, from: usize, to: usize) ?rbt.Vec {
-    const bone: rbt.Vec = positions[to] - positions[from];
-    const bone_length: f32 = @sqrt(bone[0] * bone[0] + bone[1] * bone[1] + bone[2] * bone[2]);
-    if (bone_length < 1.0e-6) {
-        return null;
-    }
-    const unit: rbt.Vec = bone / @as(rbt.Vec, @splat(bone_length));
-    // The same Y-up -> Z-up conversion the positions use.
-    return vec(unit[0], -unit[2], unit[1]);
-}
-
-/// FK one BVH frame into world positions and rotations.
-/// The first joint whose parent is `joint`, in the capture's hierarchy.
-///
-/// * A foot's TOE is a capture joint the robot's tree does not contain - the robot's foot is a
-/// leaf. Finding it lets a leaf body be aimed like any other bone.
-// * `firstChildJointOf` deleted: `robot.buildPointSamples` owns the leaf construction now.
-
-fn poseFromBvhFrame(
-    clip: *const codecs.bvh.Data,
-    frame: usize,
-    out_pos: []rbt.Vec,
-    out_rot: []rbt.Quat,
-) void {
-    const row: []const f32 = clip.motion[frame * clip.channel_count ..][0..clip.channel_count];
-    var cur: usize = 0;
-    for (clip.joints, 0..) |j, i| {
-        const v: []const f32 = row[cur..][0..j.channels.len];
-        cur += j.channels.len;
-        var t: rbt.Vec = vec(j.offset[0], j.offset[1], j.offset[2]);
-        var q: rbt.Quat = zm.quat_identity;
-        for (j.channels, 0..) |c, k| {
-            switch (c) {
-                .x_position => t[0] = v[k],
-                .y_position => t[1] = v[k],
-                .z_position => t[2] = v[k],
-                .x_rotation => q = qmul(q, quatFromAxisAngle(vec(1, 0, 0), radFromDeg(v[k]))),
-                .y_rotation => q = qmul(q, quatFromAxisAngle(vec(0, 1, 0), radFromDeg(v[k]))),
-                .z_rotation => q = qmul(q, quatFromAxisAngle(vec(0, 0, 1), radFromDeg(v[k]))),
-            }
-        }
-        if (j.parent < 0) {
-            out_pos[i] = t;
-            out_rot[i] = q;
-        } else {
-            const p: usize = @intCast(j.parent);
-            out_pos[i] = out_pos[p] + zm.rotate(out_rot[p], t);
-            out_rot[i] = qmul(out_rot[p], q);
-        }
-    }
-}
-
 test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesis was wrong" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    const io: Io = threaded.io();
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -2981,16 +2989,16 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
     var arm: usize = 0;
     var forearm: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             arm = i;
         }
-        if (std.mem.eql(u8, n, "lower_arm_right")) {
+        if (eql(u8, n, "lower_arm_right")) {
             forearm = i;
         }
     }
@@ -3061,7 +3069,7 @@ test "fitBodyRotation PRESERVES a bone's aim on a 2-DOF shoulder - the hypothesi
     rbt.kinematics(&imported.model, &data);
     var hand: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "hand_right")) {
+        if (eql(u8, n, "hand_right")) {
             hand = i;
         }
     }
@@ -3129,15 +3137,27 @@ fn flexionDegrees(parent_dir: rbt.Vec, child_dir: rbt.Vec) f32 {
     return angleBetweenDegrees(parent_dir, child_dir);
 }
 
-test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency order" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
-    defer threaded.deinit();
-    const io: std.Io = threaded.io();
+fn crossVecLocal(a: rbt.Vec, b: rbt.Vec) rbt.Vec {
+    return vec(
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    );
+}
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+fn vecLen(v: rbt.Vec) f32 {
+    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+}
+
+test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency order" {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -3147,21 +3167,21 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, cb, null);
     defer capture.deinit();
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const tsz: std.Io.File.Stat = try tf.stat(io);
+    const tsz: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, tsz.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -3225,20 +3245,20 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
         // * MUST MATCH THE TABLE. The scorecard measures the arm relative to whichever human
         // joint drives the torso; referencing a different one makes the ruler disagree with the
         // thing being measured.
-        if (std.mem.eql(u8, j.name, "Spine3")) {
+        if (eql(u8, j.name, "Spine3")) {
             spine_h = i;
         }
-        if (std.mem.eql(u8, j.name, "Neck")) {
+        if (eql(u8, j.name, "Neck")) {
             neck_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightArm")) {
+        if (eql(u8, j.name, "RightArm")) {
             arm_h = i;
             shoulder_ref = i;
         }
-        if (std.mem.eql(u8, j.name, "RightForeArm")) {
+        if (eql(u8, j.name, "RightForeArm")) {
             fore_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightHand")) {
+        if (eql(u8, j.name, "RightHand")) {
             hand_h = i;
         }
     }
@@ -3247,16 +3267,16 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     var fore_b: usize = 0;
     var hand_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "torso")) {
+        if (eql(u8, n, "torso")) {
             torso_b = i;
         }
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             arm_b = i;
         }
-        if (std.mem.eql(u8, n, "lower_arm_right")) {
+        if (eql(u8, n, "lower_arm_right")) {
             fore_b = i;
         }
-        if (std.mem.eql(u8, n, "hand_right")) {
+        if (eql(u8, n, "hand_right")) {
             hand_b = i;
         }
     }
@@ -3322,13 +3342,13 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     var shin_b: usize = 0;
     var foot_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "thigh_right")) {
+        if (eql(u8, n, "thigh_right")) {
             thigh_b = i;
         }
-        if (std.mem.eql(u8, n, "shin_right")) {
+        if (eql(u8, n, "shin_right")) {
             shin_b = i;
         }
-        if (std.mem.eql(u8, n, "foot_right")) {
+        if (eql(u8, n, "foot_right")) {
             foot_b = i;
         }
     }
@@ -3336,13 +3356,13 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     var leg_h: usize = 0;
     var lfoot_h: usize = 0;
     for (capture.joints, 0..) |j, i| {
-        if (std.mem.eql(u8, j.name, "RightUpLeg")) {
+        if (eql(u8, j.name, "RightUpLeg")) {
             upleg_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightLeg")) {
+        if (eql(u8, j.name, "RightLeg")) {
             leg_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightFoot")) {
+        if (eql(u8, j.name, "RightFoot")) {
             lfoot_h = i;
         }
     }
@@ -3380,7 +3400,7 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     @memset(ik_weights, 0);
     for (rbt.lafan_to_humanoid) |row| {
         for (imported.names, 0..) |n, i| {
-            if (std.mem.eql(u8, n, row.robot_body)) {
+            if (eql(u8, n, row.robot_body)) {
                 ik_weights[i] = row.position_weight;
             }
         }
@@ -3644,27 +3664,15 @@ test "SCORECARD: torso, then upper arm, then elbow, then twist - in dependency o
     }
 }
 
-fn crossVecLocal(a: rbt.Vec, b: rbt.Vec) rbt.Vec {
-    return vec(
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    );
-}
-
-fn vecLen(v: rbt.Vec) f32 {
-    return @sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-}
-
 test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not by name" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -3674,14 +3682,14 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
     @memcpy(data.pos, imported.model.qpos0);
     rbt.kinematics(&imported.model, &data);
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const tsz: std.Io.File.Stat = try tf.stat(io);
+    const tsz: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, tsz.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -3697,10 +3705,10 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
     var torso_b: usize = 0;
     var arm_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "torso")) {
+        if (eql(u8, n, "torso")) {
             torso_b = i;
         }
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             arm_b = i;
         }
     }
@@ -3719,7 +3727,7 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
 
     var shoulder_h: usize = 0;
     for (tpose.joints, 0..) |j, i| {
-        if (std.mem.eql(u8, j.name, "RightArm")) {
+        if (eql(u8, j.name, "RightArm")) {
             shoulder_h = i;
         }
     }
@@ -3736,7 +3744,7 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
     for (candidates) |candidate| {
         var idx: ?usize = null;
         for (tpose.joints, 0..) |j, i| {
-            if (std.mem.eql(u8, j.name, candidate)) {
+            if (eql(u8, j.name, candidate)) {
                 idx = i;
             }
         }
@@ -3760,14 +3768,14 @@ test "which spine joint should drive the torso: measured by SHOULDER OFFSET, not
 }
 
 test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own guarantee" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -3777,21 +3785,21 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, cb, null);
     defer capture.deinit();
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const tsz: std.Io.File.Stat = try tf.stat(io);
+    const tsz: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, tsz.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -3892,11 +3900,11 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
             worst_deg = deg;
             worst_body = body;
         }
-        if (std.mem.eql(u8, imported.names[body], "torso") or
-            std.mem.eql(u8, imported.names[body], "upper_arm_right") or
-            std.mem.eql(u8, imported.names[body], "lower_arm_right") or
-            std.mem.eql(u8, imported.names[body], "pelvis") or
-            std.mem.eql(u8, imported.names[body], "thigh_right"))
+        if (eql(u8, imported.names[body], "torso") or
+            eql(u8, imported.names[body], "upper_arm_right") or
+            eql(u8, imported.names[body], "lower_arm_right") or
+            eql(u8, imported.names[body], "pelvis") or
+            eql(u8, imported.names[body], "thigh_right"))
         {
             std.log.debug("  {s: <18} {d: >6.1} deg   dof {d}", .{
                 imported.names[body],
@@ -3938,15 +3946,19 @@ test "INVARIANT: world_rot_robot == world_rot_src * R_twist, the reference's own
     try expect(worst_deg >= 0.0);
 }
 
-test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
-    defer threaded.deinit();
-    const io: std.Io = threaded.io();
+fn m_body_offset(m: *const rbt.Model, body: usize) rbt.Vec {
+    return m.body_pos[body];
+}
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
+    defer threaded.deinit();
+    const io: Io = threaded.io();
+
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -3956,21 +3968,21 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
     var capture: codecs.bvh.Data = try codecs.bvh.parse(gpa, cb, null);
     defer capture.deinit();
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const tsz: std.Io.File.Stat = try tf.stat(io);
+    const tsz: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, tsz.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -4028,16 +4040,16 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     var hand_b: usize = 0;
     var torso_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             arm_b = i;
         }
-        if (std.mem.eql(u8, n, "lower_arm_right")) {
+        if (eql(u8, n, "lower_arm_right")) {
             fore_b = i;
         }
-        if (std.mem.eql(u8, n, "hand_right")) {
+        if (eql(u8, n, "hand_right")) {
             hand_b = i;
         }
-        if (std.mem.eql(u8, n, "torso")) {
+        if (eql(u8, n, "torso")) {
             torso_b = i;
         }
     }
@@ -4045,13 +4057,13 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     var fore_h: usize = 0;
     var hand_h: usize = 0;
     for (capture.joints, 0..) |j, i| {
-        if (std.mem.eql(u8, j.name, "RightArm")) {
+        if (eql(u8, j.name, "RightArm")) {
             arm_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightForeArm")) {
+        if (eql(u8, j.name, "RightForeArm")) {
             fore_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightHand")) {
+        if (eql(u8, j.name, "RightHand")) {
             hand_h = i;
         }
     }
@@ -4076,7 +4088,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     // which read as "the revert failed" until the flag was traced.
     aim_flags[arm_b] = true;
     for (imported.names, 0..) |n, i| {
-        if (i < imported.model.nbody and std.mem.eql(u8, n, "upper_arm_left")) {
+        if (i < imported.model.nbody and eql(u8, n, "upper_arm_left")) {
             aim_flags[i] = true;
         }
     }
@@ -4086,8 +4098,8 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     var two_bone_flags: [64]bool = undefined;
     @memset(two_bone_flags[0..imported.model.nbody], false);
     for (imported.names, 0..) |n, i| {
-        if (i < imported.model.nbody and (std.mem.eql(u8, n, "upper_arm_right") or
-            std.mem.eql(u8, n, "upper_arm_left")))
+        if (i < imported.model.nbody and (eql(u8, n, "upper_arm_right") or
+            eql(u8, n, "upper_arm_left")))
         {
             two_bone_flags[i] = true;
         }
@@ -4128,7 +4140,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     const H2 = struct {
         fn find(joints: []const codecs.bvh.Joint, name: []const u8) usize {
             for (joints, 0..) |j, i| {
-                if (std.mem.eql(u8, j.name, name)) {
+                if (eql(u8, j.name, name)) {
                     return i;
                 }
             }
@@ -4136,7 +4148,7 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
         }
         fn body(bnames: []const []const u8, name: []const u8) usize {
             for (bnames, 0..) |n, i| {
-                if (std.mem.eql(u8, n, name)) {
+                if (eql(u8, n, name)) {
                     return i;
                 }
             }
@@ -4456,18 +4468,14 @@ test "ARM FOCUS: five frames, torso and right arm, per-joint and per-frame" {
     try expect(worst_hand < 2.0);
 }
 
-fn m_body_offset(m: *const rbt.Model, body: usize) rbt.Vec {
-    return m.body_pos[body];
-}
-
 test "MINIMAL: setting the elbow hinge bends the arm by that angle" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    const io: Io = threaded.io();
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -4477,20 +4485,20 @@ test "MINIMAL: setting the elbow hinge bends the arm by that angle" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
     var arm_b: usize = 0;
     var fore_b: usize = 0;
     var hand_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             arm_b = i;
         }
-        if (std.mem.eql(u8, n, "lower_arm_right")) {
+        if (eql(u8, n, "lower_arm_right")) {
             fore_b = i;
         }
-        if (std.mem.eql(u8, n, "hand_right")) {
+        if (eql(u8, n, "hand_right")) {
             hand_b = i;
         }
     }
@@ -4561,14 +4569,14 @@ test "MINIMAL: setting the elbow hinge bends the arm by that angle" {
 }
 
 test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -4578,12 +4586,12 @@ test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
@@ -4601,16 +4609,16 @@ test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
     var larm_h: usize = 0;
     var rarm_h: usize = 0;
     for (capture.joints, 0..) |j, i| {
-        if (std.mem.eql(u8, j.name, "Spine3")) {
+        if (eql(u8, j.name, "Spine3")) {
             spine_h = i;
         }
-        if (std.mem.eql(u8, j.name, "Head")) {
+        if (eql(u8, j.name, "Head")) {
             head_h = i;
         }
-        if (std.mem.eql(u8, j.name, "LeftArm")) {
+        if (eql(u8, j.name, "LeftArm")) {
             larm_h = i;
         }
-        if (std.mem.eql(u8, j.name, "RightArm")) {
+        if (eql(u8, j.name, "RightArm")) {
             rarm_h = i;
         }
     }
@@ -4619,16 +4627,16 @@ test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
     var larm_b: usize = 0;
     var rarm_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "torso")) {
+        if (eql(u8, n, "torso")) {
             torso_b = i;
         }
-        if (std.mem.eql(u8, n, "head")) {
+        if (eql(u8, n, "head")) {
             head_b = i;
         }
-        if (std.mem.eql(u8, n, "upper_arm_left")) {
+        if (eql(u8, n, "upper_arm_left")) {
             larm_b = i;
         }
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             rarm_b = i;
         }
     }
@@ -4717,21 +4725,12 @@ test "TORSO FOCUS: spine and shoulder axis, five frames, orientation only" {
     try expect(worst_shoulder < 25.0);
 }
 
-test "TORSO+PELVIS through the pipeline: two directions each, then IK for position" {
-    if (!run_slow_retarget_diagnostics) {
-        return error.SkipZigTest;
-    }
-    for ([_]bool{ false, true }) |flex| {
-        try runCoreRetarget(flex);
-    }
-}
-
 fn runCoreRetarget(flex_model: bool) !void {
     std.log.debug("=== {s} ===", .{if (flex_model) "humanoid_flex.xml" else "humanoid.xml"});
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
 
     // -- *** BOTH MODELS, SAME CODE, SAME CAPTURE --
     //
@@ -4743,9 +4742,9 @@ fn runCoreRetarget(flex_model: bool) !void {
         "src/tests/fixtures/robot/humanoid_flex2.xml"
     else
         "src/tests/fixtures/robot/humanoid.xml";
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, model_path, .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, model_path, .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -4755,12 +4754,12 @@ fn runCoreRetarget(flex_model: bool) !void {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
@@ -4788,7 +4787,7 @@ fn runCoreRetarget(flex_model: bool) !void {
     const H = struct {
         fn find(joints: []const codecs.bvh.Joint, name: []const u8) usize {
             for (joints, 0..) |j, i| {
-                if (std.mem.eql(u8, j.name, name)) {
+                if (eql(u8, j.name, name)) {
                     return i;
                 }
             }
@@ -4796,7 +4795,7 @@ fn runCoreRetarget(flex_model: bool) !void {
         }
         fn body(bnames: []const []const u8, name: []const u8) usize {
             for (bnames, 0..) |n, i| {
-                if (std.mem.eql(u8, n, name)) {
+                if (eql(u8, n, name)) {
                     return i;
                 }
             }
@@ -4895,9 +4894,9 @@ fn runCoreRetarget(flex_model: bool) !void {
     const rest_rot_t: []rbt.Quat = try gpa.alloc(rbt.Quat, hn);
     defer gpa.free(rest_rot_t);
     {
-        var tf2: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+        var tf2: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
         defer tf2.close(io);
-        const ts2: std.Io.File.Stat = try tf2.stat(io);
+        const ts2: Io.File.Stat = try tf2.stat(io);
         const tb2: []u8 = try gpa.alloc(u8, ts2.size);
         defer gpa.free(tb2);
         _ = try tf2.readPositionalAll(io, tb2, 0);
@@ -4986,7 +4985,7 @@ fn runCoreRetarget(flex_model: bool) !void {
         var tpose_scratch_probe: [4096]f32 = undefined;
         var pelvis_probe: usize = 0;
         for (imported.names, 0..) |n, i| {
-            if (std.mem.eql(u8, n, "pelvis")) {
+            if (eql(u8, n, "pelvis")) {
                 pelvis_probe = i;
             }
         }
@@ -5563,10 +5562,10 @@ fn runCoreRetarget(flex_model: bool) !void {
                 // * THE FOOT: a point along the sole aimed at the capture's toe. The end body of
                 // a leg has no child, so every bone-aiming mechanism skipped it and the ankle's
                 // two DOF sat at rest for the whole take.
-                if (std.mem.startsWith(u8, rb[0], "thigh")) {
+                if (startsWith(u8, rb[0], "thigh")) {
                     const toe_h: usize = H.find(
                         capture.joints,
-                        if (std.mem.endsWith(u8, rb[0], "right")) "RightToeBase" else "LeftToeBase",
+                        if (endsWith(u8, rb[0], "right")) "RightToeBase" else "LeftToeBase",
                     );
                     if (toe_h != 0) {
                         var sole: rbt.Vec = .{ 0, 0, 0, 0 };
@@ -5668,14 +5667,23 @@ fn runCoreRetarget(flex_model: bool) !void {
     try expect(@abs(robot_travel - human_travel) < 0.05);
 }
 
+test "TORSO+PELVIS through the pipeline: two directions each, then IK for position" {
+    if (!run_slow_retarget_diagnostics) {
+        return error.SkipZigTest;
+    }
+    for ([_]bool{ false, true }) |flex| {
+        try runCoreRetarget(flex);
+    }
+}
+
 test "MINIMAL: two-bone through the shoulder places the hand on the target" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    const io: Io = threaded.io();
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -5685,20 +5693,20 @@ test "MINIMAL: two-bone through the shoulder places the hand on the target" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
     var arm_b: usize = 0;
     var fore_b: usize = 0;
     var hand_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "upper_arm_right")) {
+        if (eql(u8, n, "upper_arm_right")) {
             arm_b = i;
         }
-        if (std.mem.eql(u8, n, "lower_arm_right")) {
+        if (eql(u8, n, "lower_arm_right")) {
             fore_b = i;
         }
-        if (std.mem.eql(u8, n, "hand_right")) {
+        if (eql(u8, n, "hand_right")) {
             hand_b = i;
         }
     }
@@ -5771,13 +5779,13 @@ test "MINIMAL: two-bone through the shoulder places the hand on the target" {
 }
 
 test "MINIMAL: what the ankle's two DOF can actually do to the sole" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
+    const io: Io = threaded.io();
+    var xf: Io.File = Io.Dir.cwd().openFile(io, "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -5787,12 +5795,12 @@ test "MINIMAL: what the ankle's two DOF can actually do to the sole" {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
     var foot_b: usize = 0;
     for (imported.names, 0..) |n, i| {
-        if (std.mem.eql(u8, n, "foot_right")) {
+        if (eql(u8, n, "foot_right")) {
             foot_b = i;
         }
     }
@@ -5852,23 +5860,17 @@ test "MINIMAL: what the ankle's two DOF can actually do to the sole" {
     try expect(widest > 5.0);
 }
 
-test "FRAME 166: why the right arm breaks at t=2.761" {
-    for ([_]bool{ false, true }) |flex| {
-        try frame166(flex);
-    }
-}
-
 fn frame166(flex: bool) !void {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, if (flex)
+    const io: Io = threaded.io();
+    var xf: Io.File = Io.Dir.cwd().openFile(io, if (flex)
         "src/tests/fixtures/robot/humanoid_flex2.xml"
     else
         "src/tests/fixtures/robot/humanoid.xml", .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -5878,12 +5880,12 @@ fn frame166(flex: bool) !void {
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
@@ -5899,7 +5901,7 @@ fn frame166(flex: bool) !void {
     const F = struct {
         fn j(joints: []const codecs.bvh.Joint, name: []const u8) usize {
             for (joints, 0..) |x, i| {
-                if (std.mem.eql(u8, x.name, name)) {
+                if (eql(u8, x.name, name)) {
                     return i;
                 }
             }
@@ -5907,7 +5909,7 @@ fn frame166(flex: bool) !void {
         }
         fn b(bn: []const []const u8, name: []const u8) usize {
             for (bn, 0..) |n, i| {
-                if (std.mem.eql(u8, n, name)) {
+                if (eql(u8, n, name)) {
                     return i;
                 }
             }
@@ -6046,95 +6048,9 @@ fn frame166(flex: bool) !void {
     try expect(true);
 }
 
-test "WHOLE BODY: one point-cloud solve against six sequential mechanisms" {
-    if (!run_slow_retarget_diagnostics) {
-        return error.SkipZigTest;
-    }
-    // * Three weights for the shoulder-axis constraint: off, a nudge, and the command that
-    // measured worse. **The flat direction needs a nudge, and 2.0 on a 0.3 m difference is a
-    // command** - so the sweep goes downward, not up.
-    // ** The sweep that chose 2.0, kept so the choice stays visible:
-    //
-    //     arm weight   arm    torso   fore    thigh  shin   POPS
-    //        1.0      13.6     7.6    13.1     3.7   1.58   65.9
-    //        2.0      11.45    8.4    14.05    2.75  2.1    56.2   <- best pops
-    //        4.0       8.75    7.7    13.6     2.2   2.85   60.8   <- best sum
-    //
-    // * 4.0 wins the sum; 2.0 wins the POPS by a clear margin and recovers most of the arm.
-    // **Smoothness has been the repeatedly-observed defect on the device**, and the accuracy
-    // difference between them is small - so 2.0.
-    // ** And the POSTURE weight, re-swept because the sample set grew 44 -> 68: **a weight is
-    // a ratio against the other terms, so adding residuals silently weakens every regulariser.**
-    // *** THE POSTURE SWEEP FOUND NOTHING, AND THAT IS THE RESULT: 0.15, 0.30 and 0.60 all
-    // gave **worst pop 59.2 deg at upper_arm_left frame 226, identical to the decimal.** A 4x
-    // change in the continuity term does not move it, so that pop is **not drift the term can
-    // hold - it is a BRANCH FLIP.** Once the solve crosses to a different feasible piece the
-    // previous configuration is far away, and a quadratic pull cannot compete with a large
-    // residual.
-    //
-    // * Consistent with everything measured about the shoulder: 2 DOF against a range it is
-    // pinned on, two clamped configurations satisfying the targets nearly equally. **The
-    // remaining pops are structural, and the instrument now says so rather than inviting
-    // another weight sweep.**
-    // -- *** THE SWEEP THAT CHOSE 1.0 - the retargeted skeleton is no longer needed --
-    //
-    //     pull   torso   arm   forearm   thigh      (means over four frames)
-    //     0.0     6.0    7.6     4.6      4.6       retargeted skeleton only
-    //     0.5     5.6    6.4     2.9      4.7
-    //     1.0     5.4    6.9     2.1      4.7       the capture's world positions, directly
-    //
-    // *** **The retargeted skeleton existed to fix a PROPORTION problem** - arms 25% longer than
-    // the capture's, so no world-position target was reachable and the free root slid to spread
-    // the residual. **`humanoid_flex2.xml` fixed that in the MODEL** (bone ratios 0.99-1.03), so
-    // the workaround now costs more than it saves: it accumulates a chain away from the capture
-    // for no remaining benefit.
-    //
-    // ** Simon saw it before the metrics did - "the whole guy is really 10 cm to the side... the
-    // bones should really try to match the world positions better?" - and the split measurement
-    // agreed: solve-miss 0.019 m against target-off 0.032. **The solve was fine; the targets were
-    // in the wrong place on purpose.**
-    //
-    // * Kept as a parameter rather than deleted: a robot whose proportions do NOT match a capture
-    // still needs the retargeted shape, and this is the dial for it.
-    // -- *** RE-SWEPT ON THE SHIPPED PATH --
-    //
-    // Every weight in this system was chosen while this test measured a REIMPLEMENTATION of the
-    // solve. **A weight is a ratio against the other terms**, so a change to the objective - and
-    // swapping in the library was a change to the objective - invalidates the sweep that chose
-    // it. This is the first sweep whose numbers describe what ships.
-    //     pull   torso   arm   forearm   thigh   shin    sum    POPS
-    //     0.0     7.3    8.6     4.6      2.6    1.1    24.2    9.2
-    //     0.5     6.8    7.2     3.1      2.9    1.45   21.5    9.2
-    //     1.0     6.4    6.3     2.1      3.3    1.9    20.0    9.2
-    //
-    // *** **1.0 confirmed on the shipped path.** It wins the torso, arm and forearm and loses the
-    // legs - the upper body's proportions match the capture better after `humanoid_flex2`, so
-    // pulling those onto the capture's own joints costs nothing, while the legs prefer the
-    // reachable retargeted skeleton.
-    //
-    // ** The pop is **9.2 at every value**, which says the remaining discontinuity is not about
-    // where targets sit at all. That is worth knowing: no amount of this dial will move it.
-    // *** THE POSTURE SWEEP, AGAINST THE REAL POP. The previous one reported "no effect at
-    // 0.15/0.5/1.5" because the swept value reached the ACCURACY loop while the number came from
-    // the pops loop's own literal. Both now call the shipped solve, so this is the first time the
-    // weight and the measurement are in the same program.
-    //     posture 0.15   worst 27.9 deg at lower_arm_left
-    //     posture 0.60   worst 27.9
-    //     posture 2.00   worst 27.9
-    //
-    // *** **Identical across a 13x range, and this time the sweep genuinely reaches the code.**
-    // The same result was reported before from a sweep that could not reach the pops loop; that
-    // was an artefact. This one is a finding: **the posture term cannot move this discontinuity.**
-    //
-    // ** Which confirms the branch-flip reading on solid ground: a quadratic pull toward the
-    // previous frame prevents WANDERING, and cannot prevent JUMPING between two configurations
-    // that both satisfy the targets. `lower_arm_left` is the shoulder pair again - 2 DOF, two
-    // clamped answers of nearly equal cost.
-    //
-    // * So the remaining 27.9 is structural, and the lever is the model (a third shoulder axis
-    // already helped once) or a HARD bound on `|q - q_prev|`, not another weight.
-    for ([_]f32{0.15}) |posture_weight| {
-        try runWholeBody(0.1, 2.0, posture_weight, 1.0);
+test "FRAME 166: why the right arm breaks at t=2.761" {
+    for ([_]bool{ false, true }) |flex| {
+        try frame166(flex);
     }
 }
 
@@ -6150,14 +6066,14 @@ fn runWholeBody(
     _ = arm_weight;
     _ = axis_weight;
     std.log.debug("=== position pull {d:.2} ===", .{position_pull});
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const flex2_path: []const u8 = "src/tests/fixtures/robot/humanoid_flex2.xml";
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, flex2_path, .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, flex2_path, .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -6167,12 +6083,12 @@ fn runWholeBody(
     defer robot.deinit();
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
-    var data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+    var data: rbt.Data = try .init(gpa, &imported.model);
     defer data.deinit();
 
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
@@ -6235,9 +6151,9 @@ fn runWholeBody(
     var rest_sole_world: rbt.Vec = vec(1, 0, 0);
     {
         const yz_r: rbt.Quat = quatFromAxisAngle(vec(1, 0, 0), 1.5707963);
-        var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+        var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
         defer tf.close(io);
-        const ts: std.Io.File.Stat = try tf.stat(io);
+        const ts: Io.File.Stat = try tf.stat(io);
         const tb: []u8 = try gpa.alloc(u8, ts.size);
         defer gpa.free(tb);
         _ = try tf.readPositionalAll(io, tb, 0);
@@ -6258,7 +6174,7 @@ fn runWholeBody(
         var tsc: [4096]f32 = undefined;
         var pelvis: usize = 0;
         for (imported.names, 0..) |n, i| {
-            if (std.mem.eql(u8, n, "pelvis")) {
+            if (eql(u8, n, "pelvis")) {
                 pelvis = i;
             }
         }
@@ -6291,7 +6207,7 @@ fn runWholeBody(
         // measured against. Captured here because this is the only place both figures are in the
         // same pose, which is the whole point.
         for (imported.names, 0..) |n, b| {
-            if (!std.mem.eql(u8, n, "foot_right")) {
+            if (!eql(u8, n, "foot_right")) {
                 continue;
             }
             var far: rbt.Vec = .{ 0, 0, 0, 0 };
@@ -6321,7 +6237,7 @@ fn runWholeBody(
     const H4 = struct {
         fn body(bn: []const []const u8, name: []const u8) usize {
             for (bn, 0..) |n, k| {
-                if (std.mem.eql(u8, n, name)) {
+                if (eql(u8, n, name)) {
                     return k;
                 }
             }
@@ -6329,7 +6245,7 @@ fn runWholeBody(
         }
         fn find(js: []const codecs.bvh.Joint, name: []const u8) usize {
             for (js, 0..) |x, k| {
-                if (std.mem.eql(u8, x.name, name)) {
+                if (eql(u8, x.name, name)) {
                     return k;
                 }
             }
@@ -6423,8 +6339,8 @@ fn runWholeBody(
         std.log.debug("NO-TIP LEAF TARGETS at the REST pose (where they land vs the joint)", .{});
         for (0..probe_n) |i| {
             const sample: rbt.PointSample = probe_samples[i];
-            const of_interest: bool = std.mem.eql(u8, imported.names[sample.body], "head") or
-                std.mem.eql(u8, imported.names[sample.body], "hand_right");
+            const of_interest: bool = eql(u8, imported.names[sample.body], "head") or
+                eql(u8, imported.names[sample.body], "hand_right");
             if (!of_interest) {
                 continue;
             }
@@ -6680,7 +6596,7 @@ fn runWholeBody(
             if (human_of_body[fb] < 0) {
                 continue;
             }
-            if (!std.mem.startsWith(u8, imported.names[fb], "foot")) {
+            if (!startsWith(u8, imported.names[fb], "foot")) {
                 continue;
             }
             floor_height = @min(floor_height, p_robot[@intCast(human_of_body[fb])][2]);
@@ -6812,7 +6728,7 @@ fn runWholeBody(
         const H3 = struct {
             fn b(bn: []const []const u8, name: []const u8) usize {
                 for (bn, 0..) |n, i| {
-                    if (std.mem.eql(u8, n, name)) {
+                    if (eql(u8, n, name)) {
                         return i;
                     }
                 }
@@ -6820,7 +6736,7 @@ fn runWholeBody(
             }
             fn j(js: []const codecs.bvh.Joint, name: []const u8) usize {
                 for (js, 0..) |x, i| {
-                    if (std.mem.eql(u8, x.name, name)) {
+                    if (eql(u8, x.name, name)) {
                         return i;
                     }
                 }
@@ -7185,14 +7101,106 @@ fn runWholeBody(
     try expect(sample_n > 10);
 }
 
+test "WHOLE BODY: one point-cloud solve against six sequential mechanisms" {
+    if (!run_slow_retarget_diagnostics) {
+        return error.SkipZigTest;
+    }
+    // * Three weights for the shoulder-axis constraint: off, a nudge, and the command that
+    // measured worse. **The flat direction needs a nudge, and 2.0 on a 0.3 m difference is a
+    // command** - so the sweep goes downward, not up.
+    // ** The sweep that chose 2.0, kept so the choice stays visible:
+    //
+    //     arm weight   arm    torso   fore    thigh  shin   POPS
+    //        1.0      13.6     7.6    13.1     3.7   1.58   65.9
+    //        2.0      11.45    8.4    14.05    2.75  2.1    56.2   <- best pops
+    //        4.0       8.75    7.7    13.6     2.2   2.85   60.8   <- best sum
+    //
+    // * 4.0 wins the sum; 2.0 wins the POPS by a clear margin and recovers most of the arm.
+    // **Smoothness has been the repeatedly-observed defect on the device**, and the accuracy
+    // difference between them is small - so 2.0.
+    // ** And the POSTURE weight, re-swept because the sample set grew 44 -> 68: **a weight is
+    // a ratio against the other terms, so adding residuals silently weakens every regulariser.**
+    // *** THE POSTURE SWEEP FOUND NOTHING, AND THAT IS THE RESULT: 0.15, 0.30 and 0.60 all
+    // gave **worst pop 59.2 deg at upper_arm_left frame 226, identical to the decimal.** A 4x
+    // change in the continuity term does not move it, so that pop is **not drift the term can
+    // hold - it is a BRANCH FLIP.** Once the solve crosses to a different feasible piece the
+    // previous configuration is far away, and a quadratic pull cannot compete with a large
+    // residual.
+    //
+    // * Consistent with everything measured about the shoulder: 2 DOF against a range it is
+    // pinned on, two clamped configurations satisfying the targets nearly equally. **The
+    // remaining pops are structural, and the instrument now says so rather than inviting
+    // another weight sweep.**
+    // -- *** THE SWEEP THAT CHOSE 1.0 - the retargeted skeleton is no longer needed --
+    //
+    //     pull   torso   arm   forearm   thigh      (means over four frames)
+    //     0.0     6.0    7.6     4.6      4.6       retargeted skeleton only
+    //     0.5     5.6    6.4     2.9      4.7
+    //     1.0     5.4    6.9     2.1      4.7       the capture's world positions, directly
+    //
+    // *** **The retargeted skeleton existed to fix a PROPORTION problem** - arms 25% longer than
+    // the capture's, so no world-position target was reachable and the free root slid to spread
+    // the residual. **`humanoid_flex2.xml` fixed that in the MODEL** (bone ratios 0.99-1.03), so
+    // the workaround now costs more than it saves: it accumulates a chain away from the capture
+    // for no remaining benefit.
+    //
+    // ** Simon saw it before the metrics did - "the whole guy is really 10 cm to the side... the
+    // bones should really try to match the world positions better?" - and the split measurement
+    // agreed: solve-miss 0.019 m against target-off 0.032. **The solve was fine; the targets were
+    // in the wrong place on purpose.**
+    //
+    // * Kept as a parameter rather than deleted: a robot whose proportions do NOT match a capture
+    // still needs the retargeted shape, and this is the dial for it.
+    // -- *** RE-SWEPT ON THE SHIPPED PATH --
+    //
+    // Every weight in this system was chosen while this test measured a REIMPLEMENTATION of the
+    // solve. **A weight is a ratio against the other terms**, so a change to the objective - and
+    // swapping in the library was a change to the objective - invalidates the sweep that chose
+    // it. This is the first sweep whose numbers describe what ships.
+    //     pull   torso   arm   forearm   thigh   shin    sum    POPS
+    //     0.0     7.3    8.6     4.6      2.6    1.1    24.2    9.2
+    //     0.5     6.8    7.2     3.1      2.9    1.45   21.5    9.2
+    //     1.0     6.4    6.3     2.1      3.3    1.9    20.0    9.2
+    //
+    // *** **1.0 confirmed on the shipped path.** It wins the torso, arm and forearm and loses the
+    // legs - the upper body's proportions match the capture better after `humanoid_flex2`, so
+    // pulling those onto the capture's own joints costs nothing, while the legs prefer the
+    // reachable retargeted skeleton.
+    //
+    // ** The pop is **9.2 at every value**, which says the remaining discontinuity is not about
+    // where targets sit at all. That is worth knowing: no amount of this dial will move it.
+    // *** THE POSTURE SWEEP, AGAINST THE REAL POP. The previous one reported "no effect at
+    // 0.15/0.5/1.5" because the swept value reached the ACCURACY loop while the number came from
+    // the pops loop's own literal. Both now call the shipped solve, so this is the first time the
+    // weight and the measurement are in the same program.
+    //     posture 0.15   worst 27.9 deg at lower_arm_left
+    //     posture 0.60   worst 27.9
+    //     posture 2.00   worst 27.9
+    //
+    // *** **Identical across a 13x range, and this time the sweep genuinely reaches the code.**
+    // The same result was reported before from a sweep that could not reach the pops loop; that
+    // was an artefact. This one is a finding: **the posture term cannot move this discontinuity.**
+    //
+    // ** Which confirms the branch-flip reading on solid ground: a quadratic pull toward the
+    // previous frame prevents WANDERING, and cannot prevent JUMPING between two configurations
+    // that both satisfy the targets. `lower_arm_left` is the shoulder pair again - 2 DOF, two
+    // clamped answers of nearly equal cost.
+    //
+    // * So the remaining 27.9 is structural, and the lever is the model (a third shoulder axis
+    // already helped once) or a HARD bound on `|q - q_prev|`, not another weight.
+    for ([_]f32{0.15}) |posture_weight| {
+        try runWholeBody(0.1, 2.0, posture_weight, 1.0);
+    }
+}
+
 test "SOURCE: does the capture's forearm rotation carry twist at all?" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
-    var cf: std.Io.File = std.Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
+    const io: Io = threaded.io();
+    var cf: Io.File = Io.Dir.cwd().openFile(io, "examples/geno_dance/dance1_20s.bvh", .{}) catch return;
     defer cf.close(io);
-    const cs: std.Io.File.Stat = try cf.stat(io);
+    const cs: Io.File.Stat = try cf.stat(io);
     const cb: []u8 = try gpa.alloc(u8, cs.size);
     defer gpa.free(cb);
     _ = try cf.readPositionalAll(io, cb, 0);
@@ -7208,7 +7216,7 @@ test "SOURCE: does the capture's forearm rotation carry twist at all?" {
     const J = struct {
         fn f(js: []const codecs.bvh.Joint, name: []const u8) usize {
             for (js, 0..) |x, i| {
-                if (std.mem.eql(u8, x.name, name)) {
+                if (eql(u8, x.name, name)) {
                     return i;
                 }
             }
@@ -7281,14 +7289,14 @@ test "SOURCE: does the capture's forearm rotation carry twist at all?" {
 }
 
 test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
-    const gpa: Allocator = std.testing.allocator;
-    var threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    const gpa: Allocator = testing_allocator;
+    var threaded: Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();
-    const io: std.Io = threaded.io();
+    const io: Io = threaded.io();
     const flex2_path: []const u8 = "src/tests/fixtures/robot/humanoid_flex2.xml";
-    var xf: std.Io.File = std.Io.Dir.cwd().openFile(io, flex2_path, .{}) catch return;
+    var xf: Io.File = Io.Dir.cwd().openFile(io, flex2_path, .{}) catch return;
     defer xf.close(io);
-    const xs: std.Io.File.Stat = try xf.stat(io);
+    const xs: Io.File.Stat = try xf.stat(io);
     const xb: []u8 = try gpa.alloc(u8, xs.size);
     defer gpa.free(xb);
     _ = try xf.readPositionalAll(io, xb, 0);
@@ -7299,9 +7307,9 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     var imported: Imported = try build(gpa, &robot, .{});
     defer imported.deinit();
 
-    var tf: std.Io.File = std.Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
+    var tf: Io.File = Io.Dir.cwd().openFile(io, "assets/Geno_stance.bvh", .{}) catch return;
     defer tf.close(io);
-    const ts: std.Io.File.Stat = try tf.stat(io);
+    const ts: Io.File.Stat = try tf.stat(io);
     const tb: []u8 = try gpa.alloc(u8, ts.size);
     defer gpa.free(tb);
     _ = try tf.readPositionalAll(io, tb, 0);
@@ -7344,7 +7352,7 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
         const J2 = struct {
             fn f(js: []const codecs.bvh.Joint, name: []const u8) usize {
                 for (js, 0..) |x, i| {
-                    if (std.mem.eql(u8, x.name, name)) {
+                    if (eql(u8, x.name, name)) {
                         return i;
                     }
                 }
@@ -7375,7 +7383,7 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     // orientation and its capture joint's. **Where this is large, any construction that mixes
     // the two frames is unsound**, and the number says which bodies those are.
     {
-        var probe: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+        var probe: rbt.Data = try .init(gpa, &imported.model);
         defer probe.deinit();
         @memcpy(probe.pos, imported.model.qpos0);
         rbt.kinematics(&imported.model, &probe);
@@ -7444,7 +7452,7 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
     {
         const foot_b: usize = blk: {
             for (imported.names, 0..) |n, i| {
-                if (std.mem.eql(u8, n, "foot_right")) {
+                if (eql(u8, n, "foot_right")) {
                     break :blk i;
                 }
             }
@@ -7453,10 +7461,10 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
         var ankle_h: usize = 0;
         var toe_h: usize = 0;
         for (tpose.joints, 0..) |j, i| {
-            if (std.mem.eql(u8, j.name, "RightFoot")) {
+            if (eql(u8, j.name, "RightFoot")) {
                 ankle_h = i;
             }
-            if (std.mem.eql(u8, j.name, "RightToeBase")) {
+            if (eql(u8, j.name, "RightToeBase")) {
                 toe_h = i;
             }
         }
@@ -7483,7 +7491,7 @@ test "SCALE: is the robot bigger than the scaled capture, bone by bone?" {
             // rest orientation before being compared to the floor. Reading it raw reported 0.0
             // degrees no matter what - **it could not see the 24.6-degree pitch that was just
             // added to the model**, which is exactly the quantity it exists to measure.
-            var probe_data: rbt.Data = try rbt.Data.init(gpa, &imported.model);
+            var probe_data: rbt.Data = try .init(gpa, &imported.model);
             defer probe_data.deinit();
             @memcpy(probe_data.pos, imported.model.qpos0);
             rbt.kinematics(&imported.model, &probe_data);

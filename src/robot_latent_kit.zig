@@ -39,6 +39,11 @@ const float = zm.float;
 const assertf = zm.assertf;
 const Tensor = zn.Tensor(f32);
 
+/// How many floats a kit buffer holds: its field's own array length.
+fn floatsIn(comptime M: type, comptime field: []const u8) u32 {
+    return @typeInfo(@FieldType(M.Buffers, field)).array.len;
+}
+
 pub fn LatentKit(comptime M: type) type {
     return struct {
         const Self = @This();
@@ -320,7 +325,14 @@ pub fn LatentKit(comptime M: type) type {
         }
 
         /// One Adam step over `count` weights from `offset`, `t` counting from 1.
-        fn adamOver(self: Self, offset: u32, count: u32, rate: f32, t: u32, epsilon_scale: f32) void {
+        fn adamOver(
+            self: Self,
+            offset: u32,
+            count: u32,
+            rate: f32,
+            t: u32,
+            epsilon_scale: f32,
+        ) void {
             var power1: f32 = 1.0;
             var power2: f32 = 1.0;
             for (0..t) |_| {
@@ -692,6 +704,12 @@ pub fn LatentKit(comptime M: type) type {
     };
 }
 
+/// Where a training window starts: a character, and its first record's replay index.
+pub const Start = struct {
+    env: u32,
+    index: u64,
+};
+
 /// The training data, RESIDENT in the kit's activation buffer: the reference TABLES, uploaded once per
 /// clip, and the replay of FEATURES, appended once per simulation step. What the CPU would otherwise
 /// recompute for every record of every window, every training step - forward kinematics, the feature
@@ -792,9 +810,9 @@ pub fn Resident(comptime M: type) type {
             if (end > floatsIn(M, "acts")) {
                 return error.KitTooSmall;
             }
-            var data: rbt.Data = try rbt.Data.init(gpa, m);
+            var data: rbt.Data = try .init(gpa, m);
             errdefer data.deinit();
-            var state: track.State = try track.State.init(gpa, m.nbody);
+            var state: track.State = try .init(gpa, m.nbody);
             errdefer state.deinit(gpa);
             return .{
                 .gpa = gpa,
@@ -872,7 +890,12 @@ pub fn Resident(comptime M: type) type {
         /// place, and WebGPU lands every upload of a frame before any of its work runs - so both
         /// dispatches would see the second batch's starts. One gather per frame, or give this a
         /// region per step (the training driver's job, when it runs several steps a frame).
-        pub fn stageStarts(self: *Self, starts: []const Start, slot: u32, steps: u32) void {
+        pub fn stageStarts(
+            self: *Self,
+            starts: []const Start,
+            slot: u32,
+            steps: u32,
+        ) void {
             assertf(slot < self.slots, @src(), "stageStarts: slot {d} of {d}", .{ slot, self.slots });
             // A FULL batch: a slot holds `rows` windows, and a partial staging would leave the rest of
             // them as they were - the previous update's windows, gathered again as if they were this
@@ -902,13 +925,16 @@ pub fn Resident(comptime M: type) type {
             self.pipe.uploadAt(.acts, self.startsAt(slot), self.staging[0 .. 2 * starts.len]);
         }
 
+        /// The steps the replay holds, the oldest and the newest, both inclusive - what `held` answers.
+        pub const HeldSteps = struct { first: u64, last: u64 };
+
         /// The replay indices the ring actually carries right now: from the later of its first append
         /// and `capacity` behind its latest, through its latest. Null while it has received nothing.
         ///
         /// Worth asking before sampling windows, because the CPU's replay is NOT the ring: the replay
         /// may hold steps taken before the learner existed (a warm-up the ring never saw), and it may
         /// hold more of them than the ring has room for.
-        pub fn held(self: Self) ?struct { first: u64, last: u64 } {
+        pub fn held(self: Self) ?HeldSteps {
             const latest: u64 = self.appended orelse return null;
             const oldest: u64 = @max(self.first_appended.?, (latest + 1) -| self.capacity);
             return .{ .first = oldest, .last = latest };
@@ -1005,15 +1031,4 @@ pub fn Resident(comptime M: type) type {
             self.pipe.uploadAt(.acts, self.recordAt(0, index), self.staging[0 .. self.envs * self.record]);
         }
     };
-}
-
-/// Where a training window starts: a character, and its first record's replay index.
-pub const Start = struct {
-    env: u32,
-    index: u64,
-};
-
-/// How many floats a kit buffer holds: its field's own array length.
-fn floatsIn(comptime M: type, comptime field: []const u8) u32 {
-    return @typeInfo(@FieldType(M.Buffers, field)).array.len;
 }

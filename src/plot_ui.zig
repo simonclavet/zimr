@@ -1452,3 +1452,8 @@ pub fn show(
     state.q_mouse = u.getMousePos();
     state.q_valid = true;
 }
+
+test "DrawListSink is a graphics sink" {
+    var sink: DrawListSink = undefined;
+    plot.requireGraphicsSink(&sink);
+}

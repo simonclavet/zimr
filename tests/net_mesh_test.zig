@@ -12,11 +12,16 @@
 //! fire channel-open, and from then on send() on one drops a data event into
 //! the other's queue.
 //!
-//! Run: zig test net_mesh_test.zig   (net_core imports only std, so no graph)
+//! Run: zig build test -Dtest-filter=<a test's name> - the build gives this file the session layer (`net_core`)
+//! and the typed messages (`net_typed`) as modules; it is a test of its own, outside `src/tests.zig`.
 
 const std = @import("std");
-const core = @import("src/net_core.zig");
-const typed = @import("src/net_typed.zig");
+const eql = std.mem.eql;
+const indexOf = std.mem.indexOf;
+const indexOfScalar = std.mem.indexOfScalar;
+const parseInt = std.fmt.parseInt;
+const core = @import("net_core");
+const typed = @import("net_typed");
 
 // ------------------------------------------------------------------ transports
 
@@ -97,16 +102,16 @@ fn pcEnqueue(pc: *MockPc, kind: RtcEventKind, channel: u8, payload: []const u8) 
 }
 
 fn firstToken(s: []const u8) []const u8 {
-    const sp: usize = std.mem.indexOfScalar(u8, s, ' ') orelse return s;
+    const sp: usize = indexOfScalar(u8, s, ' ') orelse return s;
     return s[0..sp];
 }
 
 // Pull N out of a "...pc=N" string.
 fn parsePc(s: []const u8) u32 {
-    const at: usize = std.mem.indexOf(u8, s, "pc=") orelse return 0;
+    const at: usize = indexOf(u8, s, "pc=") orelse return 0;
     const tail: []const u8 = s[at + 3 ..];
     const tok: []const u8 = firstToken(tail);
-    return std.fmt.parseInt(u32, tok, 10) catch 0;
+    return parseInt(u32, tok, 10) catch 0;
 }
 
 const mock_ws = struct {
@@ -181,7 +186,7 @@ const mock_ws = struct {
         } else if (std.mem.startsWith(u8, bytes, "SIGNAL ")) {
             const rest: []const u8 = bytes[7..];
             const to_tok: []const u8 = firstToken(rest);
-            const to: u32 = std.fmt.parseInt(u32, to_tok, 10) catch return;
+            const to: u32 = parseInt(u32, to_tok, 10) catch return;
             const raw: []const u8 = rest[to_tok.len + 1 ..];
             var fbuf: [msg_cap]u8 = undefined;
             const from_msg: []const u8 = std.fmt.bufPrint(&fbuf, "FROM {d} {s}", .{ me.id, raw }) catch return;
@@ -194,7 +199,7 @@ const mock_ws = struct {
         } else if (std.mem.startsWith(u8, bytes, "RELAY ")) {
             const rrest: []const u8 = bytes[6..];
             const rto_tok: []const u8 = firstToken(rrest);
-            const rto: u32 = std.fmt.parseInt(u32, rto_tok, 10) catch return;
+            const rto: u32 = parseInt(u32, rto_tok, 10) catch return;
             const rraw: []const u8 = rrest[rto_tok.len + 1 ..];
             var rbuf: [msg_cap]u8 = undefined;
             const relayed: []const u8 = std.fmt.bufPrint(&rbuf, "RELAYED {d} {s}", .{ me.id, rraw }) catch return;
@@ -237,7 +242,7 @@ const mock_ws = struct {
 
 fn sameRoom(a: *const MockSocket, b: *const MockSocket) bool {
     if (a.room_len != b.room_len) return false;
-    return std.mem.eql(u8, a.room[0..a.room_len], b.room[0..b.room_len]);
+    return eql(u8, a.room[0..a.room_len], b.room[0..b.room_len]);
 }
 
 const mock_rtc = struct {
@@ -349,6 +354,46 @@ fn mockDropSocket(h: u32) void {
 
 const TestSession = core.Net(mock_ws, mock_rtc).Session;
 
+/// A transport with no direct connections at all, as on a native platform, where WebRTC does not exist: `create`
+/// answers 0, and the rest do nothing.
+const no_rtc = struct {
+    pub const Handle = u32;
+    pub const Event = RtcEvent;
+    pub const EventKind = RtcEventKind;
+
+    pub fn create() Handle {
+        return 0;
+    }
+    pub fn createOffer(h: Handle) void {
+        _ = h;
+    }
+    pub fn setRemote(h: Handle, is_offer: bool, sdp: []const u8) void {
+        _ = h;
+        _ = is_offer;
+        _ = sdp;
+    }
+    pub fn addIce(h: Handle, cand: []const u8) void {
+        _ = h;
+        _ = cand;
+    }
+    pub fn send(h: Handle, channel: u8, bytes: []const u8) void {
+        _ = h;
+        _ = channel;
+        _ = bytes;
+    }
+    pub fn poll(h: Handle, out: []u8) ?Event {
+        _ = h;
+        _ = out;
+        return null;
+    }
+    pub fn close(h: Handle) void {
+        _ = h;
+    }
+};
+
+/// Sessions over the fake signaling server with no direct connections: every peer relayed through it.
+const RelayOnlySession = core.Net(mock_ws, no_rtc).Session;
+
 // ------------------------------------------------------------------ event log
 
 const RecKind = enum { joined_as, peer_joined, peer_state, channel_open, message, peer_left, host_changed, room_full };
@@ -383,7 +428,7 @@ const Log = struct {
             .peer_state => |ps| {
                 r.kind = .peer_state;
                 r.peer = ps.peer;
-                r.channel = @intFromEnum(ps.state);
+                r.channel = @backingInt(ps.state);
             },
             .channel_open => |c| {
                 r.kind = .channel_open;
@@ -426,7 +471,7 @@ const Log = struct {
         var i: usize = 0;
         while (i < self.count) : (i += 1) {
             const r: Rec = self.recs[i];
-            if (r.kind == .peer_state and r.peer == peer and r.channel == @intFromEnum(state)) return true;
+            if (r.kind == .peer_state and r.peer == peer and r.channel == @backingInt(state)) return true;
         }
         return false;
     }
@@ -453,6 +498,11 @@ const Log = struct {
 };
 
 fn pump(sessions: []const *TestSession, logs: []Log, rounds: usize) void {
+    pumpSessions(TestSession, sessions, logs, rounds);
+}
+
+/// Pumps every session's poll loop `rounds` times, logging what each reports - for sessions of any transports.
+fn pumpSessions(comptime Session: type, sessions: []const *Session, logs: []Log, rounds: usize) void {
     var r: usize = 0;
     while (r < rounds) : (r += 1) {
         var i: usize = 0;
@@ -500,10 +550,10 @@ test "two peers connect, channels open, messages flow both ways" {
 
     const at_b: ?[]const u8 = logs[1].message(1, 1);
     try expect(at_b != null);
-    try expect(std.mem.eql(u8, at_b.?, "hi-from-a"));
+    try expect(eql(u8, at_b.?, "hi-from-a"));
     const at_a: ?[]const u8 = logs[0].message(2, 0);
     try expect(at_a != null);
-    try expect(std.mem.eql(u8, at_a.?, "hi-from-b"));
+    try expect(eql(u8, at_a.?, "hi-from-b"));
 }
 
 test "three-peer full mesh: a broadcast reaches both others" {
@@ -533,8 +583,8 @@ test "three-peer full mesh: a broadcast reaches both others" {
     pump(&sessions, &logs, 10);
     const at_b: ?[]const u8 = logs[1].message(1, 1);
     const at_c: ?[]const u8 = logs[2].message(1, 1);
-    try expect(at_b != null and std.mem.eql(u8, at_b.?, "mesh-hello"));
-    try expect(at_c != null and std.mem.eql(u8, at_c.?, "mesh-hello"));
+    try expect(at_b != null and eql(u8, at_b.?, "mesh-hello"));
+    try expect(at_c != null and eql(u8, at_c.?, "mesh-hello"));
 }
 
 test "a peer leaving is reported to the others" {
@@ -580,7 +630,61 @@ test "a failed connection falls back to relaying through the server" {
     a.broadcast(1, "relayed-msg");
     pump(&sessions, &logs, 8);
     const at_b: ?[]const u8 = logs[1].message(1, 1);
-    try expect(at_b != null and std.mem.eql(u8, at_b.?, "relayed-msg"));
+    try expect(at_b != null and eql(u8, at_b.?, "relayed-msg"));
+}
+
+test "with no direct connections at all, peers relay through the server from the start" {
+    resetMocks();
+    var a: RelayOnlySession = RelayOnlySession.init();
+    var b: RelayOnlySession = RelayOnlySession.init();
+    a.connect("mock://s", "native");
+    b.connect("mock://s", "native");
+    var sessions = [_]*RelayOnlySession{ &a, &b };
+    var logs = [_]Log{ Log.init(), Log.init() };
+    pumpSessions(RelayOnlySession, &sessions, &logs, 24);
+
+    // Each sees the other join already relayed: no direct connection is tried, and none is waited for.
+    try expect(logs[0].has(.peer_joined, 2));
+    try expect(logs[0].hasState(2, .relayed));
+    try expect(logs[1].hasState(1, .relayed));
+
+    // Messages flow through the (mock) server's relay both ways.
+    a.broadcast(1, "from-a");
+    b.broadcast(1, "from-b");
+    pumpSessions(RelayOnlySession, &sessions, &logs, 8);
+    const at_b: ?[]const u8 = logs[1].message(1, 1);
+    const at_a: ?[]const u8 = logs[0].message(2, 1);
+    try expect(at_b != null and eql(u8, at_b.?, "from-a"));
+    try expect(at_a != null and eql(u8, at_a.?, "from-b"));
+}
+
+test "a mixed room - one side with direct connections, one without - relays both ways" {
+    resetMocks();
+    // `a` can make direct connections (a browser); `b` cannot (a native app).
+    var a: TestSession = TestSession.init();
+    var b: RelayOnlySession = RelayOnlySession.init();
+    a.connect("mock://s", "mixed");
+    b.connect("mock://s", "mixed");
+    var logs = [_]Log{ Log.init(), Log.init() };
+    var sessions_a = [_]*TestSession{&a};
+    var sessions_b = [_]*RelayOnlySession{&b};
+    for (0..24) |_| {
+        pumpSessions(TestSession, &sessions_a, logs[0..1], 1);
+        pumpSessions(RelayOnlySession, &sessions_b, logs[1..2], 1);
+    }
+    // `a` must not wait for a direct connection that `b` cannot make: both relay.
+    try expect(logs[0].hasState(2, .relayed));
+    try expect(logs[1].hasState(1, .relayed));
+    a.broadcast(1, "from-a");
+    b.broadcast(1, "from-b");
+    for (0..8) |_| {
+        pumpSessions(TestSession, &sessions_a, logs[0..1], 1);
+        pumpSessions(RelayOnlySession, &sessions_b, logs[1..2], 1);
+    }
+    const at_b: ?[]const u8 = logs[1].message(1, 1);
+    const at_a: ?[]const u8 = logs[0].message(2, 1);
+    try expect(at_b != null and eql(u8, at_b.?, "from-a"));
+    try expect(at_a != null and eql(u8, at_a.?, "from-b"));
 }
 
 test "reconnects and re-establishes peers after the signaling socket drops" {
@@ -610,7 +714,7 @@ test "reconnects and re-establishes peers after the signaling socket drops" {
     a.broadcast(1, "back-online");
     pump(&sessions, &logs, 12);
     const at_b: ?[]const u8 = logs[1].message(new_a, 1);
-    try expect(at_b != null and std.mem.eql(u8, at_b.?, "back-online"));
+    try expect(at_b != null and eql(u8, at_b.?, "back-online"));
 }
 
 const Emote = struct { kind: u32 = 0, x: f32 = 0, y: f32 = 0 };
@@ -700,7 +804,7 @@ test "room names are valid, deterministic, and well-spread" {
     // deterministic
     const a: []const u8 = core.generateRoomName(12345, &buf);
     const b: []const u8 = core.generateRoomName(12345, &buf2);
-    try expect(std.mem.eql(u8, a, b));
+    try expect(eql(u8, a, b));
     // format: contains two dashes, ends in two digits
     var dashes: usize = 0;
     for (a) |ch| {

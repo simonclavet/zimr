@@ -1,5 +1,5 @@
 A zig port of raylib, imgui, implot, box2d / jolt physics, and MuJoCo-style robot
-dynamics, for wasm/webgpu. Reads FBX and BVH for models and animation, and retargets
+dynamics, for wasm/webgpu and natively on Windows (Vulkan). Reads FBX and BVH for models and animation, and retargets
 motion capture onto the robots. Carries a numerics library shaped like numpy, jax and
 pandas that trains neural networks — attention and transformer blocks, the distributions
 generative models are built from, PPO and SAC — on the GPU through compute shaders
@@ -15,7 +15,8 @@ It builds in place, right after a clone:
 
     git clone https://github.com/simonclavet/zimr
     cd zimr/template
-    zig build serve        # then open http://127.0.0.1:8081/
+    zig build serve -Dplatform=web     # then open http://127.0.0.1:8081/
+    zig build run -Dplatform=windows   # or natively on Windows: the first app, as a program
 
 Then copy it wherever your project should live and fix one line of its `build.zig.zon`,
 the relative path to zimr. [template/README.md](template/README.md) has the layouts and the

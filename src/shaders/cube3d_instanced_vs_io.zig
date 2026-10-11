@@ -13,6 +13,8 @@
 
 const shader = @import("shader_interface");
 const common = @import("cube3d_common_io.zig");
+const zm = @import("zm");
+const Vec = zm.Vec;
 
 /// Vertex attributes. Locations 0/1 are per-vertex (the mesh); 2-5 are the four
 /// columns of the per-instance model matrix and 6 is the per-instance colour
@@ -30,7 +32,7 @@ pub const Attributes = struct {
 /// Single uniform block (group 0, binding 0): the camera view-projection - the
 /// SAME schema the immediate batch uses, so both share one `Resources` host.
 pub const Ubo = struct {
-    view_projection: [4]@Vector(4, f32),
+    view_projection: [4]Vec,
 };
 
 /// Varying outputs to the fragment shader - aliases the shared `Interp`.

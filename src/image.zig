@@ -12,6 +12,7 @@ const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
 const expectError = std.testing.expectError;
 const Allocator = std.mem.Allocator;
+const testing_allocator = std.testing.allocator;
 const zm = @import("zm");
 const turnsFromRad = zm.turnsFromRad;
 const float = zm.float;
@@ -29,6 +30,7 @@ const roundi = zm.roundi;
 const signbit = zm.signbit;
 const sqrt = zm.sqrt;
 pub const types = @import("types.zig");
+const requireGl = types.requireGl;
 const errors = @import("errors.zig");
 
 const Color = zm.Color;
@@ -542,7 +544,7 @@ test "coverageToSdf: filled square has 0.5 edge, >0.5 inside, <0.5 outside" {
         .mipmaps = 1,
         .format = @backingInt(types.PixelFormat.uncompressed_r8g8b8a8),
     };
-    try coverageToSdf(std.testing.allocator, img, 4.0);
+    try coverageToSdf(testing_allocator, img, 4.0);
     const at = struct {
         fn a(b: []const u8, x: usize, y: usize) u8 {
             return b[(y * 16 + x) * 4 + 3];
@@ -573,6 +575,17 @@ fn spriteFontKeyMatch(data: [*]const u8, i: usize, key: Color) bool {
     return data[b + 0] == key.r and data[b + 1] == key.g and
         data[b + 2] == key.b and data[b + 3] == key.a;
 }
+
+const z = struct {
+    pub const colorFromHSV = types.colorFromHSV;
+    pub const Rectangle = types.Rectangle;
+    pub const Texture = types.Texture;
+    pub const Image = types.Image;
+    pub const RenderTexture = types.RenderTexture;
+    pub const NPatchInfo = types.NPatchInfo;
+};
+
+const Rectangle = z.Rectangle;
 
 /// Segment a raylib-style bitmap-font image into glyph rectangles - a faithful
 /// port of raylib's `LoadFontFromImage` scan, with NO GPU dependency so it is
@@ -928,26 +941,29 @@ pub fn imageBlurGaussian(
         }
     }
 
-    // Reverse-premultiply and write back to image.data.
+    // Reverse-premultiply and write back to image.data. The running sums never
+    // return to exactly 0 once the window slides past content, so "transparent"
+    // pixels hold f32 residue of either sign, and residue / residue is garbage.
+    // Alpha that truncates to 0 is transparent; colors clamp at both ends.
     for (0..pixel_count) |i| {
         const a: f32 = buf1[i * 4 + 3];
-        if (a == 0.0) {
+        if (a < 1.0) {
             img_data[i * 4 + 0] = 0;
             img_data[i * 4 + 1] = 0;
             img_data[i * 4 + 2] = 0;
             img_data[i * 4 + 3] = 0;
         } else {
             const inv_a: f32 = 255.0 / a;
-            img_data[i * 4 + 0] = @trunc(@min(255.0, buf1[i * 4 + 0] * inv_a));
-            img_data[i * 4 + 1] = @trunc(@min(255.0, buf1[i * 4 + 1] * inv_a));
-            img_data[i * 4 + 2] = @trunc(@min(255.0, buf1[i * 4 + 2] * inv_a));
+            img_data[i * 4 + 0] = @trunc(clamp(buf1[i * 4 + 0] * inv_a, 0.0, 255.0));
+            img_data[i * 4 + 1] = @trunc(clamp(buf1[i * 4 + 1] * inv_a, 0.0, 255.0));
+            img_data[i * 4 + 2] = @trunc(clamp(buf1[i * 4 + 2] * inv_a, 0.0, 255.0));
             img_data[i * 4 + 3] = @trunc(@min(255.0, a));
         }
     }
 }
 
 test "image: invert + rotateCW + copy round-trip" {
-    const a: Allocator = std.testing.allocator;
+    const a: Allocator = testing_allocator;
     var img: Image = try genImageColor(a, 3, 2, .{ .r = 10, .g = 20, .b = 30, .a = 255 });
     defer unloadImage(a, img);
 
@@ -965,25 +981,54 @@ test "image: invert + rotateCW + copy round-trip" {
     try expectEqual(@as(i32, 3), img.height);
 }
 
+test "image: blurGaussian of an opaque disc on transparent stays in u8 range" {
+    // The sliding-window sums never return to exactly 0 past the disc, so the
+    // un-premultiply divides f32 residue by f32 residue - signed garbage.
+    const a: Allocator = testing_allocator;
+    const n: usize = 64;
+    var img: Image = try genImageColor(a, n, n, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    defer unloadImage(a, img);
+    const px: [*]Color = @ptrCast(@alignCast(img.data.?));
+    for (0..n) |y| {
+        for (0..n) |x| {
+            const dx: i32 = @as(i32, @intCast(x)) - 32;
+            const dy: i32 = @as(i32, @intCast(y)) - 32;
+            if (dx * dx + dy * dy < 8 * 8) {
+                px[y * n + x] = .{ .r = @intCast(x * 7 % 256), .g = @intCast(y * 5 + 3), .b = 201, .a = 255 };
+            }
+        }
+    }
+
+    try imageBlurGaussian(a, &img, 4);
+    // Reach is 4 px x 4 iterations = 16 px per axis, so this corner is untouched.
+    try expectEqual(Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, px[n * n - 1]);
+    for (0..n * n) |i| {
+        if (px[i].a == 0) {
+            try expectEqual(Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, px[i]);
+        }
+    }
+    try expect(px[32 * n + 32].a > 128); // center stays mostly opaque
+}
+
 test "image: genImageColor fills RGBA8" {
-    const img: Image = try genImageColor(std.testing.allocator, 4, 3, .{ .r = 10, .g = 20, .b = 30, .a = 255 });
+    const img: Image = try genImageColor(testing_allocator, 4, 3, .{ .r = 10, .g = 20, .b = 30, .a = 255 });
     const px: [*]Color = @ptrCast(@alignCast(img.data.?));
     const n: usize = @as(usize, @intCast(img.width)) * @as(usize, @intCast(img.height));
-    defer std.testing.allocator.free(px[0..n]);
+    defer testing_allocator.free(px[0..n]);
     try expectEqual(@as(i32, 4), img.width);
     try expectEqual(@as(i32, 3), img.height);
     try expectEqual(@as(u8, 20), px[5].g);
 }
 
 test "image: perlin noise is deterministic + in range" {
-    const a: Image = try genImagePerlinNoise(std.testing.allocator, 8, 8, 0, 0, 4.0);
+    const a: Image = try genImagePerlinNoise(testing_allocator, 8, 8, 0, 0, 4.0);
     const pa: [*]Color = @ptrCast(@alignCast(a.data.?));
     const na: usize = @as(usize, @intCast(a.width)) * @as(usize, @intCast(a.height));
-    defer std.testing.allocator.free(pa[0..na]);
-    const b: Image = try genImagePerlinNoise(std.testing.allocator, 8, 8, 0, 0, 4.0);
+    defer testing_allocator.free(pa[0..na]);
+    const b: Image = try genImagePerlinNoise(testing_allocator, 8, 8, 0, 0, 4.0);
     const pb: [*]Color = @ptrCast(@alignCast(b.data.?));
     const nb: usize = @as(usize, @intCast(b.width)) * @as(usize, @intCast(b.height));
-    defer std.testing.allocator.free(pb[0..nb]);
+    defer testing_allocator.free(pb[0..nb]);
     var i: usize = 0;
     while (i < 64) : (i += 1) {
         try expectEqual(pa[i].r, pb[i].r); // reproducible
@@ -999,17 +1044,7 @@ test "image: perlin noise is deterministic + in range" {
 // kept this file's versions.
 // ===========================================================================
 
-const z = struct {
-    pub const colorFromHSV = types.colorFromHSV;
-    pub const Rectangle = types.Rectangle;
-    pub const Texture = types.Texture;
-    pub const Image = types.Image;
-    pub const RenderTexture = types.RenderTexture;
-    pub const NPatchInfo = types.NPatchInfo;
-};
-
 const Vec = zm.Vec;
-const Rectangle = z.Rectangle;
 const Texture = z.Texture;
 
 // rlgl externs (same surface as shapes.zig)
@@ -1030,6 +1065,7 @@ pub fn drawTexturePro(
     rotation_rad: f32,
     tint: Color,
 ) void {
+    requireGl(gl);
     if (texture.id == 0) {
         return;
     }
@@ -1134,6 +1170,7 @@ pub fn drawTextureRotated(
     scale: f32,
     tint: Color,
 ) void {
+    requireGl(gl);
     const w: f32 = float(texture.width);
     const h: f32 = float(texture.height);
     const source: Rectangle = .{ .x = 0, .y = 0, .width = w, .height = h };
@@ -1149,6 +1186,7 @@ pub fn drawTexture(
     posY: i32,
     tint: Color,
 ) void {
+    requireGl(gl);
     drawTextureRotated(gl, texture, .{ @floatFromInt(posX), @floatFromInt(posY) }, 0, 1.0, tint);
 }
 
@@ -1159,6 +1197,7 @@ pub fn drawTextureV(
     position: Vec2,
     tint: Color,
 ) void {
+    requireGl(gl);
     drawTextureRotated(gl, texture, position, 0, 1.0, tint);
 }
 
@@ -1170,6 +1209,7 @@ pub fn drawTextureRec(
     position: Vec2,
     tint: Color,
 ) void {
+    requireGl(gl);
     const dest: Rectangle = .{
         .x = position[0],
         .y = position[1],
@@ -1281,8 +1321,12 @@ pub fn colorContrast(color: Color, contrast_in: f32) Color {
             p *= c;
             p += 0.5;
             p *= 255.0;
-            if (p < 0) p = 0;
-            if (p > 255) p = 255;
+            if (p < 0) {
+                p = 0;
+            }
+            if (p > 255) {
+                p = 255;
+            }
             return @trunc(p);
         }
     }.go;
@@ -2713,6 +2757,7 @@ pub fn drawTextureNPatch(
     rotation_rad: f32,
     tint: Color,
 ) void {
+    requireGl(gl);
     if (texture.id == 0) {
         return;
     }
@@ -3793,7 +3838,7 @@ pub fn imageFormat(
 }
 
 test "imageFormat: same format is a no-op (no realloc)" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const buf: []u8 = try ta.alloc(u8, 4 * 4 * 4); // 4x4 RGBA8
     @memset(buf, 0xCC);
     var img: Image = .{
@@ -3810,7 +3855,7 @@ test "imageFormat: same format is a no-op (no realloc)" {
 }
 
 test "imageFormat: RGBA8 -> grayscale shrinks buffer + preserves mean" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const buf: []u8 = try ta.alloc(u8, 2 * 2 * 4);
     // Four pixels: red, green, blue, white.
     buf[0] = 255;
@@ -3858,7 +3903,7 @@ test "imageFormat: RGBA8 -> grayscale shrinks buffer + preserves mean" {
 }
 
 test "imageFormat: compressed source is silent no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const buf: []u8 = try ta.alloc(u8, 16); // 4x4 DXT1 = 8 bytes - give it room
     defer ta.free(buf);
     @memset(buf, 0);
@@ -3874,7 +3919,7 @@ test "imageFormat: compressed source is silent no-op" {
 }
 
 test "imageFormat: null data returns InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 4,
@@ -3886,7 +3931,7 @@ test "imageFormat: null data returns InvalidDimensions" {
 }
 
 test "imageFormat: non-positive dimensions return InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const buf: []u8 = try ta.alloc(u8, 16);
     defer ta.free(buf);
     var img: Image = .{
@@ -5179,7 +5224,7 @@ test "imageAlphaMask: GRAYSCALE mask replaces alpha channel" {
 }
 
 test "imageAlphaCrop: zero-size dst is a no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 0,
@@ -5197,7 +5242,7 @@ test "imageAlphaCrop: zero-size dst is a no-op" {
 // realloc paths could be added when there's a need for visual-
 // correctness coverage; smoke tests already prove the work loops run.
 test "imageBlurGaussian: null data is a no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 0,
@@ -5209,7 +5254,7 @@ test "imageBlurGaussian: null data is a no-op" {
 }
 
 test "imageBlurGaussian: zero or negative blur size is a no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels: [2 * 2 * 4]u8 = @splat(0xFF);
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5225,7 +5270,7 @@ test "imageBlurGaussian: zero or negative blur size is a no-op" {
 }
 
 test "imageBlurGaussian: wrong format is a no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels = [_]u8{ 100, 100, 100, 100 };
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5239,7 +5284,7 @@ test "imageBlurGaussian: wrong format is a no-op" {
 }
 
 test "imageKernelConvolution: rejects even kernel sizes" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels: [2 * 2 * 4]u8 = @splat(0);
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5255,7 +5300,7 @@ test "imageKernelConvolution: rejects even kernel sizes" {
 }
 
 test "imageKernelConvolution: rejects non-square kernel" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels: [16]u8 = .{ 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4 }; // 2x2 RGBA
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5272,7 +5317,7 @@ test "imageKernelConvolution: rejects non-square kernel" {
 }
 
 test "imageKernelConvolution: 3x3 identity preserves pixels" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // 3x3 RGBA image with a single coloured pixel in the middle.
     var pixels: [3 * 3 * 4]u8 = @splat(0);
     pixels[(1 * 3 + 1) * 4 + 0] = 100; // center R
@@ -5295,7 +5340,7 @@ test "imageKernelConvolution: 3x3 identity preserves pixels" {
 }
 
 test "imageDither: requires bitDepths summing to 16" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels: [1 * 1 * 4]u8 = @splat(0);
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5431,7 +5476,7 @@ test "imageColorContrast: positive value increases contrast" {
 // coverage for the 90 deg variants lives below; the arbitrary-angle path
 // still has only no-op coverage at host.
 test "imageRotate: null data is no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 0,
@@ -5444,7 +5489,7 @@ test "imageRotate: null data is no-op" {
 }
 
 test "imageRotate: 0-degree rotation on null data" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 0,
@@ -5461,7 +5506,7 @@ test "imageRotate: 0-degree rotation on null data" {
 // invalid args) since the realloc path would free `image.data` and
 // these stack-allocated test pixels can't be freed with gpa.
 test "imageResize: null data is no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 0,
@@ -5474,7 +5519,7 @@ test "imageResize: null data is no-op" {
 }
 
 test "imageResize: same-size is no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels = [_]u8{ 100, 200, 50, 255 };
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5489,7 +5534,7 @@ test "imageResize: same-size is no-op" {
 }
 
 test "imageResize: invalid new size is no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels = [_]u8{ 100, 100, 100, 255 };
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5505,7 +5550,7 @@ test "imageResize: invalid new size is no-op" {
 }
 
 test "imageResizeNN: null data is no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = .{
         .data = null,
         .width = 0,
@@ -5518,7 +5563,7 @@ test "imageResizeNN: null data is no-op" {
 }
 
 test "imageResizeNN: same-size is no-op" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var pixels = [_]u8{ 100, 200, 50, 255 };
     var img: Image = .{
         .data = @ptrCast(&pixels),
@@ -5532,7 +5577,7 @@ test "imageResizeNN: same-size is no-op" {
 }
 
 test "imageResize: real realloc path - 4x4 -> 8x8 RGBA8" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // Build a 4x4 RGBA8 image via genImageColor so it's gpa-owned.
     var img: Image = try genImageColor(ta, 4, 4, .{ .r = 100, .g = 50, .b = 200, .a = 255 });
     defer unloadImage(ta, img);
@@ -5551,7 +5596,7 @@ test "imageResize: real realloc path - 4x4 -> 8x8 RGBA8" {
 }
 
 test "imageResizeNN: real realloc path - 2x2 -> 4x4 RGBA8" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = try genImageColor(ta, 2, 2, .{ .r = 30, .g = 60, .b = 90, .a = 255 });
     defer unloadImage(ta, img);
 
@@ -5563,7 +5608,7 @@ test "imageResizeNN: real realloc path - 2x2 -> 4x4 RGBA8" {
 }
 
 test "imageResizeCanvas: real realloc path - pad 2x2 -> 4x4 RGBA8" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = try genImageColor(ta, 2, 2, .{ .r = 200, .g = 200, .b = 200, .a = 255 });
     defer unloadImage(ta, img);
 
@@ -5577,7 +5622,7 @@ test "imageResizeCanvas: real realloc path - pad 2x2 -> 4x4 RGBA8" {
 }
 
 test "imageCrop: real realloc path - crop 4x4 -> 2x2 center" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = try genImageColor(ta, 4, 4, .{ .r = 50, .g = 100, .b = 150, .a = 255 });
     defer unloadImage(ta, img);
 
@@ -5588,7 +5633,7 @@ test "imageCrop: real realloc path - crop 4x4 -> 2x2 center" {
 }
 
 test "imageRotateCW: real realloc path - 4x2 -> 2x4 RGBA8" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var img: Image = try genImageColor(ta, 4, 2, .{ .r = 70, .g = 80, .b = 90, .a = 255 });
     defer unloadImage(ta, img);
 
@@ -5599,7 +5644,7 @@ test "imageRotateCW: real realloc path - 4x2 -> 2x4 RGBA8" {
 }
 
 test "imageCopy: deep copy is independent of source" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const src: Image = try genImageColor(ta, 3, 3, .{ .r = 10, .g = 20, .b = 30, .a = 255 });
     defer unloadImage(ta, src);
 
@@ -5614,7 +5659,7 @@ test "imageCopy: deep copy is independent of source" {
 }
 
 test "imageFromImage: extract sub-rect" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const src: Image = try genImageColor(ta, 4, 4, .{ .r = 200, .g = 100, .b = 50, .a = 255 });
     defer unloadImage(ta, src);
 
@@ -5637,25 +5682,25 @@ test "imageFromImage: extract sub-rect" {
 // ===========================================================================
 
 test "genImageColor: width=0 returns error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     try expectError(error.InvalidDimensions, genImageColor(ta, 0, 4, c));
 }
 
 test "genImageColor: height=0 returns error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     try expectError(error.InvalidDimensions, genImageColor(ta, 4, 0, c));
 }
 
 test "genImageColor: negative width returns error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     try expectError(error.InvalidDimensions, genImageColor(ta, -1, 4, c));
 }
 
 test "imageCopy: null data returns error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const empty: Image = .{
         .data = null,
         .width = 4,
@@ -5667,7 +5712,7 @@ test "imageCopy: null data returns error.InvalidDimensions" {
 }
 
 test "imageFromImage: null data returns error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const empty: Image = .{
         .data = null,
         .width = 4,
@@ -5682,7 +5727,7 @@ test "imageFromImage: null data returns error.InvalidDimensions" {
 }
 
 test "genImageGradientLinear: bad dims return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c1: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     const c2: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     try expectError(error.InvalidDimensions, genImageGradientLinear(ta, 0, 4, 0.0, c1, c2));
@@ -5690,21 +5735,21 @@ test "genImageGradientLinear: bad dims return error.InvalidDimensions" {
 }
 
 test "genImageGradientRadial: bad dims return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c1: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     const c2: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     try expectError(error.InvalidDimensions, genImageGradientRadial(ta, 0, 4, 0.5, c1, c2));
 }
 
 test "genImageGradientSquare: bad dims return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c1: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     const c2: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     try expectError(error.InvalidDimensions, genImageGradientSquare(ta, -2, 4, 0.5, c1, c2));
 }
 
 test "genImageChecked: zero checks_x returns error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c1: Color = .{ .r = 0, .g = 0, .b = 0, .a = 255 };
     const c2: Color = .{ .r = 255, .g = 255, .b = 255, .a = 255 };
     // Width and height are fine, but checks_x = 0 trips the same error.
@@ -5714,7 +5759,7 @@ test "genImageChecked: zero checks_x returns error.InvalidDimensions" {
 }
 
 test "genImageWhiteNoise: bad dims return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     // Rng is never reached on the error path - the dimension check
     // returns before the function dereferences the vtable.
     const rng: Rng = undefined;
@@ -5722,13 +5767,13 @@ test "genImageWhiteNoise: bad dims return error.InvalidDimensions" {
 }
 
 test "genImagePerlinNoise: bad dims return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     try expectError(error.InvalidDimensions, genImagePerlinNoise(ta, 0, 4, 0, 0, 1.0));
     try expectError(error.InvalidDimensions, genImagePerlinNoise(ta, 4, -3, 0, 0, 1.0));
 }
 
 test "genImageCellular: bad dims or tile_size return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     try expectError(error.InvalidDimensions, genImageCellular(ta, 0, 4, 8));
     // tile_size <= 0 also trips the same error - that branch exists
     // because zero tiles would divide by zero in the cell layout.
@@ -5736,14 +5781,14 @@ test "genImageCellular: bad dims or tile_size return error.InvalidDimensions" {
 }
 
 test "genImageText: bad dims return error.InvalidDimensions" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     try expectError(error.InvalidDimensions, genImageText(ta, 0, 4, "hi"));
     try expectError(error.InvalidDimensions, genImageText(ta, 4, -1, "hi"));
 }
 
 // exportImageToMemory + imageFromChannel + imageMipmaps - Phase-1B GAP fills.
 test "exportImageToMemory: invalid image rejected" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     var bad: Image = .{ .data = null, .width = 16, .height = 16, .mipmaps = 1, .format = 7 };
     try expectError(error.InvalidImage, exportImageToMemory(ta, bad, ".png"));
     bad = .{ .data = @ptrFromInt(8), .width = 0, .height = 16, .mipmaps = 1, .format = 7 };
@@ -5751,7 +5796,7 @@ test "exportImageToMemory: invalid image rejected" {
 }
 
 test "exportImageToMemory: unsupported file type" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c = Color{ .r = 1, .g = 2, .b = 3, .a = 4 };
     const img: Image = try genImageColor(ta, 4, 4, c);
     defer unloadImage(ta, img);
@@ -5760,7 +5805,7 @@ test "exportImageToMemory: unsupported file type" {
 }
 
 test "exportImageToMemory: PNG round-trips through codecs.png.decode" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c = Color{ .r = 0xA0, .g = 0x10, .b = 0x80, .a = 0xC0 };
     const img: Image = try genImageColor(ta, 4, 4, c);
     defer unloadImage(ta, img);
@@ -5788,7 +5833,7 @@ test "exportImageToMemory: PNG round-trips through codecs.png.decode" {
 }
 
 test "imageFromChannel: extracts R channel as grayscale" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c = Color{ .r = 0x42, .g = 0x10, .b = 0x80, .a = 0xFF };
     const img: Image = try genImageColor(ta, 3, 2, c);
     defer unloadImage(ta, img);
@@ -5806,7 +5851,7 @@ test "imageFromChannel: extracts R channel as grayscale" {
 }
 
 test "imageFromChannel: out-of-range channel returns 255" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c = Color{ .r = 0x42, .g = 0x10, .b = 0x80, .a = 0xFF };
     const img: Image = try genImageColor(ta, 2, 2, c);
     defer unloadImage(ta, img);
@@ -5820,7 +5865,7 @@ test "imageFromChannel: out-of-range channel returns 255" {
 }
 
 test "imageMipmaps: 4x4 RGBA generates 3 levels" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c = Color{ .r = 0x80, .g = 0x80, .b = 0x80, .a = 0xFF };
     var img: Image = try genImageColor(ta, 4, 4, c);
     defer unloadImage(ta, img);
@@ -5840,7 +5885,7 @@ test "imageMipmaps: 4x4 RGBA generates 3 levels" {
 }
 
 test "imageMipmaps: refuses non-RGBA8 formats" {
-    const ta: Allocator = std.testing.allocator;
+    const ta: Allocator = testing_allocator;
     const c = Color{ .r = 1, .g = 2, .b = 3, .a = 4 };
     var img: Image = try genImageColor(ta, 4, 4, c);
     defer unloadImage(ta, img);

@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
 
 const z = @import("zimr");
 const zm = @import("zm");
@@ -34,12 +35,12 @@ const margin: f32 = 40.0;
 
 const State = struct {
     font: z.Font,
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
     sequence: [count]i32 = undefined,
 };
 
 /// In-place Fisher-Yates shuffle of 0..len-1 -> a uniform permutation.
-fn fillSequence(rand: std.Random, seq: []i32) void {
+fn fillSequence(rand: Random, seq: []i32) void {
     for (seq, 0..) |*v, i| {
         v.* = @intCast(i);
     }
@@ -55,7 +56,7 @@ fn fillSequence(rand: std.Random, seq: []i32) void {
 
 fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 20);
-    s.* = .{ .font = font, .rng = std.Random.DefaultPrng.init(0x5E9_ABCD) };
+    s.* = .{ .font = font, .rng = Random.DefaultPrng.init(0x5E9_ABCD) };
     fillSequence(s.rng.random(), s.sequence[0..]);
 }
 

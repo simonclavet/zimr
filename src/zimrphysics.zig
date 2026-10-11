@@ -54,6 +54,11 @@
 //!   active            : []u32            // body indices that are awake and move
 
 const std = @import("std");
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const sortSlice = std.mem.sort;
 const zm = @import("zm");
 const turnsFromRad = zm.turnsFromRad;
 const radFromTurns = zm.radFromTurns;
@@ -154,12 +159,6 @@ pub const Body = struct {
 
 const Bodies = entities.Entities(Body);
 pub const BodyHandle = entities.Handle(Body);
-
-/// Pack a raw body index into its generation-checked handle. For the few internal builders that
-/// work in raw indices but call the public, handle-taking joint constructors.
-fn handleOf(world: *const World, idx: BodyIndex) BodyHandle {
-    return BodyHandle.pack(@intCast(idx), world.bodies.cycle[idx]);
-}
 
 /// A body index == handle.index(). Dense, <= capacity, stable for the body's life.
 pub const BodyIndex = u32;
@@ -516,6 +515,7 @@ fn quatAngleAbout(q: Quat, axis: Vec) f32 {
     const xyz: Vec = vec(q[0], q[1], q[2]);
     return 2.0 * atan2Rad(dot3(xyz, axis), q[3]);
 }
+
 /// Normalize a quaternion; returns identity for a zero quaternion.
 fn quatNormalize(q: Quat) Quat {
     const len_sq: f32 = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
@@ -605,6 +605,7 @@ fn quatFromBasis(bx: Vec, by: Vec, bz: Vec) Quat {
         return quat((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s);
     }
 }
+
 /// Transform a local AABB by a rotation+translation (abs-rotated-extents trick).
 fn transformAabb(local: Aabb, translation: Vec, rotation: Quat) Aabb {
     const center_local: Vec = (local.min + local.max) * splat(0.5);
@@ -626,11 +627,13 @@ fn transformAabbInverse(world: Aabb, translation: Vec, rotation: Quat) Aabb {
     const shifted: Aabb = .{ .min = world.min - translation, .max = world.max - translation };
     return transformAabb(shifted, vec_zero, conjugate(rotation));
 }
+
 fn aabbContainsPoint(box: Aabb, p: Vec) bool {
     return p[0] >= box.min[0] and p[0] <= box.max[0] and
         p[1] >= box.min[1] and p[1] <= box.max[1] and
         p[2] >= box.min[2] and p[2] <= box.max[2];
 }
+
 /// Max dimension of the clutch coupling matrix: engine + up to this many - 1 driven wheels.
 const clutch_max_n: usize = 16;
 
@@ -1357,11 +1360,19 @@ fn shapeMass(shape: *const Shape, density: f32) MassProperties {
     }
 }
 
-pub fn buildConvexHull(gpa: std.mem.Allocator, input_points: []const Vec) !ConvexHull {
+// =============================================================================
+// Convex hull builder. Given a point cloud, enumerate the supporting planes (each
+// a hull face), merge the coplanar points into CCW polygons, and compute the volume,
+// centre of mass and principal inertia (the whole hull is then recentred on its COM
+// so support points are COM-relative, matching the primitive shapes). Plane
+// enumeration is O(n^4) - meant for the small clouds typical of physics hulls.
+// =============================================================================
+
+pub fn buildConvexHull(gpa: Allocator, input_points: []const Vec) !ConvexHull {
     const tol: f32 = 1.0e-4;
 
     // 1) De-duplicate the input points.
-    var pts: std.ArrayListUnmanaged(Vec) = .empty;
+    var pts: ArrayListUnmanaged(Vec) = .empty;
     defer pts.deinit(gpa);
     for (input_points) |p| {
         var duplicate: bool = false;
@@ -1389,9 +1400,9 @@ pub fn buildConvexHull(gpa: std.mem.Allocator, input_points: []const Vec) !Conve
 
     // 2) Enumerate distinct hull-face planes: a plane through three points is a face
     //    iff every other point lies on or below it. Dedup by (normal, offset).
-    var face_normals: std.ArrayListUnmanaged(Vec) = .empty;
+    var face_normals: ArrayListUnmanaged(Vec) = .empty;
     defer face_normals.deinit(gpa);
-    var face_offsets: std.ArrayListUnmanaged(f32) = .empty;
+    var face_offsets: ArrayListUnmanaged(f32) = .empty;
     defer face_offsets.deinit(gpa);
 
     var i: usize = 0;
@@ -1441,13 +1452,13 @@ pub fn buildConvexHull(gpa: std.mem.Allocator, input_points: []const Vec) !Conve
 
     // 3) For each face plane, gather the points lying on it and order them CCW about
     //    the normal, building the flattened face-vertex index loops.
-    var faces: std.ArrayListUnmanaged(HullFace) = .empty;
+    var faces: ArrayListUnmanaged(HullFace) = .empty;
     defer faces.deinit(gpa);
-    var face_verts: std.ArrayListUnmanaged(u32) = .empty;
+    var face_verts: ArrayListUnmanaged(u32) = .empty;
     defer face_verts.deinit(gpa);
-    var on_plane: std.ArrayListUnmanaged(u32) = .empty;
+    var on_plane: ArrayListUnmanaged(u32) = .empty;
     defer on_plane.deinit(gpa);
-    var angles: std.ArrayListUnmanaged(f32) = .empty;
+    var angles: ArrayListUnmanaged(f32) = .empty;
     defer angles.deinit(gpa);
 
     for (face_normals.items, face_offsets.items) |normal, offset| {
@@ -1619,8 +1630,8 @@ const mesh_bvh_leaf: u32 = 4; // triangles per leaf (small => tighter culling)
 /// along the longest axis of the centroid bounds, appending nodes to `nodes` and
 /// returning the index of the node just built.
 fn buildMeshBvhNode(
-    gpa: std.mem.Allocator,
-    nodes: *std.ArrayListUnmanaged(MeshBvhNode),
+    gpa: Allocator,
+    nodes: *ArrayListUnmanaged(MeshBvhNode),
     tri_order: []u32,
     centroids: []const Vec,
     tri_bounds: []const Aabb,
@@ -1711,7 +1722,7 @@ fn buildMeshBvhNode(
 /// it to material properties). `triangle_materials` must have one entry per triangle, or be null
 /// for an all-zero (single-surface) mesh. The id array is copied and owned by the mesh.
 pub fn buildMeshWithMaterials(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     vertices_in: []const Vec,
     triangles_in: []const [3]u32,
     triangle_materials: ?[]const u16,
@@ -1752,7 +1763,7 @@ pub fn buildMeshWithMaterials(
     // shares it, and mark the edge active iff the surface bulges outward there (a real
     // feature). Coplanar seams and concave creases stay inactive. Leftover (boundary)
     // edges are active.
-    var edge_map: std.AutoHashMapUnmanaged(EdgeKey, EdgeRef) = .empty;
+    var edge_map: AutoHashMapUnmanaged(EdgeKey, EdgeRef) = .empty;
     defer edge_map.deinit(gpa);
     for (out_triangles, 0..) |tri, ti| {
         var e: u8 = 0;
@@ -1784,7 +1795,7 @@ pub fn buildMeshWithMaterials(
         }
     }
     // Whatever remains was seen once: a boundary edge, always active.
-    var it: std.AutoHashMapUnmanaged(EdgeKey, EdgeRef).Iterator = edge_map.iterator();
+    var it: AutoHashMapUnmanaged(EdgeKey, EdgeRef).Iterator = edge_map.iterator();
     while (it.next()) |entry| {
         const ref: EdgeRef = entry.value_ptr.*;
         out_triangles[ref.tri].active_edges |= other_edge_bit(ref.edge);
@@ -1796,7 +1807,7 @@ pub fn buildMeshWithMaterials(
         slot.* = @intCast(idx);
     }
 
-    var nodes: std.ArrayListUnmanaged(MeshBvhNode) = .empty;
+    var nodes: ArrayListUnmanaged(MeshBvhNode) = .empty;
     errdefer nodes.deinit(gpa);
     _ = try buildMeshBvhNode(gpa, &nodes, out_tri_order, centroids, tri_bounds, 0, triangles_in.len);
     const out_nodes: []MeshBvhNode = try nodes.toOwnedSlice(gpa);
@@ -1825,7 +1836,7 @@ pub fn buildMeshWithMaterials(
 
 /// Build a mesh from a vertex list and triangle vertex-index triples (CCW front face).
 pub fn buildMesh(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     vertices_in: []const Vec,
     triangles_in: []const [3]u32,
 ) !Mesh {
@@ -1922,7 +1933,7 @@ fn hfEdgeBit(e: u32) u8 {
 /// material properties). `triangle_materials` has one entry per cell-triangle (2 per cell, indexed
 /// as active_edges) or is null for an all-zero field. The id array is copied and owned by the field.
 pub fn buildHeightFieldWithMaterials(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     heights_in: []const f32,
     sample_count_x: u32,
     sample_count_z: u32,
@@ -2032,9 +2043,9 @@ pub fn buildHeightFieldWithMaterials(
 
 /// Shapes are shared and immutable. A flat append-only store is the simplest pool.
 pub const ShapeStore = struct {
-    items: std.ArrayListUnmanaged(Shape) = .empty,
+    items: ArrayListUnmanaged(Shape) = .empty,
 
-    pub fn add(self: *ShapeStore, gpa: std.mem.Allocator, shape: Shape) !ShapeId {
+    pub fn add(self: *ShapeStore, gpa: Allocator, shape: Shape) !ShapeId {
         const id: ShapeId = @intCast(self.items.items.len);
         try self.items.append(gpa, shape);
         return id;
@@ -2048,7 +2059,7 @@ pub const ShapeStore = struct {
     /// owned by the store and freed in deinit.
     pub fn addConvexHull(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         points: []const Vec,
     ) !ShapeId {
         const hull: ConvexHull = try buildConvexHull(gpa, points);
@@ -2059,7 +2070,7 @@ pub const ShapeStore = struct {
     /// array is owned by the store and freed in deinit.
     pub fn addCompound(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         children: []const CompoundChild,
     ) !ShapeId {
         // buildCompound takes *const ShapeStore (it reads each child via store.get) and so
@@ -2075,7 +2086,7 @@ pub const ShapeStore = struct {
     /// child's bounds/COM/mass are read once and cached; the child keeps its own store entry.
     pub fn addRotatedTranslated(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         child: ShapeId,
         rotation: Quat,
         position: Vec,
@@ -2103,7 +2114,7 @@ pub const ShapeStore = struct {
     /// Wrap an existing shape with a shifted center of mass (Jolt's OffsetCenterOfMassShape).
     pub fn addOffsetCom(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         child: ShapeId,
         offset: Vec,
     ) !ShapeId {
@@ -2125,7 +2136,7 @@ pub const ShapeStore = struct {
     }
 
     /// A collision-less placeholder shape with a configurable center of mass (Jolt's EmptyShape).
-    pub fn addEmpty(self: *ShapeStore, gpa: std.mem.Allocator, com: Vec) !ShapeId {
+    pub fn addEmpty(self: *ShapeStore, gpa: Allocator, com: Vec) !ShapeId {
         return self.add(gpa, .{ .empty = .{ .com = com } });
     }
 
@@ -2135,7 +2146,7 @@ pub const ShapeStore = struct {
     /// static bodies (cheap ground).
     pub fn addPlane(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         normal: Vec,
         distance: f32,
         half_extent: f32,
@@ -2170,7 +2181,7 @@ pub const ShapeStore = struct {
     /// are owned by the store and freed in deinit.
     pub fn addMesh(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         vertices: []const Vec,
         triangles: []const [3]u32,
     ) !ShapeId {
@@ -2181,7 +2192,7 @@ pub const ShapeStore = struct {
     /// for a single-surface mesh). Retrieve it at a contact via World.materialAt.
     pub fn addMeshWithMaterials(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         vertices: []const Vec,
         triangles: []const [3]u32,
         triangle_materials: ?[]const u16,
@@ -2194,7 +2205,7 @@ pub const ShapeStore = struct {
     /// store it. The height array is owned by the store and freed in deinit.
     pub fn addHeightField(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         heights: []const f32,
         sample_count_x: u32,
         sample_count_z: u32,
@@ -2214,7 +2225,7 @@ pub const ShapeStore = struct {
     /// cell-triangle, or null for a single-surface field). Retrieve it via World.materialAt.
     pub fn addHeightFieldWithMaterials(
         self: *ShapeStore,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         heights: []const f32,
         sample_count_x: u32,
         sample_count_z: u32,
@@ -2232,7 +2243,7 @@ pub const ShapeStore = struct {
         return self.add(gpa, .{ .heightfield = hf });
     }
 
-    pub fn deinit(self: *ShapeStore, gpa: std.mem.Allocator) void {
+    pub fn deinit(self: *ShapeStore, gpa: Allocator) void {
         for (self.items.items) |shape| {
             switch (shape) {
                 .convex_hull => |h| {
@@ -2268,7 +2279,7 @@ pub const ShapeStore = struct {
 /// and principal inertia (per unit density) via the parallel axis theorem, then
 /// recentre the children on the COM. `store` must already hold the child shapes.
 pub fn buildCompound(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     store: *const ShapeStore,
     children_in: []const CompoundChild,
 ) !Compound {
@@ -2341,14 +2352,6 @@ pub fn buildCompound(
 }
 
 // =============================================================================
-// Convex hull builder. Given a point cloud, enumerate the supporting planes (each
-// a hull face), merge the coplanar points into CCW polygons, and compute the volume,
-// centre of mass and principal inertia (the whole hull is then recentred on its COM
-// so support points are COM-relative, matching the primitive shapes). Plane
-// enumeration is O(n^4) - meant for the small clouds typical of physics hulls.
-// =============================================================================
-
-// =============================================================================
 // Mesh builder + BVH. A triangle soup gets per-triangle face normals and a static
 // median-split bounding-volume hierarchy, so a colliding convex shape only tests the
 // triangles near it. Build once; query with the convex shape's AABB transformed into
@@ -2360,8 +2363,8 @@ pub fn buildCompound(
 fn queryMeshBvh(
     mesh: *const Mesh,
     local_aabb: Aabb,
-    out: *std.ArrayListUnmanaged(u32),
-    scratch: std.mem.Allocator,
+    out: *ArrayListUnmanaged(u32),
+    scratch: Allocator,
 ) !void {
     if (mesh.nodes.len == 0) {
         return;
@@ -2398,7 +2401,7 @@ fn hfVertex(hf: *const HeightField, gx: u32, gz: u32) Vec {
 }
 
 pub fn buildHeightField(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     heights_in: []const f32,
     sample_count_x: u32,
     sample_count_z: u32,
@@ -2558,8 +2561,8 @@ pub const PointPart = struct {
     ) void {
         part.r1 = r1;
         part.r2 = r2;
-        const r1x: Mat3 = Mat3.skew(r1);
-        const r2x: Mat3 = Mat3.skew(r2);
+        const r1x: Mat3 = .skew(r1);
+        const r2x: Mat3 = .skew(r2);
         part.inv_i1_r1x = inv_i_a.mul(r1x);
         part.inv_i2_r2x = inv_i_b.mul(r2x);
         const term_a: Mat3 = r1x.mul(inv_i_a).mul(r1x.transpose());
@@ -4816,6 +4819,10 @@ pub const RayHit = struct {
 
 pub const BodyPair = struct { a: BodyIndex, b: BodyIndex };
 
+// =============================================================================
+// Broad phase: a dynamic AABB tree. SKETCH of the interface; internals next pass.
+// =============================================================================
+
 /// Broad phase: a dynamic AABB tree (the Box2D b2DynamicTree design). A flat node
 /// pool with a free list (no per-node allocation), leaves carry a fattened AABB so a
 /// body can jiggle without re-inserting, and insertion uses the surface-area
@@ -4825,7 +4832,7 @@ pub const BodyPair = struct { a: BodyIndex, b: BodyIndex };
 /// contacts are rebuilt per step rather than persisted), then the caller sorts them
 /// by body index, so the set AND the order are independent of tree shape.
 pub const BroadPhase = struct {
-    const NULL_NODE: u32 = maxInt(u32);
+    const null_node: u32 = maxInt(u32);
 
     const Node = struct {
         aabb: Aabb, // fattened
@@ -4836,14 +4843,14 @@ pub const BroadPhase = struct {
         height: i32, // 0 = leaf, -1 = free, else internal
     };
 
-    nodes: std.ArrayListUnmanaged(Node) = .empty,
-    root: u32 = NULL_NODE,
-    free_list: u32 = NULL_NODE,
+    nodes: ArrayListUnmanaged(Node) = .empty,
+    root: u32 = null_node,
+    free_list: u32 = null_node,
     margin: f32 = 0.1, // fattening (> speculative_distance, so no contact is missed)
     velocity_predict: f32 = 2.0, // fat box extended this many * displacement
 
     fn isLeaf(n: *const Node) bool {
-        return n.child1 == NULL_NODE;
+        return n.child1 == null_node;
     }
 
     fn fatten(self: *const BroadPhase, tight: Aabb, displacement: Vec) Aabb {
@@ -4854,8 +4861,8 @@ pub const BroadPhase = struct {
         return fat;
     }
 
-    fn allocNode(self: *BroadPhase, gpa: std.mem.Allocator) !u32 {
-        if (self.free_list != NULL_NODE) {
+    fn allocNode(self: *BroadPhase, gpa: Allocator) !u32 {
+        if (self.free_list != null_node) {
             const idx: u32 = self.free_list;
             self.free_list = self.nodes.items[idx].child1;
             return idx;
@@ -4873,16 +4880,16 @@ pub const BroadPhase = struct {
 
     pub fn insert(
         self: *BroadPhase,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         body: BodyIndex,
         tight: Aabb,
     ) !u32 {
         const leaf: u32 = try self.allocNode(gpa);
         self.nodes.items[leaf] = .{
             .aabb = self.fatten(tight, vec_zero),
-            .parent = NULL_NODE,
-            .child1 = NULL_NODE,
-            .child2 = NULL_NODE,
+            .parent = null_node,
+            .child1 = null_node,
+            .child2 = null_node,
             .body = body,
             .height = 0,
         };
@@ -4899,7 +4906,7 @@ pub const BroadPhase = struct {
     /// otherwise re-insert with a freshly fattened, velocity-extended box.
     pub fn moveProxy(
         self: *BroadPhase,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         node: u32,
         tight: Aabb,
         displacement: Vec,
@@ -4913,10 +4920,10 @@ pub const BroadPhase = struct {
         return true;
     }
 
-    fn insertLeaf(self: *BroadPhase, gpa: std.mem.Allocator, leaf: u32) !void {
-        if (self.root == NULL_NODE) {
+    fn insertLeaf(self: *BroadPhase, gpa: Allocator, leaf: u32) !void {
+        if (self.root == null_node) {
             self.root = leaf;
-            self.nodes.items[leaf].parent = NULL_NODE;
+            self.nodes.items[leaf].parent = null_node;
             return;
         }
 
@@ -4957,7 +4964,7 @@ pub const BroadPhase = struct {
         self.nodes.items[sibling].parent = new_parent;
         self.nodes.items[leaf].parent = new_parent;
 
-        if (old_parent != NULL_NODE) {
+        if (old_parent != null_node) {
             if (self.nodes.items[old_parent].child1 == sibling) {
                 self.nodes.items[old_parent].child1 = new_parent;
             } else {
@@ -4986,7 +4993,7 @@ pub const BroadPhase = struct {
 
     fn removeLeaf(self: *BroadPhase, leaf: u32) void {
         if (leaf == self.root) {
-            self.root = NULL_NODE;
+            self.root = null_node;
             return;
         }
         const parent: u32 = self.nodes.items[leaf].parent;
@@ -4996,7 +5003,7 @@ pub const BroadPhase = struct {
         else
             self.nodes.items[parent].child1;
 
-        if (grand_parent != NULL_NODE) {
+        if (grand_parent != null_node) {
             // The sibling takes the parent's slot.
             if (self.nodes.items[grand_parent].child1 == parent) {
                 self.nodes.items[grand_parent].child1 = sibling;
@@ -5008,7 +5015,7 @@ pub const BroadPhase = struct {
             self.refitAndBalance(grand_parent);
         } else {
             self.root = sibling;
-            self.nodes.items[sibling].parent = NULL_NODE;
+            self.nodes.items[sibling].parent = null_node;
             self.freeNode(parent);
         }
     }
@@ -5016,7 +5023,7 @@ pub const BroadPhase = struct {
     /// Walk to the root refreshing heights and AABBs, rebalancing as we go.
     fn refitAndBalance(self: *BroadPhase, start: u32) void {
         var index: u32 = start;
-        while (index != NULL_NODE) {
+        while (index != null_node) {
             index = self.balance(index);
             const left_child: u32 = self.nodes.items[index].child1;
             const right_child: u32 = self.nodes.items[index].child2;
@@ -5052,7 +5059,7 @@ pub const BroadPhase = struct {
             nodes[pivot].parent = right_child;
 
             const old_parent: u32 = nodes[right_child].parent;
-            if (old_parent != NULL_NODE) {
+            if (old_parent != null_node) {
                 if (nodes[old_parent].child1 == pivot) {
                     nodes[old_parent].child1 = right_child;
                 } else {
@@ -5093,7 +5100,7 @@ pub const BroadPhase = struct {
             nodes[pivot].parent = left_child;
 
             const old_parent: u32 = nodes[left_child].parent;
-            if (old_parent != NULL_NODE) {
+            if (old_parent != null_node) {
                 if (nodes[old_parent].child1 == pivot) {
                     nodes[old_parent].child1 = left_child;
                 } else {
@@ -5131,10 +5138,10 @@ pub const BroadPhase = struct {
     /// so no pair is produced twice. The caller sorts for a deterministic order.
     pub fn findPairs(
         self: *BroadPhase,
-        gpa: std.mem.Allocator,
-        out: *std.ArrayListUnmanaged(BodyPair),
+        gpa: Allocator,
+        out: *ArrayListUnmanaged(BodyPair),
     ) !void {
-        if (self.root == NULL_NODE) {
+        if (self.root == null_node) {
             return;
         }
 
@@ -5149,7 +5156,7 @@ pub const BroadPhase = struct {
             stack.sp = 0;
             stack.push(self.root);
             while (stack.pop()) |idx| {
-                if (idx == NULL_NODE) {
+                if (idx == null_node) {
                     continue;
                 }
                 const n: *const Node = &self.nodes.items[idx];
@@ -5167,7 +5174,7 @@ pub const BroadPhase = struct {
             }
         }
 
-        std.mem.sort(BodyPair, out.items, {}, pairLess);
+        sortSlice(BodyPair, out.items, {}, pairLess);
     }
 
     fn pairLess(_: void, lhs: BodyPair, rhs: BodyPair) bool {
@@ -5181,17 +5188,17 @@ pub const BroadPhase = struct {
     /// caster). Appends body indices to `out`.
     pub fn queryAabb(
         self: *const BroadPhase,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         aabb: Aabb,
-        out: *std.ArrayListUnmanaged(BodyIndex),
+        out: *ArrayListUnmanaged(BodyIndex),
     ) !void {
-        if (self.root == NULL_NODE) {
+        if (self.root == null_node) {
             return;
         }
         var stack: BvhStack = .{};
         stack.push(self.root);
         while (stack.pop()) |idx| {
-            if (idx == NULL_NODE) {
+            if (idx == null_node) {
                 continue;
             }
             const n: *const Node = &self.nodes.items[idx];
@@ -5412,12 +5419,7 @@ fn rayVsShape(
 /// hit does not update the closest distance, so it never hides a farther valid floor. Sensors are
 /// excluded via the filter.
 fn castRayVehicleFloor(
-    // World is the central simulation hub: it owns a ContactListener whose callbacks
-    // reference World back (a true World<->ContactListener cycle), and it is operated on
-    // by ~66 free functions (this one included) threaded through the file by feature. No
-    // declaration order resolves the listener cycle, and World sits after the subsystem
-    // types it aggregates, so these earlier *World users forward-reference it.
-    // lint:off decl-order: World<->ContactListener hub cycle (+66 free-fn operators)
+    // lint:off decl-order: World is the hub - its methods call feature functions like this, which take *World
     world: *const World,
     origin: Vec,
     direction: Vec,
@@ -5427,7 +5429,7 @@ fn castRayVehicleFloor(
     cos_max_slope_angle: f32,
 ) ?RayHit {
     const bp: *const BroadPhase = &world.broadphase;
-    if (bp.root == BroadPhase.NULL_NODE) {
+    if (bp.root == BroadPhase.null_node) {
         return null;
     }
     const dir_len: f32 = length3(direction);
@@ -5443,7 +5445,7 @@ fn castRayVehicleFloor(
     var stack: BvhStack = .{};
     stack.push(bp.root);
     while (stack.pop()) |node_index| {
-        if (node_index == BroadPhase.NULL_NODE) {
+        if (node_index == BroadPhase.null_node) {
             continue;
         }
         const node: *const BroadPhase.Node = &bp.nodes.items[node_index];
@@ -6177,7 +6179,7 @@ fn castShapeVehicleFloor(
     cos_max_slope_angle: f32,
 ) ?VehicleShapeHit {
     const bp: *const BroadPhase = &world.broadphase;
-    if (bp.root == BroadPhase.NULL_NODE) {
+    if (bp.root == BroadPhase.null_node) {
         return null;
     }
     const dir_len: f32 = length3(direction);
@@ -6201,7 +6203,7 @@ fn castShapeVehicleFloor(
     var stack: BvhStack = .{};
     stack.push(bp.root);
     while (stack.pop()) |node_index| {
-        if (node_index == BroadPhase.NULL_NODE) {
+        if (node_index == BroadPhase.null_node) {
             continue;
         }
         const node: *const BroadPhase.Node = &bp.nodes.items[node_index];
@@ -6294,7 +6296,7 @@ pub const Vehicle = struct {
     cos_max_pitch_roll_angle: f32,
     wheels: []Wheel, // owned
     tester: VehicleCollisionTester,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 
     pitch_roll_part: AngleConstraintPart, // anti-topple constraint, chassis vs fixed-to-world
     cos_pitch_roll_angle: f32, // cos of the current pitch/roll angle (set during setup)
@@ -6324,7 +6326,7 @@ pub const Vehicle = struct {
     /// Build a vehicle for chassis `body` from `settings` (one Wheel per wheel setting). The
     /// caller owns the result; deinit frees the wheels.
     pub fn init(
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         body: BodyIndex,
         settings: VehicleSettings,
         tester: VehicleCollisionTester,
@@ -8394,13 +8396,13 @@ pub const CachedFriction = struct { linear: [2]f32, angular: f32 };
 fn purgeCacheMap(
     comptime K: type,
     comptime V: type,
-    map: *std.AutoHashMapUnmanaged(K, V),
-    gpa: std.mem.Allocator,
+    map: *AutoHashMapUnmanaged(K, V),
+    gpa: Allocator,
     idx: BodyIndex,
 ) void {
-    var to_remove: std.ArrayListUnmanaged(K) = .empty;
+    var to_remove: ArrayListUnmanaged(K) = .empty;
     defer to_remove.deinit(gpa);
-    var it: std.AutoHashMapUnmanaged(K, V).Iterator = map.iterator();
+    var it: AutoHashMapUnmanaged(K, V).Iterator = map.iterator();
     while (it.next()) |entry| {
         if (entry.key_ptr.a == idx or entry.key_ptr.b == idx) {
             to_remove.append(gpa, entry.key_ptr.*) catch return; // OOM: leave the rest to expire
@@ -8412,10 +8414,10 @@ fn purgeCacheMap(
 }
 
 pub const ManifoldCache = struct {
-    normal_now: std.AutoHashMapUnmanaged(PointKey, f32) = .empty,
-    normal_prev: std.AutoHashMapUnmanaged(PointKey, f32) = .empty,
-    friction_now: std.AutoHashMapUnmanaged(ManifoldKey, CachedFriction) = .empty,
-    friction_prev: std.AutoHashMapUnmanaged(ManifoldKey, CachedFriction) = .empty,
+    normal_now: AutoHashMapUnmanaged(PointKey, f32) = .empty,
+    normal_prev: AutoHashMapUnmanaged(PointKey, f32) = .empty,
+    friction_now: AutoHashMapUnmanaged(ManifoldKey, CachedFriction) = .empty,
+    friction_prev: AutoHashMapUnmanaged(ManifoldKey, CachedFriction) = .empty,
 
     pub fn lookupNormal(self: *const ManifoldCache, key: PointKey) f32 {
         return self.normal_prev.get(key) orelse 0.0;
@@ -8425,7 +8427,7 @@ pub const ManifoldCache = struct {
     }
     pub fn storeNormal(
         self: *ManifoldCache,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         key: PointKey,
         v: f32,
     ) !void {
@@ -8433,7 +8435,7 @@ pub const ManifoldCache = struct {
     }
     pub fn storeFriction(
         self: *ManifoldCache,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         key: ManifoldKey,
         v: CachedFriction,
     ) !void {
@@ -8450,7 +8452,7 @@ pub const ManifoldCache = struct {
     /// index can't seed a later contact pair with a dead body's cached impulses. Best-effort: if
     /// the temporary key list can't be allocated the stale entries are left to expire on the next
     /// swap (one frame of slightly-off warm start at worst), never wrong memory.
-    pub fn removeBody(self: *ManifoldCache, gpa: std.mem.Allocator, idx: BodyIndex) void {
+    pub fn removeBody(self: *ManifoldCache, gpa: Allocator, idx: BodyIndex) void {
         purgeCacheMap(PointKey, f32, &self.normal_now, gpa, idx);
         purgeCacheMap(PointKey, f32, &self.normal_prev, gpa, idx);
         purgeCacheMap(ManifoldKey, CachedFriction, &self.friction_now, gpa, idx);
@@ -8527,7 +8529,7 @@ pub const ContactListener = struct {
 /// type with `body_a` / `body_b: BodyIndex` (point, six-DOF, path).
 fn removeConstraintsReferencing(
     comptime C: type,
-    list: *std.ArrayListUnmanaged(C),
+    list: *ArrayListUnmanaged(C),
     idx: BodyIndex,
 ) void {
     var i: usize = list.items.len;
@@ -8539,6 +8541,10 @@ fn removeConstraintsReferencing(
     }
 }
 
+// =============================================================================
+// The world.
+// =============================================================================
+
 pub const World = struct {
     bodies: Bodies,
     motion: []Motion,
@@ -8549,12 +8555,12 @@ pub const World = struct {
     // static/kinematic); this holds what the body would have as a dynamic body.
     mass_props: []MassProperties,
     shapes: ShapeStore,
-    active: std.ArrayListUnmanaged(BodyIndex),
-    constraints: std.ArrayListUnmanaged(Constraint), // joints (persist across frames)
-    vehicles: std.ArrayListUnmanaged(*Vehicle), // registered vehicles (not owned; see addVehicle)
-    six_dof: std.ArrayListUnmanaged(SixDofConstraint), // 6-DOF joints (persist across frames)
-    paths: std.ArrayListUnmanaged(PathConstraint), // path (rail) joints (persist across frames)
-    soft_bodies: std.ArrayListUnmanaged(SoftBody), // soft bodies (cloth / volumetric)
+    active: ArrayListUnmanaged(BodyIndex),
+    constraints: ArrayListUnmanaged(Constraint), // joints (persist across frames)
+    vehicles: ArrayListUnmanaged(*Vehicle), // registered vehicles (not owned; see addVehicle)
+    six_dof: ArrayListUnmanaged(SixDofConstraint), // 6-DOF joints (persist across frames)
+    paths: ArrayListUnmanaged(PathConstraint), // path (rail) joints (persist across frames)
+    soft_bodies: ArrayListUnmanaged(SoftBody), // soft bodies (cloth / volumetric)
 
     broadphase: BroadPhase,
     cache: ManifoldCache,
@@ -8562,8 +8568,8 @@ pub const World = struct {
     island_parent: []u32, // union-find over bodies (contact graph); rebuilt each step
     island_awake: []bool, // per-root: island contains an awake body (indexed by root)
     island_can_sleep: []bool, // per-root: every awake member passed the sleep test
-    allocator: std.mem.Allocator, // persistent (tree, caches); NOT the per-step scratch
-    scratch_arena: std.heap.ArenaAllocator, // per-step transient buffers; reset each step()
+    allocator: Allocator, // persistent (tree, caches); NOT the per-step scratch
+    scratch_arena: ArenaAllocator, // per-step transient buffers; reset each step()
     settings: Settings,
     gravity: Vec,
     prev_dt: f32,
@@ -8572,10 +8578,16 @@ pub const World = struct {
     // record which sub-shape pairs touched this frame vs last, to derive added/removed.
     // Allocated from `allocator` (persistent across frames); reused each step.
     contact_listener: ?ContactListener = null,
-    contacts_prev: std.AutoHashMapUnmanaged(ManifoldKey, void) = .empty,
-    contacts_curr: std.AutoHashMapUnmanaged(ManifoldKey, void) = .empty,
+    contacts_prev: AutoHashMapUnmanaged(ManifoldKey, void) = .empty,
+    contacts_curr: AutoHashMapUnmanaged(ManifoldKey, void) = .empty,
 
-    pub fn init(gpa: std.mem.Allocator, capacity: u32) !World {
+    /// Pack a raw body index into its generation-checked handle. For the few internal builders that
+    /// work in raw indices but call the public, handle-taking joint constructors.
+    fn handleOf(world: *const World, idx: BodyIndex) BodyHandle {
+        return BodyHandle.pack(@intCast(idx), world.bodies.cycle[idx]);
+    }
+
+    pub fn init(gpa: Allocator, capacity: u32) !World {
         var bodies: Bodies = try .init(gpa, .{ .capacity = capacity });
         errdefer bodies.deinit(gpa);
 
@@ -8632,7 +8644,7 @@ pub const World = struct {
             .island_awake = island_awake,
             .island_can_sleep = island_can_sleep,
             .allocator = gpa,
-            .scratch_arena = std.heap.ArenaAllocator.init(gpa),
+            .scratch_arena = ArenaAllocator.init(gpa),
             .settings = .{},
             .gravity = vec(0.0, -9.81, 0.0),
             .prev_dt = 0.0,
@@ -8643,7 +8655,7 @@ pub const World = struct {
     /// lists and caches grown while stepping. After this the World is invalid.
     /// Registered vehicles are NOT owned (see addVehicle) - only the list is
     /// freed. Soft bodies have no per-body deinit, so only their list is freed.
-    pub fn deinit(world: *World, gpa: std.mem.Allocator) void {
+    pub fn deinit(world: *World, gpa: Allocator) void {
         world.scratch_arena.deinit();
         world.bodies.deinit(gpa);
         gpa.free(world.motion);
@@ -8846,7 +8858,7 @@ pub const World = struct {
         purgeCacheMap(ManifoldKey, void, &world.contacts_curr, world.allocator, idx);
 
         // 5. Free the ECS slot (bumps the generation -> stale handles deref to null).
-        const handle: BodyHandle = BodyHandle.pack(@intCast(idx), world.bodies.cycle[idx]);
+        const handle: BodyHandle = .pack(@intCast(idx), world.bodies.cycle[idx]);
         _ = handle.destroy(&world.bodies);
         return true;
     }
@@ -8856,7 +8868,7 @@ pub const World = struct {
 
     /// Wake a sleeping body: put it back in the active set and reset its sleep test.
     /// No-op for an already-awake body or a static one.
-    pub fn wakeBody(world: *World, gpa: std.mem.Allocator, idx: BodyIndex) !void {
+    pub fn wakeBody(world: *World, gpa: Allocator, idx: BodyIndex) !void {
         const body: *Body = &world.bodies.data[idx];
         if (body.motion_type == .static or !body.asleep) {
             return;
@@ -8867,7 +8879,7 @@ pub const World = struct {
         resetSleepSpheres(&world.motion[idx], sleepTestPoints(body.com_pos, body.rot, shape));
     }
 
-    pub fn activateBody(world: *World, gpa: std.mem.Allocator, idx: BodyIndex) !void {
+    pub fn activateBody(world: *World, gpa: Allocator, idx: BodyIndex) !void {
         try world.wakeBody(gpa, idx);
     }
 
@@ -8879,7 +8891,7 @@ pub const World = struct {
     }
     pub fn setLinearVelocity(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         body: BodyHandle,
         v: Vec,
     ) !void {
@@ -8889,7 +8901,7 @@ pub const World = struct {
     }
     pub fn setAngularVelocity(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         body: BodyHandle,
         v: Vec,
     ) !void {
@@ -8906,7 +8918,7 @@ pub const World = struct {
     /// every step with the new target.
     pub fn moveKinematic(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         target_position: Vec,
         target_rotation: Quat,
@@ -8918,8 +8930,8 @@ pub const World = struct {
         const new_com: Vec = target_position + rotate(target_rotation, shapeCenterOfMass(shape));
         const delta_pos: Vec = new_com - com_pos;
         const delta_rot: Quat = qmul(conjugate(rot), target_rotation);
-        try world.setLinearVelocity(gpa, handleOf(world, idx), delta_pos * splat(1.0 / dt));
-        try world.setAngularVelocity(gpa, handleOf(world, idx), quatGetAngularVelocity(delta_rot, dt));
+        try world.setLinearVelocity(gpa, world.handleOf(idx), delta_pos * splat(1.0 / dt));
+        try world.setAngularVelocity(gpa, world.handleOf(idx), quatGetAngularVelocity(delta_rot, dt));
     }
 
     /// Change a body's motion type at runtime (Jolt's BodyInterface::SetMotionType). Switching
@@ -8932,7 +8944,7 @@ pub const World = struct {
     /// (animation-driven) and dynamic (physics) at runtime.
     pub fn setMotionType(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         new_type: MotionType,
         activate: bool,
@@ -9014,7 +9026,7 @@ pub const World = struct {
 
     pub fn addForce(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         force: Vec,
     ) !void {
@@ -9023,7 +9035,7 @@ pub const World = struct {
     }
     pub fn addForceAtPosition(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         force: Vec,
         world_pos: Vec,
@@ -9035,7 +9047,7 @@ pub const World = struct {
     }
     pub fn addTorque(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         torque: Vec,
     ) !void {
@@ -9045,7 +9057,7 @@ pub const World = struct {
 
     pub fn addImpulse(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         impulse: Vec,
     ) !void {
@@ -9056,7 +9068,7 @@ pub const World = struct {
     }
     pub fn addImpulseAtPosition(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         impulse: Vec,
         world_pos: Vec,
@@ -9072,7 +9084,7 @@ pub const World = struct {
     }
     pub fn addAngularImpulse(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         angular_impulse: Vec,
     ) !void {
@@ -9089,7 +9101,7 @@ pub const World = struct {
     /// mistaken for motion.
     pub fn setTransform(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         idx: BodyIndex,
         position: Vec,
         rotation: Quat,
@@ -9474,7 +9486,7 @@ pub const Skeleton = struct {
 /// decomposition); the result is rebuilt in this World's principal form (a diagonal plus the
 /// existing rotation), so no separate eigen-decomposition is needed.
 pub fn stabilizeRagdoll(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     shapes: *const ShapeStore,
     skeleton: Skeleton,
     parts: []RagdollPart,
@@ -9728,7 +9740,7 @@ pub const Ragdoll = struct {
     constraint_of: []i32, // world.constraints index of each part's parent joint, or -1
     first_constraint: usize, // index in world.constraints of this ragdoll's first joint
     constraint_count: usize, // number of joints this ragdoll added (contiguous from first)
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 
     /// Create all the bodies and joints for `settings` in `world`. Bodies are placed at
     /// their BodyDef transforms (the bind pose); each joint then reads those transforms to
@@ -9738,7 +9750,7 @@ pub const Ragdoll = struct {
     /// allocation is released.
     pub fn instantiate(
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         settings: RagdollSettings,
     ) !Ragdoll {
         const part_count: usize = settings.parts.len;
@@ -9769,8 +9781,8 @@ pub const Ragdoll = struct {
                     constraint_of[i] = @intCast(world.constraints.items.len);
                     try createSwingTwistJoint(
                         world,
-                        handleOf(world, parent_idx),
-                        handleOf(world, body_indices[i]),
+                        world.handleOf(parent_idx),
+                        world.handleOf(body_indices[i]),
                         spec,
                     );
                     added += 1;
@@ -9786,8 +9798,8 @@ pub const Ragdoll = struct {
             if (ac.part_a >= part_count or ac.part_b >= part_count) {
                 continue;
             }
-            const a: BodyHandle = handleOf(world, body_indices[ac.part_a]);
-            const b: BodyHandle = handleOf(world, body_indices[ac.part_b]);
+            const a: BodyHandle = world.handleOf(body_indices[ac.part_a]);
+            const b: BodyHandle = world.handleOf(body_indices[ac.part_b]);
             switch (ac.constraint) {
                 .point => |anchor| try createPointJoint(world, a, b, anchor),
                 .fixed => try createWeldJoint(world, a, b),
@@ -9831,7 +9843,7 @@ pub const Ragdoll = struct {
     pub fn setPose(
         self: *const Ragdoll,
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         transforms: []const BoneTransform,
     ) !void {
         const n: usize = @min(self.body_indices.len, transforms.len);
@@ -9939,7 +9951,7 @@ pub const Ragdoll = struct {
     pub fn driveToPoseUsingKinematics(
         self: *const Ragdoll,
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         pose: []const BoneTransform,
         dt: f32,
     ) !void {
@@ -9954,14 +9966,14 @@ pub const Ragdoll = struct {
     pub fn setLinearAndAngularVelocity(
         self: *const Ragdoll,
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         linear: Vec,
         angular: Vec,
     ) !void {
         var i: usize = 0;
         while (i < self.body_indices.len) : (i += 1) {
-            try world.setLinearVelocity(gpa, handleOf(world, self.body_indices[i]), linear);
-            try world.setAngularVelocity(gpa, handleOf(world, self.body_indices[i]), angular);
+            try world.setLinearVelocity(gpa, world.handleOf(self.body_indices[i]), linear);
+            try world.setAngularVelocity(gpa, world.handleOf(self.body_indices[i]), angular);
         }
     }
 
@@ -9969,7 +9981,7 @@ pub const Ragdoll = struct {
     pub fn addImpulse(
         self: *const Ragdoll,
         world: *World,
-        gpa: std.mem.Allocator,
+        gpa: Allocator,
         impulse: Vec,
     ) !void {
         var i: usize = 0;
@@ -9979,7 +9991,7 @@ pub const Ragdoll = struct {
     }
 
     /// Wake every body in the ragdoll.
-    pub fn activate(self: *const Ragdoll, world: *World, gpa: std.mem.Allocator) !void {
+    pub fn activate(self: *const Ragdoll, world: *World, gpa: Allocator) !void {
         var i: usize = 0;
         while (i < self.body_indices.len) : (i += 1) {
             try world.activateBody(gpa, self.body_indices[i]);
@@ -9996,20 +10008,18 @@ pub const Ragdoll = struct {
 };
 
 // =============================================================================
-// The world.
-// =============================================================================
-
-// =============================================================================
 // Constraint atoms. AxisPart is Jolt's AxisConstraintPart (1-DOF, linear+angular):
 // it backs the contact normal, the two linear friction directions, and (later) the
 // joints. AngularPart is Jolt's AngularFrictionConstraintPart (angular-only): it
 // backs torsional friction. Statics carry inv_mass 0 and zero cached inertia terms,
 // so they absorb impulses with zero motion and no branch on motion type.
 // =============================================================================
+
 // it backs the contact normal, the two linear friction directions, and (later) the
 // joints. AngularPart is Jolt's AngularFrictionConstraintPart (angular-only): it
 // backs torsional friction. Statics carry inv_mass 0 and zero cached inertia terms,
 // so they absorb impulses with zero motion and no branch on motion type.
+
 // =============================================================================
 
 /// Angular-only (torsional) friction about the contact normal. Jolt's
@@ -11529,6 +11539,15 @@ fn segmentSegmentClosest(p0: Vec, p1: Vec, q0: Vec, q1: Vec) SegmentPair {
     return .{ .s = s, .t = t };
 }
 
+/// Any unit vector perpendicular to `v`.
+fn perpendicularTo(v: Vec) Vec {
+    // Cross with whichever axis `v` is least aligned to, so the result never degenerates.
+    const helper: Vec = if (@abs(v[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
+    const out: Vec = cross(v, helper);
+    const len: f32 = length3(out);
+    return if (len > 1.0e-9) out / splat(len) else vec(0, 1, 0);
+}
+
 /// Capsule against capsule, analytically - the second pair a humanoid makes constantly.
 ///
 /// -- * WHY THIS PAIR NEEDS ITS OWN ROUTINE --
@@ -11605,15 +11624,6 @@ fn collideCapsuleCapsule(
         .feature_id = 0,
     };
     return m;
-}
-
-/// Any unit vector perpendicular to `v`.
-fn perpendicularTo(v: Vec) Vec {
-    // Cross with whichever axis `v` is least aligned to, so the result never degenerates.
-    const helper: Vec = if (@abs(v[0]) < 0.9) vec(1, 0, 0) else vec(0, 1, 0);
-    const out: Vec = cross(v, helper);
-    const len: f32 = length3(out);
-    return if (len > 1.0e-9) out / splat(len) else vec(0, 1, 0);
 }
 
 fn collideConvexGeneric(
@@ -11847,8 +11857,8 @@ fn collidePlaneLeaf(
     convex_rot: Quat,
     plane_is_a: bool,
     speculative_distance: f32,
-    out: *std.ArrayListUnmanaged(SubCollision),
-    scratch: std.mem.Allocator,
+    out: *ArrayListUnmanaged(SubCollision),
+    scratch: Allocator,
 ) !void {
     const n: Vec = rotate(plane_rot, plane.normal); // world outward plane normal
     const world_point: Vec = plane_pos + rotate(plane_rot, plane.normal * splat(-plane.distance));
@@ -11943,8 +11953,8 @@ fn collideMeshLeaf(
     mesh_is_a: bool,
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *std.ArrayListUnmanaged(SubCollision),
-    scratch: std.mem.Allocator,
+    out: *ArrayListUnmanaged(SubCollision),
+    scratch: Allocator,
 ) !void {
     const other_local: Aabb = shapeLocalBounds(other);
     const other_world: Aabb = transformAabb(other_local, other_pos, other_rot).expandedBy(
@@ -11952,7 +11962,7 @@ fn collideMeshLeaf(
     );
     const query_local: Aabb = transformAabbInverse(other_world, mesh_pos, mesh_rot);
 
-    var tris: std.ArrayListUnmanaged(u32) = .empty;
+    var tris: ArrayListUnmanaged(u32) = .empty;
     defer tris.deinit(scratch);
     try queryMeshBvh(mesh, query_local, &tris, scratch);
 
@@ -12031,8 +12041,8 @@ fn collideTriangleLeaf(
     active_edges: u8, // bit e set => edge e is active; inactive seams snap to face_normal
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *std.ArrayListUnmanaged(SubCollision),
-    scratch: std.mem.Allocator,
+    out: *ArrayListUnmanaged(SubCollision),
+    scratch: Allocator,
 ) !void {
     const tri_shape: Shape = .{ .triangle = .{ .v0 = v0, .v1 = v1, .v2 = v2 } };
     const maybe: ?Manifold = if (field_is_a)
@@ -12075,8 +12085,8 @@ fn collideHeightFieldLeaf(
     hf_is_a: bool,
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *std.ArrayListUnmanaged(SubCollision),
-    scratch: std.mem.Allocator,
+    out: *ArrayListUnmanaged(SubCollision),
+    scratch: Allocator,
 ) !void {
     const other_local: Aabb = shapeLocalBounds(other);
     const other_world: Aabb = transformAabb(other_local, other_pos, other_rot).expandedBy(
@@ -12163,8 +12173,8 @@ fn collideShapes(
     rot_b: Quat,
     speculative_distance: f32,
     back_face_mode: BackFaceMode,
-    out: *std.ArrayListUnmanaged(SubCollision),
-    scratch: std.mem.Allocator,
+    out: *ArrayListUnmanaged(SubCollision),
+    scratch: Allocator,
 ) !void {
     // Empty shapes never collide.
     if (shape_a.* == .empty or shape_b.* == .empty) {
@@ -12455,10 +12465,6 @@ fn shapeCastCores(
 }
 
 // =============================================================================
-// Broad phase: a dynamic AABB tree. SKETCH of the interface; internals next pass.
-// =============================================================================
-
-// =============================================================================
 // Warm-start cache: last frame's accumulated impulses keyed by body pair + feature.
 // Per manifold we cache the friction triple; per point the normal impulse. A plain
 // double-buffered hash map (no lock-free machinery - single threaded). SKETCHED.
@@ -12542,7 +12548,7 @@ pub fn castRayClosest(
     filter: QueryFilter,
 ) ?RayHit {
     const bp: *const BroadPhase = &world.broadphase;
-    if (bp.root == BroadPhase.NULL_NODE) {
+    if (bp.root == BroadPhase.null_node) {
         return null;
     }
     const dir_len: f32 = length3(direction);
@@ -12558,7 +12564,7 @@ pub fn castRayClosest(
     var stack: BvhStack = .{};
     stack.push(bp.root);
     while (stack.pop()) |node_index| {
-        if (node_index == BroadPhase.NULL_NODE) {
+        if (node_index == BroadPhase.null_node) {
             continue;
         }
         const node: *const BroadPhase.Node = &bp.nodes.items[node_index];
@@ -12595,12 +12601,12 @@ pub fn castRayClosest(
 /// Append every body whose fat AABB overlaps `box` and passes the filter.
 pub fn overlapAabb(
     world: *const World,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
     box: Aabb,
-    out: *std.ArrayListUnmanaged(BodyIndex),
+    out: *ArrayListUnmanaged(BodyIndex),
     filter: QueryFilter,
 ) !void {
-    var candidates: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, box, &candidates);
     for (candidates.items) |idx| {
@@ -12614,19 +12620,19 @@ pub fn overlapAabb(
 /// Append every body that actually contains `point` (exact per-shape test).
 pub fn overlapPoint(
     world: *const World,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
     point: Vec,
-    out: *std.ArrayListUnmanaged(BodyIndex),
+    out: *ArrayListUnmanaged(BodyIndex),
     filter: QueryFilter,
 ) !void {
     const bp: *const BroadPhase = &world.broadphase;
-    if (bp.root == BroadPhase.NULL_NODE) {
+    if (bp.root == BroadPhase.null_node) {
         return;
     }
     var stack: BvhStack = .{};
     stack.push(bp.root);
     while (stack.pop()) |node_index| {
-        if (node_index == BroadPhase.NULL_NODE) {
+        if (node_index == BroadPhase.null_node) {
             continue;
         }
         const node: *const BroadPhase.Node = &bp.nodes.items[node_index];
@@ -12653,16 +12659,16 @@ pub fn overlapPoint(
 /// Append every body whose shape actually overlaps the given shape at the given pose.
 pub fn overlapShape(
     world: *const World,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
     shape: *const Shape,
     pos: Vec,
     rot: Quat,
-    out: *std.ArrayListUnmanaged(BodyIndex),
+    out: *ArrayListUnmanaged(BodyIndex),
     filter: QueryFilter,
 ) !void {
     const local_bounds: Aabb = shapeLocalBounds(shape);
     const world_bounds: Aabb = transformAabb(local_bounds, pos, rot);
-    var candidates: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, world_bounds, &candidates);
     for (candidates.items) |idx| {
@@ -12704,7 +12710,7 @@ fn castConvexVsMesh(
     r1: f32,
     tolerance: f32,
     back_face_mode: BackFaceMode,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !?CastContact {
     const a_local: Aabb = shapeLocalBounds(shape_a);
     const start: Aabb = transformAabb(a_local, pos_a, rot_a);
@@ -12712,7 +12718,7 @@ fn castConvexVsMesh(
     const swept_world: Aabb = start.combine(end).expandedBy(tolerance + r1);
     const query_local: Aabb = transformAabbInverse(swept_world, mesh_pos, mesh_rot);
 
-    var tris: std.ArrayListUnmanaged(u32) = .empty;
+    var tris: ArrayListUnmanaged(u32) = .empty;
     defer tris.deinit(scratch);
     try queryMeshBvh(mesh, query_local, &tris, scratch);
 
@@ -12926,7 +12932,7 @@ fn castConvexVsShape(
     r1: f32,
     tolerance: f32,
     back_face_mode: BackFaceMode,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !?CastContact {
     const resolved: ResolvedShape = resolveDecorated(store, shape_b, pos_b, rot_b);
     const sb: *const Shape = resolved.shape;
@@ -13033,7 +13039,7 @@ fn castConvexVsShape(
 /// nearest body it would first touch, or null. Reuses the CCD shape cast.
 pub fn castShapeClosest(
     world: *const World,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
     shape: *const Shape,
     pos: Vec,
     rot: Quat,
@@ -13055,7 +13061,7 @@ pub fn castShapeClosest(
     };
     const swept: Aabb = start_bounds.combine(end_bounds).expandedBy(world.settings.speculative_distance);
 
-    var candidates: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, swept, &candidates);
 
@@ -13213,7 +13219,7 @@ pub const CharacterContactListener = struct {
         // This listener's callbacks take *CharacterVirtual, while CharacterVirtual
         // holds a *CharacterContactListener (its `listener` field) - a character
         // <-> listener cycle that no declaration order can resolve.
-        // lint:off decl-order: CharacterVirtual<->CharacterContactListener cycle
+        // lint:off decl-order: the listener's callbacks receive the CharacterVirtual that owns it - a cycle
         *const CharacterVirtual,
         *const CharacterContact,
     ) bool = null,
@@ -13291,10 +13297,10 @@ pub const CharacterVirtual = struct {
     ground_velocity: Vec = vec_zero,
     ground_material: u16 = 0, // opaque surface id of the ground contact (Jolt's GetGroundMaterial)
     last_dt: f32 = 0.0,
-    active_contacts: std.ArrayListUnmanaged(CharacterContact) = .empty,
-    contact_keys_prev: std.ArrayListUnmanaged(CharContactKey) = .empty,
+    active_contacts: ArrayListUnmanaged(CharacterContact) = .empty,
+    contact_keys_prev: ArrayListUnmanaged(CharContactKey) = .empty,
 
-    pub fn deinit(char: *CharacterVirtual, gpa: std.mem.Allocator) void {
+    pub fn deinit(char: *CharacterVirtual, gpa: Allocator) void {
         char.active_contacts.deinit(gpa);
         char.contact_keys_prev.deinit(gpa);
     }
@@ -13342,6 +13348,7 @@ fn cvShapePos(char: *const CharacterVirtual, pos: Vec) Vec {
 /// Velocity of body `bi` (linear, angular), zero for static/kinematic-without-motion, with the
 /// optional listener override. Mirrors Jolt's GetAdjustedBodyVelocity.
 const CvBodyVel = struct { lin: Vec, ang: Vec };
+
 fn cvAdjustedBodyVelocity(
     world: *const World,
     char: *const CharacterVirtual,
@@ -13386,8 +13393,8 @@ fn cvCharacterGroundVelocity(
 /// (Jolt ContactCollector::AddHit hit reduction).
 fn cvAddOrReduceHit(
     char: *const CharacterVirtual,
-    gpa: std.mem.Allocator,
-    out: *std.ArrayListUnmanaged(CharacterContact),
+    gpa: Allocator,
+    out: *ArrayListUnmanaged(CharacterContact),
     hit: CharacterContact,
 ) !void {
     if (out.items.len >= char.max_num_hits and char.hit_reduction_cos_max_angle > -1.0) {
@@ -13435,8 +13442,8 @@ fn cvGetContactsAtPosition(
     world: *const World,
     char: *const CharacterVirtual,
     pos: Vec,
-    scratch: std.mem.Allocator,
-    out: *std.ArrayListUnmanaged(CharacterContact),
+    scratch: Allocator,
+    out: *ArrayListUnmanaged(CharacterContact),
 ) !void {
     out.clearRetainingCapacity();
     const shape: *const Shape = world.shapes.get(char.shape);
@@ -13445,10 +13452,10 @@ fn cvGetContactsAtPosition(
     const query_bounds: Aabb =
         transformAabb(shapeLocalBounds(shape), shape_pos, char.rotation).expandedBy(margin);
 
-    var nearby: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var nearby: ArrayListUnmanaged(BodyIndex) = .empty;
     defer nearby.deinit(scratch);
     try world.broadphase.queryAabb(scratch, query_bounds, &nearby);
-    var subs: std.ArrayListUnmanaged(SubCollision) = .empty;
+    var subs: ArrayListUnmanaged(SubCollision) = .empty;
     defer subs.deinit(scratch);
 
     for (nearby.items) |bi| {
@@ -13503,7 +13510,7 @@ fn cvGetContactsAtPosition(
 
     // Sort for determinism (broadphase order is not stable), then pull distances back by the
     // padding so the character keeps a small skin off the geometry (Jolt GetContactsAtPosition).
-    std.mem.sort(CharacterContact, out.items, {}, cvContactLess);
+    sortSlice(CharacterContact, out.items, {}, cvContactLess);
     for (out.items) |*c| {
         c.distance -= char.character_padding;
     }
@@ -13514,9 +13521,9 @@ fn cvGetContactsAtPosition(
 /// go to `ignored` so the sweep skips them too.
 fn cvRemoveConflictingContacts(
     char: *const CharacterVirtual,
-    scratch: std.mem.Allocator,
-    contacts: *std.ArrayListUnmanaged(CharacterContact),
-    ignored: *std.ArrayListUnmanaged(CharContactKey),
+    scratch: Allocator,
+    contacts: *ArrayListUnmanaged(CharacterContact),
+    ignored: *ArrayListUnmanaged(CharContactKey),
 ) !void {
     const min_pen: f32 = 1.25 * char.character_padding;
     var c1: usize = 0;
@@ -13582,10 +13589,10 @@ fn cvContactSettings(
 /// slopes so the character cannot ride up them.
 fn cvDetermineConstraints(
     char: *const CharacterVirtual,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
     contacts: []CharacterContact,
     dt: f32,
-    out: *std.ArrayListUnmanaged(CharConstraint),
+    out: *ArrayListUnmanaged(CharConstraint),
 ) !void {
     var ci: usize = 0;
     while (ci < contacts.len) : (ci += 1) {
@@ -13630,7 +13637,7 @@ fn cvDetermineConstraints(
 fn cvHandleContact(
     world: *World,
     char: *const CharacterVirtual,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     velocity: Vec,
     constraint: *const CharConstraint,
     contacts: []CharacterContact,
@@ -13715,14 +13722,14 @@ fn cvConstraintLess(ctx: CvSortCtx, lhs_idx: usize, rhs_idx: usize) bool {
 fn cvSolveConstraints(
     world: *World,
     char: *const CharacterVirtual,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     in_velocity: Vec,
     dt: f32,
     in_time_remaining: f32,
     constraints: []CharConstraint,
     contacts: []CharacterContact,
-    ignored: *std.ArrayListUnmanaged(CharContactKey),
-    scratch: std.mem.Allocator,
+    ignored: *ArrayListUnmanaged(CharContactKey),
+    scratch: Allocator,
 ) !CvSolveResult {
     var time_remaining: f32 = in_time_remaining;
     if (constraints.len == 0) {
@@ -13762,7 +13769,7 @@ fn cvSolveConstraints(
         }
 
         const sort_ctx: CvSortCtx = .{ .constraints = constraints, .contacts = contacts };
-        std.mem.sort(usize, sorted, sort_ctx, cvConstraintLess);
+        sortSlice(usize, sorted, sort_ctx, cvConstraintLess);
 
         // Find the first constraint we will actually collide with.
         var chosen: ?usize = null;
@@ -13920,7 +13927,7 @@ fn cvSolveConstraints(
 fn cvGetFirstContactForSweep(
     world: *const World,
     char: *const CharacterVirtual,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
     pos: Vec,
     displacement: Vec,
     ignored: []const CharContactKey,
@@ -13943,7 +13950,7 @@ fn cvGetFirstContactForSweep(
     const sweep_margin: f32 = char.character_padding + char.collision_tolerance;
     const swept: Aabb = start_bounds.combine(end_bounds).expandedBy(sweep_margin);
 
-    var candidates: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var candidates: ArrayListUnmanaged(BodyIndex) = .empty;
     defer candidates.deinit(scratch);
     try world.broadphase.queryAabb(scratch, swept, &candidates);
 
@@ -14042,18 +14049,18 @@ fn cvGetFirstContactForSweep(
 fn cvMoveShape(
     world: *World,
     char: *CharacterVirtual,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     pos: *Vec,
     in_velocity: Vec,
     dt: f32,
     store_active: bool,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
-    var contacts: std.ArrayListUnmanaged(CharacterContact) = .empty;
+    var contacts: ArrayListUnmanaged(CharacterContact) = .empty;
     defer contacts.deinit(scratch);
-    var ignored: std.ArrayListUnmanaged(CharContactKey) = .empty;
+    var ignored: ArrayListUnmanaged(CharContactKey) = .empty;
     defer ignored.deinit(scratch);
-    var constraints: std.ArrayListUnmanaged(CharConstraint) = .empty;
+    var constraints: ArrayListUnmanaged(CharConstraint) = .empty;
     defer constraints.deinit(scratch);
 
     var time_remaining: f32 = dt;
@@ -14103,6 +14110,7 @@ fn cvMoveShape(
         }
     }
 }
+
 /// Jolt UpdateSupportingContact: classify what we are standing on from the active contacts.
 /// Marks newly-touching contacts, applies the supporting-volume cull, averages the ground
 /// normal/velocity, and decides OnGround / OnSteepGround / NotSupported / InAir - including the
@@ -14111,7 +14119,7 @@ fn cvUpdateSupportingContact(
     world: *World,
     char: *CharacterVirtual,
     skip_contact_velocity_check: bool,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     // Flag contacts as colliding if close enough and we're not moving away from them.
     for (char.active_contacts.items) |*c| {
@@ -14225,13 +14233,13 @@ fn cvUpdateSupportingContact(
         } else {
             // We may be wedged between sliding contacts so that we cannot slide off: solve a
             // straight-down move and if it barely moves, treat us as supported.
-            var wedge_contacts: std.ArrayListUnmanaged(CharacterContact) = .empty;
+            var wedge_contacts: ArrayListUnmanaged(CharacterContact) = .empty;
             defer wedge_contacts.deinit(scratch);
             try wedge_contacts.appendSlice(scratch, char.active_contacts.items);
-            var constraints: std.ArrayListUnmanaged(CharConstraint) = .empty;
+            var constraints: ArrayListUnmanaged(CharConstraint) = .empty;
             defer constraints.deinit(scratch);
             try cvDetermineConstraints(char, scratch, wedge_contacts.items, char.last_dt, &constraints);
-            var ignored: std.ArrayListUnmanaged(CharContactKey) = .empty;
+            var ignored: ArrayListUnmanaged(CharContactKey) = .empty;
             defer ignored.deinit(scratch);
             const solve: CvSolveResult = try cvSolveConstraints(
                 world,
@@ -14275,10 +14283,10 @@ fn cvMoveToContact(
     char: *CharacterVirtual,
     pos: Vec,
     contact: CharacterContact,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     char.position = pos;
-    var contacts: std.ArrayListUnmanaged(CharacterContact) = .empty;
+    var contacts: ArrayListUnmanaged(CharacterContact) = .empty;
     defer contacts.deinit(scratch);
     try cvGetContactsAtPosition(world, char, pos, scratch, &contacts);
 
@@ -14303,10 +14311,10 @@ fn cvMoveToContact(
 /// the persistent key set. (on_contact_added doubles as the settings fetch during the solve.)
 fn cvFireContactEvents(
     char: *CharacterVirtual,
-    gpa: std.mem.Allocator,
-    scratch: std.mem.Allocator,
+    gpa: Allocator,
+    scratch: Allocator,
 ) !void {
-    var current: std.ArrayListUnmanaged(CharContactKey) = .empty;
+    var current: ArrayListUnmanaged(CharContactKey) = .empty;
     defer current.deinit(scratch);
     for (char.active_contacts.items) |c| {
         if (!c.had_collision or c.was_discarded) {
@@ -14352,7 +14360,7 @@ fn cvUpdateImpl(
     char: *CharacterVirtual,
     dt: f32,
     gravity: Vec,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     if (dt <= 0.0) {
         return;
@@ -14393,7 +14401,7 @@ pub fn characterUpdate(
     char: *CharacterVirtual,
     dt: f32,
     gravity: Vec,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     try cvUpdateImpl(world, char, dt, gravity, scratch);
     try cvFireContactEvents(char, world.allocator, scratch);
@@ -14446,7 +14454,7 @@ fn cvStickToFloor(
     world: *World,
     char: *CharacterVirtual,
     step_down: Vec,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !bool {
     const ignored: [0]CharContactKey = .{};
     const maybe_floor: ?CharacterContact =
@@ -14473,7 +14481,7 @@ fn cvWalkStairs(
     step_forward: Vec,
     step_forward_test: Vec,
     step_down_extra: Vec,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !bool {
     const ignored: [0]CharContactKey = .{};
 
@@ -14491,7 +14499,7 @@ fn cvWalkStairs(
     const character_velocity: Vec = step_forward / splat(dt);
     const cv_up: f32 = dot3(character_velocity, char.up);
     const horizontal_velocity: Vec = character_velocity - char.up * splat(cv_up);
-    var steep_normals: std.ArrayListUnmanaged(Vec) = .empty;
+    var steep_normals: ArrayListUnmanaged(Vec) = .empty;
     defer steep_normals.deinit(scratch);
     for (char.active_contacts.items) |c| {
         if (c.had_collision and !c.was_discarded and
@@ -14586,7 +14594,7 @@ pub fn characterExtendedUpdate(
     dt: f32,
     gravity: Vec,
     settings: ExtendedUpdateSettings,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     const desired_velocity: Vec = char.linear_velocity;
     char.linear_velocity = cvCancelVelocityTowardsSteepSlopes(char, desired_velocity);
@@ -14723,7 +14731,7 @@ pub fn characterPostSimulation(
     world: *World,
     char: *Character,
     max_separation_distance: f32,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     const body: *const Body = &world.bodies.data[char.body];
     const char_pos: Vec = body.com_pos;
@@ -14733,9 +14741,9 @@ pub fn characterPostSimulation(
     const margin: f32 = max_separation_distance + char.predictive_distance;
     const query_bounds: Aabb = transformAabb(shapeLocalBounds(shape), char_pos, char_rot).expandedBy(margin);
 
-    var nearby: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var nearby: ArrayListUnmanaged(BodyIndex) = .empty;
     try world.broadphase.queryAabb(scratch, query_bounds, &nearby);
-    var subs: std.ArrayListUnmanaged(SubCollision) = .empty;
+    var subs: ArrayListUnmanaged(SubCollision) = .empty;
 
     var best_dot: f32 = -2.0;
     var found: bool = false;
@@ -14834,17 +14842,17 @@ pub fn characterPostSimulation(
 /// body velocity API; you can equally set `world.motion[char.body].lin_vel` yourself.
 pub fn characterSetLinearVelocity(
     world: *World,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     char: *const Character,
     v: Vec,
 ) !void {
-    try world.setLinearVelocity(gpa, handleOf(world, char.body), v);
+    try world.setLinearVelocity(gpa, world.handleOf(char.body), v);
 }
 
 /// Add an impulse to the character body (Jolt's Character::AddImpulse): dv = impulse * invMass.
 pub fn characterAddImpulse(
     world: *World,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     char: *const Character,
     impulse: Vec,
 ) !void {
@@ -16524,8 +16532,8 @@ fn solveConstraintPosition(world: *World, c: *Constraint, baumgarte: f32) void {
 /// original single-contact path exactly. Reads POST-gravity, PRE-warm-start velocities.
 fn setupContactFromManifold(
     world: *World,
-    contacts: *std.ArrayListUnmanaged(Contact),
-    scratch: std.mem.Allocator,
+    contacts: *ArrayListUnmanaged(Contact),
+    scratch: Allocator,
     a: BodyIndex,
     b: BodyIndex,
     body_a: *const Body,
@@ -16703,7 +16711,7 @@ fn softBodyBendAngle(
 /// each edge's rest length and each tetrahedron's rest volume from the initial vertex positions
 /// (Jolt's CalculateEdgeLengths / CalculateVolumeConstraintVolumes). `faces` may be empty.
 pub fn createSoftBodyShared(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     vertices: []const SoftVertexDef,
     edges: []const SoftEdge,
     bends: []const SoftDihedralBend,
@@ -16759,16 +16767,16 @@ pub fn createSoftBodyShared(
 /// the first row (z = 0) is pinned (inv_mass 0) so the cloth hangs. The caller owns the returned
 /// asset's arrays via `gpa`.
 pub fn createClothGrid(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     cols: u32,
     rows: u32,
     spacing: f32,
     compliance: f32,
     pin_top_row: bool,
 ) !SoftBodyShared {
-    var verts: std.ArrayListUnmanaged(SoftVertexDef) = .empty;
-    var edges: std.ArrayListUnmanaged(SoftEdge) = .empty;
-    var faces: std.ArrayListUnmanaged(SoftFace) = .empty;
+    var verts: ArrayListUnmanaged(SoftVertexDef) = .empty;
+    var edges: ArrayListUnmanaged(SoftEdge) = .empty;
+    var faces: ArrayListUnmanaged(SoftFace) = .empty;
     defer verts.deinit(gpa);
     defer edges.deinit(gpa);
     defer faces.deinit(gpa);
@@ -16870,13 +16878,13 @@ pub const SoftMeshOptions = struct {
 /// dihedral). This is the practical way to turn a mesh into cloth without listing constraints by
 /// hand. Edges touching only pinned vertices are skipped. The caller owns the result via gpa.
 pub fn createSoftBodyFromMesh(
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     vertices: []const SoftVertexDef,
     faces: []const SoftFace,
     opts: SoftMeshOptions,
 ) !SoftBodyShared {
     const EdgeHelper = struct { v: [2]u32, edge_idx: u32 };
-    var edges: std.ArrayListUnmanaged(EdgeHelper) = .empty;
+    var edges: ArrayListUnmanaged(EdgeHelper) = .empty;
     defer edges.deinit(gpa);
     for (faces, 0..) |f, fi| {
         var i: u32 = 0;
@@ -16894,13 +16902,13 @@ pub fn createSoftBodyFromMesh(
             return x.v[0] < y.v[0] or (x.v[0] == y.v[0] and x.v[1] < y.v[1]);
         }
     }.lt;
-    std.mem.sort(EdgeHelper, edges.items, {}, lessThan);
+    sortSlice(EdgeHelper, edges.items, {}, lessThan);
 
     const addEdge = struct {
         fn add(
-            g: std.mem.Allocator,
+            g: Allocator,
             verts: []const SoftVertexDef,
-            list: *std.ArrayListUnmanaged(SoftEdge),
+            list: *ArrayListUnmanaged(SoftEdge),
             a: u32,
             b: u32,
             comp: f32,
@@ -16911,8 +16919,8 @@ pub fn createSoftBodyFromMesh(
         }
     }.add;
 
-    var out_edges: std.ArrayListUnmanaged(SoftEdge) = .empty;
-    var out_bends: std.ArrayListUnmanaged(SoftDihedralBend) = .empty;
+    var out_edges: ArrayListUnmanaged(SoftEdge) = .empty;
+    var out_bends: ArrayListUnmanaged(SoftDihedralBend) = .empty;
     defer out_edges.deinit(gpa);
     defer out_bends.deinit(gpa);
 
@@ -17010,7 +17018,7 @@ pub fn createSoftBodyFromMesh(
 /// rotated by `rotation` (baked into the particle positions). Returns its index in world.soft_bodies.
 pub fn addSoftBody(
     world: *World,
-    gpa: std.mem.Allocator,
+    gpa: Allocator,
     shared: *const SoftBodyShared,
     com_pos: Vec,
     rotation: Quat,
@@ -17079,8 +17087,8 @@ fn collectSoftLeaves(
     pos: Vec,
     rot: Quat,
     body_idx: u32,
-    scratch: std.mem.Allocator,
-    leaves: *std.ArrayListUnmanaged(SoftLeaf),
+    scratch: Allocator,
+    leaves: *ArrayListUnmanaged(SoftLeaf),
 ) !bool {
     const r: ResolvedShape = resolveDecorated(store, shape, pos, rot);
     switch (r.shape.*) {
@@ -17113,9 +17121,9 @@ fn softBodyDetermineCollidingShapes(
     world: *World,
     sb: *const SoftBody,
     dt: f32,
-    scratch: std.mem.Allocator,
-    bodies: *std.ArrayListUnmanaged(SoftCollidingBody),
-    leaves: *std.ArrayListUnmanaged(SoftLeaf),
+    scratch: Allocator,
+    bodies: *ArrayListUnmanaged(SoftCollidingBody),
+    leaves: *ArrayListUnmanaged(SoftLeaf),
 ) !void {
     var box: Aabb = .empty;
     for (sb.vertices) |v| {
@@ -17125,7 +17133,7 @@ fn softBodyDetermineCollidingShapes(
     }
     const query_bounds: Aabb = box.expandedBy(sb.vertex_radius + 0.02);
 
-    var nearby: std.ArrayListUnmanaged(BodyIndex) = .empty;
+    var nearby: ArrayListUnmanaged(BodyIndex) = .empty;
     try world.broadphase.queryAabb(scratch, query_bounds, &nearby);
 
     for (nearby.items) |bi| {
@@ -17684,7 +17692,7 @@ pub fn softBodyUpdate(
     world: *World,
     sb: *SoftBody,
     dt: f32,
-    scratch: std.mem.Allocator,
+    scratch: Allocator,
 ) !void {
     if (!sb.enabled or sb.vertices.len == 0 or sb.num_iterations == 0) {
         return;
@@ -17706,8 +17714,8 @@ pub fn softBodyUpdate(
         v.colliding_body = -1;
         v.has_contact = false;
     }
-    var bodies: std.ArrayListUnmanaged(SoftCollidingBody) = .empty;
-    var leaves: std.ArrayListUnmanaged(SoftLeaf) = .empty;
+    var bodies: ArrayListUnmanaged(SoftCollidingBody) = .empty;
+    var leaves: ArrayListUnmanaged(SoftLeaf) = .empty;
     try softBodyDetermineCollidingShapes(world, sb, dt, scratch, &bodies, &leaves);
     softBodyDetermineCollisionPlanes(sb, leaves.items);
 
@@ -17851,7 +17859,7 @@ pub fn step(world: *World, dt: f32) !void {
     // call is `step(world, dt)` like the 2D engine. Reusing the arena across steps mirrors Jolt's
     // persistent TempAllocator; `scratch` stays a plain Allocator below, so the body is unchanged.
     _ = world.scratch_arena.reset(.retain_capacity);
-    const scratch: std.mem.Allocator = world.scratch_arena.allocator();
+    const scratch: Allocator = world.scratch_arena.allocator();
     const zstep: profiler.Zone = profiler.zoneNamed(@src(), "physics.step");
     defer zstep.end();
 
@@ -17860,7 +17868,7 @@ pub fn step(world: *World, dt: f32) !void {
     const active: []const BodyIndex = world.active.items;
     const warm_start_ratio: f32 = if (world.prev_dt > 0.0) dt / world.prev_dt else 0.0;
 
-    var contacts: std.ArrayListUnmanaged(Contact) = .empty;
+    var contacts: ArrayListUnmanaged(Contact) = .empty;
 
     // -------------------------------------------------------------------------
     // PHASE 1 - bake world-space inverse inertia for active bodies (one mat3 each).
@@ -17925,7 +17933,7 @@ pub fn step(world: *World, dt: f32) !void {
     // -------------------------------------------------------------------------
     // PHASE 3 - refit moved bodies in the broad phase, collect candidate pairs.
     // -------------------------------------------------------------------------
-    var pairs: std.ArrayListUnmanaged(BodyPair) = .empty;
+    var pairs: ArrayListUnmanaged(BodyPair) = .empty;
     {
         const zp3: profiler.Zone = profiler.zoneNamed(@src(), "broadphase");
         defer zp3.end();
@@ -18023,7 +18031,7 @@ pub fn step(world: *World, dt: f32) !void {
         const zp4: profiler.Zone = profiler.zoneNamed(@src(), "narrowphase");
         defer zp4.end();
         // Reused across pairs: the leaf manifolds collideShapes produces for a pair.
-        var submanifolds: std.ArrayListUnmanaged(SubCollision) = .empty;
+        var submanifolds: ArrayListUnmanaged(SubCollision) = .empty;
         for (pairs.items) |pair| {
             const a: BodyIndex = pair.a;
             const b: BodyIndex = pair.b;
@@ -18313,7 +18321,7 @@ pub fn step(world: *World, dt: f32) !void {
     {
         const zp6: profiler.Zone = profiler.zoneNamed(@src(), "integrate");
         defer zp6.end();
-        var ccd_candidates: std.ArrayListUnmanaged(BodyIndex) = .empty;
+        var ccd_candidates: ArrayListUnmanaged(BodyIndex) = .empty;
 
         for (world.active.items) |idx| {
             const body: *Body = &world.bodies.data[idx];
@@ -18619,6 +18627,6 @@ pub fn step(world: *World, dt: f32) !void {
 /// Register a vehicle so the World drives its wheel collision and constraint solve each step
 /// (collide + setup + warm-start + solve, slotted into step's solver phases). The World does
 /// not take ownership: the caller keeps the Vehicle alive and calls its deinit.
-pub fn addVehicle(world: *World, gpa: std.mem.Allocator, v: *Vehicle) !void {
+pub fn addVehicle(world: *World, gpa: Allocator, v: *Vehicle) !void {
     try world.vehicles.append(gpa, v);
 }

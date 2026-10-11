@@ -23,9 +23,11 @@ const expectEqual = std.testing.expectEqual;
 const zm = @import("zm");
 const assertf = zm.assertf;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const testing_allocator = std.testing.allocator;
 
 pub const FrameArena = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: ArenaAllocator,
     /// Bytes requested since the last reset. A forgotten per-frame reset makes
     /// this climb without bound - the tripwire below watches it.
     live_bytes: usize = 0,
@@ -41,7 +43,7 @@ pub const FrameArena = struct {
         label: []const u8,
     ) FrameArena {
         return .{
-            .arena = std.heap.ArenaAllocator.init(child),
+            .arena = ArenaAllocator.init(child),
             .ceiling = ceiling_bytes,
             .label = label,
         };
@@ -54,7 +56,7 @@ pub const FrameArena = struct {
     /// Drop-in for `ArenaAllocator.reset`. Clears the live-byte tally, then
     /// resets the wrapped arena. Keep `.retain_capacity` in the hot path so
     /// wasm memory plateaus at one frame's high-water instead of re-growing.
-    pub fn reset(self: *FrameArena, mode: std.heap.ArenaAllocator.ResetMode) bool {
+    pub fn reset(self: *FrameArena, mode: ArenaAllocator.ResetMode) bool {
         self.live_bytes = 0;
         return self.arena.reset(mode);
     }
@@ -148,7 +150,7 @@ pub const FrameArena = struct {
 };
 
 test "FrameArena resets the tally and stays under ceiling" {
-    var fa: FrameArena = FrameArena.init(std.testing.allocator, 1 << 20, "test");
+    var fa: FrameArena = .init(testing_allocator, 1 << 20, "test");
     defer fa.deinit();
     const a: Allocator = fa.allocator();
     var f: u32 = 0;

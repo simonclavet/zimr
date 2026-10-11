@@ -8,6 +8,7 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const Color = zm.Color;
@@ -22,7 +23,7 @@ const smiley_png = @embedFile("smiley.png");
 const State = struct {
     font: z.Font,
     tex: z.WgpuTexture,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     frame_count: usize = 0,
 };
 
@@ -41,7 +42,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         const px_len: usize = @as(usize, @intCast(img.width)) * @as(usize, @intCast(img.height)) * 4;
         gpa.free(@as([*]u8, @ptrCast(d))[0..px_len]);
     }
-    s.* = .{ .font = font, .tex = tex, .scratch = std.heap.ArenaAllocator.init(gpa) };
+    s.* = .{ .font = font, .tex = tex, .scratch = ArenaAllocator.init(gpa) };
 }
 
 fn update(f: *z.Frame, state: *State) void {

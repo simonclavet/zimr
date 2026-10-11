@@ -21,7 +21,7 @@ pub const Inputs = common.Interp;
 /// the projector faces (surface normal at the hit).
 pub const ubo_group: u32 = 1;
 pub const Ubo = struct {
-    projector: [4]@Vector(4, f32) align(16),
+    projector: [4]Vec align(16),
     color: Vec align(16),
     params: Vec align(16),
     forward: Vec align(16),

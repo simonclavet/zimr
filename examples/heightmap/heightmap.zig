@@ -19,6 +19,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const sliceAsBytes = std.mem.sliceAsBytes;
+const asBytes = std.mem.asBytes;
 const z = @import("zimr");
 const zm = @import("zm");
 
@@ -81,7 +83,7 @@ fn fillMesh(
             .normal = .{ mesh.normals[i * 3 + 0], mesh.normals[i * 3 + 1], mesh.normals[i * 3 + 2] },
         };
     }
-    z.wgpu.queueWriteBuffer(queue, vbo, 0, std.mem.sliceAsBytes(scratch[0..vcount]));
+    z.wgpu.queueWriteBuffer(queue, vbo, 0, sliceAsBytes(scratch[0..vcount]));
 }
 
 /// Build a fresh Perlin field at `offset`, upload it to `preview`, and
@@ -220,7 +222,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         z.wgpu.createPipelineLayout(device, &.{ g0_bgl, empty_bgl, g2_bgl }, "hm_pl");
     const vs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, gbuffer_vs_wgsl, "gbuffer_vs");
     const fs_mod: z.wgpu.ShaderModuleHandle = z.wgpu.createShaderModuleWgsl(device, terrain_fs_wgsl, "terrain_fs");
-    const combo: z.gpu.StateCombo = z.gpu.StateCombo.fromParts(
+    const combo: z.gpu.StateCombo = .fromParts(
         .triangle_list,
         .none,
         .less,
@@ -349,7 +351,7 @@ fn update(f: *z.Frame, s: *State) void {
 
     var vs_io: mat_vs.Io = undefined;
     vs_io.u = .{ .mvp = cam_vp, .model = zm.identity(), .normal_matrix = zm.identity() };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, std.mem.asBytes(&vs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.vs_ubo, 0, asBytes(&vs_io.u));
 
     var fs_io: mat_fs.Io = undefined;
     fs_io.u = .{
@@ -360,7 +362,7 @@ fn update(f: *z.Frame, s: *State) void {
         .band_top = .{ 0.95, 0.95, 0.98, 1 }, // snow
         .params = .{ 0.0, terrain_size[1], 0, 0 },
     };
-    z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, std.mem.asBytes(&fs_io.u));
+    z.wgpu.queueWriteBuffer(f.gpu.queue, s.fs_ubo, 0, asBytes(&fs_io.u));
 
     // ---- the terrain pass ----
     const Backend: type = z.WgpuBackend;

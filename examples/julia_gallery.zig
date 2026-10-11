@@ -18,7 +18,9 @@ const std = @import("std");
 const zm = @import("zm");
 const float = zm.float;
 const float64 = zm.float64;
+const clamp = zm.clamp;
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 // GL-retirement P2: migrated off the GL `zimr` umbrella onto the native
 // SW bundle (raster + raster_shader + codecs + math + the typed-pipeline pieces).
 const sw = @import("sw_runtime");
@@ -54,7 +56,7 @@ fn monotonicNs() i128 {
 }
 
 fn juliaPixel(zx0: f32, zy0: f32, cx: f32, cy: f32, hue_offset: f32) [4]u8 {
-    const BAIL_R2: f32 = 256.0;
+    const bail_r2: f32 = 256.0;
     var zx: f32 = zx0;
     var zy: f32 = zy0;
     var iter: u32 = 0;
@@ -63,7 +65,7 @@ fn juliaPixel(zx0: f32, zy0: f32, cx: f32, cy: f32, hue_offset: f32) [4]u8 {
     while (iter < max_iter) : (iter += 1) {
         zx2 = zx * zx;
         zy2 = zy * zy;
-        if (zx2 + zy2 > BAIL_R2) {
+        if (zx2 + zy2 > bail_r2) {
             break;
         }
         const zxy_new: f32 = 2 * zx * zy + cy;
@@ -82,15 +84,16 @@ fn juliaPixel(zx0: f32, zy0: f32, cx: f32, cy: f32, hue_offset: f32) [4]u8 {
 
     // Each cell gets a slightly shifted palette so they're
     // visually distinguishable beyond just shape.
-    const PI2: f32 = 6.28318530718;
-    const r: f32 = 0.5 + 0.5 * @cos(PI2 * (t + hue_offset + 0.00));
-    const g: f32 = 0.5 + 0.5 * @cos(PI2 * (t + hue_offset + 0.33));
-    const b: f32 = 0.5 + 0.5 * @cos(PI2 * (t + hue_offset + 0.67));
+    const pi2: f32 = 6.28318530718;
+    const r: f32 = 0.5 + 0.5 * @cos(pi2 * (t + hue_offset + 0.00));
+    const g: f32 = 0.5 + 0.5 * @cos(pi2 * (t + hue_offset + 0.33));
+    const b: f32 = 0.5 + 0.5 * @cos(pi2 * (t + hue_offset + 0.67));
 
+    // Each channel rounds to the nearest step - truncating would bias every shade darker.
     return .{
-        @trunc(@max(0, @min(255, r * 255))),
-        @trunc(@max(0, @min(255, g * 255))),
-        @trunc(@max(0, @min(255, b * 255))),
+        @round(clamp(r * 255, 0, 255)),
+        @round(clamp(g * 255, 0, 255)),
+        @round(clamp(b * 255, 0, 255)),
         255,
     };
 }
@@ -152,7 +155,7 @@ pub fn main() !void {
     {
         // Horizontal divider at y = cell_h
         var y: u32 = cell_h - div_thickness / 2;
-        while (y < cell_h + (div_thickness + 1) / 2) : (y += 1) {
+        while (y < cell_h + @divCeil(div_thickness, 2)) : (y += 1) {
             var x: u32 = 0;
             while (x < total_w) : (x += 1) {
                 const off: usize = (@as(usize, y) * total_w + x) * 4;
@@ -166,7 +169,7 @@ pub fn main() !void {
         y = 0;
         while (y < total_h) : (y += 1) {
             var x: u32 = cell_w - div_thickness / 2;
-            while (x < cell_w + (div_thickness + 1) / 2) : (x += 1) {
+            while (x < cell_w + @divCeil(div_thickness, 2)) : (x += 1) {
                 const off: usize = (@as(usize, y) * total_w + x) * 4;
                 buf[off + 0] = 0;
                 buf[off + 1] = 0;
@@ -180,10 +183,10 @@ pub fn main() !void {
     defer gpa.free(png_bytes);
 
     const out_path: []const u8 = "julia_gallery.png";
-    var io_threaded: std.Io.Threaded = std.Io.Threaded.init(gpa, .{});
+    var io_threaded: Io.Threaded = .init(gpa, .{});
     defer io_threaded.deinit();
-    const io: std.Io = io_threaded.io();
-    var f: std.Io.File = try std.Io.Dir.cwd().createFile(io, out_path, .{});
+    const io: Io = io_threaded.io();
+    var f: Io.File = try Io.Dir.cwd().createFile(io, out_path, .{});
     defer f.close(io);
     try f.writeStreamingAll(io, png_bytes);
 

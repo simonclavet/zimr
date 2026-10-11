@@ -11,6 +11,7 @@ const zm = @import("zm");
 
 const Camera3D = zm.Camera3D;
 const pointVec = zm.pointVec;
+const Vec = zm.Vec;
 
 const step_count: usize = 4;
 
@@ -19,7 +20,7 @@ const State = struct {
     cam: z.OrbitCamera,
 };
 
-const positions = [step_count]zm.Vec{
+const positions = [step_count]Vec{
     pointVec(-4.2, 0, 0),
     pointVec(-1.4, 0, 0),
     pointVec(1.4, 0, 0),

@@ -1,11 +1,11 @@
 //! lint:alias WgpuGl
 //! src/WgpuGl.zig - the WebGPU `gl: anytype` adapter (the "third renderer").
 //!
-//! `src/renderer_trait.zig` defines a comptime trait (`assertIsGlContext`) plus two
-//! adapters - `GlAdapter` (wraps `*rlgl.GlState`, the WebGL path) and
-//! `SwAdapter` (wraps `*raster.Context`, the software rasterizer) - so a single
-//! `fn drawX(gl: anytype, ...)` drives both with zero overhead. Its own comment
-//! says "adding a third renderer is a third adapter struct." This is that third
+//! Two comptime contracts describe what a `gl` must provide - `types.requireGl` (the 2D drawing
+//! surface) and `renderer_trait.requireGlScene` (that, plus scene setup) - so a single
+//! `fn drawX(gl: anytype, ...)` drives the software rasterizer (`raster`, or `SwAdapter` over it)
+//! and this backend alike, with zero overhead. Adding a renderer means implementing that
+//! surface - this file is the WebGPU one
 //! adapter: a WebGPU one, so the SAME scene code runs on rlgl, raster, AND wgpu.
 //!
 //! It is the spine of two later goals: the bulk example port (scene code stops
@@ -40,6 +40,8 @@
 //!    when textured 2D lands; for now it forces a flush + records the id.
 
 const renderer_2d = @import("renderer_2d.zig");
+const wgpu = @import("wgpu.zig");
+
 const BindGroupHandle = wgpu.BindGroupHandle;
 const gpu_iface = @import("gpu_iface.zig");
 const raster = @import("raster.zig");
@@ -47,6 +49,7 @@ const zm = @import("zm");
 const turnsFromRad = zm.turnsFromRad;
 const Mat = zm.Mat;
 const std_for_tests = @import("std");
+const expectApproxEqAbs = std_for_tests.testing.expectApproxEqAbs;
 const Vec = zm.Vec;
 const identity = zm.identity;
 const mulMat = zm.mulMat;
@@ -56,6 +59,7 @@ const translation = zm.translation;
 const rotationX = zm.rotationX;
 const rotationY = zm.rotationY;
 const rotationZ = zm.rotationZ;
+const radFromTurns = zm.radFromTurns;
 const scaling = zm.scaling;
 const float = zm.float;
 
@@ -91,6 +95,10 @@ const GroupVertex = struct {
 };
 
 const max_matrix_depth = 32;
+
+// ============================================================================
+// Matrix helpers (column-major [4]Vec, matching zm.Mat / glFrustum)
+// ============================================================================
 
 fn identityMatrix() Matrix {
     return identity();
@@ -292,7 +300,7 @@ fn resolveSprite(self: *WgpuGl, sprite: Sprite) u32 {
     const w: u32 = @intCast(sprite.image.width);
     const h: u32 = @intCast(sprite.image.height);
     const bytes: []const u8 = @as([*]const u8, @ptrCast(sprite.image.data.?))[0 .. w * h * 4];
-    const wtex: WgpuTexture = WgpuTexture.createFromPixels(r.resources.f.device, r.resources.f.queue, .{
+    const wtex: WgpuTexture = .createFromPixels(r.resources.f.device, r.resources.f.queue, .{
         .pixels = bytes,
         .width = w,
         .height = h,
@@ -553,17 +561,23 @@ pub fn translate(self: *WgpuGl, x: f32, y: f32, z: f32) void {
     self.modelview = mulMat(self.modelview, translation(x, y, z));
 }
 
-/// Post-multiply the modelview by a rotation of `angle_rad` radians about axis
-/// (x, y, z). 2D and text paths use (0, 0, 1); the three principal axes are
-/// supported and anything else falls back to Z. (`rlRotatef`, the raylib
-/// degree-taking name, is a thin shim over this - see text2d.)
+/// Post-multiply the modelview by a rotation of `angle_turns` (1 = a full circle) about axis
+/// (x, y, z). 2D and text paths use (0, 0, 1); the three principal axes are supported and
+/// anything else falls back to Z.
+///
+/// TURNS, like `raster.Context.rotate`: the 2D code calls `gl.rotate` without knowing which
+/// backend is live, so the two must agree. (They had drifted: this one took radians, so a text
+/// rotated a quarter turn on the GPU turned 0.25 rad - about 14 degrees - and the same text in the
+/// software rasteriser turned the right 90.) zimrmath's rotation matrices take radians, so the
+/// conversion is here, at the edge.
 pub fn rotate(
     self: *WgpuGl,
-    angle_rad: f32,
+    angle_turns: f32,
     x: f32,
     y: f32,
     z: f32,
 ) void {
+    const angle_rad: f32 = radFromTurns(angle_turns);
     const m: Matrix = if (x != 0 and y == 0 and z == 0)
         rotationX(angle_rad)
     else if (y != 0 and x == 0 and z == 0)
@@ -571,6 +585,13 @@ pub fn rotate(
     else
         rotationZ(angle_rad);
     self.modelview = mulMat(self.modelview, m);
+}
+
+/// The current modelview transform - what a shape drawn now is transformed by (raylib's
+/// `rlGetMatrixTransform`). draw2d's outline helper reads its scale to keep a one-pixel line
+/// one pixel wide.
+pub fn getMatrixTransform(self: *const WgpuGl) Matrix {
+    return self.modelview;
 }
 
 /// rlScalef: post-multiply the modelview by a non-uniform scale.
@@ -651,6 +672,23 @@ pub fn imageXYWH(
     self.image(.{ .x = x, .y = y, .width = w, .height = h }, sprite, opts);
 }
 
+/// One corner of a (possibly rotated) textured quad: corner `(cx,cy)` relative to
+/// the dst top-left, offset by `-origin`, rotated by (cs,sn), placed at dst.pos.
+/// Reduces to `dst.pos + (cx,cy)` when origin=0 and rotation=0.
+fn texCorner(
+    dst: Rectangle,
+    cx: f32,
+    cy: f32,
+    ox: f32,
+    oy: f32,
+    cs: f32,
+    sn: f32,
+) Vec2 {
+    const rx: f32 = cx - ox;
+    const ry: f32 = cy - oy;
+    return .{ dst.x + rx * cs - ry * sn, dst.y + rx * sn + ry * cs };
+}
+
 /// Gap primitive: draw an already-loaded GPU `WgpuTexture` into `dst`. Binds the
 /// texture directly and emits a textured quad (the same path as raylib
 /// `drawTexture`), so there is no per-frame registry churn.
@@ -725,23 +763,6 @@ pub fn texture(
     self.vertex2f(c01[0], c01[1]);
     self.end();
     self.bindTexture(.{}); // reset to white so subsequent shapes are solid
-}
-
-/// One corner of a (possibly rotated) textured quad: corner `(cx,cy)` relative to
-/// the dst top-left, offset by `-origin`, rotated by (cs,sn), placed at dst.pos.
-/// Reduces to `dst.pos + (cx,cy)` when origin=0 and rotation=0.
-fn texCorner(
-    dst: Rectangle,
-    cx: f32,
-    cy: f32,
-    ox: f32,
-    oy: f32,
-    cs: f32,
-    sn: f32,
-) Vec2 {
-    const rx: f32 = cx - ox;
-    const ry: f32 = cy - oy;
-    return .{ dst.x + rx * cs - ry * sn, dst.y + rx * sn + ry * cs };
 }
 
 // --- gap shape primitives: thin wrappers over shapes2d (host-safe gl:anytype) ---
@@ -1142,23 +1163,16 @@ pub fn clear(self: *WgpuGl, mask: raster.ClearMask) void {
 // ---- internals -----------------------------------------------------
 
 // ============================================================================
-// Matrix helpers (column-major [4]Vec, matching zm.Mat / glFrustum)
-// ============================================================================
-
-// ============================================================================
 // Tests - the headline: WgpuGl satisfies the renderer_trait trait, and a single
 // `fn drawX(gl: anytype)` compiles against all three adapters.
 // ============================================================================
 
 const renderer_trait = @import("renderer_trait.zig");
-const wgpu = @import("wgpu.zig");
 
-test "WgpuGl satisfies the renderer_trait trait" {
-    // Comptime check: errors at compile time if any required method is missing.
-    var dummy_renderer: ?Renderer2D = @as(?Renderer2D, null);
-    var dummy_pass: PassState = undefined;
-    var gl: WgpuGl = WgpuGl.init(&dummy_renderer, &dummy_pass);
-    renderer_trait.assertIsGlContext(&gl);
+test "WgpuGl satisfies both gl contracts: the 2D surface and the scene" {
+    // Comptime checks: compiling this proves every method each contract names is declared here.
+    var dummy: WgpuGl = undefined;
+    renderer_trait.requireGlScene(&dummy);
 }
 
 test "one `gl: anytype` scene fn compiles against WgpuGl" {
@@ -1169,7 +1183,7 @@ test "one `gl: anytype` scene fn compiles against WgpuGl" {
     // surface matches; drawTriangleBatched is a no-op when the batch is unset.
     const Scene = struct {
         fn draw(gl: anytype) void {
-            renderer_trait.assertIsGlContext(gl);
+            renderer_trait.requireGlScene(gl);
             gl.matrixMode(.modelview);
             gl.loadIdentity();
             gl.begin(.triangles);
@@ -1183,18 +1197,8 @@ test "one `gl: anytype` scene fn compiles against WgpuGl" {
     var dummy_renderer: ?Renderer2D = @as(?Renderer2D, null);
     var dummy_pass: PassState = undefined;
     dummy_pass.batch = null; // emits become no-ops
-    var gl: WgpuGl = WgpuGl.init(&dummy_renderer, &dummy_pass);
+    var gl: WgpuGl = .init(&dummy_renderer, &dummy_pass);
     Scene.draw(&gl);
-}
-
-// Moved from renderer_trait.zig (structure-plan S0): the impl asserts its own
-// trait conformance - and the old placement made trait<->impl a cycle.
-test "assertIsGlContext: WgpuGl satisfies the trait" {
-    // Compile-time check; if this doesn't fail to compile, the live
-    // renderer has every required method (GL-retirement P5: this
-    // replaces the GlAdapter check).
-    var dummy: WgpuGl = undefined;
-    renderer_trait.assertIsGlContext(&dummy);
 }
 
 // ----------------------------------------------------------------------------
@@ -1232,4 +1236,16 @@ test "clampScissorRect: y un-flip with top clamp preserves bottom edge" {
     const sc: ScissorRect = clampScissorRect(0, 500, 100, 200, 1080, 600);
     try std_for_tests.testing.expectEqual(@as(i32, 0), sc.y);
     try std_for_tests.testing.expectEqual(@as(i32, 100), sc.h);
+}
+
+test "rotate takes TURNS, like raster's: a quarter turn about Z maps X onto Y" {
+    var gl: WgpuGl = undefined;
+    gl.modelview = identityMatrix();
+    gl.rotate(0.25, 0, 0, 1);
+    // A quarter turn about Z sends the X axis to +Y and Y to -X - the very matrix raster's twin
+    // test asserts. (Taking radians, this rotated 0.25 rad and the two backends disagreed.)
+    try expectApproxEqAbs(@as(f32, 0.0), gl.modelview[0][0], 1e-6);
+    try expectApproxEqAbs(@as(f32, 1.0), gl.modelview[0][1], 1e-6);
+    try expectApproxEqAbs(@as(f32, -1.0), gl.modelview[1][0], 1e-6);
+    try expectApproxEqAbs(@as(f32, 0.0), gl.modelview[1][1], 1e-6);
 }

@@ -20,6 +20,8 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const expect = std.testing.expect;
 const expectEqual = std.testing.expectEqual;
+const AutoHashMapUnmanaged = std.AutoHashMapUnmanaged;
+const testing_allocator = std.testing.allocator;
 
 /// Side of one atlas page, in texels. 1024^2 RGBA8 is 4 MB of GPU memory.
 pub const page_size: u32 = 1024;
@@ -66,7 +68,7 @@ pub const Slot = struct { page: u32, x: u32, y: u32 };
 const Shelf = struct { page: u32, y: u32, height: u32, x_next: u32 };
 
 pub const GlyphAtlas = struct {
-    entries: std.AutoHashMapUnmanaged(Key, Entry) = .empty,
+    entries: AutoHashMapUnmanaged(Key, Entry) = .empty,
     shelves: ArrayList(Shelf) = .empty,
     /// Pages holding glyphs. New shelves open on the last one.
     pages_used: u32 = 0,
@@ -202,7 +204,7 @@ fn slotsOverlap(
 }
 
 test "reserve: slots never overlap and stay on the page" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var atlas: GlyphAtlas = .{};
     defer atlas.deinit(gpa);
     var slots: [300]Slot = undefined;
@@ -224,7 +226,7 @@ test "reserve: slots never overlap and stay on the page" {
 }
 
 test "reserve: a full atlas refuses, requests a reset, and beginFrame performs it" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var atlas: GlyphAtlas = .{};
     defer atlas.deinit(gpa);
     // Half-page glyphs: a page holds only a few, so a handful fills the atlas.
@@ -246,7 +248,7 @@ test "reserve: a full atlas refuses, requests a reset, and beginFrame performs i
 }
 
 test "reserve: a glyph larger than a page is refused without a reset" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var atlas: GlyphAtlas = .{};
     defer atlas.deinit(gpa);
     try expect(atlas.reserve(gpa, page_size, 10) == null);
@@ -254,7 +256,7 @@ test "reserve: a glyph larger than a page is refused without a reset" {
 }
 
 test "find/remember: entries are keyed by face, slot, size and phase" {
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var atlas: GlyphAtlas = .{};
     defer atlas.deinit(gpa);
     const key: Key = .{ .face_id = 3, .slot = 12, .size_quarters = 64, .phase = 2 };
@@ -271,7 +273,7 @@ test "requestReset: a reloaded font's glyphs replace the old ones instead of pil
     // down (its font unloaded), and the next lifecycle loads the font again under a NEW
     // face id. Without the reset the second set sits beside the first and the table
     // grows; with it the old entries go and the new ones reuse the kept capacity.
-    const gpa: Allocator = std.testing.allocator;
+    const gpa: Allocator = testing_allocator;
     var atlas: GlyphAtlas = .{};
     defer atlas.deinit(gpa);
     const glyphs_per_font: u32 = 40;

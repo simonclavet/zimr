@@ -235,6 +235,82 @@ fn settle(s: *State, vw: f32, vh: f32, dt: f32) void {
 
 // ---- update ----------------------------------------------------------------
 
+fn label(
+    f: *z.Frame,
+    s: *State,
+    pos: Vec2,
+    str: []const u8,
+    size: f32,
+    col: Color,
+) void {
+    f.gl.text(pos, str, .{ .size = size, .color = col, .font = &s.font });
+}
+
+fn cmpByX(s: *State, a: usize, b: usize) bool {
+    return s.chips[a].pos[0] < s.chips[b].pos[0];
+}
+
+/// Join every chip back into one sentence in visual (left-to-right) order and
+/// show it live, so the string ops read as one evolving string.
+fn drawHud(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
+    var order: [max_chips]usize = undefined;
+    for (0..s.count) |k| {
+        order[k] = k;
+    }
+    std.sort.pdq(usize, order[0..s.count], s, cmpByX);
+    var joined: [1024]u8 = undefined;
+    var w: usize = 0;
+    for (order[0..s.count], 0..) |ci, n| {
+        const t: []const u8 = s.chips[ci].text();
+        if (n != 0 and w < joined.len) {
+            joined[w] = ' ';
+            w += 1;
+        }
+        const take: usize = @min(t.len, joined.len - w);
+        @memcpy(joined[w .. w + take], t[0..take]);
+        w += take;
+    }
+    var hud: [1100]u8 = undefined;
+    const line: []const u8 = bufPrint(&hud, "{d} chips  |  {s}", .{ s.count, joined[0..w] }) catch joined[0..w];
+    f.gl.rect(.{ .x = 0, .y = vh - 64, .width = vw, .height = 64 }, .{ .color = hud_bg });
+    label(f, s, .{ 20, vh - 44 }, line, 17, hud_col);
+}
+
+fn drawScene(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
+    z.clearViewport(f, bg);
+    label(f, s, .{ 20, 22 }, "String Playground", 22, title_col);
+    label(f, s, .{ 20, 50 }, "tap a chip to shatter into letters . drag one onto another to glue", 15, sub_col);
+
+    var i: usize = 0;
+    while (i < s.count) : (i += 1) {
+        const ch: *const Chip = &s.chips[i];
+        const r: Rect = chipRect(s, ch);
+        const lifted: bool = (s.grabbed == i);
+        const oy: f32 = if (lifted) 6 else 3;
+        f.gl.rect(.{ .x = r.x + 2, .y = r.y + oy, .width = r.w, .height = r.h }, .{ .color = shadow });
+        f.gl.rect(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = palette[ch.tint] });
+        const edge: Color = if (lifted)
+            .{ .r = 255, .g = 255, .b = 255, .a = 255 }
+        else
+            .{ .r = 255, .g = 255, .b = 255, .a = 70 };
+        f.gl.rect(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = edge, .outline = 1.5 });
+        const tw: f32 = z.measureText(s.font, ch.text(), font_size)[0];
+        label(f, s, .{ ch.pos[0] - tw * 0.5, ch.pos[1] - font_size * 0.5 }, ch.text(), font_size, ink);
+    }
+
+    const rr: Rect = resetRect(vw);
+    const over: bool = pointInRect(z.getMousePosition(f.input), rr);
+    const btn: Color = if (over)
+        .{ .r = 71, .g = 85, .b = 105, .a = 255 }
+    else
+        .{ .r = 51, .g = 65, .b = 85, .a = 255 };
+    f.gl.rect(.{ .x = rr.x, .y = rr.y, .width = rr.w, .height = rr.h }, .{ .color = btn });
+    label(f, s, .{ rr.x + 20, rr.y + 11 }, "reset", 18, .{ .r = 226, .g = 232, .b = 240, .a = 255 });
+
+    drawHud(f, s, vw, vh);
+    common.caption(f.gl, s.font, "tap = split into letters, drag-and-drop = join - the two string ops as gestures");
+}
+
 fn update(f: *z.Frame, s: *State) void {
     const vw: f32 = @max(f.window.widthf(), 1);
     const vh: f32 = @max(f.window.heightf(), 1);
@@ -288,82 +364,6 @@ fn update(f: *z.Frame, s: *State) void {
 }
 
 // ---- draw ------------------------------------------------------------------
-
-fn label(
-    f: *z.Frame,
-    s: *State,
-    pos: Vec2,
-    str: []const u8,
-    size: f32,
-    col: Color,
-) void {
-    f.gl.text(pos, str, .{ .size = size, .color = col, .font = &s.font });
-}
-
-fn drawScene(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
-    z.clearViewport(f, bg);
-    label(f, s, .{ 20, 22 }, "String Playground", 22, title_col);
-    label(f, s, .{ 20, 50 }, "tap a chip to shatter into letters . drag one onto another to glue", 15, sub_col);
-
-    var i: usize = 0;
-    while (i < s.count) : (i += 1) {
-        const ch: *const Chip = &s.chips[i];
-        const r: Rect = chipRect(s, ch);
-        const lifted: bool = (s.grabbed == i);
-        const oy: f32 = if (lifted) 6 else 3;
-        f.gl.rect(.{ .x = r.x + 2, .y = r.y + oy, .width = r.w, .height = r.h }, .{ .color = shadow });
-        f.gl.rect(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = palette[ch.tint] });
-        const edge: Color = if (lifted)
-            .{ .r = 255, .g = 255, .b = 255, .a = 255 }
-        else
-            .{ .r = 255, .g = 255, .b = 255, .a = 70 };
-        f.gl.rect(.{ .x = r.x, .y = r.y, .width = r.w, .height = r.h }, .{ .color = edge, .outline = 1.5 });
-        const tw: f32 = z.measureText(s.font, ch.text(), font_size)[0];
-        label(f, s, .{ ch.pos[0] - tw * 0.5, ch.pos[1] - font_size * 0.5 }, ch.text(), font_size, ink);
-    }
-
-    const rr: Rect = resetRect(vw);
-    const over: bool = pointInRect(z.getMousePosition(f.input), rr);
-    const btn: Color = if (over)
-        .{ .r = 71, .g = 85, .b = 105, .a = 255 }
-    else
-        .{ .r = 51, .g = 65, .b = 85, .a = 255 };
-    f.gl.rect(.{ .x = rr.x, .y = rr.y, .width = rr.w, .height = rr.h }, .{ .color = btn });
-    label(f, s, .{ rr.x + 20, rr.y + 11 }, "reset", 18, .{ .r = 226, .g = 232, .b = 240, .a = 255 });
-
-    drawHud(f, s, vw, vh);
-    common.caption(f.gl, s.font, "tap = split into letters, drag-and-drop = join - the two string ops as gestures");
-}
-
-/// Join every chip back into one sentence in visual (left-to-right) order and
-/// show it live, so the string ops read as one evolving string.
-fn drawHud(f: *z.Frame, s: *State, vw: f32, vh: f32) void {
-    var order: [max_chips]usize = undefined;
-    for (0..s.count) |k| {
-        order[k] = k;
-    }
-    std.sort.pdq(usize, order[0..s.count], s, cmpByX);
-    var joined: [1024]u8 = undefined;
-    var w: usize = 0;
-    for (order[0..s.count], 0..) |ci, n| {
-        const t: []const u8 = s.chips[ci].text();
-        if (n != 0 and w < joined.len) {
-            joined[w] = ' ';
-            w += 1;
-        }
-        const take: usize = @min(t.len, joined.len - w);
-        @memcpy(joined[w .. w + take], t[0..take]);
-        w += take;
-    }
-    var hud: [1100]u8 = undefined;
-    const line: []const u8 = bufPrint(&hud, "{d} chips  |  {s}", .{ s.count, joined[0..w] }) catch joined[0..w];
-    f.gl.rect(.{ .x = 0, .y = vh - 64, .width = vw, .height = 64 }, .{ .color = hud_bg });
-    label(f, s, .{ 20, vh - 44 }, line, 17, hud_col);
-}
-
-fn cmpByX(s: *State, a: usize, b: usize) bool {
-    return s.chips[a].pos[0] < s.chips[b].pos[0];
-}
 
 pub const app: z.AppSpec(State) = .{
     .config = .{

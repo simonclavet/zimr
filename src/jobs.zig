@@ -73,13 +73,17 @@
 //! the user why it hitched.
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const asBytes = std.mem.asBytes;
 const builtin = @import("builtin");
+// lint:off browser-call: the browser's workers; jobs on threads come with C4
 const web = @import("web.zig");
 const jobs_abi = @import("jobs_abi.zig");
 const wgpu = @import("wgpu.zig");
 
 const Allocator = std.mem.Allocator;
-const Writer = std.Io.Writer;
+const Writer = Io.Writer;
 
 pub const Error = error{
     /// The kernel returned an error. Its name is logged (see `logFailure`) - errors
@@ -314,6 +318,124 @@ pub const Options = struct {
     /// size, so a runaway kernel gets `error.WriteFailed` rather than eating memory.
     max_output: usize = 24 << 20,
 };
+
+/// Check the table's shape at comptime, so a malformed entry is a clear message here
+/// rather than a baffling one from deep inside `invoke`.
+fn validate(comptime kernels: anytype) void {
+    if (kernels.len == 0) {
+        @compileError("jobs.Registry: the kernel table is empty");
+    }
+    for (kernels) |entry| {
+        if (entry.len != 2) {
+            @compileError("jobs.Registry: each entry must be .{ \"name\", kernelFn }");
+        }
+        const name: []const u8 = entry[0];
+        const info = @typeInfo(@TypeOf(entry[1]));
+        if (info != .@"fn") {
+            @compileError("jobs: kernel '" ++ name ++ "' is not a function");
+        }
+        const params = info.@"fn".param_types;
+        if (params.len != 4) {
+            @compileError("jobs: kernel '" ++ name ++ "' must take exactly 4 parameters:\n" ++
+                "  fn (gpa: Allocator, hdr: <POD>, payload: []const u8, out: *std.Io.Writer) !void");
+        }
+        if (params[0].? != Allocator) {
+            @compileError("jobs: kernel '" ++ name ++ "': parameter 1 must be std.mem.Allocator " ++
+                "(allocator first, as everywhere else in Zig)");
+        }
+        if (params[2].? != []const u8) {
+            @compileError("jobs: kernel '" ++ name ++ "': parameter 3 must be []const u8 (the payload)");
+        }
+        if (params[3].? != *Writer) {
+            @compileError("jobs: kernel '" ++ name ++ "': parameter 4 must be *std.Io.Writer (the output)");
+        }
+    }
+}
+
+fn HeaderOf(comptime kernel: anytype) type {
+    return @typeInfo(@TypeOf(kernel)).@"fn".param_types[1].?;
+}
+
+/// A header is memcpy'd out of the APP's wasm and into the KERNEL's wasm - two separate
+/// compilations. So it must satisfy two things, and both are checked here rather than
+/// discovered as garbage inside a worker you cannot breakpoint.
+///
+///   1. NO POINTERS. An address from one instance's linear memory means nothing in
+///      another's.
+///   2. AN ABI-GUARANTEED LAYOUT. Zig's `auto` layout is explicitly unspecified and it
+///      really does reorder fields - `struct { a: u8, b: u32, c: u8 }` puts `b` at
+///      offset 0. It happens to be deterministic for the same compiler and target, so an
+///      auto-layout header works TODAY by luck. `extern` is what the language provides
+///      for bytes that cross a boundary, so require it. An anonymous literal still
+///      coerces to an extern struct, so no call site changes.
+fn assertPod(comptime T: type, comptime kernel: []const u8) void {
+    switch (@typeInfo(T)) {
+        .pointer => @compileError("jobs: kernel '" ++ kernel ++ "' has a POINTER in its header (" ++
+            @typeName(T) ++ "). The header is copied into another wasm instance, where that address " ++
+            "means nothing. Pass the bytes as `payload` instead."),
+        .@"struct" => |st| {
+            if (st.layout == .auto) {
+                @compileError("jobs: kernel '" ++ kernel ++ "' has an AUTO-LAYOUT header (" ++
+                    @typeName(T) ++ "). The header is memcpy'd between two separately compiled wasm " ++
+                    "modules, and Zig's auto layout is unspecified — it reorders fields for packing. " ++
+                    "Declare it `extern struct` so the layout is ABI-guaranteed. The call site does " ++
+                    "not change: an anonymous literal still coerces.");
+            }
+            for (st.field_types) |ft| {
+                assertPod(ft, kernel);
+            }
+        },
+        // A union's payload is copied just as a struct's is - and a slice hidden in one
+        // used to sail straight through into a worker, where the pointer addressed
+        // nothing.
+        .@"union" => |un| {
+            if (un.layout == .auto) {
+                @compileError("jobs: kernel '" ++ kernel ++ "' has an AUTO-LAYOUT union in its header (" ++
+                    @typeName(T) ++ "). Declare it `extern union` or `packed union` — the bytes cross " ++
+                    "a compilation boundary and need a guaranteed layout.");
+            }
+            for (un.field_types) |ft| {
+                assertPod(ft, kernel);
+            }
+        },
+        .optional => |o| assertPod(o.child, kernel),
+        .array => |a| assertPod(a.child, kernel),
+        .vector => |v| assertPod(v.child, kernel),
+        else => {},
+    }
+}
+
+/// Errors cannot cross a wasm boundary as values, so the app gets `KernelFailed` and
+/// the developer gets the NAME - on the page's log overlay, which is visible on a phone
+/// with no devtools attached. Without this a failing kernel is a bare `-1` and you are
+/// guessing between OutOfMemory and InvalidPixelBufferSize.
+///
+/// Silent under test: the tests deliberately fail kernels, and Zig's test runner counts
+/// a logged error as a failed run.
+fn logFailure(comptime name: []const u8, err: anyerror) void {
+    if (comptime builtin.is_test) {
+        return;
+    }
+    std.log.err("zimr.jobs: kernel '" ++ name ++ "' failed: {s}", .{@errorName(err)});
+}
+
+/// Split `staged` into header ++ payload and hand them to the kernel.
+fn invoke(
+    comptime kernel: anytype,
+    gpa: Allocator,
+    staged: []const u8,
+    out: *Writer,
+) !void {
+    const H: type = HeaderOf(kernel);
+    if (staged.len < @sizeOf(H)) {
+        return error.MalformedJob;
+    }
+    // memcpy rather than @ptrCast: `staged` carries no alignment guarantee, and a
+    // misaligned load is a trap on some targets and merely wrong on others.
+    var header: H = undefined;
+    @memcpy(asBytes(&header), staged[0..@sizeOf(H)]);
+    try kernel(gpa, header, staged[@sizeOf(H)..], out);
+}
 
 /// The job system for one app's kernels.
 ///
@@ -596,11 +718,11 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             header: HeaderOf(kernel),
             payload: []const u8,
         ) Error!Job {
-            const name = comptime nameOf(kernel);
+            const name: []const u8 = comptime nameOf(kernel);
             const H: type = @TypeOf(header);
             comptime assertPod(H, name);
 
-            const header_bytes: []const u8 = std.mem.asBytes(&header);
+            const header_bytes: []const u8 = asBytes(&header);
             const total_input_bytes: usize = header_bytes.len + payload.len;
             if (total_input_bytes > opts.max_input) {
                 return Error.InputTooLarge;
@@ -655,14 +777,14 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             // memcpy rather than @ptrCast: `header_bytes` carries no alignment guarantee, and
             // a misaligned load is a trap on some targets and merely wrong on others.
             var header: HeaderType = undefined;
-            @memcpy(std.mem.asBytes(&header), header_bytes);
+            @memcpy(asBytes(&header), header_bytes);
 
             const output_buffer: []u8 = gpa.alloc(u8, opts.max_output) catch {
                 return Error.OutOfMemory;
             };
             defer gpa.free(output_buffer);
 
-            var kernel_arena: std.heap.ArenaAllocator = .init(gpa);
+            var kernel_arena: ArenaAllocator = .init(gpa);
             defer kernel_arena.deinit(); // whatever the kernel allocated, gone - always
 
             var output_writer: Writer = .fixed(output_buffer);
@@ -721,6 +843,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
             @export(&Worker.errLen, .{ .name = jobs_abi.err_len });
 
             for (kernels) |entry| {
+                // lint:off untyped-local: each entry's kernel is its own function type - no one type fits every entry
                 const kernel = entry[1];
                 const Entry = struct {
                     fn run(in_len: u32) callconv(.c) i32 {
@@ -737,7 +860,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
         const Worker = struct {
             var in_mem: []u8 = &.{};
             var out_mem: []u8 = &.{};
-            var arena: std.heap.ArenaAllocator = undefined;
+            var arena: ArenaAllocator = undefined;
             var arena_ready: bool = false;
             /// The name of the last error, so a failure is legible instead of a bare -1.
             /// `@errorName` returns a static string, so this borrows and never owns.
@@ -769,7 +892,7 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
                     };
                 }
                 if (!arena_ready) {
-                    arena = std.heap.ArenaAllocator.init(wa);
+                    arena = ArenaAllocator.init(wa);
                     arena_ready = true;
                 }
                 // Reset, not free: a worker runs job after job, and retaining capacity
@@ -803,124 +926,6 @@ pub fn Registry(comptime kernels: anytype, comptime opts: Options) type {
 // The one code path. The worker calls it; the inline fallback calls it; the tests call
 // it. "It passed on the host" therefore means something.
 // ---------------------------------------------------------------------------
-
-/// Split `staged` into header ++ payload and hand them to the kernel.
-fn invoke(
-    comptime kernel: anytype,
-    gpa: Allocator,
-    staged: []const u8,
-    out: *Writer,
-) !void {
-    const H: type = HeaderOf(kernel);
-    if (staged.len < @sizeOf(H)) {
-        return error.MalformedJob;
-    }
-    // memcpy rather than @ptrCast: `staged` carries no alignment guarantee, and a
-    // misaligned load is a trap on some targets and merely wrong on others.
-    var header: H = undefined;
-    @memcpy(std.mem.asBytes(&header), staged[0..@sizeOf(H)]);
-    try kernel(gpa, header, staged[@sizeOf(H)..], out);
-}
-
-fn HeaderOf(comptime kernel: anytype) type {
-    return @typeInfo(@TypeOf(kernel)).@"fn".param_types[1].?;
-}
-
-/// Errors cannot cross a wasm boundary as values, so the app gets `KernelFailed` and
-/// the developer gets the NAME - on the page's log overlay, which is visible on a phone
-/// with no devtools attached. Without this a failing kernel is a bare `-1` and you are
-/// guessing between OutOfMemory and InvalidPixelBufferSize.
-///
-/// Silent under test: the tests deliberately fail kernels, and Zig's test runner counts
-/// a logged error as a failed run.
-fn logFailure(comptime name: []const u8, err: anyerror) void {
-    if (comptime builtin.is_test) {
-        return;
-    }
-    std.log.err("zimr.jobs: kernel '" ++ name ++ "' failed: {s}", .{@errorName(err)});
-}
-
-/// Check the table's shape at comptime, so a malformed entry is a clear message here
-/// rather than a baffling one from deep inside `invoke`.
-fn validate(comptime kernels: anytype) void {
-    if (kernels.len == 0) {
-        @compileError("jobs.Registry: the kernel table is empty");
-    }
-    for (kernels) |entry| {
-        if (entry.len != 2) {
-            @compileError("jobs.Registry: each entry must be .{ \"name\", kernelFn }");
-        }
-        const name: []const u8 = entry[0];
-        const info = @typeInfo(@TypeOf(entry[1]));
-        if (info != .@"fn") {
-            @compileError("jobs: kernel '" ++ name ++ "' is not a function");
-        }
-        const params = info.@"fn".param_types;
-        if (params.len != 4) {
-            @compileError("jobs: kernel '" ++ name ++ "' must take exactly 4 parameters:\n" ++
-                "  fn (gpa: Allocator, hdr: <POD>, payload: []const u8, out: *std.Io.Writer) !void");
-        }
-        if (params[0].? != Allocator) {
-            @compileError("jobs: kernel '" ++ name ++ "': parameter 1 must be std.mem.Allocator " ++
-                "(allocator first, as everywhere else in Zig)");
-        }
-        if (params[2].? != []const u8) {
-            @compileError("jobs: kernel '" ++ name ++ "': parameter 3 must be []const u8 (the payload)");
-        }
-        if (params[3].? != *Writer) {
-            @compileError("jobs: kernel '" ++ name ++ "': parameter 4 must be *std.Io.Writer (the output)");
-        }
-    }
-}
-
-/// A header is memcpy'd out of the APP's wasm and into the KERNEL's wasm - two separate
-/// compilations. So it must satisfy two things, and both are checked here rather than
-/// discovered as garbage inside a worker you cannot breakpoint.
-///
-///   1. NO POINTERS. An address from one instance's linear memory means nothing in
-///      another's.
-///   2. AN ABI-GUARANTEED LAYOUT. Zig's `auto` layout is explicitly unspecified and it
-///      really does reorder fields - `struct { a: u8, b: u32, c: u8 }` puts `b` at
-///      offset 0. It happens to be deterministic for the same compiler and target, so an
-///      auto-layout header works TODAY by luck. `extern` is what the language provides
-///      for bytes that cross a boundary, so require it. An anonymous literal still
-///      coerces to an extern struct, so no call site changes.
-fn assertPod(comptime T: type, comptime kernel: []const u8) void {
-    switch (@typeInfo(T)) {
-        .pointer => @compileError("jobs: kernel '" ++ kernel ++ "' has a POINTER in its header (" ++
-            @typeName(T) ++ "). The header is copied into another wasm instance, where that address " ++
-            "means nothing. Pass the bytes as `payload` instead."),
-        .@"struct" => |st| {
-            if (st.layout == .auto) {
-                @compileError("jobs: kernel '" ++ kernel ++ "' has an AUTO-LAYOUT header (" ++
-                    @typeName(T) ++ "). The header is memcpy'd between two separately compiled wasm " ++
-                    "modules, and Zig's auto layout is unspecified — it reorders fields for packing. " ++
-                    "Declare it `extern struct` so the layout is ABI-guaranteed. The call site does " ++
-                    "not change: an anonymous literal still coerces.");
-            }
-            for (st.field_types) |ft| {
-                assertPod(ft, kernel);
-            }
-        },
-        // A union's payload is copied just as a struct's is - and a slice hidden in one
-        // used to sail straight through into a worker, where the pointer addressed
-        // nothing.
-        .@"union" => |un| {
-            if (un.layout == .auto) {
-                @compileError("jobs: kernel '" ++ kernel ++ "' has an AUTO-LAYOUT union in its header (" ++
-                    @typeName(T) ++ "). Declare it `extern union` or `packed union` — the bytes cross " ++
-                    "a compilation boundary and need a guaranteed layout.");
-            }
-            for (un.field_types) |ft| {
-                assertPod(ft, kernel);
-            }
-        },
-        .optional => |o| assertPod(o.child, kernel),
-        .array => |a| assertPod(a.child, kernel),
-        .vector => |v| assertPod(v.child, kernel),
-        else => {},
-    }
-}
 
 // ===========================================================================
 // TESTS - the ergonomic payoff, not an afterthought.
@@ -1084,13 +1089,13 @@ test "jobs: invoke splits header from payload exactly, for worker and host alike
     const Hdr = extern struct { n: u32 };
     var staged: [@sizeOf(Hdr) + 5]u8 = undefined;
     const hdr: Hdr = .{ .n = 3 };
-    @memcpy(staged[0..@sizeOf(Hdr)], std.mem.asBytes(&hdr));
+    @memcpy(staged[0..@sizeOf(Hdr)], asBytes(&hdr));
     @memcpy(staged[@sizeOf(Hdr)..], "abcde");
 
     // The kernel's allocator is an ARENA - that is the contract, and it is why a kernel
     // contains no `defer free`. Hand `invoke` a raw allocator and the kernel's
     // allocations leak, exactly as testing.allocator caught when this test first did it.
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var arena: ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
 
     var buf: [16]u8 = undefined;

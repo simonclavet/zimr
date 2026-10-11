@@ -20,10 +20,18 @@
 //! src/notes/files.html).
 
 const std = @import("std");
+const Io = std.Io;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const indexOfScalarPos = std.mem.indexOfScalarPos;
+const splitScalar = std.mem.splitScalar;
+const trim = std.mem.trim;
+const cli = @import("cli");
 const Allocator = std.mem.Allocator;
 const bufPrint = std.fmt.bufPrint;
-const Writer = std.Io.Writer;
-const File = std.Io.File;
+const indexOfPos = std.mem.indexOfPos;
+const startsWith = std.mem.startsWith;
+const Writer = Io.Writer;
+const File = Io.File;
 
 const in_path = "src/notes/files.md";
 const out_path = "src/notes/files.html";
@@ -48,44 +56,138 @@ const foot =
     \\
 ;
 
-pub fn main(init: std.process.Init) !void {
-    var arena: std.heap.ArenaAllocator = .init(init.gpa);
-    defer arena.deinit();
-    const gpa: Allocator = arena.allocator();
-    const io: std.Io = init.io;
-    const cwd: std.Io.Dir = std.Io.Dir.cwd();
+/// The command line (std's cli, `src/command_line.zig`): none - but the parser still gives it `--help` and refuses
+/// an argument it would otherwise ignore.
+const NoArgs = struct {};
 
-    const md: []const u8 = try cwd.readFileAlloc(io, in_path, gpa, .unlimited);
-
-    var aw: Writer.Allocating = .init(gpa);
-    const w: *Writer = &aw.writer;
-    try w.writeAll(head);
-    try render(w, md);
-    try w.writeAll(foot);
-
-    try cwd.writeFile(io, .{ .sub_path = out_path, .data = aw.written() });
-
-    var out_buf: [256]u8 = undefined;
-    const msg: []const u8 = try bufPrint(
-        &out_buf,
-        "files_html: {s} -> {s} ({d} bytes)\n",
-        .{ in_path, out_path, aw.written().len },
-    );
-    try File.stdout().writeStreamingAll(io, msg);
-}
+const files_html_cli: cli.Config(NoArgs) = .{
+    .prog = "zig build files-html",
+    .description = "Renders src/notes/files.md (the per-file atlas) as a doc page.",
+};
 
 const Mode = enum { prose, code, table, list };
+
+fn closeBlock(w: *Writer, mode: *Mode, table_head_done: *bool) !void {
+    switch (mode.*) {
+        .table => {
+            try w.writeAll(if (table_head_done.*) "</tbody></table>\n" else "</thead></table>\n");
+            table_head_done.* = false;
+        },
+        .list => try w.writeAll("</ul>\n"),
+        .code => try w.writeAll("</code></pre>\n"),
+        .prose => {},
+    }
+    mode.* = .prose;
+}
+
+fn escapeInto(w: *Writer, s: []const u8) !void {
+    var start: usize = 0;
+    var j: usize = 0;
+    while (j < s.len) : (j += 1) {
+        const rep: ?[]const u8 = switch (s[j]) {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            else => null,
+        };
+        if (rep) |r| {
+            try w.writeAll(s[start..j]);
+            try w.writeAll(r);
+            start = j + 1;
+        }
+    }
+    try w.writeAll(s[start..]);
+}
+
+// `code`, **bold**, *italic*, [text](url) and bare http(s) autolinks.  Applied
+// in one left-to-right pass so a `*` inside `code` is never taken for emphasis.
+fn inline_md(w: *Writer, s: []const u8) !void {
+    var i: usize = 0;
+    while (i < s.len) {
+        const c: u8 = s[i];
+        if (c == '`') {
+            const end: usize = indexOfScalarPos(u8, s, i + 1, '`') orelse {
+                try escapeInto(w, s[i .. i + 1]);
+                i += 1;
+                continue;
+            };
+            try w.writeAll("<code>");
+            try escapeInto(w, s[i + 1 .. end]);
+            try w.writeAll("</code>");
+            i = end + 1;
+            continue;
+        }
+        if (c == '*' and i + 1 < s.len and s[i + 1] == '*') {
+            if (indexOfPos(u8, s, i + 2, "**")) |end| {
+                try w.writeAll("<strong>");
+                try inline_md(w, s[i + 2 .. end]);
+                try w.writeAll("</strong>");
+                i = end + 2;
+                continue;
+            }
+        }
+        if (c == '*') {
+            if (indexOfScalarPos(u8, s, i + 1, '*')) |end| {
+                try w.writeAll("<em>");
+                try inline_md(w, s[i + 1 .. end]);
+                try w.writeAll("</em>");
+                i = end + 1;
+                continue;
+            }
+        }
+        if (c == '[') {
+            if (indexOfScalarPos(u8, s, i, ']')) |rb| {
+                if (rb + 1 < s.len and s[rb + 1] == '(') {
+                    if (indexOfScalarPos(u8, s, rb + 2, ')')) |rp| {
+                        try w.writeAll("<a href=\"");
+                        try escapeInto(w, s[rb + 2 .. rp]);
+                        try w.writeAll("\">");
+                        try inline_md(w, s[i + 1 .. rb]);
+                        try w.writeAll("</a>");
+                        i = rp + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        if (c == 'h' and startsWith(u8, s[i..], "http")) {
+            var j: usize = i;
+            while (j < s.len and s[j] != ' ' and s[j] != ')' and s[j] != '\t') : (j += 1) {}
+            try w.writeAll("<a href=\"");
+            try escapeInto(w, s[i..j]);
+            try w.writeAll("\">");
+            try escapeInto(w, s[i..j]);
+            try w.writeAll("</a>");
+            i = j;
+            continue;
+        }
+        try escapeInto(w, s[i .. i + 1]);
+        i += 1;
+    }
+}
+
+fn isDelimiterRow(s: []const u8) bool {
+    var saw_dash: bool = false;
+    for (s) |c| {
+        switch (c) {
+            '-' => saw_dash = true,
+            '|', ':', ' ', '\t' => {},
+            else => return false,
+        }
+    }
+    return saw_dash;
+}
 
 fn render(w: *Writer, md: []const u8) !void {
     var mode: Mode = .prose;
     var table_head_done: bool = false;
-    var it = std.mem.splitScalar(u8, md, '\n');
+    var it = splitScalar(u8, md, '\n');
     while (it.next()) |raw| {
         const line: []const u8 = std.mem.trimEnd(u8, raw, "\r");
-        const trimmed: []const u8 = std.mem.trim(u8, line, " \t");
+        const trimmed: []const u8 = trim(u8, line, " \t");
 
         // Fenced code: everything inside passes through escaped, untouched.
-        if (std.mem.startsWith(u8, trimmed, "```")) {
+        if (startsWith(u8, trimmed, "```")) {
             if (mode == .code) {
                 try w.writeAll("</code></pre>\n");
                 mode = .prose;
@@ -93,7 +195,7 @@ fn render(w: *Writer, md: []const u8) !void {
                 try closeBlock(w, &mode, &table_head_done);
                 // The fence's info string (e.g. ```mermaid) becomes the class,
                 // so docfmt highlights ```zig and leaves ```mermaid alone.
-                const info: []const u8 = std.mem.trim(u8, trimmed[3..], " \t");
+                const info: []const u8 = trim(u8, trimmed[3..], " \t");
                 try w.writeAll("<pre><code");
                 if (info.len > 0) {
                     try w.writeAll(" class=\"");
@@ -122,7 +224,7 @@ fn render(w: *Writer, md: []const u8) !void {
             try closeBlock(w, &mode, &table_head_done);
             var level: usize = 0;
             while (level < trimmed.len and trimmed[level] == '#') : (level += 1) {}
-            const text: []const u8 = std.mem.trim(u8, trimmed[level..], " \t");
+            const text: []const u8 = trim(u8, trimmed[level..], " \t");
             const tag: u8 = '0' + @as(u8, @intCast(@min(level, 6)));
             try w.writeAll("<h");
             try w.writeByte(tag);
@@ -152,12 +254,12 @@ fn render(w: *Writer, md: []const u8) !void {
             }
             const cell_tag: []const u8 = if (table_head_done) "td" else "th";
             try w.writeAll("<tr>");
-            var cells = std.mem.splitScalar(u8, std.mem.trim(u8, trimmed, "|"), '|');
+            var cells = splitScalar(u8, trim(u8, trimmed, "|"), '|');
             while (cells.next()) |cell| {
                 try w.writeAll("<");
                 try w.writeAll(cell_tag);
                 try w.writeAll(">");
-                try inline_md(w, std.mem.trim(u8, cell, " \t"));
+                try inline_md(w, trim(u8, cell, " \t"));
                 try w.writeAll("</");
                 try w.writeAll(cell_tag);
                 try w.writeAll(">");
@@ -167,7 +269,7 @@ fn render(w: *Writer, md: []const u8) !void {
         }
 
         // List item.
-        if (std.mem.startsWith(u8, trimmed, "- ") or std.mem.startsWith(u8, trimmed, "* ")) {
+        if (startsWith(u8, trimmed, "- ") or startsWith(u8, trimmed, "* ")) {
             if (mode != .list) {
                 try closeBlock(w, &mode, &table_head_done);
                 try w.writeAll("<ul>\n");
@@ -180,7 +282,7 @@ fn render(w: *Writer, md: []const u8) !void {
         }
 
         // An indented block in files.md is a code sample, not a list continuation.
-        if (std.mem.startsWith(u8, line, "    ") and mode == .prose) {
+        if (startsWith(u8, line, "    ") and mode == .prose) {
             try w.writeAll("<pre><code>");
             try escapeInto(w, line[4..]);
             try w.writeAll("</code></pre>\n");
@@ -198,113 +300,29 @@ fn render(w: *Writer, md: []const u8) !void {
     try closeBlock(w, &mode, &table_head_done);
 }
 
-fn closeBlock(w: *Writer, mode: *Mode, table_head_done: *bool) !void {
-    switch (mode.*) {
-        .table => {
-            try w.writeAll(if (table_head_done.*) "</tbody></table>\n" else "</thead></table>\n");
-            table_head_done.* = false;
-        },
-        .list => try w.writeAll("</ul>\n"),
-        .code => try w.writeAll("</code></pre>\n"),
-        .prose => {},
-    }
-    mode.* = .prose;
-}
+pub fn main(init: std.process.Init) !void {
+    _ = cli.args(&init, NoArgs, files_html_cli);
+    var arena: ArenaAllocator = .init(init.gpa);
+    defer arena.deinit();
+    const gpa: Allocator = arena.allocator();
+    const io: Io = init.io;
+    const cwd: Io.Dir = .cwd();
 
-fn isDelimiterRow(s: []const u8) bool {
-    var saw_dash: bool = false;
-    for (s) |c| {
-        switch (c) {
-            '-' => saw_dash = true,
-            '|', ':', ' ', '\t' => {},
-            else => return false,
-        }
-    }
-    return saw_dash;
-}
+    const md: []const u8 = try cwd.readFileAlloc(io, in_path, gpa, .unlimited);
 
-// `code`, **bold**, *italic*, [text](url) and bare http(s) autolinks.  Applied
-// in one left-to-right pass so a `*` inside `code` is never taken for emphasis.
-fn inline_md(w: *Writer, s: []const u8) !void {
-    var i: usize = 0;
-    while (i < s.len) {
-        const c: u8 = s[i];
-        if (c == '`') {
-            const end: usize = std.mem.indexOfScalarPos(u8, s, i + 1, '`') orelse {
-                try escapeInto(w, s[i .. i + 1]);
-                i += 1;
-                continue;
-            };
-            try w.writeAll("<code>");
-            try escapeInto(w, s[i + 1 .. end]);
-            try w.writeAll("</code>");
-            i = end + 1;
-            continue;
-        }
-        if (c == '*' and i + 1 < s.len and s[i + 1] == '*') {
-            if (std.mem.indexOfPos(u8, s, i + 2, "**")) |end| {
-                try w.writeAll("<strong>");
-                try inline_md(w, s[i + 2 .. end]);
-                try w.writeAll("</strong>");
-                i = end + 2;
-                continue;
-            }
-        }
-        if (c == '*') {
-            if (std.mem.indexOfScalarPos(u8, s, i + 1, '*')) |end| {
-                try w.writeAll("<em>");
-                try inline_md(w, s[i + 1 .. end]);
-                try w.writeAll("</em>");
-                i = end + 1;
-                continue;
-            }
-        }
-        if (c == '[') {
-            if (std.mem.indexOfScalarPos(u8, s, i, ']')) |rb| {
-                if (rb + 1 < s.len and s[rb + 1] == '(') {
-                    if (std.mem.indexOfScalarPos(u8, s, rb + 2, ')')) |rp| {
-                        try w.writeAll("<a href=\"");
-                        try escapeInto(w, s[rb + 2 .. rp]);
-                        try w.writeAll("\">");
-                        try inline_md(w, s[i + 1 .. rb]);
-                        try w.writeAll("</a>");
-                        i = rp + 1;
-                        continue;
-                    }
-                }
-            }
-        }
-        if (c == 'h' and std.mem.startsWith(u8, s[i..], "http")) {
-            var j: usize = i;
-            while (j < s.len and s[j] != ' ' and s[j] != ')' and s[j] != '\t') : (j += 1) {}
-            try w.writeAll("<a href=\"");
-            try escapeInto(w, s[i..j]);
-            try w.writeAll("\">");
-            try escapeInto(w, s[i..j]);
-            try w.writeAll("</a>");
-            i = j;
-            continue;
-        }
-        try escapeInto(w, s[i .. i + 1]);
-        i += 1;
-    }
-}
+    var aw: Writer.Allocating = .init(gpa);
+    const w: *Writer = &aw.writer;
+    try w.writeAll(head);
+    try render(w, md);
+    try w.writeAll(foot);
 
-fn escapeInto(w: *Writer, s: []const u8) !void {
-    var start: usize = 0;
-    var j: usize = 0;
-    while (j < s.len) : (j += 1) {
-        const rep: ?[]const u8 = switch (s[j]) {
-            '&' => "&amp;",
-            '<' => "&lt;",
-            '>' => "&gt;",
-            else => null,
-        };
-        if (rep) |r| {
-            try w.writeAll(s[start..j]);
-            try w.writeAll(r);
-            start = j + 1;
-        }
-    }
-    try w.writeAll(s[start..]);
+    try cwd.writeFile(io, .{ .sub_path = out_path, .data = aw.written() });
+
+    var out_buf: [256]u8 = undefined;
+    const msg: []const u8 = try bufPrint(
+        &out_buf,
+        "files_html: {s} -> {s} ({d} bytes)\n",
+        .{ in_path, out_path, aw.written().len },
+    );
+    try File.stdout().writeStreamingAll(io, msg);
 }

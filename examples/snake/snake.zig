@@ -14,6 +14,8 @@
 const std = @import("std");
 const allocPrint = std.fmt.allocPrint;
 const Allocator = std.mem.Allocator;
+const Random = std.Random;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const z = @import("zimr");
 const zm = @import("zm");
 const common = @import("example_common");
@@ -90,6 +92,10 @@ const Rect = struct {
     }
 };
 
+fn barHeight(f: *z.Frame) f32 {
+    return @max(44.0, f.window.heightf() * 0.10);
+}
+
 /// Board geometry for the current window: a square grid centred in the space
 /// above the control bar, sized off the shorter side. Recomputed every frame.
 const Layout = struct {
@@ -121,9 +127,9 @@ const Layout = struct {
 
 const State = struct {
     font: z.Font,
-    scratch: std.heap.ArenaAllocator,
+    scratch: ArenaAllocator,
     gestures: z.GesturesState = .{},
-    rng: std.Random.DefaultPrng,
+    rng: Random.DefaultPrng,
 
     /// The snake body, head first. `len` cells are live.
     body: [max_len]Cell = undefined,
@@ -149,39 +155,9 @@ const State = struct {
     }
 };
 
-fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
-    s.* = .{
-        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
-        .scratch = std.heap.ArenaAllocator.init(gpa),
-        .rng = std.Random.DefaultPrng.init(0x5EED_1234),
-    };
-    restart(s);
-}
-
-fn deinit(gpa: Allocator, s: *State) void {
-    z.unloadFont(gpa, s.font);
-    s.scratch.deinit();
-}
-
-fn restart(s: *State) void {
-    const cx: i32 = grid_w / 2;
-    const cy: i32 = grid_h / 2;
-    s.len = 3;
-    s.body[0] = .{ .x = cx, .y = cy };
-    s.body[1] = .{ .x = cx - 1, .y = cy };
-    s.body[2] = .{ .x = cx - 2, .y = cy };
-    s.dir = .right;
-    s.next_dir = .right;
-    s.score = 0;
-    s.paused = false;
-    s.dead = false;
-    s.step_accum = 0;
-    placeFood(s);
-}
-
 /// Drop food on a random cell that isn't currently under the snake.
 fn placeFood(s: *State) void {
-    const rand: std.Random = s.rng.random();
+    const rand: Random = s.rng.random();
     while (true) {
         const c: Cell = .{
             .x = rand.intRangeLessThan(i32, 0, grid_w),
@@ -200,6 +176,40 @@ fn placeFood(s: *State) void {
             return;
         }
     }
+}
+
+fn restart(s: *State) void {
+    const cx: i32 = grid_w / 2;
+    const cy: i32 = grid_h / 2;
+    s.len = 3;
+    s.body[0] = .{ .x = cx, .y = cy };
+    s.body[1] = .{ .x = cx - 1, .y = cy };
+    s.body[2] = .{ .x = cx - 2, .y = cy };
+    s.dir = .right;
+    s.next_dir = .right;
+    s.score = 0;
+    s.paused = false;
+    s.dead = false;
+    s.step_accum = 0;
+    placeFood(s);
+}
+
+fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
+    s.* = .{
+        .font = try z.loadFont(f, gpa, atkinson_mono_ttf, 22),
+        .scratch = ArenaAllocator.init(gpa),
+        .rng = Random.DefaultPrng.init(0x5EED_1234),
+    };
+    restart(s);
+}
+
+fn deinit(gpa: Allocator, s: *State) void {
+    z.unloadFont(gpa, s.font);
+    s.scratch.deinit();
+}
+
+fn die(s: *State) void {
+    s.dead = true;
 }
 
 /// One tick: turn, move the head, eat or shuffle the tail, check for death.
@@ -252,19 +262,11 @@ fn tick(s: *State) void {
     }
 }
 
-fn die(s: *State) void {
-    s.dead = true;
-}
-
 fn turn(s: *State, d: Dir) void {
     // Buffer the turn; tick() applies it and rejects a straight reversal.
     if (!s.dir.opposite(d)) {
         s.next_dir = d;
     }
-}
-
-fn barHeight(f: *z.Frame) f32 {
-    return @max(44.0, f.window.heightf() * 0.10);
 }
 
 fn barButton(f: *z.Frame, i: usize, count: usize) Rect {
@@ -351,7 +353,7 @@ fn update(f: *z.Frame, s: *State) void {
         s.step_accum = 0;
     }
 
-    const lay: Layout = Layout.of(f);
+    const lay: Layout = .of(f);
 
     z.beginDrawing(f.gl);
     f.gl.rect(.{ .x = 0, .y = 0, .width = f.window.widthf(), .height = f.window.heightf() }, .{ .color = bg_col });

@@ -63,7 +63,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
     const font: z.Font = try z.loadFont(f, gpa, atkinson_mono_ttf, 24);
 
     // CPU-backend oracle.
-    var cpu: z.Compute(shared_rotate) = z.Compute(shared_rotate).initCpu();
+    var cpu: z.Compute(shared_rotate) = .initCpu();
     cpu.element_count = count;
     cpu.params = .{ .count = count };
     var probe: [count]f32 = undefined;
@@ -79,7 +79,7 @@ fn initState(gpa: Allocator, f: *z.Frame, s: *State) !void {
         countMismatch(cs, expectSelf) == 0 and countMismatch(cr, expectRotate) == 0;
 
     // GPU round-trip.
-    var pipe: z.Compute(shared_rotate) = try z.Compute(shared_rotate).initGpu(
+    var pipe: z.Compute(shared_rotate) = try .initGpu(
         gpa,
         f.gpu.device,
         f.gpu.queue,
